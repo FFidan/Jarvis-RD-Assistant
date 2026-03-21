@@ -1,0 +1,304 @@
+"""Tests for the analyze SSE endpoint (download -> process -> summarize).
+
+These tests avoid importing ``app.main`` (which triggers fitz/numpy) by
+injecting a fake module into ``sys.modules`` before the deferred imports
+inside ``_analyze_stream`` run.
+"""
+
+import json
+import os
+import sys
+import types
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from app.routers.analyze import _sse_event, _analyze_stream
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_sse_events(raw_events: list[str]) -> list[dict | str]:
+    """Parse raw SSE frame strings into dicts (or raw strings for [DONE])."""
+    results: list[dict | str] = []
+    for raw in raw_events:
+        if not raw.startswith("data: "):
+            continue
+        payload = raw.replace("data: ", "").strip()
+        if payload == "[DONE]":
+            results.append("[DONE]")
+        else:
+            results.append(json.loads(payload))
+    return results
+
+
+def _make_mock_request(paper_row, *, update_row=None):
+    """Build a MagicMock Request with a mock db_pool returning paper_row."""
+    mock_request = MagicMock()
+
+    mock_conn = AsyncMock()
+    if update_row is not None:
+        mock_conn.fetchrow = AsyncMock(side_effect=[paper_row, update_row])
+    else:
+        mock_conn.fetchrow = AsyncMock(return_value=paper_row)
+    mock_conn.transaction = MagicMock(return_value=AsyncMock())
+
+    mock_pool = AsyncMock()
+    mock_pool.acquire = MagicMock(return_value=AsyncMock())
+    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    mock_request.app.state.db_pool = mock_pool
+    mock_request.app.state.http_client = AsyncMock()
+    mock_request.app.state.pdf_processor = MagicMock()
+    mock_request.app.state.pdf_processor.download_pdf = AsyncMock(return_value="/data/pdfs/1.pdf")
+    mock_request.app.state.embedder = MagicMock()
+    mock_request.app.state.verifier = MagicMock()
+
+    return mock_request
+
+
+async def _collect_events(request, paper_id, *, mock_process=None, mock_summarize=None):
+    """Run _analyze_stream with fake service modules to avoid heavy imports."""
+    _mock_process = mock_process or AsyncMock(
+        return_value={"paper_id": paper_id, "chunk_count": 42, "status": "processed"}
+    )
+    _mock_summarize = mock_summarize or AsyncMock(return_value=MagicMock())
+
+    # Inject fake modules so deferred imports in _analyze_stream resolve
+    # without pulling in qdrant_client/numpy/fitz.
+    fake_pdf_workflow = types.ModuleType("app.services.pdf_workflow")
+    fake_pdf_workflow._run_process_pdf = _mock_process  # type: ignore[attr-defined]
+
+    fake_summarization = types.ModuleType("app.services.summarization")
+    fake_summarization.generate_paper_summary = _mock_summarize  # type: ignore[attr-defined]
+
+    # Ensure the parent packages exist in sys.modules
+    if "app.services" not in sys.modules:
+        fake_services = types.ModuleType("app.services")
+        fake_services.__path__ = []  # type: ignore[attr-defined]
+        sys.modules["app.services"] = fake_services
+
+    saved_pw = sys.modules.get("app.services.pdf_workflow")
+    saved_sm = sys.modules.get("app.services.summarization")
+    sys.modules["app.services.pdf_workflow"] = fake_pdf_workflow
+    sys.modules["app.services.summarization"] = fake_summarization
+
+    _real_env_get = os.environ.get
+
+    def _selective_env_get(key, default=None):
+        if key == "PDF_STORAGE_PATH":
+            return "/data/pdfs"
+        return _real_env_get(key, default)
+
+    try:
+        with (
+            patch("app.routers.analyze.Path") as MockPath,
+            patch("app.routers.analyze.os.environ.get", side_effect=_selective_env_get),
+        ):
+            mock_path_instance = MagicMock()
+            mock_path_instance.resolve.return_value.is_relative_to.return_value = True
+            mock_path_instance.exists.return_value = True
+            MockPath.return_value = mock_path_instance
+
+            events_raw = []
+            async for event in _analyze_stream(request, paper_id):
+                events_raw.append(event)
+    finally:
+        # Restore original modules
+        if saved_pw is not None:
+            sys.modules["app.services.pdf_workflow"] = saved_pw
+        else:
+            sys.modules.pop("app.services.pdf_workflow", None)
+        if saved_sm is not None:
+            sys.modules["app.services.summarization"] = saved_sm
+        else:
+            sys.modules.pop("app.services.summarization", None)
+
+    return _parse_sse_events(events_raw), _mock_process
+
+
+# ---------------------------------------------------------------------------
+# Test _sse_event helper
+# ---------------------------------------------------------------------------
+
+
+def test_sse_event_dict():
+    result = _sse_event({"type": "step", "step": "downloading", "status": "started"})
+    assert result.startswith("data: ")
+    assert result.endswith("\n\n")
+    parsed = json.loads(result[6:])
+    assert parsed["type"] == "step"
+    assert parsed["step"] == "downloading"
+
+
+def test_sse_event_string():
+    result = _sse_event("[DONE]")
+    assert result == "data: [DONE]\n\n"
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — happy path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_happy_path():
+    """Full chain yields download->process->summarize step events + complete + [DONE]."""
+    paper_row = {
+        "id": 1,
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": False,
+        "pdf_local_path": None,
+    }
+    updated_row = {
+        **paper_row,
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/1.pdf",
+    }
+    mock_request = _make_mock_request(paper_row, update_row=updated_row)
+
+    events, _ = await _collect_events(mock_request, 1)
+
+    assert len(events) == 8
+    assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
+    assert events[1] == {"type": "step", "step": "downloading", "status": "completed"}
+    assert events[2] == {"type": "step", "step": "processing", "status": "started"}
+    assert events[3]["type"] == "step"
+    assert events[3]["step"] == "processing"
+    assert events[3]["status"] == "completed"
+    assert events[3]["chunk_count"] == 42
+    assert events[4] == {"type": "step", "step": "summarizing", "status": "started"}
+    assert events[5] == {"type": "step", "step": "summarizing", "status": "completed"}
+    assert events[6] == {"type": "complete", "paper_id": 1}
+    assert events[7] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — paper not found
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_paper_not_found():
+    """Stream emits error when paper ID doesn't exist."""
+    mock_request = _make_mock_request(None)
+
+    events_raw = []
+    async for event in _analyze_stream(mock_request, 999):
+        events_raw.append(event)
+    events = _parse_sse_events(events_raw)
+
+    assert len(events) == 3
+    assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
+    assert events[1]["type"] == "error"
+    assert events[1]["step"] == "downloading"
+    assert "not found" in events[1]["message"]
+    assert events[2] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — no pdf_url
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_no_pdf_url():
+    """Stream emits error when paper has no PDF URL."""
+    paper_row = {
+        "id": 2,
+        "pdf_url": None,
+        "pdf_downloaded": False,
+        "pdf_local_path": None,
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    events_raw = []
+    async for event in _analyze_stream(mock_request, 2):
+        events_raw.append(event)
+    events = _parse_sse_events(events_raw)
+
+    assert len(events) == 3
+    assert events[1]["type"] == "error"
+    assert "no PDF URL" in events[1]["message"]
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — already downloaded, skips download
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_already_downloaded():
+    """If paper already has PDF downloaded, it skips download call and continues."""
+    paper_row = {
+        "id": 2,
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/2.pdf",
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    events, _ = await _collect_events(mock_request, 2)
+
+    assert len(events) == 8
+    assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
+    assert events[1] == {"type": "step", "step": "downloading", "status": "completed"}
+
+    # download_pdf should NOT have been called
+    mock_request.app.state.pdf_processor.download_pdf.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — process failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_process_failure():
+    """Stream emits error event when processing fails."""
+    paper_row = {
+        "id": 3,
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/3.pdf",
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    mock_process = AsyncMock(side_effect=RuntimeError("Embedding service error"))
+    events, _ = await _collect_events(mock_request, 3, mock_process=mock_process)
+
+    # download started, download completed, process started, error, [DONE]
+    assert len(events) == 5
+    assert events[3]["type"] == "error"
+    assert events[3]["step"] == "processing"
+    assert events[4] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — summarize failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_summarize_failure():
+    """Stream emits error event when summarization fails."""
+    paper_row = {
+        "id": 4,
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/4.pdf",
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    mock_summarize = AsyncMock(side_effect=RuntimeError("LLM timeout"))
+    events, _ = await _collect_events(mock_request, 4, mock_summarize=mock_summarize)
+
+    # download started/completed, process started/completed, summarize started, error, [DONE]
+    assert len(events) == 7
+    assert events[5]["type"] == "error"
+    assert events[5]["step"] == "summarizing"
+    assert events[6] == "[DONE]"

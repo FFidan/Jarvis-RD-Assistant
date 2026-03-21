@@ -1,0 +1,280 @@
+"""Semantic Scholar paper source implementation.
+
+Uses the Semantic Scholar Academic Graph API
+(https://api.semanticscholar.org/graph/v1).
+Rate limit: 1 request/second on the free tier.
+"""
+
+import asyncio
+import logging
+from datetime import date
+from typing import Any
+from urllib.parse import quote as _url_quote
+
+import httpx
+
+from app.models import PaperCreate, PaperSourceConfig, SourceType
+from app.sources.base import PaperSource
+from app.sources.registry import register_source
+
+logger = logging.getLogger(__name__)
+
+S2_API_URL = "https://api.semanticscholar.org/graph/v1"
+RATE_LIMIT_DELAY = 1.05  # seconds between requests (free tier: 1 req/sec)
+S2_FIELDS = (
+    "paperId,externalIds,title,authors,authors.authorId,abstract,year,"
+    "publicationDate,url,citationCount,openAccessPdf,tldr"
+)
+
+
+@register_source
+class SemanticScholarSource(PaperSource):
+    """Semantic Scholar Academic Graph API paper source.
+
+    Attributes
+    ----------
+    source_type : str
+        Always ``"semantic_scholar"``.
+    """
+
+    source_type = "semantic_scholar"
+
+    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
+        super().__init__(config, http_client)
+        self._last_request_time: float = 0.0
+        self._rate_lock = asyncio.Lock()
+        # Optional API key for higher rate limits
+        self._api_key: str | None = config.config.get("api_key") if config.config else None
+
+    async def _rate_limit(self) -> None:
+        """Enforce Semantic Scholar free-tier rate limit (1 req/sec)."""
+        async with self._rate_lock:
+            now = asyncio.get_running_loop().time()
+            elapsed = now - self._last_request_time
+            if elapsed < RATE_LIMIT_DELAY:
+                await asyncio.sleep(RATE_LIMIT_DELAY - elapsed)
+            self._last_request_time = asyncio.get_running_loop().time()
+
+    def _build_headers(self) -> dict[str, str]:
+        """Build request headers, including API key if configured."""
+        headers: dict[str, str] = {}
+        if self._api_key:
+            headers["x-api-key"] = self._api_key
+        return headers
+
+    async def _fetch_json(self, path: str, params: dict | None = None) -> dict[str, Any]:
+        """Make a rate-limited GET request to the S2 API and return JSON.
+
+        Parameters
+        ----------
+        path : str
+            API path relative to the base URL (e.g., ``/paper/search``).
+        params : dict | None
+            Query parameters.
+
+        Returns
+        -------
+        dict
+            Parsed JSON response.
+
+        Raises
+        ------
+        httpx.HTTPStatusError
+            If the request returns a non-2xx status.
+        """
+        await self._rate_limit()
+        url = f"{S2_API_URL}{path}"
+        response = await self.http_client.get(
+            url, params=params, headers=self._build_headers(), timeout=30.0
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def _parse_paper(self, data: dict[str, Any]) -> PaperCreate:
+        """Convert a Semantic Scholar paper JSON object to a PaperCreate model.
+
+        Parameters
+        ----------
+        data : dict
+            A single paper object from the S2 API response.
+
+        Returns
+        -------
+        PaperCreate
+            Paper with all metadata from S2 API (never LLM-generated).
+        """
+        paper_id = data.get("paperId", "")
+        external_ids = data.get("externalIds") or {}
+
+        title = (data.get("title") or "").strip()
+
+        authors = [
+            author.get("name", "")
+            for author in (data.get("authors") or [])
+            if author.get("name")
+        ]
+
+        abstract = (data.get("abstract") or "").strip()
+
+        # Parse publication date: prefer ISO date string, fallback to year
+        published_date: date | None = None
+        pub_date_str = data.get("publicationDate")
+        if pub_date_str:
+            try:
+                published_date = date.fromisoformat(pub_date_str)
+            except ValueError:
+                logger.warning("Invalid publicationDate for S2 paper %s: %s", paper_id, pub_date_str)
+        if published_date is None and data.get("year"):
+            published_date = date(data["year"], 1, 1)
+
+        # PDF URL from openAccessPdf
+        pdf_url: str | None = None
+        open_access = data.get("openAccessPdf")
+        if open_access and isinstance(open_access, dict):
+            pdf_url = open_access.get("url")
+        if pdf_url is not None and not pdf_url.strip():
+            pdf_url = None  # Treat empty/whitespace-only as missing
+
+        url = data.get("url") or f"https://www.semanticscholar.org/paper/{paper_id}"
+
+        citation_count = data.get("citationCount") or 0
+
+        # Build metadata
+        metadata: dict[str, Any] = {"s2_id": paper_id}
+        if external_ids.get("ArXiv"):
+            metadata["arxiv_id"] = external_ids["ArXiv"]
+        if external_ids.get("DOI"):
+            metadata["doi"] = external_ids["DOI"]
+
+        # TLDR
+        tldr_data = data.get("tldr")
+        if tldr_data and isinstance(tldr_data, dict):
+            metadata["s2_tldr"] = tldr_data.get("text", "")
+
+        # Author IDs
+        s2_author_ids = [
+            {"name": a.get("name", ""), "authorId": a.get("authorId")}
+            for a in (data.get("authors") or [])
+            if a.get("authorId")
+        ]
+        if s2_author_ids:
+            metadata["s2_author_ids"] = s2_author_ids
+
+        return PaperCreate(
+            external_id=f"s2:{paper_id}",
+            source_type=SourceType.SEMANTIC_SCHOLAR,
+            title=title,
+            authors=authors,
+            abstract=abstract,
+            published_date=published_date,
+            url=url,
+            pdf_url=pdf_url,
+            citation_count=citation_count,
+            metadata=metadata,
+        )
+
+    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+        """Search Semantic Scholar for papers matching the query.
+
+        Parameters
+        ----------
+        query : str
+            Free-text search query.
+        max_results : int
+            Maximum results to return.
+
+        Returns
+        -------
+        list[PaperCreate]
+            Papers parsed from S2 API response.
+        """
+        params = {
+            "query": query,
+            "limit": min(max_results, 100),  # S2 API max is 100
+            "fields": S2_FIELDS,
+        }
+        response_data = await self._fetch_json("/paper/search", params=params)
+
+        papers = []
+        for item in response_data.get("data") or []:
+            try:
+                papers.append(self._parse_paper(item))
+            except Exception:
+                item_id = item.get("paperId", "unknown")
+                logger.exception("Failed to parse S2 paper: %s", item_id)
+                continue
+
+        return papers
+
+    async def fetch_by_id(self, external_id: str) -> PaperCreate | None:
+        """Fetch a single paper by Semantic Scholar paper ID.
+
+        Parameters
+        ----------
+        external_id : str
+            S2 paper ID, with or without ``"s2:"`` prefix.
+            Also accepts arXiv IDs (``"arXiv:2301.12345"``) or DOIs.
+
+        Returns
+        -------
+        PaperCreate | None
+            The paper if found, None otherwise.
+        """
+        paper_id = external_id.removeprefix("s2:")
+        params = {"fields": S2_FIELDS}
+        try:
+            data = await self._fetch_json(f"/paper/{_url_quote(paper_id, safe='')}", params=params)
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
+                return None
+            raise
+
+        return self._parse_paper(data)
+
+    async def fetch_citations(self, paper_id: str, limit: int = 100) -> list[dict]:
+        """Fetch papers that cite the given paper.
+
+        Parameters
+        ----------
+        paper_id : str
+            Semantic Scholar paper ID.
+        limit : int
+            Maximum citations to return (S2 max is 1000).
+
+        Returns
+        -------
+        list[dict]
+            List of citation data dicts from S2 API.
+        """
+        params = {
+            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",
+            "limit": min(limit, 1000),
+        }
+        data = await self._fetch_json(
+            f"/paper/{_url_quote(paper_id, safe='')}/citations", params=params
+        )
+        return data.get("data", [])
+
+    async def fetch_references(self, paper_id: str, limit: int = 100) -> list[dict]:
+        """Fetch papers cited BY the given paper.
+
+        Parameters
+        ----------
+        paper_id : str
+            Semantic Scholar paper ID.
+        limit : int
+            Maximum references to return (S2 max is 1000).
+
+        Returns
+        -------
+        list[dict]
+            List of reference data dicts from S2 API.
+        """
+        params = {
+            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",
+            "limit": min(limit, 1000),
+        }
+        data = await self._fetch_json(
+            f"/paper/{_url_quote(paper_id, safe='')}/references", params=params
+        )
+        return data.get("data", [])

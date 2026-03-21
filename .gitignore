@@ -1,0 +1,76 @@
+# Node
+node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environment and secrets - NEVER commit
+.env
+.env.local
+.env.*.local
+.env.production
+*.pem
+*.key
+*.p12
+credentials.json
+
+# Docker local overrides
+docker-compose.override.yml
+
+# Generated data (large, user-specific)
+shared/pdf_storage/
+shared/snapshots/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# n8n credentials (encrypted but still sensitive)
+n8n/credentials/
+
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+.worktrees/
+
+# Raw pdfs and images
+*.pdf
+*.png
+
+# AI agent / tool scaffolding
+.claude/
+.desloppify/
+.serena/
+.ralph/
+.playwright-mcp/
+inspection/
+
+# Test artifacts
+**/test-results/

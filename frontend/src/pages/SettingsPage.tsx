@@ -1,0 +1,50 @@
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { TopicSection } from '@/components/settings/TopicSection';
+import { SourceSection } from '@/components/settings/SourceSection';
+import { AuthorSection } from '@/components/settings/AuthorSection';
+import { IngestionSection } from '@/components/settings/IngestionSection';
+import { AutomationSection } from '@/components/settings/AutomationSection';
+import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
+
+export function SettingsPage() {
+  return (
+    <div className="space-y-6">
+      <h1 className="text-3xl font-bold">Settings</h1>
+
+      <Tabs defaultValue="topics">
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="topics">Topics</TabsTrigger>
+          <TabsTrigger value="sources">Sources</TabsTrigger>
+          <TabsTrigger value="authors">Authors</TabsTrigger>
+          <TabsTrigger value="ingestion">Ingestion</TabsTrigger>
+          <TabsTrigger value="automation">Automation</TabsTrigger>
+          <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="topics">
+          <TopicSection />
+        </TabsContent>
+
+        <TabsContent value="sources">
+          <SourceSection />
+        </TabsContent>
+
+        <TabsContent value="authors">
+          <AuthorSection />
+        </TabsContent>
+
+        <TabsContent value="ingestion">
+          <IngestionSection />
+        </TabsContent>
+
+        <TabsContent value="automation">
+          <AutomationSection />
+        </TabsContent>
+
+        <TabsContent value="extraction">
+          <ExtractionTemplateSection />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

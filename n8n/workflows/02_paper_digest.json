@@ -1,0 +1,133 @@
+{
+  "name": "JARVIS Weekly Paper Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtDay": 1,
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT * FROM topics WHERE enabled = TRUE",
+        "options": {}
+      },
+      "id": "node-2",
+      "name": "Enabled Topics",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300],
+      "credentials": {
+        "postgres": {
+          "id": "jarvis_postgres",
+          "name": "jarvis_postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "node-3",
+      "name": "Loop Over Items",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://paper_ingestion:8000/api/search",
+        "method": "POST",
+        "body": {
+          "json": {
+            "query": "={{ $json.query_terms || $json.name }}",
+            "source": "arxiv",
+            "max_results": 10
+          }
+        },
+        "options": {},
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.JARVIS_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "node-4",
+      "name": "Search Papers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nlet digest = '--- Weekly Paper Digest ---\\n\\n';\n\nfor (const item of items) {\n  const papers = item.json.papers || item.json.results || [];\n  const topic = item.json.topic || 'Unknown Topic';\n  digest += `Topic: ${topic}\\n`;\n  if (papers.length === 0) {\n    digest += '  No new papers found.\\n\\n';\n    continue;\n  }\n  papers.slice(0, 5).forEach((p, i) => {\n    digest += `  ${i + 1}. ${p.title || 'Untitled'}\\n`;\n    if (p.authors) digest += `     Authors: ${Array.isArray(p.authors) ? p.authors.join(', ') : p.authors}\\n`;\n    if (p.url) digest += `     ${p.url}\\n`;\n  });\n  digest += '\\n';\n}\n\nreturn [{ json: { message: digest } }];"
+      },
+      "id": "node-5",
+      "name": "Format Digest",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "node-6",
+      "name": "Send Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1500, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "jarvis_telegram",
+          "name": "jarvis_telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Enabled Topics", "type": "main", "index": 0 }]]
+    },
+    "Enabled Topics": {
+      "main": [[{ "node": "Loop Over Items", "type": "main", "index": 0 }]]
+    },
+    "Loop Over Items": {
+      "main": [
+        [{ "node": "Search Papers", "type": "main", "index": 0 }],
+        [{ "node": "Format Digest", "type": "main", "index": 0 }]
+      ]
+    },
+    "Search Papers": {
+      "main": [[{ "node": "Loop Over Items", "type": "main", "index": 0 }]]
+    },
+    "Format Digest": {
+      "main": [[{ "node": "Send Telegram", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

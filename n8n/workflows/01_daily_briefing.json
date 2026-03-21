@@ -1,0 +1,149 @@
+{
+  "name": "JARVIS Daily Briefing",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8,
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "node-1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT COUNT(*) AS new_papers FROM papers WHERE created_at >= NOW() - INTERVAL '24 hours'",
+        "options": {}
+      },
+      "id": "node-2",
+      "name": "New Papers Count",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [500, 300],
+      "credentials": {
+        "postgres": {
+          "id": "jarvis_postgres",
+          "name": "jarvis_postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://learning_engine:8001/api/stats",
+        "options": {},
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.JARVIS_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "node-3",
+      "name": "Learning Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT t.title, p.name AS project_name FROM tasks t LEFT JOIN projects p ON t.project_id = p.id WHERE t.status = 'in_progress'",
+        "options": {}
+      },
+      "id": "node-4",
+      "name": "In-Progress Tasks",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1000, 300],
+      "credentials": {
+        "postgres": {
+          "id": "jarvis_postgres",
+          "name": "jarvis_postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.name, m.deadline, p.name AS project_name FROM milestones m JOIN projects p ON m.project_id = p.id WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'",
+        "options": {}
+      },
+      "id": "node-5",
+      "name": "Upcoming Milestones",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [1250, 300],
+      "credentials": {
+        "postgres": {
+          "id": "jarvis_postgres",
+          "name": "jarvis_postgres"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const papers = $('New Papers Count').first().json;\nconst stats = $('Learning Stats').first().json;\nconst tasks = $('In-Progress Tasks').all().map(i => i.json);\nconst milestones = $('Upcoming Milestones').all().map(i => i.json);\n\nlet msg = '--- JARVIS Daily Briefing ---\\n\\n';\nmsg += `New papers (24h): ${papers.new_papers || 0}\\n`;\nmsg += `Flashcards due: ${stats.due_now || 0}\\n`;\nmsg += `Cards reviewed today: ${stats.reviewed_today || 0}\\n\\n`;\n\nif (tasks.length > 0) {\n  msg += 'In-Progress Tasks:\\n';\n  tasks.forEach(t => {\n    msg += `  - ${t.title} (${t.project_name || 'no project'})\\n`;\n  });\n} else {\n  msg += 'No in-progress tasks.\\n';\n}\nmsg += '\\n';\n\nif (milestones.length > 0) {\n  msg += 'Upcoming Milestones (7 days):\\n';\n  milestones.forEach(m => {\n    const deadline = new Date(m.deadline).toLocaleDateString();\n    msg += `  - ${m.name} [${m.project_name}] due ${deadline}\\n`;\n  });\n} else {\n  msg += 'No upcoming milestones.\\n';\n}\n\nreturn [{ json: { message: msg } }];"
+      },
+      "id": "node-6",
+      "name": "Compose Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1500, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID}}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "node-7",
+      "name": "Send Telegram",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1750, 300],
+      "credentials": {
+        "telegramApi": {
+          "id": "jarvis_telegram",
+          "name": "jarvis_telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "New Papers Count", "type": "main", "index": 0 }]]
+    },
+    "New Papers Count": {
+      "main": [[{ "node": "Learning Stats", "type": "main", "index": 0 }]]
+    },
+    "Learning Stats": {
+      "main": [[{ "node": "In-Progress Tasks", "type": "main", "index": 0 }]]
+    },
+    "In-Progress Tasks": {
+      "main": [[{ "node": "Upcoming Milestones", "type": "main", "index": 0 }]]
+    },
+    "Upcoming Milestones": {
+      "main": [[{ "node": "Compose Message", "type": "main", "index": 0 }]]
+    },
+    "Compose Message": {
+      "main": [[{ "node": "Send Telegram", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

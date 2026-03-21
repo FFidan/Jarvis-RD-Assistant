@@ -1,0 +1,301 @@
+# =============================================================================
+# JARVIS RD Assistant - Docker Compose
+# =============================================================================
+# Based on n8n Self-Hosted AI Starter Kit, extended with JARVIS services.
+# Usage:
+#   cp .env.example .env   # edit with your values
+#   docker compose up -d
+# =============================================================================
+
+x-shared-env: &shared-env
+  DATABASE_URL: postgresql://${POSTGRES_USER:-jarvis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jarvis}
+  LITELLM_BASE_URL: http://litellm:4000
+  LITELLM_API_KEY: ${LITELLM_MASTER_KEY}
+  QDRANT_URL: http://qdrant:6333
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
+  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
+  JARVIS_API_KEY: ${JARVIS_API_KEY:-}
+  QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+  DEV_MODE: ${DEV_MODE:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+
+services:
+  # ==========================================================================
+  # INFRASTRUCTURE (from n8n AI Starter Kit)
+  # ==========================================================================
+
+  postgres:
+    image: postgres:16.8
+    restart: unless-stopped
+    mem_limit: 2g
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-jarvis}
+      POSTGRES_USER: ${POSTGRES_USER:-jarvis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/01_init.sql
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jarvis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - jarvis
+
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:1.77.0
+    restart: unless-stopped
+    mem_limit: 2g
+    ports:
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_PERSONALIZATION_ENABLED=false
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_JWT_SECRET}
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-jarvis}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER:-jarvis}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./shared/pdf_storage:/data/pdfs
+      - ./shared/snapshots:/data/snapshots
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://127.0.0.1:5678/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  ollama:
+    image: ollama/ollama:0.17.7
+    restart: unless-stopped
+    mem_limit: 20g
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      - OLLAMA_MAX_LOADED_MODELS=3
+      - OLLAMA_FLASH_ATTENTION=1
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=2
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/11434' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks:
+      - jarvis
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    restart: unless-stopped
+    mem_limit: 2g
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/localhost/6333' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - jarvis
+
+  # ==========================================================================
+  # JARVIS ADDITIONS
+  # ==========================================================================
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    pull_policy: never  # M-20: prevent silent upgrades; run `docker pull ghcr.io/berriai/litellm:main-latest` to upgrade explicitly
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4000:4000"
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml
+    environment:
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    command: ["--config", "/app/config.yaml"]
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    depends_on:
+      ollama:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  paper_ingestion:
+    build:
+      context: .
+      dockerfile: services/paper_ingestion/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PAPER_INGESTION_HOST_PORT:-8010}:8000"
+    environment:
+      <<: *shared-env
+      PDF_STORAGE_PATH: /data/pdfs
+      SNAPSHOT_STORAGE_PATH: /data/snapshots
+    volumes:
+      - ./shared/pdf_storage:/data/pdfs
+      - ./shared/snapshots:/data/snapshots
+      - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
+      - ./db/migrations:/app/db/migrations:ro
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8000/health').raise_for_status()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  learning_engine:
+    build:
+      context: .
+      dockerfile: services/learning_engine/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}:8001"
+    environment:
+      <<: *shared-env
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  telegram_bot:
+    build:
+      context: .
+      dockerfile: services/telegram_bot/Dockerfile
+    restart: unless-stopped
+    profiles:
+      - telegram
+    environment:
+      <<: *shared-env
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python.*app' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      learning_engine:
+        condition: service_healthy
+      paper_ingestion:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  dashboard:
+    build:
+      context: ./frontend
+      args:
+        VITE_DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-3001}:3000"
+    environment:
+      JARVIS_API_KEY: ${JARVIS_API_KEY:-}
+      NGINX_ENVSUBST_FILTER: "JARVIS_API_KEY"
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      paper_ingestion:
+        condition: service_healthy
+      learning_engine:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+  postgres-backup:
+    image: postgres:16.8
+    profiles: [backup]
+    restart: unless-stopped
+    mem_limit: 256m
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-jarvis}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-jarvis}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+    volumes:
+      - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
+      - postgres_backups:/backups
+    entrypoint: >
+      sh -c "while true; do /usr/local/bin/backup.sh; sleep $${BACKUP_INTERVAL_SECONDS:-86400}; done"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - jarvis
+
+volumes:
+  postgres_data:
+  n8n_data:
+  ollama_data:
+  qdrant_data:
+  postgres_backups:
+
+networks:
+  jarvis:
+    driver: bridge

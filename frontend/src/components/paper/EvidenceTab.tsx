@@ -1,0 +1,68 @@
+import type { Summary } from '@/types';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/EmptyState';
+import { ShieldCheck } from 'lucide-react';
+
+interface EvidenceTabProps {
+  summary: Summary | null;
+}
+
+export function EvidenceTab({ summary }: EvidenceTabProps) {
+  if (!summary) {
+    return (
+      <EmptyState
+        icon={ShieldCheck}
+        title="No summary available"
+        description="Generate a summary first to see verified findings."
+      />
+    );
+  }
+
+  const findings = summary.key_findings ?? [];
+
+  if (findings.length === 0) {
+    return (
+      <EmptyState
+        icon={ShieldCheck}
+        title="No findings"
+        description="No findings to display."
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold">Verified Findings</h3>
+      <div className="space-y-3">
+        {findings.map((kf, i) => (
+          <Card key={i}>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-sm font-medium">{kf.finding}</CardTitle>
+                <Badge variant={kf.verified ? 'default' : 'secondary'} className="shrink-0 text-xs">
+                  {kf.verified ? 'Verified' : 'Unverified'}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {kf.quote && (
+                <blockquote className="border-l-2 border-muted-foreground/30 pl-3 text-sm italic text-muted-foreground">
+                  &ldquo;{kf.quote}&rdquo;
+                </blockquote>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {kf.page_number != null && (
+                  <Badge variant="outline" className="text-xs">Page {kf.page_number}</Badge>
+                )}
+                {kf.chunk_id != null && (
+                  <Badge variant="outline" className="text-xs">Chunk #{kf.chunk_id}</Badge>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    </div>
+  );
+}

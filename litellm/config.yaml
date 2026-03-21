@@ -1,0 +1,79 @@
+# =============================================================================
+# LiteLLM Proxy Configuration
+# =============================================================================
+# Model aliases: workflows use "smart", "fast", "embed" - never provider-specific
+# model names. LiteLLM routes to the fastest responding provider per alias.
+#
+# To add a new provider, add another entry under model_list with the same
+# model_name alias. LiteLLM will failover automatically.
+# =============================================================================
+
+model_list:
+  # --- "smart" alias: best available model for summarization, card generation ---
+  # Uncomment cloud providers below when you set API keys in .env
+
+  # - model_name: "smart"
+  #   litellm_params:
+  #     model: "openai/gpt-4o"
+  #     api_key: "os.environ/OPENAI_API_KEY"
+
+  # - model_name: "smart"
+  #   litellm_params:
+  #     model: "anthropic/claude-sonnet-4-20250514"
+  #     api_key: "os.environ/ANTHROPIC_API_KEY"
+
+  - model_name: "smart"
+    litellm_params:
+      model: "ollama/mistral-nemo"
+      api_base: "http://ollama:11434"
+      temperature: 0.2
+      num_ctx: 8192
+
+  # --- "fast" alias: cheaper/faster model for simple tasks (relevance scoring, etc.) ---
+
+  # - model_name: "fast"
+  #   litellm_params:
+  #     model: "openai/gpt-4o-mini"
+  #     api_key: "os.environ/OPENAI_API_KEY"
+
+  # - model_name: "fast"
+  #   litellm_params:
+  #     model: "anthropic/claude-haiku-4-5-20251001"
+  #     api_key: "os.environ/ANTHROPIC_API_KEY"
+
+  - model_name: "fast"
+    litellm_params:
+      model: "ollama/qwen3:4b"
+      api_base: "http://ollama:11434"
+      temperature: 0.1
+      num_ctx: 4096
+
+  # --- "embed" alias: embedding model for paper chunk vectors ---
+  # WARNING: Embedding models are NOT interchangeable — latency routing must
+  # never mix providers. Use only ONE embed provider at a time.
+  # Uncomment the OpenAI entry below (and comment Ollama) to switch providers.
+
+  # - model_name: "embed"
+  #   litellm_params:
+  #     model: "openai/text-embedding-3-small"
+  #     api_key: "os.environ/OPENAI_API_KEY"
+  #     dimensions: 768  # Must match EMBEDDING_DIMENSION env var
+
+  - model_name: "embed"
+    litellm_params:
+      model: "ollama/nomic-embed-text"
+      api_base: "http://ollama:11434"
+      dimensions: 768  # nomic-embed-text outputs 768d, must match EMBEDDING_DIMENSION
+
+router_settings:
+  routing_strategy: "latency-based-routing"
+  num_retries: 3
+  timeout: 300
+  allowed_fails: 2
+  retry_after: 5
+
+general_settings:
+  master_key: "os.environ/LITELLM_MASTER_KEY"
+
+litellm_settings:
+  drop_params: true

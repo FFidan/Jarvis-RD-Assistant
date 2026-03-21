@@ -1,0 +1,108 @@
+{
+  "name": "JARVIS Review Reminder",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 14,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "node-1",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "url": "http://learning_engine:8001/api/stats",
+        "options": {},
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.JARVIS_API_KEY}}"
+            }
+          ]
+        }
+      },
+      "id": "node-2",
+      "name": "Learning Stats",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.due_now }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "node-3",
+      "name": "Has Due Cards",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [750, 300]
+    },
+    {
+      "parameters": {
+        "chatId": "={{$env.TELEGRAM_CHAT_ID}}",
+        "text": "=Review Reminder: You have {{ $('Learning Stats').first().json.due_now }} flashcard(s) due for review. Head to the dashboard to study!",
+        "additionalFields": {}
+      },
+      "id": "node-4",
+      "name": "Send Reminder",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1000, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "jarvis_telegram",
+          "name": "jarvis_telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [[{ "node": "Learning Stats", "type": "main", "index": 0 }]]
+    },
+    "Learning Stats": {
+      "main": [[{ "node": "Has Due Cards", "type": "main", "index": 0 }]]
+    },
+    "Has Due Cards": {
+      "main": [
+        [{ "node": "Send Reminder", "type": "main", "index": 0 }],
+        []
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
