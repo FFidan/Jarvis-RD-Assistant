@@ -13,9 +13,11 @@ interface UseStreamingChatOptions {
 export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOptions) {
   const { chats, addMessage, appendToLastMessage, setLastMessageSources, clearChat } =
     useChatStore();
-  const [isStreaming, setIsStreaming] = useState(false);
+  const [phase, setPhase] = useState<'idle' | 'searching' | 'streaming'>('idle');
   const [sources, setSources] = useState<Source[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+
+  const isStreaming = phase !== 'idle';
 
   const messages = chats[chatId] || [];
 
@@ -30,7 +32,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
-      setIsStreaming(true);
+      setPhase('searching');
       setSources([]);
 
       const url =
@@ -46,6 +48,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
       try {
         for await (const event of streamSSE(url, body, controller.signal)) {
           if (event.type === 'token' && event.content) {
+            setPhase('streaming');
             appendToLastMessage(chatId, event.content);
           } else if (event.type === 'sources' && event.sources) {
             const mapped: Source[] = event.sources.map((s) => ({
@@ -62,12 +65,13 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
         if ((err as Error).name !== 'AbortError') {
           appendToLastMessage(chatId, `\n\n**Error:** ${(err as Error).message}`);
         }
+        setPhase('idle');
       } finally {
-        setIsStreaming(false);
+        setPhase('idle');
         abortControllerRef.current = null;
       }
     },
-    [chatId, scope, paperId, isStreaming, addMessage, appendToLastMessage, setLastMessageSources],
+    [chatId, scope, paperId, phase, addMessage, appendToLastMessage, setLastMessageSources],
   );
 
   const stopStreaming = useCallback(() => {
@@ -78,6 +82,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     messages,
     sources,
     isStreaming,
+    phase,
     sendMessage,
     stopStreaming,
     clearChat: () => clearChat(chatId),

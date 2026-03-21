@@ -211,8 +211,26 @@ class Embedder:
                                 end_char=current_start + len(current_text),
                             ))
                             chunk_index += 1
-                        current_text = para
-                        current_start = para_offset
+                        # Force-split oversized paragraphs by token windows
+                        if token_count(para) > CHUNK_TOKEN_LIMIT:
+                            tokens = enc.encode(para)
+                            for j in range(0, len(tokens), CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS):
+                                window = tokens[j : j + CHUNK_TOKEN_LIMIT]
+                                sub_text = enc.decode(window)
+                                sub_start = para_offset + (j * len(para) // max(len(tokens), 1))
+                                mid = sub_start + len(sub_text) // 2
+                                chunks.append(ChunkForEmbedding(
+                                    chunk_index=chunk_index,
+                                    content=sub_text.strip(),
+                                    page_number=find_page(mid),
+                                    start_char=sub_start,
+                                    end_char=sub_start + len(sub_text),
+                                ))
+                                chunk_index += 1
+                            current_text = ""
+                        else:
+                            current_text = para
+                            current_start = para_offset
                     para_offset += len(para) + 2
 
             text_offset += len(section)

@@ -16,6 +16,7 @@ from app.models import (
     SourceResponse,
     SourceUpdate,
 )
+from app.services.litellm_config import ROLE_TO_ALIAS, reload_litellm, update_litellm_model
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -66,6 +67,10 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
             ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
             key, value_json,
         )
+    if key in ROLE_TO_ALIAS:
+        updated = update_litellm_model(key, body.value)
+        if updated:
+            await reload_litellm()
     return ConfigEntry(key=key, value=body.value)
 
 

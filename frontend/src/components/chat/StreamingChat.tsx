@@ -5,7 +5,7 @@ import { SourcesAccordion } from '@/components/chat/SourcesAccordion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Send, Square, Trash2 } from 'lucide-react';
+import { Loader2, Send, Square, Trash2 } from 'lucide-react';
 
 interface StreamingChatProps {
   chatId: string;
@@ -14,7 +14,7 @@ interface StreamingChatProps {
 }
 
 export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
-  const { messages, sources, isStreaming, sendMessage, stopStreaming, clearChat } =
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat } =
     useStreamingChat({ chatId, scope, paperId });
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -46,12 +46,21 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
           )}
           {messages.map((msg, i) => (
             <div key={i}>
-              <ChatMessage message={msg} />
+              <ChatMessage
+                message={msg}
+                isLoading={isStreaming && i === messages.length - 1 && msg.role === 'assistant'}
+              />
               {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
                 <SourcesAccordion sources={msg.sources} />
               )}
             </div>
           ))}
+          {phase === 'searching' && (
+            <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Searching paper chunks and thinking...</span>
+            </div>
+          )}
           {isStreaming && sources.length > 0 && (
             <SourcesAccordion sources={sources} />
           )}
