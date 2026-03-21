@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import type { Source } from '@/types';
 import { Button } from '@/components/ui/button';
+import { MarkdownContent } from '@/components/shared/MarkdownContent';
 
 interface SourcesAccordionProps {
   sources: Source[];
@@ -32,9 +33,9 @@ export function SourcesAccordion({ sources }: SourcesAccordionProps) {
               {source.paper_title && (
                 <p className="font-medium">{source.paper_title}</p>
               )}
-              <p className="mt-1 text-muted-foreground line-clamp-3">
-                {source.text || source.content}
-              </p>
+              <div className="mt-1 text-muted-foreground line-clamp-3">
+                <MarkdownContent className="prose prose-xs dark:prose-invert max-w-none text-muted-foreground">{source.text || source.content || ''}</MarkdownContent>
+              </div>
               <p className="mt-1 text-muted-foreground">
                 {source.page_number != null && `p.${source.page_number} `}
                 Score: {source.score.toFixed(3)}

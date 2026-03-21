@@ -2,6 +2,7 @@ import type { Summary } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
+import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { FileText, AlertTriangle } from 'lucide-react';
 
 interface SummaryTabProps {
@@ -23,28 +24,22 @@ export function SummaryTab({ summary }: SummaryTabProps) {
     <div className="space-y-6">
       <section>
         <h3 className="mb-2 text-lg font-semibold">Brief</h3>
-        <p className="text-sm leading-relaxed">{summary.summary_brief || 'No brief summary.'}</p>
+        <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">{summary.summary_brief || 'No brief summary.'}</MarkdownContent>
       </section>
 
       <section>
         <h3 className="mb-2 text-lg font-semibold">Detailed Summary</h3>
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {summary.summary_detailed || 'No detailed summary.'}
-        </p>
+        <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">{summary.summary_detailed || 'No detailed summary.'}</MarkdownContent>
       </section>
 
       <section>
         <h3 className="mb-2 text-lg font-semibold">Methodology</h3>
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {summary.methodology || 'Not available.'}
-        </p>
+        <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">{summary.methodology || 'Not available.'}</MarkdownContent>
       </section>
 
       <section>
         <h3 className="mb-2 text-lg font-semibold">Limitations</h3>
-        <p className="whitespace-pre-wrap text-sm leading-relaxed">
-          {summary.limitations || 'Not available.'}
-        </p>
+        <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none leading-relaxed">{summary.limitations || 'Not available.'}</MarkdownContent>
       </section>
 
       <section>
@@ -54,7 +49,9 @@ export function SummaryTab({ summary }: SummaryTabProps) {
             {summary.key_findings.map((kf, i) => (
               <Card key={i}>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm font-medium">{kf.finding}</CardTitle>
+                  <CardTitle className="text-sm font-medium">
+                    <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none">{kf.finding}</MarkdownContent>
+                  </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-1">
                   {kf.quote && (

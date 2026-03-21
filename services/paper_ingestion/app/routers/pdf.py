@@ -411,10 +411,11 @@ async def _process_paper_background(
     db_pool: asyncpg.Pool,
     pdf_processor: "PDFProcessor",
     embedder,
+    force: bool = False,
 ) -> None:
     """Background task: process a single paper via the shared workflow helper."""
     try:
-        await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder, force=False)
+        await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder, force=force)
         logger.info("Batch processed paper %d successfully", paper_id)
     except Exception:
         logger.error("Batch processing failed for paper %d", paper_id, exc_info=True)
@@ -426,6 +427,7 @@ async def batch_process_papers(
     request: Request,
     background_tasks: BackgroundTasks,
     limit: int = Query(default=10, ge=1, le=50),
+    force: bool = Query(default=False),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Queue unprocessed papers for chunk extraction + embedding.
@@ -434,10 +436,15 @@ async def batch_process_papers(
     up to ``limit`` papers. Each is queued as a FastAPI background task.
     Returns immediately with the queued count.
 
+    When ``force=True``, includes ALL papers with downloaded PDFs (even those
+    already processed), allowing re-extraction with updated models.
+
     Parameters
     ----------
     limit : int
         Maximum number of papers to queue (1-50, default 10).
+    force : bool
+        If True, include papers that already have chunks (re-process all).
 
     Returns
     -------
@@ -445,19 +452,31 @@ async def batch_process_papers(
         ``{queued, total_unprocessed, skipped_missing_pdf}``
     """
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT p.id, p.pdf_local_path FROM papers p
-            WHERE p.pdf_downloaded = TRUE
-              AND p.pdf_local_path IS NOT NULL
-              AND NOT EXISTS (
-                  SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
-              )
-            ORDER BY p.id
-            LIMIT $1
-            """,
-            limit,
-        )
+        if force:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.pdf_local_path FROM papers p
+                WHERE p.pdf_downloaded = TRUE
+                  AND p.pdf_local_path IS NOT NULL
+                ORDER BY p.id
+                LIMIT $1
+                """,
+                limit,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT p.id, p.pdf_local_path FROM papers p
+                WHERE p.pdf_downloaded = TRUE
+                  AND p.pdf_local_path IS NOT NULL
+                  AND NOT EXISTS (
+                      SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
+                  )
+                ORDER BY p.id
+                LIMIT $1
+                """,
+                limit,
+            )
 
     pdf_processor = request.app.state.pdf_processor
     embedder = request.app.state.embedder
@@ -481,6 +500,7 @@ async def batch_process_papers(
             db_pool=db_pool,
             pdf_processor=pdf_processor,
             embedder=embedder,
+            force=force,
         )
         queued += 1
 

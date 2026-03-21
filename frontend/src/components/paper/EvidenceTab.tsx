@@ -2,6 +2,7 @@ import type { Summary } from '@/types';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
+import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { ShieldCheck } from 'lucide-react';
 
 interface EvidenceTabProps {
@@ -39,7 +40,9 @@ export function EvidenceTab({ summary }: EvidenceTabProps) {
           <Card key={i}>
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
-                <CardTitle className="text-sm font-medium">{kf.finding}</CardTitle>
+                <CardTitle className="text-sm font-medium">
+                  <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none">{kf.finding}</MarkdownContent>
+                </CardTitle>
                 <Badge variant={kf.verified ? 'default' : 'secondary'} className="shrink-0 text-xs">
                   {kf.verified ? 'Verified' : 'Unverified'}
                 </Badge>
@@ -48,7 +51,7 @@ export function EvidenceTab({ summary }: EvidenceTabProps) {
             <CardContent className="space-y-2">
               {kf.quote && (
                 <blockquote className="border-l-2 border-muted-foreground/30 pl-3 text-sm italic text-muted-foreground">
-                  &ldquo;{kf.quote}&rdquo;
+                  <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none italic">{kf.quote}</MarkdownContent>
                 </blockquote>
               )}
               <div className="flex flex-wrap gap-2">

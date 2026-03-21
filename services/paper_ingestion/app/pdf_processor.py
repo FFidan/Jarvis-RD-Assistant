@@ -1,7 +1,8 @@
 """PDF processing pipeline.
 
-Downloads PDFs via httpx, extracts text with PyMuPDF, generates page snapshots
-at 150 DPI, and orchestrates chunking + embedding storage.
+Downloads PDFs via httpx, extracts text with Marker (Markdown + LaTeX math),
+generates page snapshots at 150 DPI via PyMuPDF, and orchestrates chunking +
+embedding storage.
 """
 
 import asyncio
@@ -12,8 +13,10 @@ import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
-import fitz  # PyMuPDF
+import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
 import httpx
+from marker.converters.pdf import PdfConverter
+from marker.models import create_model_dict
 
 from app.embedder import Embedder
 from app.models import ChunkForEmbedding
@@ -33,6 +36,75 @@ ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset({
     "pdfs.semanticscholar.org",
     "www.semanticscholar.org",
 })
+
+# ---------------------------------------------------------------------------
+# Marker PDF text extraction (replaces fitz-based text extraction)
+# ---------------------------------------------------------------------------
+
+_marker_models = None
+
+
+def _get_marker_models():
+    """Lazy-load Marker models (expensive, cached after first call)."""
+    global _marker_models
+    if _marker_models is None:
+        logger.info("Loading Marker PDF models (first call, may take ~30s)...")
+        _marker_models = create_model_dict()
+        logger.info("Marker models loaded.")
+    return _marker_models
+
+
+def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
+    """Synchronous Marker extraction (runs in thread pool).
+
+    Returns
+    -------
+    tuple[str, list[tuple[int, int]]]
+        ``(full_text, page_boundaries)`` where full_text is Markdown with
+        LaTeX math and page_boundaries is a list of ``(start_char, end_char)``
+        tuples (index 0 = page 1).
+    """
+    models = _get_marker_models()
+    converter = PdfConverter(artifact_dict=models)
+    rendered = converter(str(pdf_path))
+    full_text = rendered.markdown
+
+    # Build page boundaries from metadata
+    page_boundaries: list[tuple[int, int]] = []
+    if hasattr(rendered, "metadata") and rendered.metadata:
+        page_stats = rendered.metadata.get("page_stats", [])
+        if not page_stats:
+            page_boundaries = [(0, len(full_text))]
+        else:
+            # Approximate: divide text evenly across pages
+            total_pages = len(page_stats)
+            chars_per_page = len(full_text) // max(total_pages, 1)
+            for i in range(total_pages):
+                start = i * chars_per_page
+                end = min((i + 1) * chars_per_page, len(full_text))
+                page_boundaries.append((start, end))
+    else:
+        page_boundaries = [(0, len(full_text))]
+
+    return full_text, page_boundaries
+
+
+async def extract_text(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
+    """Extract text from PDF using Marker, returning Markdown with LaTeX math.
+
+    Runs Marker in a thread pool since it is CPU-bound.
+
+    Returns
+    -------
+    tuple[str, list[tuple[int, int]]]
+        ``(full_text, page_boundaries)`` where page_boundaries is a list of
+        ``(start_char, end_char)`` tuples for each page (1-indexed).
+    """
+    loop = asyncio.get_running_loop()
+    full_text, page_boundaries = await loop.run_in_executor(
+        None, _extract_text_sync, pdf_path
+    )
+    return full_text, page_boundaries
 
 
 async def _validate_pdf_url(url: str) -> None:
@@ -163,41 +235,7 @@ class PDFProcessor:
         logger.info("Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path)
         return pdf_path
 
-    def extract_text(self, pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
-        """Extract full text from a PDF, tracking page boundaries.
-
-        Parameters
-        ----------
-        pdf_path : Path
-            Path to the PDF file.
-
-        Returns
-        -------
-        tuple[str, list[tuple[int, int]]]
-            ``(full_text, page_boundaries)`` where page_boundaries is a list
-            of ``(start_char, end_char)`` tuples.  Index 0 = page 1
-            (PyMuPDF is 0-indexed internally; we store 1-indexed per AGENTS.md).
-        """
-        doc = fitz.open(str(pdf_path))
-        try:
-            if len(doc) > MAX_PDF_PAGES:
-                raise ValueError(
-                    f"PDF has {len(doc)} pages, exceeding limit of {MAX_PDF_PAGES}"
-                )
-            full_text = ""
-            page_boundaries: list[tuple[int, int]] = []
-
-            for page_num in range(len(doc)):  # 0-indexed in PyMuPDF
-                page = doc[page_num]
-                page_text = page.get_text("text")
-                start = len(full_text)
-                full_text += page_text
-                end = len(full_text)
-                page_boundaries.append((start, end))
-
-            return full_text, page_boundaries
-        finally:
-            doc.close()
+    # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
 
     def generate_snapshots(self, pdf_path: Path, paper_id: int) -> list[Path]:
         """Generate PNG snapshots of each page at 150 DPI.
@@ -266,8 +304,8 @@ class PDFProcessor:
         tuple[str, list[ChunkForEmbedding], list[str]]
             ``(full_text, chunks, qdrant_point_ids)``
         """
-        # 1. Extract text and page boundaries (sync I/O — run in thread pool)
-        full_text, page_boundaries = await asyncio.to_thread(self.extract_text, pdf_path)
+        # 1. Extract text and page boundaries via Marker (CPU-bound, runs in thread pool)
+        full_text, page_boundaries = await extract_text(pdf_path)
 
         # Strip null bytes — common in PDF text, causes PostgreSQL UTF-8 errors
         full_text = full_text.replace("\x00", "")

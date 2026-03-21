@@ -1,6 +1,6 @@
 """Embedding service via LiteLLM's OpenAI-compatible API.
 
-Handles: text chunking by token count, embedding generation, Qdrant storage,
+Handles: Markdown-aware text chunking, embedding generation, Qdrant storage,
 collection initialization, and hybrid search (BM25 + semantic via RRF).
 """
 
@@ -10,6 +10,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import uuid
 from collections import defaultdict
 from typing import TYPE_CHECKING
@@ -100,12 +101,19 @@ class Embedder:
         text: str,
         page_boundaries: list[tuple[int, int]] | None = None,
     ) -> list[ChunkForEmbedding]:
-        """Split text into token-limited chunks with overlap.
+        """Chunk Markdown text respecting structure and math blocks.
+
+        Strategy:
+        1. Split on section headings (## )
+        2. Within sections, split on paragraph boundaries (double newline)
+        3. Never split inside $$...$$ display math blocks
+        4. If a unit exceeds CHUNK_TOKEN_LIMIT, sub-split at paragraph boundaries
+        5. Accumulate small units until reaching target size
 
         Parameters
         ----------
         text : str
-            Full extracted text from the PDF.
+            Full extracted Markdown text from the PDF.
         page_boundaries : list[tuple[int, int]] | None
             List of ``(start_char, end_char)`` per page.  Index 0 corresponds
             to page 1 (1-indexed for user display).
@@ -115,60 +123,110 @@ class Embedder:
         list[ChunkForEmbedding]
             Chunks ready for embedding, with character offsets and page numbers.
         """
-        tokens = self._encoding.encode(text)
+        enc = self._encoding
+
+        def token_count(s: str) -> int:
+            return len(enc.encode(s))
+
+        def find_page(char_offset: int) -> int | None:
+            if not page_boundaries:
+                return None
+            for page_idx, (start, end) in enumerate(page_boundaries):
+                if start <= char_offset < end:
+                    return page_idx + 1  # 1-indexed
+            return len(page_boundaries)  # last page
+
+        # Split into sections by headings, preserving the heading with each section
+        sections = re.split(r'(?=\n##\s)', text)
+
         chunks: list[ChunkForEmbedding] = []
         chunk_index = 0
+        current_text = ""
+        current_start = 0
+        text_offset = 0  # track position in original text
 
-        # Collect all boundary positions needed for the chunking loop
-        boundaries: set[int] = {0}
-        pos = 0
-        while pos < len(tokens):
-            end = min(pos + CHUNK_TOKEN_LIMIT, len(tokens))
-            boundaries.add(pos)
-            boundaries.add(end)
-            pos = end - CHUNK_OVERLAP_TOKENS if end < len(tokens) else end
+        for section in sections:
+            if not section.strip():
+                text_offset += len(section)
+                continue
 
-        # Pre-compute character offsets at each boundary in O(n) total
-        sorted_bounds = sorted(boundaries)
-        char_offsets: dict[int, int] = {0: 0}
-        for i in range(1, len(sorted_bounds)):
-            prev_b = sorted_bounds[i - 1]
-            curr_b = sorted_bounds[i]
-            segment = self._encoding.decode(tokens[prev_b:curr_b])
-            char_offsets[curr_b] = char_offsets[prev_b] + len(segment)
+            section_tokens = token_count(section)
 
-        # Main chunking loop using pre-computed offsets
-        pos = 0
-        while pos < len(tokens):
-            end = min(pos + CHUNK_TOKEN_LIMIT, len(tokens))
-            chunk_tokens = tokens[pos:end]
-            chunk_text = self._encoding.decode(chunk_tokens)
+            if section_tokens <= CHUNK_TOKEN_LIMIT:
+                # Section fits in one chunk -- try to accumulate with current
+                combined = current_text + ("\n\n" if current_text else "") + section
+                if token_count(combined) <= CHUNK_TOKEN_LIMIT:
+                    if not current_text:
+                        current_start = text_offset
+                    current_text = combined
+                else:
+                    # Flush current chunk, start new
+                    if current_text.strip():
+                        mid = current_start + len(current_text) // 2
+                        chunks.append(ChunkForEmbedding(
+                            chunk_index=chunk_index,
+                            content=current_text.strip(),
+                            page_number=find_page(mid),
+                            start_char=current_start,
+                            end_char=current_start + len(current_text),
+                        ))
+                        chunk_index += 1
+                    current_text = section
+                    current_start = text_offset
+            else:
+                # Section too large -- flush current, then sub-split
+                if current_text.strip():
+                    mid = current_start + len(current_text) // 2
+                    chunks.append(ChunkForEmbedding(
+                        chunk_index=chunk_index,
+                        content=current_text.strip(),
+                        page_number=find_page(mid),
+                        start_char=current_start,
+                        end_char=current_start + len(current_text),
+                    ))
+                    chunk_index += 1
+                    current_text = ""
 
-            start_char = char_offsets[pos]
-            end_char = char_offsets[end]
+                # Sub-split on paragraphs (double newline, but not inside $$...$$)
+                paragraphs = re.split(r'\n\n(?!\$\$)', section)
+                para_offset = text_offset
 
-            # Determine page number from boundaries using chunk midpoint
-            page_number = None
-            if page_boundaries:
-                mid_char = (start_char + end_char) // 2
-                for page_idx, (pg_start, pg_end) in enumerate(page_boundaries):
-                    if pg_start <= mid_char < pg_end:
-                        page_number = page_idx + 1  # 1-indexed per AGENTS.md
-                        break
+                for para in paragraphs:
+                    if not para.strip():
+                        para_offset += len(para) + 2  # +2 for \n\n
+                        continue
+                    combined = current_text + ("\n\n" if current_text else "") + para
+                    if token_count(combined) <= CHUNK_TOKEN_LIMIT:
+                        if not current_text:
+                            current_start = para_offset
+                        current_text = combined
+                    else:
+                        if current_text.strip():
+                            mid = current_start + len(current_text) // 2
+                            chunks.append(ChunkForEmbedding(
+                                chunk_index=chunk_index,
+                                content=current_text.strip(),
+                                page_number=find_page(mid),
+                                start_char=current_start,
+                                end_char=current_start + len(current_text),
+                            ))
+                            chunk_index += 1
+                        current_text = para
+                        current_start = para_offset
+                    para_offset += len(para) + 2
 
-            chunks.append(
-                ChunkForEmbedding(
-                    chunk_index=chunk_index,
-                    content=chunk_text,
-                    page_number=page_number,
-                    start_char=start_char,
-                    end_char=end_char,
-                )
-            )
+            text_offset += len(section)
 
-            chunk_index += 1
-            # Advance with overlap unless we've reached the end
-            pos = end - CHUNK_OVERLAP_TOKENS if end < len(tokens) else end
+        # Flush remaining
+        if current_text.strip():
+            mid = current_start + len(current_text) // 2
+            chunks.append(ChunkForEmbedding(
+                chunk_index=chunk_index,
+                content=current_text.strip(),
+                page_number=find_page(mid),
+                start_char=current_start,
+                end_char=current_start + len(current_text),
+            ))
 
         return chunks
 
