@@ -2,6 +2,9 @@ FROM python:3.12.9-slim
 
 WORKDIR /app
 
+# Install PyTorch with CUDA support first (before other deps that might pull CPU-only torch)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+
 COPY libs/jarvis_common/ ./libs/jarvis_common/
 RUN pip install --no-cache-dir ./libs/jarvis_common/
 
@@ -10,9 +13,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN adduser --disabled-password --no-create-home appuser
 
-# Writable cache for HuggingFace models (cross-encoder reranker)
-ENV HF_HOME=/tmp/hf_cache
-RUN mkdir -p /tmp/hf_cache && chown appuser:appuser /tmp/hf_cache
+# Writable caches for HuggingFace, Surya/Marker model downloads, and Marker fonts
+ENV HF_HOME=/tmp/hf_cache HOME=/tmp/appuser
+RUN mkdir -p /tmp/hf_cache /tmp/appuser && chown -R appuser:appuser /tmp/hf_cache /tmp/appuser
+# Marker downloads a font to its package static/ dir on first use
+RUN mkdir -p /usr/local/lib/python3.12/site-packages/static && \
+    chown -R appuser:appuser /usr/local/lib/python3.12/site-packages/static
 
 COPY services/paper_ingestion/app/ ./app/
 
