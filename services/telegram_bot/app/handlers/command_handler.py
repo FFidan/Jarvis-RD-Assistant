@@ -161,7 +161,9 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     for paper in papers[:10]:
-        paper_id = paper.get("id", "")
+        paper_id = paper.get("id")
+        if not paper_id:
+            continue
         text = format_paper_card(paper)
         await update.message.reply_text(
             text,

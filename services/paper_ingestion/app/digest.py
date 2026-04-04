@@ -69,7 +69,7 @@ async def generate_weekly_digest(
 
     # asyncpg.Pool has no .fetch() method — must acquire a connection first (PI-013).
     async with db_pool.acquire() as conn:
-        smart_model = await get_smart_model(conn)
+        smart_model = get_smart_model()
         rows = await conn.fetch(
             """
             SELECT p.id, p.title, p.url, p.published_date, p.authors,

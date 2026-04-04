@@ -1,9 +1,13 @@
 """Automated fetch->embed pipeline scheduler for paper_ingestion."""
+
 import asyncio
 import logging
+from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+
+from app.recommender import refresh_recommendations
 
 logger = logging.getLogger(__name__)
 
@@ -17,12 +21,8 @@ async def run_auto_pipeline(app) -> None:
     try:
         # 1. Query enabled sources and topics
         async with db_pool.acquire() as conn:
-            sources_rows = await conn.fetch(
-                "SELECT * FROM paper_sources WHERE enabled = TRUE"
-            )
-            topics_rows = await conn.fetch(
-                "SELECT name FROM topics"
-            )
+            sources_rows = await conn.fetch("SELECT * FROM paper_sources WHERE enabled = TRUE")
+            topics_rows = await conn.fetch("SELECT name FROM topics")
 
         topics = [row["name"] for row in topics_rows]
         if not topics:
@@ -32,6 +32,7 @@ async def run_auto_pipeline(app) -> None:
         from .models import PaperSourceConfig
         from .services.pdf_workflow import upsert_paper  # local imports to avoid circular
         from .sources.registry import get_source_class
+
         papers_added = 0
         for src_row in sources_rows:
             source_type = src_row["source_type"]
@@ -63,7 +64,9 @@ async def run_auto_pipeline(app) -> None:
                     except Exception as e:
                         logger.warning(
                             "auto_pipeline: source %s topic '%s' failed: %s",
-                            source_type, topic, e,
+                            source_type,
+                            topic,
+                            e,
                         )
             except Exception as e:
                 logger.error("auto_pipeline: source %s failed: %s", source_type, e, exc_info=True)
@@ -107,7 +110,8 @@ async def run_auto_pipeline(app) -> None:
                 except Exception as exc:
                     logger.warning(
                         "auto_pipeline: failed to download PDF for paper %d: %s",
-                        paper_id, exc,
+                        paper_id,
+                        exc,
                     )
 
         download_tasks = [
@@ -135,8 +139,12 @@ async def run_auto_pipeline(app) -> None:
             async with sem:
                 try:
                     await run_process_pdf(
-                        paper_id, pdf_path, db_pool,
-                        pdf_processor, embedder, force=False,
+                        paper_id,
+                        pdf_path,
+                        db_pool,
+                        pdf_processor,
+                        embedder,
+                        force=False,
                     )
                     logger.info("auto_pipeline: processed paper %d", paper_id)
                 except Exception as exc:
@@ -152,9 +160,7 @@ async def run_auto_pipeline(app) -> None:
                     row["id"],
                 )
                 continue
-            process_tasks.append(
-                asyncio.create_task(_extract_and_embed_paper(row["id"], pdf_path))
-            )
+            process_tasks.append(asyncio.create_task(_extract_and_embed_paper(row["id"], pdf_path)))
         if process_tasks:
             await asyncio.gather(*process_tasks)
 
@@ -166,8 +172,16 @@ async def run_auto_pipeline(app) -> None:
 
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     """Start the APScheduler and return the scheduler instance."""
+
+    async def _run_recommendations(app: Any) -> None:
+        try:
+            count = await refresh_recommendations(app)
+            logger.info("Nightly recommendations: %d saved", count)
+        except Exception:
+            logger.exception("Nightly recommendation refresh failed")
+
     scheduler = AsyncIOScheduler()
-    trigger = IntervalTrigger(hours=interval_hours)
+    trigger = IntervalTrigger(hours=int(interval_hours))
     scheduler.add_job(
         run_auto_pipeline,
         trigger=trigger,
@@ -176,6 +190,15 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         name="Auto fetch->process pipeline",
         replace_existing=True,
         max_instances=1,  # prevent overlap if a run takes longer than the interval
+    )
+    scheduler.add_job(
+        _run_recommendations,
+        IntervalTrigger(hours=24),
+        args=[app],
+        id="recommendation_refresh",
+        name="Nightly recommendation refresh",
+        replace_existing=True,
+        max_instances=1,
     )
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)

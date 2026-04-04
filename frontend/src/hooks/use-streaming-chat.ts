@@ -65,7 +65,6 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
         if ((err as Error).name !== 'AbortError') {
           appendToLastMessage(chatId, `\n\n**Error:** ${(err as Error).message}`);
         }
-        setPhase('idle');
       } finally {
         setPhase('idle');
         abortControllerRef.current = null;

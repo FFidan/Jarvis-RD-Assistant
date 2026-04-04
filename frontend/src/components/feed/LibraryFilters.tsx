@@ -153,6 +153,7 @@ export function LibraryFilters({
             <SelectItem value="published_date">Published Date</SelectItem>
             <SelectItem value="title">Title (A-Z)</SelectItem>
             <SelectItem value="citation_count">Most Cited</SelectItem>
+            <SelectItem value="recommendation">Recommended for you</SelectItem>
           </SelectContent>
         </Select>
       </div>

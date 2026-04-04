@@ -18,7 +18,10 @@ x-shared-env: &shared-env
   QDRANT_API_KEY: ${QDRANT_API_KEY:-}
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  DB_POOL_MIN: ${DB_POOL_MIN:-2}
+  DB_POOL_MAX: ${DB_POOL_MAX:-10}
 
 services:
   # ==========================================================================
@@ -43,6 +46,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+      start_period: 10s
     networks:
       - jarvis
 
@@ -167,6 +171,7 @@ services:
       <<: *shared-env
       PDF_STORAGE_PATH: /data/pdfs
       SNAPSHOT_STORAGE_PATH: /data/snapshots
+      AUTO_FETCH_INTERVAL_HOURS: ${AUTO_FETCH_INTERVAL_HOURS:-0}
     volumes:
       - ./shared/pdf_storage:/data/pdfs
       - ./shared/snapshots:/data/snapshots

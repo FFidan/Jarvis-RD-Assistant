@@ -257,7 +257,7 @@ async def extract_entities_for_paper(
         if not chunks:
             raise ValueError(f"No chunks found for paper {paper_id}")
 
-        fast_model = await get_fast_model(conn)
+        fast_model = get_fast_model()
 
     full_text = "\n\n".join(c["content"] for c in chunks)
     if len(full_text) > 12000:
@@ -351,7 +351,10 @@ async def extract_entities_for_paper(
             if not source_id or not target_id or not rel_type:
                 continue
 
-            confidence = float(rel.get("confidence", 1.0))
+            try:
+                confidence = float(rel.get("confidence", 1.0))
+            except (ValueError, TypeError):
+                confidence = 1.0
 
             inserted = await conn.fetchval(
                 """INSERT INTO entity_relationships

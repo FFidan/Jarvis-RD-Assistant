@@ -5,6 +5,7 @@ task management, and paper interactions via inline keyboards.
 """
 
 import logging
+import os
 import sys
 
 import httpx
@@ -17,11 +18,9 @@ from app.handlers import (
     register_command_handlers,
 )
 from app.scheduler import JarvisScheduler
+from jarvis_common.logging_config import configure_logging
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+configure_logging("telegram_bot", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
 
 

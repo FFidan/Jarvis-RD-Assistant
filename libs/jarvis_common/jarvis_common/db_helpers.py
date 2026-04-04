@@ -1,14 +1,10 @@
 """Shared database helper functions for dynamic UPDATE and DELETE operations."""
 
 import json
-import logging
-import re
 from typing import Any
 
 import asyncpg
 from fastapi import HTTPException
-
-_logger = logging.getLogger(__name__)
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -46,7 +42,6 @@ def fmt_safe(s: str) -> str:
 
 
 _ALIAS_MODELS = frozenset({"smart", "fast", "embed"})
-_MODEL_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$")
 
 
 def validated_model(model: str) -> str:
@@ -61,7 +56,7 @@ def validated_model(model: str) -> str:
     return "smart"
 
 
-async def get_smart_model(conn) -> str:
+def get_smart_model() -> str:
     """Return the LiteLLM alias for the smart model role.
 
     The user_config ``llm.smart_model`` value stores the Ollama model name
@@ -71,12 +66,12 @@ async def get_smart_model(conn) -> str:
     return "smart"
 
 
-async def get_fast_model(conn) -> str:
+def get_fast_model() -> str:
     """Return the LiteLLM alias for the fast model role."""
     return "fast"
 
 
-async def get_embed_model(conn) -> str:
+def get_embed_model() -> str:
     """Return the LiteLLM alias for the embedding model role."""
     return "embed"
 
@@ -127,6 +122,9 @@ async def dynamic_update(
     HTTPException(400)
         If *updates* contains a key not in *allowed_columns*.
     """
+    if not updates and not extra_sets:
+        raise ValueError("No updates to apply")
+
     if table not in _ALLOWED_TABLES:
         raise ValueError(f"Table {table!r} not in allowed list")
 

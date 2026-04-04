@@ -73,7 +73,7 @@ async def get_retention(
     rows = await db_pool.fetch(
         """
         SELECT
-            reviewed_at::date AS review_date,
+            (reviewed_at AT TIME ZONE 'UTC')::date AS review_date,
             COUNT(*) AS total,
             COUNT(*) FILTER (WHERE rating IN (3, 4)) AS good_easy,
             ROUND(
@@ -82,7 +82,7 @@ async def get_retention(
             ) AS retention_pct
         FROM review_logs
         WHERE reviewed_at >= NOW() - make_interval(days => $1)
-        GROUP BY reviewed_at::date
+        GROUP BY (reviewed_at AT TIME ZONE 'UTC')::date
         ORDER BY review_date
         """,
         days,
@@ -105,12 +105,12 @@ async def get_llm_cost(
     rows = await db_pool.fetch(
         """
         SELECT
-            DATE(created_at) AS day,
+            (created_at AT TIME ZONE 'UTC')::date AS day,
             SUM(cost_usd)::float AS total_cost,
             workflow
         FROM llm_usage_log
         WHERE created_at >= NOW() - make_interval(days => $1)
-        GROUP BY DATE(created_at), workflow
+        GROUP BY (created_at AT TIME ZONE 'UTC')::date, workflow
         ORDER BY day
         """,
         days,

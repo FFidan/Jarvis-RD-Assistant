@@ -179,7 +179,11 @@ async def _simple_digest(
         if len(papers) > 5:
             lines.append(f"   <i>... and {len(papers) - 5} more</i>")
 
-    await _send_chunked(bot, config.telegram_chat_id, lines)
+    try:
+        await _send_chunked(bot, config.telegram_chat_id, lines)
+    except Exception:
+        logger.exception("Failed to send simple digest fallback")
+        return
     logger.info(
         "Simple paper digest sent: %d papers in %d topics",
         len(rows),

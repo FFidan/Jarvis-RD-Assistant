@@ -123,8 +123,7 @@ async def _prepare_cross_paper_rag(
     """
     # 1. Search all chunks — optionally via query decomposition
     if body.decompose:
-        async with db_pool.acquire() as conn:
-            fast_model = await get_fast_model(conn)
+        fast_model = get_fast_model()
         sub_queries = await decompose_query(body.question, http_client, model=fast_model)
         per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
 

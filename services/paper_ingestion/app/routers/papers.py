@@ -298,9 +298,10 @@ async def batch_save_papers(
         return []
     results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
-        for paper in papers:
-            row = await upsert_paper(conn, paper)
-            results.append(row_to_paper_response(row))
+        async with conn.transaction():
+            for paper in papers:
+                row = await upsert_paper(conn, paper)
+                results.append(row_to_paper_response(row))
     return results
 
 

@@ -14,18 +14,25 @@ _BASE_SELECT = (
     "SELECT p.*, ps.summary_brief, ps.tldr, ps.confidence,"
     " pus.status AS user_status, pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
-    " (ps.id IS NOT NULL) AS has_summary"
+    " (ps.id IS NOT NULL) AS has_summary,"
+    " pr.score AS recommendation_score,"
+    " pr.explanation AS recommendation_reason,"
+    " pr.modes AS recommendation_modes"
 )
 _FALLBACK_SELECT = (
     "SELECT p.*, ps.summary_brief, NULL AS tldr, ps.confidence,"
     " pus.status AS user_status, pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
-    " (ps.id IS NOT NULL) AS has_summary"
+    " (ps.id IS NOT NULL) AS has_summary,"
+    " pr.score AS recommendation_score,"
+    " pr.explanation AS recommendation_reason,"
+    " pr.modes AS recommendation_modes"
 )
 _BASE_FROM = (
     " FROM papers p"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
     " LEFT JOIN paper_user_state pus ON p.id = pus.paper_id"
+    " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
 )
 
 
@@ -59,6 +66,7 @@ def build_feed_queries(
     topic_names: str | None,
     date_from: date | None,
     date_to: date | None,
+    recommended: bool = False,
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters."""
     conditions: list[str] = []
@@ -107,14 +115,18 @@ def build_feed_queries(
         params.append(date_to)
         param_idx += 1
 
+    if recommended:
+        conditions.append("pr.id IS NOT NULL")
+
     where_sql = (" WHERE " + " AND ".join(conditions)) if conditions else ""
-    _SORT_MAP = {
+    sort_map = {
         "priority": " ORDER BY p.priority_score DESC NULLS LAST",
         "published_date": " ORDER BY p.published_date DESC NULLS LAST",
         "title": " ORDER BY p.title ASC",
         "citation_count": " ORDER BY p.citation_count DESC NULLS LAST",
+        "recommendation": " ORDER BY pr.score DESC NULLS LAST",
     }
-    order_sql = _SORT_MAP.get(sort, " ORDER BY p.discovered_at DESC")
+    order_sql = sort_map.get(sort, " ORDER BY p.discovered_at DESC")
 
     count_params = list(params)
     data_query = (

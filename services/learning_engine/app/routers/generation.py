@@ -57,7 +57,7 @@ async def generate_cards(
             )
 
         # Read configured model from user_config (falls back to "smart")
-        smart_model = await get_smart_model(conn)
+        smart_model = get_smart_model()
 
     chunks = [dict(row) for row in chunk_rows]
 
@@ -123,7 +123,7 @@ async def batch_generate_cards(
             raise HTTPException(status_code=404, detail="Deck not found")
 
         # Read configured model from user_config
-        smart_model = await get_smart_model(conn)
+        smart_model = get_smart_model()
 
         # Query papers with chunks but no cards yet for this deck (limit 50)
         paper_rows = await conn.fetch(

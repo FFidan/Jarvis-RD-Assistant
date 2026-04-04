@@ -420,7 +420,10 @@ def format_weekly_digest(digest: dict) -> str:
             else:
                 lines.append(f"  \u2022 {title} {conf}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    if len(result) > 4000:
+        result = result[:3997] + "..."
+    return result
 
 
 def format_author_alert(author_name: str, papers: list[dict]) -> str:

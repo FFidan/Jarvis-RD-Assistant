@@ -97,13 +97,23 @@ async def request_chat_completion_content(
     if options.response_format is not None:
         payload["response_format"] = options.response_format
 
-    resp = await http_client.post(
-        f"{litellm.base_url}/v1/chat/completions",
-        json=payload,
-        headers=build_litellm_headers(litellm),
-        timeout=options.timeout,
-    )
-    resp.raise_for_status()
+    try:
+        resp = await http_client.post(
+            f"{litellm.base_url}/v1/chat/completions",
+            json=payload,
+            headers=build_litellm_headers(litellm),
+            timeout=options.timeout,
+        )
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"LiteLLM chat error {exc.response.status_code}: "
+            f"{exc.response.text[:200]}"
+        ) from exc
+    except httpx.TimeoutException as exc:
+        raise RuntimeError("LiteLLM chat request timed out") from exc
+    except httpx.RequestError as exc:
+        raise RuntimeError(f"LiteLLM chat request failed: {exc}") from exc
     try:
         raw = resp.json()["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -131,7 +141,10 @@ async def call_llm_json_value(
         options=resolved_options,
         config=config,
     )
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LLM returned invalid JSON: {raw[:200]}") from exc
 
 
 async def call_llm(
@@ -186,8 +199,11 @@ async def embed_texts(
     except httpx.RequestError as exc:
         raise RuntimeError(f"Embedding request failed: {exc}") from exc
     payload = response.json()
-    data = sorted(
-        enumerate(payload["data"]),
-        key=lambda pair: pair[1].get("index", pair[0]),
-    )
-    return [item["embedding"] for _, item in data]
+    try:
+        data = sorted(
+            enumerate(payload["data"]),
+            key=lambda pair: pair[1].get("index", pair[0]),
+        )
+        return [item["embedding"] for _, item in data]
+    except (KeyError, TypeError, IndexError) as exc:
+        raise RuntimeError(f"Unexpected embedding response format: {exc}") from exc

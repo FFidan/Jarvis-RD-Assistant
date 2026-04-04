@@ -18,4 +18,5 @@ testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",
     "services/telegram_bot/tests",
+    "libs/jarvis_common/tests",
 ]

@@ -362,7 +362,7 @@ COMMENT ON TABLE daily_log IS 'Daily activity summary for analytics and streaks.
 
 CREATE TABLE scheduled_nudges (
     id              SERIAL PRIMARY KEY,
-    nudge_type      VARCHAR(50) NOT NULL CHECK (nudge_type IN ('deadline_warning', 'daily_summary', 'review_reminder', 'paper_digest', 'research_pulse', 'author_alert')),
+    nudge_type      VARCHAR(50) NOT NULL UNIQUE CHECK (nudge_type IN ('deadline_warning', 'daily_summary', 'review_reminder', 'paper_digest', 'research_pulse', 'author_alert')),
     cron_expression VARCHAR(100) NOT NULL,
     enabled         BOOLEAN DEFAULT TRUE,
     config          JSONB DEFAULT '{}',
@@ -382,7 +382,7 @@ INSERT INTO scheduled_nudges (nudge_type, cron_expression, enabled) VALUES
     ('deadline_warning', '0 12 * * *', TRUE),
     ('research_pulse', '0 9 * * *', TRUE),
     ('author_alert', '0 10 * * *', TRUE)
-ON CONFLICT DO NOTHING;
+ON CONFLICT (nudge_type) DO NOTHING;
 
 -- =============================================================================
 -- AUTHOR TRACKING

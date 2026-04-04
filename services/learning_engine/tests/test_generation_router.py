@@ -70,22 +70,14 @@ def _make_card_row(id=1, deck_id=1, paper_id=1):
     )
 
 
-@pytest.mark.asyncio
-async def test_get_smart_model_strips_json_string_quotes():
-    """get_smart_model normalizes quoted JSONB strings from user_config."""
-    conn = AsyncMock()
-    conn.fetchval.return_value = '"mistral-nemo"'
-
-    assert await get_smart_model(conn) == "mistral-nemo"
+def test_get_smart_model_returns_alias():
+    """get_smart_model always returns the 'smart' LiteLLM alias."""
+    assert get_smart_model() == "smart"
 
 
-@pytest.mark.asyncio
-async def test_get_smart_model_defaults_to_alias_when_missing():
-    """get_smart_model falls back to the smart alias when no config row exists."""
-    conn = AsyncMock()
-    conn.fetchval.return_value = None
-
-    assert await get_smart_model(conn) == "smart"
+def test_get_smart_model_no_conn_param():
+    """get_smart_model requires no arguments (conn was removed)."""
+    assert get_smart_model() == "smart"
 
 
 @pytest.mark.asyncio
@@ -117,7 +109,7 @@ async def test_generate_cards_success_creates_cards_and_uses_validated_model():
     conn.fetch.return_value = [FakeRecord(id=1, content="chunk", page_number=2)]
 
     with (
-        patch.object(generation, "get_smart_model", AsyncMock(return_value="resolved-model")) as mock_get_model,
+        patch.object(generation, "get_smart_model", MagicMock(return_value="resolved-model")) as mock_get_model,
         patch.object(generation, "_insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))),
     ):
         response = await generation.generate_cards.__wrapped__(
@@ -131,7 +123,7 @@ async def test_generate_cards_success_creates_cards_and_uses_validated_model():
     assert response.cards_created == 1
     assert response.confidence == "HIGH"
     assert response.cards[0].paper_id == 101
-    mock_get_model.assert_awaited_once()
+    mock_get_model.assert_called_once()
     card_generator.generate_cards.assert_awaited_once()
     assert card_generator.generate_cards.await_args.kwargs["model"] == "resolved-model"
 

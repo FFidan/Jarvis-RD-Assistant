@@ -66,7 +66,7 @@ async def link_paper(
             paper_id,
         )
     # result is e.g. "INSERT 0 1" (inserted) or "INSERT 0 0" (no-op)
-    if result and result.endswith("0"):
+    if result and result == "INSERT 0 0":
         return JSONResponse(
             content={"project_id": project_id, "paper_id": paper_id, "message": "Paper already linked"},
             status_code=200,

@@ -39,7 +39,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["search"])
 
 
-def _raise_source_search_error(source_type: str, exc: httpx.HTTPStatusError, *, api_key_configured: bool) -> NoReturn:
+def _raise_source_search_error(
+    source_type: str, exc: httpx.HTTPStatusError, *, api_key_configured: bool
+) -> NoReturn:
     """Translate source API failures into stable user-facing HTTP errors."""
     status_code = exc.response.status_code
     if source_type == "semantic_scholar" and status_code == 429:
@@ -165,7 +167,10 @@ async def search_hybrid(
 async def list_feed_papers(
     request: Request,
     unread_only: bool = False,
-    sort: str = Query(default="discovered_at", pattern="^(discovered_at|priority|published_date|title|citation_count)$"),
+    sort: str = Query(
+        default="discovered_at",
+        pattern="^(discovered_at|priority|published_date|title|citation_count|recommendation)$",
+    ),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     q: str | None = Query(default=None),
@@ -174,6 +179,7 @@ async def list_feed_papers(
     topic_names: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
+    recommended: bool = False,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
@@ -218,6 +224,7 @@ async def list_feed_papers(
         topic_names=topic_names,
         date_from=date_from,
         date_to=date_to,
+        recommended=recommended,
     )
 
     # Note: pool.acquire() without an explicit transaction uses auto-commit mode.
@@ -421,12 +428,8 @@ async def compute_relevance(
     """Compute and store relevance score between a paper and a topic."""
     async with db_pool.acquire() as conn:
         # Fetch paper and topic data in one round-trip
-        paper = await conn.fetchrow(
-            "SELECT title, abstract FROM papers WHERE id = $1", paper_id
-        )
-        topic = await conn.fetchrow(
-            "SELECT query_terms FROM topics WHERE id = $1", topic_id
-        )
+        paper = await conn.fetchrow("SELECT title, abstract FROM papers WHERE id = $1", paper_id)
+        topic = await conn.fetchrow("SELECT query_terms FROM topics WHERE id = $1", topic_id)
         if not paper:
             raise HTTPException(404, f"Paper {paper_id} not found")
         if not topic:

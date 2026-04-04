@@ -101,6 +101,9 @@ export interface FeedPaper extends Paper {
   priority_level?: string;
   has_chunks?: boolean;
   has_summary?: boolean;
+  recommendation_score?: number | null;
+  recommendation_reason?: string | null;
+  recommendation_modes?: string[] | null;
 }
 
 export interface FeedResponse {

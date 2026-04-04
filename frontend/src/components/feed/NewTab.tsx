@@ -37,7 +37,7 @@ export function NewTab() {
     queryFn: () =>
       fetchFeedPapers({
         unread_only: true,
-        sort,
+        sort: sort as 'discovered_at' | 'priority' | 'published_date' | 'title' | 'citation_count' | 'recommendation',
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
         q: filterText || undefined,
@@ -46,6 +46,7 @@ export function NewTab() {
         topic_names: selectedTopics.length ? selectedTopics.join(',') : undefined,
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
+        recommended: undefined,
       }),
   });
 
@@ -148,6 +149,11 @@ export function NewTab() {
                     {paper.has_chunks && <Badge variant="outline" className="text-xs px-1.5 py-0">Chunked</Badge>}
                     {paper.has_summary && <Badge variant="outline" className="text-xs px-1.5 py-0">Summary</Badge>}
                   </div>
+                  {paper.recommendation_score != null && paper.recommendation_reason && (
+                    <Badge variant="outline" className="text-xs text-blue-600 border-blue-300 bg-blue-50">
+                      ★ {paper.recommendation_reason}
+                    </Badge>
+                  )}
                   {paper.discovered_at && (
                     <span className="text-xs text-muted-foreground">
                       {formatDate(paper.discovered_at)}

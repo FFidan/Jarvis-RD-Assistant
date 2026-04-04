@@ -17,8 +17,9 @@ RUN adduser --disabled-password --no-create-home appuser
 ENV HF_HOME=/tmp/hf_cache HOME=/tmp/appuser
 RUN mkdir -p /tmp/hf_cache /tmp/appuser && chown -R appuser:appuser /tmp/hf_cache /tmp/appuser
 # Marker downloads a font to its package static/ dir on first use
-RUN mkdir -p /usr/local/lib/python3.12/site-packages/static && \
-    chown -R appuser:appuser /usr/local/lib/python3.12/site-packages/static
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    mkdir -p "$SITE_PKGS/static" && \
+    chown -R appuser:appuser "$SITE_PKGS/static"
 
 COPY services/paper_ingestion/app/ ./app/
 

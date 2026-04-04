@@ -1,5 +1,6 @@
 """Settings, nudges, and source management endpoints."""
 
+import asyncio
 import json
 import logging
 
@@ -21,12 +22,30 @@ from app.services.litellm_config import ROLE_TO_ALIAS, reload_litellm, update_li
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
 
-_ALLOWED_CONFIG_KEYS = frozenset({
-    "llm.smart_model", "llm.fast_model", "llm.embed_model",
-    "ui.page_size",
-    "ingestion.max_papers_per_run", "ingestion.chunk_size",
-    "paper.max_daily", "paper.auto_generate_cards",
-})
+_ALLOWED_CONFIG_KEYS = frozenset(
+    {
+        "llm.smart_model",
+        "llm.fast_model",
+        "llm.embed_model",
+        "ui.page_size",
+        "ingestion.max_papers_per_run",
+        "ingestion.chunk_size",
+        "paper.max_daily",
+        "paper.auto_generate_cards",
+        # FSRS
+        "fsrs.desired_retention",
+        "fsrs.learning_steps",
+        # Notifications
+        "notifications.timezone",
+        "notifications.morning_briefing",
+        "notifications.paper_digest",
+        "notifications.review_reminder",
+        # Recommendation engine
+        "recommendation.liked_weight",
+        "recommendation.project_weight",
+        "recommendation.enabled",
+    }
+)
 
 _NUDGE_ALLOWED_COLUMNS = frozenset({"cron_expression", "enabled"})
 _NUDGE_JSONB_COLUMNS = frozenset()
@@ -36,6 +55,7 @@ _SOURCE_JSONB_COLUMNS = frozenset({"config"})
 
 
 # --- User Config ---
+
 
 @router.get("/config", response_model=list[ConfigEntry])
 @limiter.limit("60/minute")
@@ -60,21 +80,32 @@ async def get_config(request: Request, key: str) -> ConfigEntry:
 async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEntry:
     if key not in _ALLOWED_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
+    if key in ROLE_TO_ALIAS:
+        if not isinstance(body.value, str):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model name must be a string, got {type(body.value).__name__}",
+            )
     value_json = json.dumps(body.value)
     async with request.app.state.db_pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
             ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
-            key, value_json,
+            key,
+            value_json,
         )
     if key in ROLE_TO_ALIAS:
-        updated = update_litellm_model(key, body.value)
+        from app.services.litellm_config import _config_lock
+
+        async with _config_lock:
+            updated = await asyncio.to_thread(update_litellm_model, key, body.value)
         if updated:
             await reload_litellm()
     return ConfigEntry(key=key, value=body.value)
 
 
 # --- Scheduled Nudges ---
+
 
 @router.get("/nudges", response_model=list[NudgeResponse])
 @limiter.limit("60/minute")
@@ -109,6 +140,7 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
 
 # --- Paper Sources ---
 
+
 @router.get("/sources", response_model=list[SourceResponse])
 @limiter.limit("60/minute")
 async def list_sources(request: Request) -> list[SourceResponse]:
@@ -142,13 +174,15 @@ async def update_source(request: Request, source_id: int, body: SourceUpdate) ->
 
 # --- Analytics ---
 
+
 @router.get("/analytics/papers-by-source", response_model=list[PapersBySourceItem])
 @limiter.limit("60/minute")
 async def papers_by_source(request: Request) -> list[dict]:
     """Return paper counts grouped by source type."""
     async with request.app.state.db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT source_type, COUNT(*) AS count FROM papers GROUP BY source_type ORDER BY count DESC"
+            "SELECT source_type, COUNT(*) AS count"
+            " FROM papers GROUP BY source_type ORDER BY count DESC"
         )
     return [{"source_type": r["source_type"], "count": r["count"]} for r in rows]
 

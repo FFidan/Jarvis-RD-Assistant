@@ -27,18 +27,23 @@ from jarvis_common import (
     validation_exception_handler,
     verify_api_key,
 )
+from jarvis_common.llm_client import get_litellm_config
 from qdrant_client import AsyncQdrantClient
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Trigger source registration via imports
 import app.sources  # noqa: F401
-from app.deps import limiter
 
 # Re-export dependency helpers so existing tests can `from app.main import get_db_pool`
-from app.deps import get_db_pool, get_http_client, get_pdf_processor, get_verifier  # noqa: F401
+from app.deps import (  # noqa: F401
+    get_db_pool,
+    get_http_client,
+    get_pdf_processor,
+    get_verifier,
+    limiter,
+)
 from app.embedder import Embedder
-from jarvis_common.llm_client import get_litellm_config
 from app.models import HealthCheckResponse, PaperSourceConfig, SystemModelsResponse
 from app.pdf_processor import PDFProcessor
 from app.sources.registry import get_source_class
@@ -62,10 +67,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                 applied_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
-        applied = {
-            r["version"]
-            for r in await conn.fetch("SELECT version FROM schema_migrations")
-        }
+        applied = {r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")}
 
         migrations_dir = Path("/app/db/migrations")
         if not migrations_dir.exists():
@@ -87,9 +89,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             sql = sql_file.read_text()
             async with conn.transaction():
                 await conn.execute(sql)
-                await conn.execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                )
+                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
             logger.info("Migration %s applied successfully", version)
 
 
@@ -115,7 +115,7 @@ async def lifespan(app: FastAPI):
         database_url,
         min_size=int(os.environ.get("DB_POOL_MIN", "2")),
         max_size=int(os.environ.get("DB_POOL_MAX", "10")),
-        init=init_pg_connection
+        init=init_pg_connection,
     )
     await run_migrations(app.state.db_pool)
     app.state.http_client = httpx.AsyncClient(
@@ -139,7 +139,8 @@ async def lifespan(app: FastAPI):
                 continue
             async with app.state.db_pool.acquire() as _conn:
                 _row = await _conn.fetchrow(
-                    "SELECT id, source_type, enabled, config FROM paper_sources WHERE source_type = $1",
+                    "SELECT id, source_type, enabled, config"
+                    " FROM paper_sources WHERE source_type = $1",
                     _source_type_val,
                 )
             if _row:
@@ -220,7 +221,7 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # Router registration
 # ---------------------------------------------------------------------------
 
-from app.routers import (
+from app.routers import (  # noqa: E402
     analyze,
     authors,
     citations,
@@ -232,6 +233,7 @@ from app.routers import (
     pdf,
     priority,
     rag,
+    recommendations,
     search,
     settings,
     snapshots,
@@ -249,6 +251,7 @@ app.include_router(dashboard_api.router)
 app.include_router(analyze.router)
 app.include_router(notes.router)
 app.include_router(priority.router)
+app.include_router(recommendations.router)
 app.include_router(search.router)
 app.include_router(papers.router)
 app.include_router(pdf.router)
@@ -280,9 +283,7 @@ async def health_check(request: Request) -> HealthCheckResponse:
 
     # Qdrant
     try:
-        await asyncio.wait_for(
-            request.app.state.qdrant_client.get_collections(), timeout=5.0
-        )
+        await asyncio.wait_for(request.app.state.qdrant_client.get_collections(), timeout=5.0)
         checks["qdrant"] = "ok"
     except Exception:
         logger.warning("Health check: Qdrant unavailable", exc_info=True)
@@ -324,9 +325,7 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
 
     try:
         async with request.app.state.db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT key, value FROM user_config WHERE key LIKE 'llm.%'"
-            )
+            rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'llm.%'")
         for r in rows:
             short_key = r["key"].replace("llm.", "")
             val = r["value"]
@@ -343,12 +342,14 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
         if resp.status_code == 200:
             data = resp.json()
             for m in data.get("models", []):
-                result["installed"].append({
-                    "name": m.get("name", ""),
-                    "size": m.get("size", 0),
-                    "parameter_size": m.get("details", {}).get("parameter_size", ""),
-                    "quantization": m.get("details", {}).get("quantization_level", ""),
-                })
+                result["installed"].append(
+                    {
+                        "name": m.get("name", ""),
+                        "size": m.get("size", 0),
+                        "parameter_size": m.get("details", {}).get("parameter_size", ""),
+                        "quantization": m.get("details", {}).get("quantization_level", ""),
+                    }
+                )
     except Exception:
         logger.warning("Could not load installed Ollama models", exc_info=True)
         result["issues"]["installed"] = "Could not load installed Ollama models."

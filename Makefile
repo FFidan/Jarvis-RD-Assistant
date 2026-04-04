@@ -1,6 +1,6 @@
 SERVICES = services/paper_ingestion services/learning_engine services/telegram_bot
 
-.PHONY: setup setup-service test test-service lint clean
+.PHONY: setup setup-service test test-service lint clean typecheck check
 
 ## Create all virtual environments and install dependencies
 setup:
@@ -48,6 +48,13 @@ clean:
 ## Remove virtual environments
 clean-venvs:
 	find . -type d -name .venv -exec rm -rf {} + 2>/dev/null || true
+
+## Run pyright type checking
+typecheck:
+	npx pyright
+
+## Run all quality checks: lint + typecheck + test
+check: lint typecheck test
 
 ## Docker shortcuts
 up:

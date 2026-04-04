@@ -61,4 +61,3 @@ async def run_review_reminder(
             config.telegram_chat_id,
             due_now,
         )
-        raise

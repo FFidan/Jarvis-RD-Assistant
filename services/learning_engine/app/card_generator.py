@@ -119,7 +119,7 @@ class CardGenerator:
             result = await call_llm(
                 self.http_client, prompt, options=options, config=self.litellm_config,
             )
-        except (httpx.HTTPStatusError, httpx.ReadTimeout):
+        except RuntimeError:
             raise
         except (json.JSONDecodeError, ValueError):
             logger.error("LLM returned invalid JSON for card generation")

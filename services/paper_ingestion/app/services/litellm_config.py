@@ -6,11 +6,14 @@ the alias to the new model. LiteLLM picks up the change on next request
 (config is re-read from the mounted volume).
 """
 
+import asyncio
 import logging
 from pathlib import Path
 
 import httpx
 import yaml
+
+from jarvis_common.llm_client import get_litellm_config, LITELLM_FALLBACK_ENV_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ ROLE_TO_ALIAS: dict[str, str] = {
     "llm.fast_model": "fast",
     "llm.embed_model": "embed",
 }
+
+# Async-safe lock for config file I/O (A3: PI-009 + PI-010)
+_config_lock = asyncio.Lock()
 
 
 def update_litellm_model(config_key: str, ollama_model_name: str) -> bool:
@@ -51,14 +57,24 @@ def update_litellm_model(config_key: str, ollama_model_name: str) -> bool:
     updated = False
     for entry in config.get("model_list", []):
         if entry.get("model_name") == alias:
-            old_model = entry.get("litellm_params", {}).get("model", "")
-            new_model = f"ollama/{ollama_model_name}"
-            if old_model != new_model:
-                entry["litellm_params"]["model"] = new_model
+            # A6: detect provider from existing entry instead of hardcoding ollama
+            existing_model = (entry.get("litellm_params") or {}).get("model", "")
+            if "/" in existing_model:
+                provider = existing_model.split("/")[0]
+                new_model = f"{provider}/{ollama_model_name}"
+            else:
+                new_model = f"ollama/{ollama_model_name}"
+            if existing_model != new_model:
+                # A2: guard litellm_params null in YAML update
+                params = entry.get("litellm_params")
+                if params is None:
+                    params = {}
+                    entry["litellm_params"] = params
+                params["model"] = new_model
                 updated = True
                 logger.info(
                     "Updated LiteLLM alias %r: %s -> %s",
-                    alias, old_model, new_model,
+                    alias, existing_model, new_model,
                 )
             break
 
@@ -77,23 +93,28 @@ async def reload_litellm() -> bool:
     the config change will still take effect on LiteLLM's next restart.
     """
     try:
+        # A5: use shared helper instead of local _get_litellm_key
+        litellm_cfg = get_litellm_config(
+            fallback_env_names=LITELLM_FALLBACK_ENV_NAMES,
+        )
         async with httpx.AsyncClient(timeout=5.0) as client:
             # LiteLLM proxy supports config reload via internal API
             resp = await client.post(
-                "http://litellm:4000/config/update",
+                f"{litellm_cfg.base_url}/config/update",
                 json={},
-                headers={"Authorization": f"Bearer {_get_litellm_key()}"},
+                headers={"Authorization": f"Bearer {litellm_cfg.api_key}"},
             )
             if resp.status_code < 400:
                 logger.info("LiteLLM config reloaded successfully")
                 return True
-            logger.warning("LiteLLM reload returned %d", resp.status_code)
+            # A4: improved logging on non-2xx response
+            logger.warning(
+                "LiteLLM reload returned %s — config will apply on next LiteLLM restart",
+                resp.status_code,
+            )
     except Exception as exc:
-        logger.warning("Could not reload LiteLLM (will apply on restart): %r", exc)
+        logger.warning(
+            "Could not signal LiteLLM to reload — config will apply on next LiteLLM restart: %r",
+            exc,
+        )
     return False
-
-
-def _get_litellm_key() -> str:
-    """Read the LiteLLM master key from environment."""
-    import os
-    return os.environ.get("LITELLM_API_KEY") or os.environ.get("LITELLM_MASTER_KEY", "")

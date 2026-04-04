@@ -1,0 +1,18 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "basic",
+  "include": [
+    "services/paper_ingestion/app",
+    "services/learning_engine/app",
+    "libs/jarvis_common/jarvis_common"
+  ],
+  "exclude": [
+    "**/tests",
+    "**/.venv",
+    "**/node_modules",
+    "frontend",
+    "scripts"
+  ],
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
+}

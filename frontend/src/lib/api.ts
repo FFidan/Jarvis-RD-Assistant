@@ -60,16 +60,23 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 
 /** Fetch that returns the raw Response (for blob downloads). */
 export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, {
-    ...init,
-    headers: {
-      ...init?.headers,
-    },
-  });
-  if (!res.ok) {
-    throw new ApiError(res.status, await res.text());
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 300_000);
+  try {
+    const res = await fetch(url, {
+      ...init,
+      signal: init?.signal ?? controller.signal,
+      headers: {
+        ...init?.headers,
+      },
+    });
+    if (!res.ok) {
+      throw new ApiError(res.status, await res.text());
+    }
+    return res;
+  } finally {
+    clearTimeout(timeout);
   }
-  return res;
 }
 
 /** Health check helper — returns true if service responds ok. */
@@ -319,7 +326,7 @@ export async function exportAnki(deckId: number): Promise<void> {
 // --- Feed ---
 export const fetchFeedPapers = (params: {
   unread_only?: boolean;
-  sort?: string;
+  sort?: 'discovered_at' | 'priority' | 'published_date' | 'title' | 'citation_count' | 'recommendation';
   limit?: number;
   offset?: number;
   q?: string;
@@ -328,15 +335,38 @@ export const fetchFeedPapers = (params: {
   topic_names?: string;
   date_from?: string;
   date_to?: string;
+  recommended?: boolean;
 }) => {
   const searchParams = new URLSearchParams();
-  Object.entries(params).forEach(([key, value]) => {
+  const { recommended, ...rest } = params;
+  Object.entries(rest).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== '') {
       searchParams.set(key, String(value));
     }
   });
+  if (recommended) {
+    searchParams.set('recommended', 'true');
+  }
   return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
 };
+
+// --- Recommendations ---
+export interface RecommendationItem {
+  paper_id: number;
+  score: number;
+  modes: string[];
+  explanation: string;
+  dismissed: boolean;
+}
+
+export const fetchRecommendations = (limit = 20) =>
+  apiFetch<RecommendationItem[]>(`/api/recommendations?limit=${limit}`);
+
+export const triggerRecommendationRefresh = () =>
+  apiFetch<{ refreshed: number }>('/api/recommendations/refresh', { method: 'POST' });
+
+export const dismissRecommendation = (paperId: number) =>
+  apiFetch<{ dismissed: boolean }>(`/api/recommendations/${paperId}/dismiss`, { method: 'POST' });
 
 export const searchPreview = (query: string, source?: string, maxResults?: number) =>
   apiFetch<SearchPreviewResult[]>('/api/search-preview', {
@@ -430,7 +460,7 @@ export const batchFetchCitations = () =>
 export const getKnowledgeGraph = (entityType?: string, minPaperCount?: number) => {
   const params = new URLSearchParams();
   if (entityType) params.set('entity_type', entityType);
-  if (minPaperCount) params.set('min_paper_count', String(minPaperCount));
+  if (minPaperCount != null) params.set('min_paper_count', String(minPaperCount));
   return apiFetch<KnowledgeGraph>(`/api/knowledge-graph?${params.toString()}`);
 };
 

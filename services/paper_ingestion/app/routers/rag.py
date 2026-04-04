@@ -134,8 +134,7 @@ async def ask_paper(
         embedder, request.app.state.db_pool, paper_id, body, http_client
     )
 
-    async with request.app.state.db_pool.acquire() as conn:
-        smart_model = await get_smart_model(conn)
+    smart_model = get_smart_model()
 
     litellm_config = get_litellm_config(
         fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
@@ -206,8 +205,7 @@ async def ask_paper_stream(
             media_type="text/event-stream",
         )
 
-    async with request.app.state.db_pool.acquire() as conn:
-        smart_model = await get_smart_model(conn)
+    smart_model = get_smart_model()
 
     return StreamingResponse(
         _stream_rag_events(http_client, messages, sources, model=smart_model),
@@ -261,8 +259,7 @@ async def ask_cross_paper(
 
     messages, sources_list = result
 
-    async with request.app.state.db_pool.acquire() as conn:
-        smart_model = await get_smart_model(conn)
+    smart_model = get_smart_model()
 
     litellm_config = get_litellm_config(
         fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
@@ -344,8 +341,7 @@ async def ask_cross_paper_stream(
 
     messages, sources = result
 
-    async with request.app.state.db_pool.acquire() as conn:
-        smart_model = await get_smart_model(conn)
+    smart_model = get_smart_model()
 
     return StreamingResponse(
         _stream_rag_events(http_client, messages, sources, model=smart_model),

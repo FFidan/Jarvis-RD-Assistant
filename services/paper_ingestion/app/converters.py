@@ -79,6 +79,9 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         rating=row.get("rating"),
         has_chunks=row.get("has_chunks", False),
         has_summary=row.get("has_summary", False),
+        recommendation_score=row.get("recommendation_score"),
+        recommendation_reason=row.get("recommendation_reason"),
+        recommendation_modes=row.get("recommendation_modes"),
     )
 
 
@@ -176,4 +179,3 @@ def deduplicate_by_paper_id(results: list[dict]) -> list[dict]:
 # either rename the function (e.g. ``upsert_paper_read_state``) or split the
 # two operations.
 # ---------------------------------------------------------------------------
-

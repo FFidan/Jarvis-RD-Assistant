@@ -200,7 +200,7 @@ async def generate_paper_summary(
             full_text = "\n".join(c.content for c in chunks)
 
             # Read model preference from user_config while connection is held
-            smart_model = await get_smart_model(conn)
+            smart_model = get_smart_model()
     # Lock and connection released here.
 
     llm_model_name = smart_model

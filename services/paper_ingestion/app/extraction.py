@@ -102,7 +102,7 @@ async def extract_fields_for_paper(
         if not chunks:
             raise ValueError(f"No chunks found for paper {paper_id}")
 
-        smart_model = await get_smart_model(conn)
+        smart_model = get_smart_model()
 
     # If any per-field chunk search fails, keep full-paper context but move any
     # already-selected chunks to the front so truncation does not discard them.

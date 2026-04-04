@@ -8,9 +8,8 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
-
 from jarvis_common import HealthCheckResponse  # noqa: F401 — re-exported
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --- Enums ---
 
@@ -433,6 +432,9 @@ class FeedPaper(PaperResponse):
     priority_level: str | None = None
     has_chunks: bool = False
     has_summary: bool = False
+    recommendation_score: float | None = None
+    recommendation_reason: str | None = None
+    recommendation_modes: list[str] | None = None
 
 
 class FeedResponse(BaseModel):

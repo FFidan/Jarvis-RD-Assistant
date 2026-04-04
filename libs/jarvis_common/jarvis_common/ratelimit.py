@@ -7,12 +7,12 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
-_TRUSTED_NETS = [
+_TRUSTED_NETS = (
     ipaddress.ip_network("127.0.0.0/8"),
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),   # Docker default bridge
     ipaddress.ip_network("192.168.0.0/16"),
-]
+)
 
 
 def _in_trusted_nets(ip: str) -> bool:
