@@ -48,12 +48,15 @@ async def lifespan(app: FastAPI):
     """Initialize and tear down shared resources."""
     validate_production_config()
 
-    from jarvis_common.llm_client import get_litellm_config, LITELLM_FALLBACK_ENV_NAMES
+    from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
 
     database_url = os.environ["DATABASE_URL"]
 
     app.state.db_pool = await asyncpg.create_pool(
-        database_url, min_size=int(os.environ.get("DB_POOL_MIN", "2")), max_size=int(os.environ.get("DB_POOL_MAX", "10")), init=init_pg_connection
+        database_url,
+        min_size=int(os.environ.get("DB_POOL_MIN", "2")),
+        max_size=int(os.environ.get("DB_POOL_MAX", "10")),
+        init=init_pg_connection,
     )
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
@@ -88,7 +91,7 @@ async def lifespan(app: FastAPI):
         logger.info("DEV_MODE enabled -- running without authentication")
     else:
         logger.warning(
-            "API authentication is not configured and DEV_MODE is disabled -- service will reject requests"
+            "API authentication is not configured and DEV_MODE is disabled -- service will reject requests"  # noqa: E501
         )
 
     logger.info("Learning Engine Service started (retention=%.2f)", desired_retention)
@@ -133,7 +136,19 @@ app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 # Router registration
 # ---------------------------------------------------------------------------
 
-from app.routers import analytics, cards, decks, export, generation, milestones, project_papers, projects, review, tasks
+from app.routers import (  # noqa: E402
+    analytics,
+    cards,
+    decks,
+    executive,
+    export,
+    generation,
+    milestones,
+    project_papers,
+    projects,
+    review,
+    tasks,
+)
 
 app.include_router(projects.router)
 app.include_router(tasks.router)
@@ -145,6 +160,7 @@ app.include_router(cards.router)
 app.include_router(review.router)
 app.include_router(generation.router)
 app.include_router(export.router)
+app.include_router(executive.router)
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +185,7 @@ async def health_check(request: Request) -> HealthCheckResponse:
     # Check LiteLLM
     try:
         from jarvis_common.llm_client import get_litellm_config
+
         litellm_config = get_litellm_config()
         client: httpx.AsyncClient = request.app.state.http_client
         resp = await client.get(f"{litellm_config.base_url}/health/readiness", timeout=5.0)

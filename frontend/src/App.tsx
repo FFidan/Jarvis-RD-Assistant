@@ -3,6 +3,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { LoginPage } from '@/pages/LoginPage';
 import { HomePage } from '@/pages/HomePage';
+import { MyDayPage } from '@/pages/MyDayPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
@@ -32,6 +33,7 @@ export function App() {
       <AppShell>
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/my-day" element={<MyDayPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="analytics" element={<AnalyticsPage />} />
           <Route path="extractions" element={<ExtractionTablePage />} />

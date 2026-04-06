@@ -14,6 +14,10 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Project Manager** -- Lightweight task and milestone tracking with paper linking, deadline warnings, and progress monitoring.
 
+- **My Day** -- Daily productivity command center surfacing today's tasks, project progress, and due flashcards in one view, with per-task Focus buttons to start a Pomodoro session.
+
+- **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations.
+
 ### Key Design Choices
 
 - **Anti-hallucination pipeline**: Every LLM-generated finding must include an exact verbatim quote and page number. A 4-layer verification pipeline checks quotes against the source PDF. Unverifiable claims are discarded, never corrected.
@@ -125,27 +129,15 @@ See [`.env.example`](.env.example) for the full list with comments.
 
 ### Local Setup
 
-```bash
-# Install Python dependencies for all services
-make setup
-
-# Run all tests
-make test
-
-# Run tests for a single service
-make test-service SERVICE=services/paper_ingestion
-
-# Lint and format
-make lint
-make format
-```
+We strictly use Docker Compose for local development to avoid polluting the host machine with heavy ML dependencies.
 
 ### Docker Development
 
 ```bash
-docker compose up paper_ingestion       # Start one service + deps
+docker compose up -d                    # Start all services
 docker compose logs -f paper_ingestion  # Follow logs
-docker compose up -d --build            # Rebuild and restart
+docker compose exec paper_ingestion pytest tests/  # Run tests
+docker compose exec paper_ingestion ruff check .   # Run linting
 ```
 
 ### Adding a Paper Source

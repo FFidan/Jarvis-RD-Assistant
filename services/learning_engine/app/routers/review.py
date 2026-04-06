@@ -1,6 +1,6 @@
 """Review and stats endpoints."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -41,9 +41,7 @@ async def submit_review(
     """Submit a review for a card. Atomic: updates FSRS state and logs review."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow(
-                "SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id
-            )
+            row = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
             if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
 
@@ -142,9 +140,21 @@ async def get_stats(
                 """
             )
             streak_days = 0
-            expected = datetime.now(UTC).date()
+            today = datetime.now(UTC).date()
+            yesterday = today - timedelta(days=1)
+            expected: date | None = None
             for row in streak_rows:
-                if row["review_date"] == expected:
+                rd = row["review_date"]
+                if expected is None:
+                    # Accept today or yesterday as streak start
+                    if rd == today:
+                        expected = today - timedelta(days=1)
+                    elif rd == yesterday:
+                        expected = yesterday - timedelta(days=1)
+                    else:
+                        break  # streak is already broken (gap > 1 day)
+                    streak_days += 1
+                elif rd == expected:
                     streak_days += 1
                     expected -= timedelta(days=1)
                 else:

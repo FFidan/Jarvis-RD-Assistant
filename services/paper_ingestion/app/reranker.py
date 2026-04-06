@@ -23,20 +23,19 @@ class Reranker:
         self._model_name = model_name
         self._model = None
 
-    def _load_model_if_needed(self):
+    def _load_model_if_needed(self) -> None:
         """Lazy-load the cross-encoder model on first use."""
-        if self._model is None:
-            try:
-                from sentence_transformers import CrossEncoder
+        if self._model is not None:
+            return
+        from sentence_transformers import CrossEncoder
 
-                self._model = CrossEncoder(self._model_name)
-                logger.info("Loaded cross-encoder model: %s", self._model_name)
-            except ImportError:
-                logger.warning("sentence-transformers not installed; reranking disabled")
-                raise
-            except Exception:
-                logger.exception("Failed to load cross-encoder model")
-                raise
+        try:
+            self._model = CrossEncoder(self._model_name, device="cuda")
+            logger.info("Cross-encoder loaded on CUDA: %s", self._model_name)
+        except Exception:
+            logger.warning("CUDA unavailable for cross-encoder, falling back to CPU")
+            self._model = CrossEncoder(self._model_name, device="cpu")
+            logger.info("Cross-encoder loaded on CPU: %s", self._model_name)
 
     def rerank(
         self,
@@ -91,7 +90,5 @@ def get_reranker() -> Reranker | None:
         reranker._load_model_if_needed()
         return reranker
     except Exception:
-        logger.warning(
-            "Reranker unavailable; using retrieval scores only", exc_info=True
-        )
+        logger.warning("Reranker unavailable; using retrieval scores only", exc_info=True)
         return None

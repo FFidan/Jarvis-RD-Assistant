@@ -2,6 +2,7 @@ import { Link, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Home,
+  Sun,
   Newspaper,
   BarChart3,
   FolderKanban,
@@ -24,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
+  { path: '/my-day', label: 'My Day', icon: Sun },
   { path: '/feed', label: 'Feed', icon: Newspaper },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/projects', label: 'Projects', icon: FolderKanban },

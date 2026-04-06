@@ -92,8 +92,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     """
     text = (
         "Welcome to <b>JARVIS RD Assistant</b>!\n\n"
-        "I help you manage research papers, flashcard reviews, and projects.\n\n"
-        + format_help()
+        "I help you manage research papers, flashcard reviews, and projects.\n\n" + format_help()
     )
     await update.message.reply_text(text, parse_mode="HTML")
 
@@ -195,9 +194,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         stats = resp.json()
     except Exception:
         logger.exception("Failed to fetch stats")
-        await update.message.reply_text(
-            "Failed to retrieve learning stats.", parse_mode="HTML"
-        )
+        await update.message.reply_text("Failed to retrieve learning stats.", parse_mode="HTML")
         return
 
     await update.message.reply_text(format_review_stats(stats), parse_mode="HTML")
@@ -223,17 +220,13 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # New papers in last 24 hours
     since = datetime.now(UTC) - timedelta(hours=24)
-    row = await db.fetchrow(
-        "SELECT COUNT(*) AS cnt FROM papers WHERE created_at >= $1", since
-    )
+    row = await db.fetchrow("SELECT COUNT(*) AS cnt FROM papers WHERE created_at >= $1", since)
     new_papers_count = row["cnt"] if row else 0
 
     # Due cards from learning engine
     due_cards = 0
     try:
-        resp = await http.get(
-            f"{config.learning_engine_url}/api/stats", timeout=15.0
-        )
+        resp = await http.get(f"{config.learning_engine_url}/api/stats", timeout=15.0)
         resp.raise_for_status()
         stats = resp.json()
         due_cards = stats.get("due_now", 0)
@@ -319,9 +312,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             project_id = int(context.args[0])
         except ValueError:
-            await update.message.reply_text(
-                "Usage: /tasks [project_id]", parse_mode="HTML"
-            )
+            await update.message.reply_text("Usage: /tasks [project_id]", parse_mode="HTML")
             return
 
     base_sql = (
@@ -352,9 +343,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             line += f" <i>({project_name})</i>"
         lines.append(line)
 
-    await update.message.reply_text(
-        truncate("\n".join(lines)), parse_mode="HTML"
-    )
+    await update.message.reply_text(truncate("\n".join(lines)), parse_mode="HTML")
 
 
 @auth_required
@@ -369,17 +358,13 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         Bot context.
     """
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /done &lt;task_id&gt;", parse_mode="HTML"
-        )
+        await update.message.reply_text("Usage: /done &lt;task_id&gt;", parse_mode="HTML")
         return
 
     try:
         task_id = int(context.args[0])
     except ValueError:
-        await update.message.reply_text(
-            "Task ID must be a number.", parse_mode="HTML"
-        )
+        await update.message.reply_text("Task ID must be a number.", parse_mode="HTML")
         return
 
     db = _get_db(context)
@@ -387,9 +372,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     result = await pm.complete_task(task_id)
 
     if not result:
-        await update.message.reply_text(
-            f"Task <b>{task_id}</b> not found.", parse_mode="HTML"
-        )
+        await update.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
     else:
         await update.message.reply_text(
             f"✅ Task <b>{task_id}</b> marked as done.", parse_mode="HTML"
@@ -408,20 +391,15 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         Bot context.
     """
     if not context.args:
-        await update.message.reply_text(
-            "Usage: /newproject &lt;name&gt;", parse_mode="HTML"
-        )
+        await update.message.reply_text("Usage: /newproject &lt;name&gt;", parse_mode="HTML")
         return
 
     name = " ".join(context.args)[:200]
     db = _get_db(context)
     try:
-        row = await db.fetchrow(
-            "INSERT INTO projects (name, status, created_at) "
-            "VALUES ($1, 'active', NOW()) RETURNING id",
-            name,
-        )
-        project_id = row["id"]
+        pm = ProjectManager(db)
+        result = await pm.create_project(name)
+        project_id = result["id"]
         await update.message.reply_text(
             f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",
             parse_mode="HTML",
@@ -432,6 +410,71 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Failed to create project. Please try again later.",
             parse_mode="HTML",
         )
+
+
+@auth_required
+async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/focus [duration]`` — start a focus session."""
+    try:
+        minutes = int(context.args[0]) if context.args else 25
+    except ValueError:
+        await update.message.reply_text(
+            "Please provide a valid integer for duration.",
+            parse_mode="HTML",  # noqa: E501
+        )
+        return
+
+    chat_id = update.effective_chat.id
+
+    async def focus_alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
+        job = context.job
+        await context.bot.send_message(
+            job.chat_id,
+            text=f"🍅 Focus session complete ({job.data} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
+        )
+        try:
+            http = _get_http(context)
+            config = _get_config(context)
+            await http.post(
+                f"{config.learning_engine_url}/api/executive/focus/log",
+                json={"duration_hours": job.data / 60},
+                timeout=10.0,
+            )
+        except Exception:
+            logger.exception("Failed to log focus session to backend")
+
+    context.job_queue.run_once(
+        focus_alarm, minutes * 60, chat_id=chat_id, name=f"focus_{chat_id}", data=minutes
+    )
+    await update.message.reply_text(
+        f"🍅 Focus session started for {minutes} minutes. Notifications are paused.",
+        parse_mode="HTML",
+    )
+
+
+@auth_required
+async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/next`` — recommend the next paper to read."""
+    db = _get_db(context)
+    row = await db.fetchrow(
+        """
+        SELECT pr.paper_id, pr.score, p.title
+        FROM paper_recommendations pr
+        JOIN papers p ON pr.paper_id = p.id
+        WHERE pr.dismissed = FALSE
+        ORDER BY pr.score DESC LIMIT 1
+        """
+    )
+    if row:
+        await update.message.reply_text(
+            f"🧠 <b>Next Recommended Paper</b>\n\n"
+            f"{escape(row['title'])} (Score: {row['score']:.2f})\n\n"
+            f"Use /focus to start reading.",
+            parse_mode="HTML",
+            reply_markup=_paper_keyboard(row["paper_id"]),
+        )
+    else:
+        await update.message.reply_text("No pending recommendations found.", parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
@@ -456,3 +499,5 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("tasks", tasks_command))
     app.add_handler(CommandHandler("done", done_command))
     app.add_handler(CommandHandler("newproject", newproject_command))
+    app.add_handler(CommandHandler("focus", focus_command))
+    app.add_handler(CommandHandler("next", next_command))

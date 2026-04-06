@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 import re
 
-from telegram import Update
+from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from app.formatters import format_paper_detail, format_project_status
@@ -24,9 +24,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def paper_detail_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper_detail_{id}`` — show detailed paper view.
 
     Fetches the paper from the paper_ingestion API and sends a
@@ -40,7 +38,11 @@ async def paper_detail_callback(
         Bot context.
     """
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
+    if not isinstance(query.message, Message):
+        return
 
     config = _get_config(context)
     if not _auth_check(update, config):
@@ -61,22 +63,16 @@ async def paper_detail_callback(
         data = resp.json()
     except Exception:
         logger.exception("Failed to fetch paper detail for id=%s", paper_id)
-        await query.message.reply_text(
-            "Failed to load paper details.", parse_mode="HTML"
-        )
+        await query.message.reply_text("Failed to load paper details.", parse_mode="HTML")
         return
 
     paper = data.get("paper", {}) if isinstance(data, dict) else {}
     summary = data.get("summary") if isinstance(data, dict) else None
     text = format_paper_detail(paper, summary)
-    await query.message.reply_text(
-        text, parse_mode="HTML", disable_web_page_preview=True
-    )
+    await query.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
-async def paper_bookmark_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper.
 
     Upserts a row in ``paper_user_state`` with status ``'starred'``.
@@ -89,7 +85,11 @@ async def paper_bookmark_callback(
         Bot context.
     """
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
+    if not isinstance(query.message, Message):
+        return
 
     config = _get_config(context)
     if not _auth_check(update, config):
@@ -108,19 +108,13 @@ async def paper_bookmark_callback(
             "ON CONFLICT (paper_id) DO UPDATE SET status = 'starred'",
             paper_id,
         )
-        await query.message.reply_text(
-            f"⭐ Paper <b>{paper_id}</b> bookmarked.", parse_mode="HTML"
-        )
+        await query.message.reply_text(f"⭐ Paper <b>{paper_id}</b> bookmarked.", parse_mode="HTML")
     except Exception:
         logger.exception("Failed to bookmark paper id=%s", paper_id)
-        await query.message.reply_text(
-            "Failed to bookmark paper.", parse_mode="HTML"
-        )
+        await query.message.reply_text("Failed to bookmark paper.", parse_mode="HTML")
 
 
-async def project_detail_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``project_detail_{id}`` — show detailed project status.
 
     Queries the project record together with its tasks and milestones,
@@ -134,7 +128,11 @@ async def project_detail_callback(
         Bot context.
     """
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
+    if not isinstance(query.message, Message):
+        return
 
     config = _get_config(context)
     if not _auth_check(update, config):
@@ -152,9 +150,7 @@ async def project_detail_callback(
         project_id,
     )
     if not project_row:
-        await query.message.reply_text(
-            "Project not found.", parse_mode="HTML"
-        )
+        await query.message.reply_text("Project not found.", parse_mode="HTML")
         return
 
     project = dict(project_row)
@@ -176,16 +172,18 @@ async def project_detail_callback(
     await query.message.reply_text(text, parse_mode="HTML")
 
 
-async def start_review_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``start_review`` — sent by the review reminder inline button.
 
     Replies with a prompt to use the /review command, since the review
     flow is managed by a ConversationHandler that must be triggered via command.
     """
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
+    if not isinstance(query.message, Message):
+        return
 
     config = _get_config(context)
     if not _auth_check(update, config):
@@ -197,9 +195,7 @@ async def start_review_callback(
     )
 
 
-async def task_done_callback(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task as complete.
 
     Parameters
@@ -210,7 +206,11 @@ async def task_done_callback(
         Bot context.
     """
     query = update.callback_query
+    if query is None:
+        return
     await query.answer()
+    if not isinstance(query.message, Message):
+        return
 
     config = _get_config(context)
     if not _auth_check(update, config):
@@ -226,9 +226,7 @@ async def task_done_callback(
     result = await pm.complete_task(task_id)
 
     if not result:
-        await query.message.reply_text(
-            f"Task <b>{task_id}</b> not found.", parse_mode="HTML"
-        )
+        await query.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
     else:
         await query.message.reply_text(
             f"✅ Task <b>{task_id}</b> marked as done.", parse_mode="HTML"
@@ -248,18 +246,8 @@ def register_callback_handlers(app: Application) -> None:
     app : Application
         The ``python-telegram-bot`` Application instance.
     """
-    app.add_handler(
-        CallbackQueryHandler(paper_detail_callback, pattern=r"^paper_detail_\d+$")
-    )
-    app.add_handler(
-        CallbackQueryHandler(paper_bookmark_callback, pattern=r"^paper_bookmark_\d+$")
-    )
-    app.add_handler(
-        CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$")
-    )
-    app.add_handler(
-        CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$")
-    )
-    app.add_handler(
-        CallbackQueryHandler(start_review_callback, pattern=r"^start_review$")
-    )
+    app.add_handler(CallbackQueryHandler(paper_detail_callback, pattern=r"^paper_detail_\d+$"))
+    app.add_handler(CallbackQueryHandler(paper_bookmark_callback, pattern=r"^paper_bookmark_\d+$"))
+    app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
+    app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
+    app.add_handler(CallbackQueryHandler(start_review_callback, pattern=r"^start_review$"))

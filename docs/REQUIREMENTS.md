@@ -4,8 +4,9 @@
 > this document should be read as conservative runtime truth rather than product
 > aspiration. The current local Docker setup is not a perfect match for every
 > claim elsewhere in the docs. In particular:
-> - the default Compose host binding for the dashboard is `127.0.0.1:3001`, not `3000`
-> - the default localhost bindings for the backend APIs are `127.0.0.1:8010` and `127.0.0.1:8011`, not `8000` and `8001`
+> - Dashboard is accessible at `localhost:3001`
+> - Paper Ingestion API is accessible at `localhost:8010`
+> - Learning Engine API is accessible at `localhost:8011`
 > - the current default LiteLLM configuration is Ollama-first; cloud-only usage
 >   requires configuration review
 > - `telegram_bot` is not started by plain `docker compose up`; it requires the

@@ -6,6 +6,7 @@ import { IngestionSection } from '@/components/settings/IngestionSection';
 import { AutomationSection } from '@/components/settings/AutomationSection';
 import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
 import { RecommendationSection } from '@/components/settings/RecommendationSection';
+import { TimerSection } from '@/components/settings/TimerSection';
 
 export function SettingsPage() {
   return (
@@ -21,6 +22,7 @@ export function SettingsPage() {
           <TabsTrigger value="automation">Automation</TabsTrigger>
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
           <TabsTrigger value="recommendation">Recommendations</TabsTrigger>
+          <TabsTrigger value="timer">Timer</TabsTrigger>
         </TabsList>
 
         <TabsContent value="topics">
@@ -49,6 +51,10 @@ export function SettingsPage() {
 
         <TabsContent value="recommendation">
           <RecommendationSection />
+        </TabsContent>
+
+        <TabsContent value="timer">
+          <TimerSection />
         </TabsContent>
       </Tabs>
     </div>

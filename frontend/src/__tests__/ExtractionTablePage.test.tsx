@@ -73,7 +73,7 @@ describe('ExtractionTablePage', () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByText('Select papers and run extraction with a template to extract structured data.'),
+        screen.getByText('Create one to get started.'),
       ).toBeInTheDocument();
     });
   });

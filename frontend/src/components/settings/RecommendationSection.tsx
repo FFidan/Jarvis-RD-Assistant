@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -24,6 +24,12 @@ export function RecommendationSection() {
   const enabled = getConfigValue('recommendation.enabled', true) as boolean;
   const likedWeight = Number(getConfigValue('recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue('recommendation.project_weight', 0.4));
+
+  const [localLikedWeight, setLocalLikedWeight] = useState<number>(likedWeight);
+  const [localProjectWeight, setLocalProjectWeight] = useState<number>(projectWeight);
+
+  useEffect(() => { setLocalLikedWeight(likedWeight); }, [likedWeight]);
+  useEffect(() => { setLocalProjectWeight(projectWeight); }, [projectWeight]);
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -76,14 +82,15 @@ export function RecommendationSection() {
         </div>
 
         <div className="space-y-2">
-          <Label>Liked papers weight ({Math.round(likedWeight * 100)}%)</Label>
+          <Label>Liked papers weight ({Math.round(localLikedWeight * 100)}%)</Label>
           <input
             type="range"
             min={0}
             max={1}
             step={0.05}
-            value={likedWeight}
-            onChange={(e) => save('recommendation.liked_weight', Number(e.target.value))}
+            value={localLikedWeight}
+            onChange={(e) => setLocalLikedWeight(Number(e.target.value))}
+            onPointerUp={() => save('recommendation.liked_weight', localLikedWeight)}
             className="w-full accent-primary"
           />
           <p className="text-xs text-muted-foreground">
@@ -92,14 +99,15 @@ export function RecommendationSection() {
         </div>
 
         <div className="space-y-2">
-          <Label>Project context weight ({Math.round(projectWeight * 100)}%)</Label>
+          <Label>Project context weight ({Math.round(localProjectWeight * 100)}%)</Label>
           <input
             type="range"
             min={0}
             max={1}
             step={0.05}
-            value={projectWeight}
-            onChange={(e) => save('recommendation.project_weight', Number(e.target.value))}
+            value={localProjectWeight}
+            onChange={(e) => setLocalProjectWeight(Number(e.target.value))}
+            onPointerUp={() => save('recommendation.project_weight', localProjectWeight)}
             className="w-full accent-primary"
           />
           <p className="text-xs text-muted-foreground">

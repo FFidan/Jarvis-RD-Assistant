@@ -31,6 +31,7 @@ export default defineConfig({
       '/api/analytics/retention': learningEngineBase,
       '/api/analytics/reviews': learningEngineBase,
       '/api/analytics/llm-cost': learningEngineBase,
+      '/api/executive': learningEngineBase,
       '/api': paperIngestionBase,
     },
   },

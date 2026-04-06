@@ -373,7 +373,7 @@ export interface ProjectDetail extends Project {
 
 export interface Task {
   id: number;
-  project_id: number;
+  project_id: number | null;
   parent_task_id: number | null;
   title: string;
   description: string | null;
@@ -397,6 +397,44 @@ export interface Milestone {
   completed: boolean;
   completed_at: string | null;
   created_at: string;
+}
+
+// --- Executive / My Day ---
+
+export interface MyDayTask {
+  id: number;
+  project_id: number | null;
+  title: string;
+  priority: number;
+  deadline: string | null;
+  status: TaskStatus;
+  completed_at: string | null;
+  project_name: string | null;
+  project_color: string | null;
+}
+
+export interface ProjectPulseItem {
+  id: number;
+  name: string;
+  total_tasks: number;
+  done_tasks: number;
+  next_milestone: string | null;
+  next_milestone_deadline: string | null;
+}
+
+export interface MyDayResponse {
+  tasks: MyDayTask[];
+  cards_due: number;
+  recommendations: Array<{
+    recommendation_id: number;
+    paper_id: number;
+    score: number;
+    title: string;
+    authors: string[];
+  }>;
+  today_focus_hours: number;
+  focus_streak_days: number;
+  project_pulse: ProjectPulseItem[];
 }
 
 // --- Learning Cards ---

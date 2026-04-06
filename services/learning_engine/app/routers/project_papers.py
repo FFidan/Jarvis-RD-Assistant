@@ -20,9 +20,7 @@ async def list_project_papers(
     """List papers linked to a project."""
     async with db_pool.acquire() as conn:
         # Verify project exists (same connection as data query to avoid TOCTOU)
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
+        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -40,7 +38,11 @@ async def list_project_papers(
     return [dict(r) for r in rows]
 
 
-@router.post("/api/projects/{project_id}/papers/{paper_id}", status_code=201, response_model=ProjectPaperLinkResponse)
+@router.post(
+    "/api/projects/{project_id}/papers/{paper_id}",
+    status_code=201,
+    response_model=ProjectPaperLinkResponse,
+)
 @limiter.limit("30/minute")
 async def link_paper(
     request: Request,
@@ -50,25 +52,27 @@ async def link_paper(
 ) -> dict:
     """Link a paper to a project."""
     async with db_pool.acquire() as conn:
-        project = await conn.fetchrow(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
-        if not project:
-            raise HTTPException(status_code=404, detail="Project not found")
-        paper = await conn.fetchrow(
-            "SELECT id FROM papers WHERE id = $1", paper_id
-        )
-        if not paper:
-            raise HTTPException(status_code=404, detail="Paper not found")
-        result = await conn.execute(
-            "INSERT INTO project_papers (project_id, paper_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
-            project_id,
-            paper_id,
-        )
+        async with conn.transaction():
+            project = await conn.fetchrow("SELECT id FROM projects WHERE id = $1", project_id)
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            paper = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+            if not paper:
+                raise HTTPException(status_code=404, detail="Paper not found")
+            result = await conn.execute(
+                "INSERT INTO project_papers (project_id, paper_id) "
+                "VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                project_id,
+                paper_id,
+            )
     # result is e.g. "INSERT 0 1" (inserted) or "INSERT 0 0" (no-op)
     if result and result == "INSERT 0 0":
         return JSONResponse(
-            content={"project_id": project_id, "paper_id": paper_id, "message": "Paper already linked"},
+            content={
+                "project_id": project_id,
+                "paper_id": paper_id,
+                "message": "Paper already linked",
+            },
             status_code=200,
         )
     return {"project_id": project_id, "paper_id": paper_id}

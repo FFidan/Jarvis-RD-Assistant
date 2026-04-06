@@ -179,6 +179,7 @@ export function IngestionSection() {
   const queryClient = useQueryClient();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   const { data: configs = [], isLoading } = useQuery({
     queryKey: ['config'],
@@ -191,6 +192,10 @@ export function IngestionSection() {
       queryClient.invalidateQueries({ queryKey: ['config'] });
       queryClient.invalidateQueries({ queryKey: ['system-models'] });
       setEditingKey(null);
+      setSaveError(null);
+    },
+    onError: (error: Error) => {
+      setSaveError(`Failed to save: ${error.message}`);
     },
   });
 
@@ -284,26 +289,31 @@ export function IngestionSection() {
       <Card key={entry.key}>
         <CardContent className="flex items-center gap-4 p-4">
           {editingKey === entry.key ? (
-            <div className="flex flex-1 items-center gap-2">
-              <span className="shrink-0 text-sm font-medium">
-                {meta?.label ?? entry.key}
-              </span>
-              <Input
-                value={editValue}
-                onChange={(e) => setEditValue(e.target.value)}
-                className="flex-1"
-              />
-              <Button
-                size="icon"
-                variant="ghost"
-                onClick={saveEdit}
-                disabled={setMut.isPending}
-              >
-                <Check className="h-4 w-4" />
-              </Button>
-              <Button size="icon" variant="ghost" onClick={() => setEditingKey(null)}>
-                <X className="h-4 w-4" />
-              </Button>
+            <div className="flex-1 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="shrink-0 text-sm font-medium">
+                  {meta?.label ?? entry.key}
+                </span>
+                <Input
+                  value={editValue}
+                  onChange={(e) => setEditValue(e.target.value)}
+                  className="flex-1"
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={saveEdit}
+                  disabled={setMut.isPending}
+                >
+                  <Check className="h-4 w-4" />
+                </Button>
+                <Button size="icon" variant="ghost" onClick={() => setEditingKey(null)}>
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              {saveError && (
+                <p className="text-sm text-destructive mt-1">{saveError}</p>
+              )}
             </div>
           ) : (
             <>

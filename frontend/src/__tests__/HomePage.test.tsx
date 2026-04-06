@@ -8,6 +8,9 @@ import { HomePage } from '@/pages/HomePage';
 vi.mock('@/lib/api', () => ({
   fetchDashboardMetrics: vi.fn(),
   checkHealth: vi.fn(),
+  batchProcessPapers: vi.fn(),
+  batchSummarizePapers: vi.fn(),
+  batchExtractEntities: vi.fn(),
 }));
 
 const { fetchDashboardMetrics } = await import('@/lib/api');
@@ -78,7 +81,7 @@ describe('HomePage', () => {
     renderHomePage();
     expect(await screen.findByText('Total Papers')).toBeInTheDocument();
     expect(screen.getByText('Unread Papers')).toBeInTheDocument();
-    expect(screen.getByText('Pending Papers')).toBeInTheDocument();
+    expect(screen.getByText('Unsummarized')).toBeInTheDocument();
     expect(screen.getByText('Due Cards')).toBeInTheDocument();
     expect(screen.getByText('Active Projects')).toBeInTheDocument();
     expect(screen.getByText('Topics')).toBeInTheDocument();

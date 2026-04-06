@@ -103,6 +103,13 @@ async def refresh_recommendations(app: Any) -> int:
         return len(merged)
 
 
+def _safe_float(val: object, default: float) -> float:
+    try:
+        return float(val)  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return default
+
+
 async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
     rows = await conn.fetch(
         "SELECT key, value FROM user_config"
@@ -112,8 +119,12 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
         " 'recommendation.enabled')"
     )
     cfg = {r["key"]: r["value"] for r in rows}
-    liked = float(cfg.get("recommendation.liked_weight", _DEFAULT_LIKED_WEIGHT))
-    project = float(cfg.get("recommendation.project_weight", _DEFAULT_PROJECT_WEIGHT))
+    liked = _safe_float(
+        cfg.get("recommendation.liked_weight", _DEFAULT_LIKED_WEIGHT), _DEFAULT_LIKED_WEIGHT
+    )
+    project = _safe_float(
+        cfg.get("recommendation.project_weight", _DEFAULT_PROJECT_WEIGHT), _DEFAULT_PROJECT_WEIGHT
+    )
     enabled_val = cfg.get("recommendation.enabled", True)
     enabled = bool(enabled_val) if not isinstance(enabled_val, bool) else enabled_val
     return liked, project, enabled

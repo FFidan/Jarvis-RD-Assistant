@@ -129,6 +129,7 @@ import type {
   CitationRelation,
   KnowledgeGraph,
   Entity,
+  MyDayResponse,
 } from '@/types';
 
 // --- Dashboard ---
@@ -489,3 +490,20 @@ export async function downloadExtractionCsv(templateId: number): Promise<void> {
   const blob = await res.blob();
   triggerBlobDownload(blob, 'extractions.csv');
 }
+
+// --- Executive / My Day ---
+
+export const fetchMyDay = () =>
+  apiFetch<MyDayResponse>('/api/executive/my-day');
+
+export const createQuickTask = (data: { title: string; project_id?: number | null; priority?: number }) =>
+  apiFetch<Task>('/api/executive/tasks', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+export const logFocusSession = (data: { duration_hours: number; task_id?: number; paper_id?: number }) =>
+  apiFetch<{ status: string; recorded_hours: number }>('/api/executive/focus/log', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });

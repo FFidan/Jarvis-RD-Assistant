@@ -1,7 +1,7 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 1.1
-**Date:** 2026-03-08
+**Version:** 1.2
+**Date:** 2026-04-06
 **Status:** Active
 
 > Implementation status note (2026-03-10):
@@ -118,6 +118,7 @@ browser, without hallucinated claims, in under 2 minutes of reading.
 - Cross-reference consistency checking between papers (semantic similarity via Qdrant)
 - Trend detection via relevance scoring and similarity search
 - Relevance feedback loop (rating 1-5, flagging suspicious summaries)
+- Paper Recommendation Engine (Phase 1: liked centroid + project context)
 
 **Nice-to-have (v2+):**
 - Additional source plugins (PubMed, IEEE, DBLP)
@@ -190,6 +191,17 @@ These features were promoted from v2 or added during development:
 - **Shared utility library**: `jarvis_common` -- auth, rate limiting, DB helpers
 - **10-page React dashboard**: Home, Research Feed, Paper Detail, Learning Cards,
   Projects, Settings, Analytics, Extractions, Citation Graph, Knowledge Graph
+
+### My Day — Daily Productivity Command Center
+
+The My Day page is the researcher's daily hub, combining task management with focused work tracking:
+
+- **Pomodoro Timer**: Wall-clock based 25/5/15 timer with pause/resume, auto-logging of completed sessions, browser notifications, and configurable durations (15-60 min work, 3-15 min short break, 10-30 min long break, 2-8 cycles)
+- **Quick-Add Tasks**: Create tasks from the daily view with optional project assignment; standalone tasks (no project) are supported
+- **Today's Tasks**: Filtered view of tasks due today/overdue + tasks completed today, with project badges linking to the Projects page, completion circles, and per-task Focus buttons to start a Pomodoro attached to that task
+- **Project Pulse**: At-a-glance view of active project progress (done/total tasks) with next milestone and deadline
+- **Learning Integration**: Cards due count with direct link to review; recommended papers with match scores
+- **Focus Tracking**: Daily focus hours accumulated from Pomodoro sessions, focus streak tracking (consecutive days with focus time)
 
 ---
 

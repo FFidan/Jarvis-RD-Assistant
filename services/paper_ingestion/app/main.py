@@ -61,36 +61,45 @@ logger = logging.getLogger(__name__)
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply unapplied SQL migrations from db/migrations/ on startup."""
     async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS schema_migrations (
-                version INTEGER PRIMARY KEY,
-                applied_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-        applied = {r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")}
+        # Advisory lock prevents concurrent migration runs across service instances
+        await conn.execute("SELECT pg_advisory_lock(42)")
+        try:
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            applied = {
+                r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
+            }
 
-        migrations_dir = Path("/app/db/migrations")
-        if not migrations_dir.exists():
-            # Fallback for local dev
-            migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
-        if not migrations_dir.exists():
-            logger.warning("Migrations directory not found, skipping migrations")
-            return
+            migrations_dir = Path("/app/db/migrations")
+            if not migrations_dir.exists():
+                # Fallback for local dev
+                migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
+            if not migrations_dir.exists():
+                logger.warning("Migrations directory not found, skipping migrations")
+                return
 
-        for sql_file in sorted(migrations_dir.glob("*.sql")):
-            try:
-                version = int(sql_file.name.split("_")[0])
-            except (ValueError, IndexError):
-                logger.warning("Skipping non-migration file: %s", sql_file.name)
-                continue
-            if version in applied:
-                continue
-            logger.info("Applying migration %s: %s", version, sql_file.name)
-            sql = sql_file.read_text()
-            async with conn.transaction():
-                await conn.execute(sql)
-                await conn.execute("INSERT INTO schema_migrations (version) VALUES ($1)", version)
-            logger.info("Migration %s applied successfully", version)
+            for sql_file in sorted(migrations_dir.glob("*.sql")):
+                try:
+                    version = int(sql_file.name.split("_")[0])
+                except (ValueError, IndexError):
+                    logger.warning("Skipping non-migration file: %s", sql_file.name)
+                    continue
+                if version in applied:
+                    continue
+                logger.info("Applying migration %s: %s", version, sql_file.name)
+                sql = sql_file.read_text()
+                async with conn.transaction():
+                    await conn.execute(sql)
+                    await conn.execute(
+                        "INSERT INTO schema_migrations (version) VALUES ($1)", version
+                    )
+                logger.info("Migration %s applied successfully", version)
+        finally:
+            await conn.execute("SELECT pg_advisory_unlock(42)")
 
 
 # ---------------------------------------------------------------------------

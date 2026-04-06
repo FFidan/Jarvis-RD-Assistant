@@ -8,14 +8,15 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
-
 from jarvis_common import HealthCheckResponse  # noqa: F401 — re-exported
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 # --- Enums ---
 
+
 class CardType(str, Enum):
     """Supported flashcard types."""
+
     CONCEPT = "concept"
     QUOTE = "quote"
     METHOD = "method"
@@ -24,6 +25,7 @@ class CardType(str, Enum):
 
 class Rating(int, Enum):
     """FSRS review rating."""
+
     AGAIN = 1
     HARD = 2
     GOOD = 3
@@ -32,8 +34,10 @@ class Rating(int, Enum):
 
 # --- Nested Models ---
 
+
 class Evidence(BaseModel):
     """Evidence linking a card to source text."""
+
     quote: str | None = None
     page_number: int | None = None
     chunk_id: int | None = None
@@ -46,15 +50,21 @@ class Evidence(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _migrate_snapshot(cls, data):
-        if isinstance(data, dict) and data.get("pdf_snapshot_path") and not data.get("snapshot_path"):
+        if (
+            isinstance(data, dict)
+            and data.get("pdf_snapshot_path")
+            and not data.get("snapshot_path")
+        ):
             data["snapshot_path"] = data.pop("pdf_snapshot_path")
         return data
 
 
 # --- Request Models ---
 
+
 class DeckCreate(BaseModel):
     """Request body for creating a deck."""
+
     name: str = Field(..., min_length=1, max_length=255)
     description: str | None = None
     topic_id: int | None = None
@@ -62,6 +72,7 @@ class DeckCreate(BaseModel):
 
 class CardCreate(BaseModel):
     """Request body for creating a card."""
+
     deck_id: int
     card_type: CardType
     front: str = Field(..., min_length=1)
@@ -72,6 +83,7 @@ class CardCreate(BaseModel):
 
 class CardUpdate(BaseModel):
     """Request body for updating a card (all fields optional)."""
+
     front: str | None = None
     back: str | None = None
     card_type: CardType | None = None
@@ -80,12 +92,14 @@ class CardUpdate(BaseModel):
 
 class ReviewRequest(BaseModel):
     """Request body for submitting a review."""
+
     rating: Rating
     review_duration_ms: int | None = None
 
 
 class GenerateCardsRequest(BaseModel):
     """Request body for LLM card generation."""
+
     paper_id: int
     deck_id: int
     max_cards: int = Field(default=5, ge=1, le=20)
@@ -93,14 +107,17 @@ class GenerateCardsRequest(BaseModel):
 
 class BatchGenerateRequest(BaseModel):
     """Request body for batch card generation across all unprocessed papers."""
+
     deck_id: int
     max_per_paper: int = Field(default=5, ge=1, le=20)
 
 
 # --- Response Models ---
 
+
 class DeckResponse(BaseModel):
     """Deck with computed card counts."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -114,6 +131,7 @@ class DeckResponse(BaseModel):
 
 class CardResponse(BaseModel):
     """Full card representation returned by the API."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -131,6 +149,7 @@ class CardResponse(BaseModel):
 
 class ReviewResponse(BaseModel):
     """Response after submitting a review."""
+
     card_id: int
     rating: int
     next_due_at: datetime
@@ -140,6 +159,7 @@ class ReviewResponse(BaseModel):
 
 class GenerateCardsResponse(BaseModel):
     """Response from card generation."""
+
     cards_created: int
     cards: list[CardResponse]
     confidence: str = "MEDIUM"
@@ -147,6 +167,7 @@ class GenerateCardsResponse(BaseModel):
 
 class RetentionStats(BaseModel):
     """Retention and review statistics."""
+
     total_cards: int
     due_now: int
     reviewed_today: int
@@ -218,7 +239,7 @@ class TaskUpdate(BaseModel):
 class TaskResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int
-    project_id: int
+    project_id: int | None = None
     parent_task_id: int | None = None
     title: str
     description: str | None = None
