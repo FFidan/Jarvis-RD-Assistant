@@ -33,6 +33,8 @@ class SourceType(str, Enum):
     ARXIV = "arxiv"
     SEMANTIC_SCHOLAR = "semantic_scholar"
     LOCAL = "local"
+    OPENALEX = "openalex"
+    PUBMED = "pubmed"
 
 
 class PaperStatus(str, Enum):
@@ -941,3 +943,33 @@ class PapersByStatusItem(BaseModel):
 
     status: str
     count: int
+
+
+# --- Pulse models ---
+
+
+class PulseCardResponse(BaseModel):
+    """A single scored card within a Pulse deck."""
+
+    card_id: int
+    paper_id: int
+    paper_title: str
+    paper_authors: list[str]
+    paper_url: str | None
+    rank: int
+    score: float
+    llm_relevance: int | None
+    llm_novelty: int | None
+    reasoning: str | None
+    signals: dict[str, float]
+
+
+class PulseDeckResponse(BaseModel):
+    """A full Pulse deck for one day, including all scored cards."""
+
+    deck_id: int
+    deck_date: date
+    card_count: int
+    generated_at: datetime
+    cards: list[PulseCardResponse]
+    stats: dict
