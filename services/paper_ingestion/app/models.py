@@ -973,3 +973,22 @@ class PulseDeckResponse(BaseModel):
     generated_at: datetime
     cards: list[PulseCardResponse]
     stats: dict
+
+
+class PulseStatsResponse(BaseModel):
+    """Aggregate Pulse pipeline stats over a sliding window of past runs."""
+
+    window_days: int
+    decks_generated: int
+    avg_candidates: float | None
+    avg_llm_calls: float | None
+    avg_duration_s: float | None
+    last_run_at: datetime | None
+    last_error: str | None
+
+
+class PulseRateRequest(BaseModel):
+    """Body for POST /api/pulse/rate."""
+
+    paper_id: int
+    rating: Literal["up", "down", "save", "dismiss", "open"]
