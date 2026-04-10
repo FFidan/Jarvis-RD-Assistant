@@ -17,14 +17,17 @@ class FocusSessionRequest(BaseModel):
 
 
 class QuickAddTaskRequest(BaseModel):
-    title: str
+    title: str = Field(..., min_length=1, max_length=500)
     project_id: int | None = None
-    priority: int = 3
+    priority: int = Field(3, ge=1, le=4)
 
 
 @router.get("/my-day")
+@limiter.limit("60/minute")
 async def get_my_day(
-    db: Pool = Depends(get_db_pool), limit_recommendations: int = Query(3, ge=1, le=10)
+    request: Request,
+    db: Pool = Depends(get_db_pool),
+    limit_recommendations: int = Query(3, ge=1, le=10),
 ) -> dict[str, Any]:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers)."""
     async with db.acquire() as conn:
@@ -148,47 +151,48 @@ async def quick_add_task(
 
 
 @router.post("/focus/log")
+@limiter.limit("10/minute")
 async def log_focus_session(
-    payload: FocusSessionRequest, db: Pool = Depends(get_db_pool)
+    request: Request,
+    payload: FocusSessionRequest,
+    db: Pool = Depends(get_db_pool),
 ) -> dict[str, Any]:
     """Log a completed focus session."""
     async with db.acquire() as conn:
+        # Pre-validate references (outside transaction)
+        if payload.task_id is not None:
+            task_exists = await conn.fetchval("SELECT 1 FROM tasks WHERE id = $1", payload.task_id)
+            if not task_exists:
+                raise HTTPException(status_code=404, detail="Task not found")
+        if payload.paper_id is not None:
+            paper_exists = await conn.fetchval(
+                "SELECT 1 FROM papers WHERE id = $1", payload.paper_id
+            )
+            if not paper_exists:
+                raise HTTPException(status_code=404, detail="Paper not found")
+
+        # All validated — execute mutations in transaction (no more HTTPException inside)
         async with conn.transaction():
-            if payload.task_id:
-                updated = await conn.execute(
+            if payload.task_id is not None:
+                await conn.execute(
                     "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
                     "updated_at = NOW() WHERE id = $2",
                     payload.duration_hours,
                     payload.task_id,
                 )
-                if updated == "UPDATE 0":
-                    raise HTTPException(status_code=404, detail="Task not found")
-
-            if payload.paper_id:
-                paper_exists = await conn.fetchval(
-                    "SELECT 1 FROM papers WHERE id = $1",
-                    payload.paper_id,
-                )
-                if not paper_exists:
-                    raise HTTPException(status_code=404, detail="Paper not found")
+            if payload.paper_id is not None:
                 await conn.execute(
-                    """
-                    INSERT INTO paper_user_state (paper_id, status)
+                    """INSERT INTO paper_user_state (paper_id, status)
                     VALUES ($1, 'reading')
                     ON CONFLICT (paper_id) DO UPDATE SET status = 'reading'
-                    WHERE paper_user_state.status = 'new'
-                    """,
+                    WHERE paper_user_state.status = 'new'""",
                     payload.paper_id,
                 )
-
-            # Always upsert daily_log regardless of task/paper/bare session
+            # Always upsert daily_log
             await conn.execute(
-                """
-                INSERT INTO daily_log (log_date, focus_hours)
+                """INSERT INTO daily_log (log_date, focus_hours)
                 VALUES (CURRENT_DATE, $1)
-                ON CONFLICT (log_date)
-                DO UPDATE SET focus_hours = daily_log.focus_hours + EXCLUDED.focus_hours
-                """,
+                ON CONFLICT (log_date) DO UPDATE SET focus_hours = daily_log.focus_hours + $1""",
                 payload.duration_hours,
             )
 

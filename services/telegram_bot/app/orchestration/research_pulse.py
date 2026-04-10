@@ -63,8 +63,7 @@ async def run_research_pulse(
         try:
             # Parallel search all terms
             search_tasks = [
-                _search_term(http_client, config, term)
-                for term in topic["query_terms"]
+                _search_term(http_client, config, term) for term in topic["query_terms"]
             ]
             term_results = await asyncio.gather(*search_tasks)
 
@@ -99,21 +98,22 @@ async def run_research_pulse(
                 processed_ok = True
                 try:
                     resp = await http_client.post(
-                        f"{config.paper_ingestion_url}/api/download-pdf/{paper_id}"
+                        f"{config.paper_ingestion_url}/api/download-pdf/{paper_id}",
+                        timeout=120.0,
                     )
                     resp.raise_for_status()
                     resp = await http_client.post(
-                        f"{config.paper_ingestion_url}/api/process-pdf/{paper_id}"
+                        f"{config.paper_ingestion_url}/api/process-pdf/{paper_id}",
+                        timeout=180.0,
                     )
                     resp.raise_for_status()
                     resp = await http_client.post(
-                        f"{config.paper_ingestion_url}/api/summarize/{paper_id}"
+                        f"{config.paper_ingestion_url}/api/summarize/{paper_id}",
+                        timeout=120.0,
                     )
                     resp.raise_for_status()
                 except httpx.HTTPError:
-                    logger.warning(
-                        "Failed to process paper %s, will retry next run", paper_id
-                    )
+                    logger.warning("Failed to process paper %s, will retry next run", paper_id)
                     processed_ok = False
 
                 # Compute relevance score (attempt even on failure)
@@ -123,27 +123,21 @@ async def run_research_pulse(
                         params={"paper_id": paper_id, "topic_id": topic["id"]},
                     )
                 except httpx.HTTPError:
-                    logger.debug(
-                        "Failed to compute relevance score for paper %s", paper_id
-                    )
+                    logger.debug("Failed to compute relevance score for paper %s", paper_id)
 
                 # Only add to notification list on successful processing
                 if processed_ok:
                     paper["topic_name"] = topic_name
                     all_new_papers.append(paper)
         except Exception:  # noqa: BLE001 — per-topic catch-all; must not abort other topics
-            logger.exception(
-                "Failed to process topic '%s'", topic_name
-            )
+            logger.exception("Failed to process topic '%s'", topic_name)
 
     if not all_new_papers:
         logger.info("No new papers found across all topics")
         return
 
     # Send briefing
-    lines = [
-        f"\U0001f4e1 <b>Research Pulse: {len(all_new_papers)} new papers</b>\n"
-    ]
+    lines = [f"\U0001f4e1 <b>Research Pulse: {len(all_new_papers)} new papers</b>\n"]
     for paper in all_new_papers[:10]:
         lines.append(format_paper_card(paper))
         lines.append("")
@@ -153,9 +147,7 @@ async def run_research_pulse(
 
     message = truncate("\n".join(lines))
     try:
-        await bot.send_message(
-            chat_id=config.telegram_chat_id, text=message, parse_mode="HTML"
-        )
+        await bot.send_message(chat_id=config.telegram_chat_id, text=message, parse_mode="HTML")
     except Exception:  # noqa: BLE001 — top-level send; must not crash the scheduler
         logger.exception("Failed to send message")
         return

@@ -52,6 +52,7 @@ services:
 
   n8n:
     image: docker.n8n.io/n8nio/n8n:1.77.0
+    profiles: ["n8n"]
     restart: unless-stopped
     mem_limit: 2g
     ports:
@@ -223,6 +224,8 @@ services:
       postgres:
         condition: service_healthy
       litellm:
+        condition: service_healthy
+      paper_ingestion:
         condition: service_healthy
     networks:
       - jarvis

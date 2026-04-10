@@ -14,6 +14,19 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # --- Enums ---
 
 
+class TopicRef(BaseModel):
+    """Lightweight topic reference passed to source polling methods.
+
+    Used by PaperSource.fetch_new_since() so sources can filter by topic
+    without a round-trip to the database.
+    """
+
+    id: int
+    name: str
+    description: str | None = None
+    query_terms: list[str] = []
+
+
 class SourceType(str, Enum):
     """Supported paper source types."""
 

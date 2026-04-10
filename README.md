@@ -6,7 +6,7 @@ A self-hosted AI research assistant that delivers citation-backed paper briefing
 
 JARVIS is designed for researchers who track multiple topics, read (or should read) dozens of papers per week, and want an assistant that doesn't hallucinate. It runs entirely on your own hardware with local LLMs via Ollama, or optionally connects to cloud providers (OpenAI, Anthropic) through LiteLLM.
 
-**Three modules:**
+**Core features:**
 
 - **Research Pulse** -- Discovers papers from arXiv and Semantic Scholar based on your topics, downloads PDFs, chunks and embeds them for semantic search, generates verified summaries with exact quotes, and supports RAG-powered Q&A across your entire paper library.
 
@@ -17,6 +17,8 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 - **My Day** -- Daily productivity command center surfacing today's tasks, project progress, and due flashcards in one view, with per-task Focus buttons to start a Pomodoro session.
 
 - **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations.
+
+- **Discovery & Pulse** *(coming soon)* -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day view and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Complements the existing weekly reflection tools without overlapping them.
 
 ### Key Design Choices
 
@@ -60,7 +62,7 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
     └─────────────────────────────────────────────────────────┘
 ```
 
-**Additional services:** n8n (workflow orchestration, `:5678`), Telegram bot (optional, `--profile telegram`).
+**Additional services:** n8n (optional workflow automation, `--profile n8n`), Telegram bot (optional, `--profile telegram`).
 
 ## Quick Start
 
@@ -116,6 +118,9 @@ If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidi
 | `DASHBOARD_HOST_PORT` | `3001` | Host port for the dashboard |
 | `PAPER_INGESTION_HOST_PORT` | `8010` | Host port for paper ingestion API |
 | `LEARNING_ENGINE_HOST_PORT` | `8011` | Host port for learning engine API |
+| `OPENALEX_API_KEY` | _(empty)_ | Enable OpenAlex as a paper discovery source. Free key at [openalex.org](https://openalex.org). *(Used by the upcoming Discovery & Pulse feature.)* |
+| `PUBMED_API_KEY` | _(empty)_ | Upgrade PubMed rate limit from 3 to 10 requests per second. Free key from [NCBI](https://www.ncbi.nlm.nih.gov/home/develop/api/). *(Used by the upcoming Discovery & Pulse feature.)* |
+| `UNPAYWALL_EMAIL` | _(empty)_ | Required by [Unpaywall](https://unpaywall.org) to resolve free legal PDFs for paywalled papers. Any email address. *(Used by the upcoming Discovery & Pulse feature.)* |
 
 See [`.env.example`](.env.example) for the full list with comments.
 
@@ -140,6 +145,26 @@ docker compose exec paper_ingestion pytest tests/  # Run tests
 docker compose exec paper_ingestion ruff check .   # Run linting
 ```
 
+### n8n Integration Layer (optional)
+
+n8n is available as an optional workflow automation tool for connecting JARVIS to external services. Enable with `--profile n8n`:
+
+```bash
+docker compose --profile n8n up -d
+# Access n8n UI at http://localhost:5678
+```
+
+Built-in scheduling (daily briefings, review reminders, etc.) is handled by APScheduler in the Telegram bot -- n8n is NOT required for core functionality.
+
+**n8n is useful for power users who want to:**
+- Sync papers/tasks to **Notion** databases
+- Export paper summaries to **Obsidian** vaults (via shared volume)
+- Push briefings to **Slack/Discord** channels
+- Send weekly digests via **email**
+- Integrate with **Zotero/Mendeley** reference managers
+
+See `n8n/workflows/` for template workflows and the recreation guide.
+
 ### Adding a Paper Source
 
 1. Create `services/paper_ingestion/app/sources/new_source.py`
@@ -158,7 +183,7 @@ docker compose exec paper_ingestion ruff check .   # Run linting
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-015)
+│   └── migrations/             # Versioned schema changes (001-017)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -170,7 +195,7 @@ docker compose exec paper_ingestion ruff check .   # Run linting
 
 | Layer | Technology |
 |-------|-----------|
-| **Frontend** | React 19, TypeScript, Vite, Shadcn/ui, TanStack Query v5, Recharts, Cytoscape.js |
+| **Frontend** | React 19, TypeScript, Vite, Shadcn/ui, TanStack Query v5, Zustand, React Router v7, Recharts, Cytoscape.js |
 | **Backend** | FastAPI, Python 3.12, asyncpg, Pydantic v2 |
 | **LLM Gateway** | LiteLLM (routes to Ollama, OpenAI, Anthropic, etc.) |
 | **Local LLM** | Ollama (mistral-nemo, qwen3:4b, nomic-embed-text) |
@@ -181,6 +206,22 @@ docker compose exec paper_ingestion ruff check .   # Run linting
 | **Orchestration** | n8n |
 | **Notifications** | Telegram Bot API (optional) |
 | **Reverse Proxy** | nginx (in dashboard container) |
+
+## Inspiration & Prior Art
+
+JARVIS stands on the shoulders of excellent open-source and public research tools. The Discovery & Pulse subsystem in particular draws on ideas and patterns from:
+
+- [ChatGPT Pulse](https://openai.com/index/introducing-chatgpt-pulse/) — async overnight research, morning card deck, ephemeral delivery, and feedback loop pattern.
+- [zotero-arxiv-daily](https://github.com/TideDra/zotero-arxiv-daily) — using your existing library as a preference model via weighted centroid cosine similarity.
+- [GPT Paper Assistant](https://github.com/tatsu-lab/gpt_paper_assistant) — two-axis LLM scoring (relevance + novelty) and author watchlists via Semantic Scholar IDs.
+- [ArxivDigest](https://github.com/AutoLLM/ArxivDigest) — natural-language interest descriptions driving LLM relevance ranking.
+- [Scholar Inbox](https://scholar-inbox.com) — per-user logistic regression classifier trained on embedding vectors.
+- [Inciteful](https://inciteful.xyz) — citation graph algorithms (PageRank + Adamic/Adar) for paper discovery.
+- [BERTopic](https://github.com/MaartenGr/BERTopic) — neural topic modeling with dynamic temporal topics.
+- [OpenScholar](https://github.com/AkariAsai/OpenScholar) — iterative self-feedback RAG over scientific literature.
+- [PaperQA2](https://github.com/Future-House/paper-qa) — metadata-aware embeddings and agentic retrieval.
+
+These projects are credited for the ideas and patterns that informed JARVIS's design, not for copied code. All are MIT/Apache-licensed.
 
 ## License
 

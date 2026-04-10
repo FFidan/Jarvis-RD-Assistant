@@ -5,7 +5,6 @@ more accurate relevance rankings than bi-encoder similarity alone.
 """
 
 import logging
-from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
@@ -72,22 +71,26 @@ class Reranker:
         return indexed_scores[:top_k]
 
 
-@lru_cache(maxsize=1)
+_reranker_instance: Reranker | None = None
+_reranker_attempted: bool = False
+
+
 def get_reranker() -> Reranker | None:
     """Get or create the singleton reranker instance.
 
-    Returns the cached :class:`Reranker` on success, or ``None`` when the
-    cross-encoder model cannot be loaded (e.g. ``sentence-transformers`` is
-    not installed, the model download fails, or any other initialisation
-    error occurs).  Callers **must** handle ``None`` by falling back to
-    raw retrieval scores.
-
-    Because the result is ``@lru_cache``-d, the first call determines the
-    outcome for the lifetime of the process.
+    Unlike @lru_cache, this does not permanently cache None on transient
+    failures. A process restart will retry model loading.
     """
+    global _reranker_instance, _reranker_attempted
+    if _reranker_instance is not None:
+        return _reranker_instance
+    if _reranker_attempted:
+        return None
+    _reranker_attempted = True
     try:
         reranker = Reranker()
         reranker._load_model_if_needed()
+        _reranker_instance = reranker
         return reranker
     except Exception:
         logger.warning("Reranker unavailable; using retrieval scores only", exc_info=True)

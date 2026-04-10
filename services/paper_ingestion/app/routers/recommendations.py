@@ -1,6 +1,6 @@
 """Recommendation endpoints."""
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import verify_api_key
 from pydantic import BaseModel
 
@@ -18,7 +18,9 @@ class RecommendationItem(BaseModel):
 
 
 @router.get("", response_model=list[RecommendationItem], dependencies=[Depends(verify_api_key)])
-async def list_recommendations(request: Request, limit: int = 20) -> list[RecommendationItem]:
+async def list_recommendations(
+    request: Request, limit: int = Query(default=20, ge=1, le=200)
+) -> list[RecommendationItem]:
     async with request.app.state.db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT paper_id, score, modes, explanation, dismissed "

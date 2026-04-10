@@ -443,6 +443,10 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception:
             logger.exception("Failed to log focus session to backend")
 
+    # Cancel any existing focus timer for this chat
+    for job in context.job_queue.get_jobs_by_name(f"focus_{chat_id}"):
+        job.schedule_removal()
+
     context.job_queue.run_once(
         focus_alarm, minutes * 60, chat_id=chat_id, name=f"focus_{chat_id}", data=minutes
     )

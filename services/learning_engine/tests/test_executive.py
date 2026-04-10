@@ -268,8 +268,8 @@ async def test_focus_log_task_not_found(exec_app):
     """POST /api/executive/focus/log with a missing task_id returns 404."""
     app, conn = exec_app
 
-    # UPDATE tasks returns "UPDATE 0" — no rows affected
-    conn.execute.return_value = "UPDATE 0"
+    # Pre-validation fetchval returns None — task doesn't exist
+    conn.fetchval.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -602,3 +602,42 @@ async def test_focus_log_excessive_hours_returns_422(exec_app):
     ) as client:
         resp = await client.post("/api/executive/focus/log", json={"duration_hours": 25})
         assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_quick_add_task_empty_title_returns_422(exec_app):
+    app, _ = exec_app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/executive/tasks", json={"title": ""})
+        assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_quick_add_task_invalid_priority_returns_422(exec_app):
+    app, _ = exec_app
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/executive/tasks", json={"title": "Valid", "priority": 0})
+        assert resp.status_code == 422
+        resp2 = await client.post("/api/executive/tasks", json={"title": "Valid", "priority": 5})
+        assert resp2.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_focus_log_task_not_found_no_side_effects(exec_app):
+    """When task_id doesn't exist, 404 fires BEFORE transaction — no daily_log update."""
+    app, conn = exec_app
+    conn.fetchval.return_value = None  # task doesn't exist
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/executive/focus/log",
+            json={"duration_hours": 0.5, "task_id": 99999},
+        )
+    assert resp.status_code == 404
+    # Verify no transaction was opened (execute should NOT be called for daily_log)
+    conn.execute.assert_not_called()
