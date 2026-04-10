@@ -1,0 +1,113 @@
+{
+  "meta": {"count": 8, "db_response_time_ms": 67, "page": 1, "per_page": 10},
+  "results": [
+    {
+      "id": "https://openalex.org/W4100001",
+      "title": "Mamba: Linear-Time Sequence Modeling",
+      "display_name": "Mamba: Linear-Time Sequence Modeling",
+      "doi": "https://doi.org/10.4100/mamba.2026",
+      "publication_date": "2026-04-01",
+      "authorships": [
+        {"author": {"display_name": "Albert Gu"}},
+        {"author": {"display_name": "Tri Dao"}}
+      ],
+      "abstract_inverted_index": {
+        "We": [0],
+        "introduce": [1],
+        "Mamba,": [2],
+        "a": [3],
+        "selective": [4],
+        "state": [5],
+        "space": [6],
+        "model": [7],
+        "achieving": [8],
+        "linear": [9],
+        "complexity": [10],
+        "in": [11],
+        "sequence": [12],
+        "length.": [13]
+      },
+      "primary_location": {"pdf_url": "https://arxiv.org/pdf/2312.00001.pdf"},
+      "type": "article"
+    },
+    {
+      "id": "https://openalex.org/W4100002",
+      "title": "RWKV: Parallelizable RNNs for Language Models",
+      "display_name": "RWKV: Parallelizable RNNs for Language Models",
+      "doi": null,
+      "publication_date": "2026-04-02",
+      "authorships": [
+        {"author": {"display_name": "Bo Peng"}}
+      ],
+      "abstract_inverted_index": {
+        "RWKV": [0],
+        "combines": [1],
+        "the": [2],
+        "efficient": [3],
+        "parallelizable": [4],
+        "training": [5],
+        "of": [6],
+        "transformers": [7],
+        "with": [8],
+        "linear": [9],
+        "RNN": [10],
+        "inference.": [11]
+      },
+      "primary_location": {"pdf_url": null},
+      "type": "article"
+    },
+    {
+      "id": "https://openalex.org/W4100003",
+      "title": "Long Context Scaling of Language Models",
+      "display_name": "Long Context Scaling of Language Models",
+      "doi": "https://doi.org/10.4100/longctx.2026",
+      "publication_date": "2026-04-03",
+      "authorships": [
+        {"author": {"display_name": "Chris Olah"}},
+        {"author": {"display_name": "Dana Huang"}}
+      ],
+      "abstract_inverted_index": null,
+      "primary_location": {"pdf_url": "https://example.com/longctx.pdf"},
+      "type": "article"
+    },
+    {
+      "id": "https://openalex.org/W4100004",
+      "title": "Multimodal Grounding for Embodied Agents",
+      "display_name": "Multimodal Grounding for Embodied Agents",
+      "doi": "https://doi.org/10.4100/embody.2026",
+      "publication_date": "2026-04-04",
+      "authorships": [
+        {"author": {"display_name": "Elena Sokolova"}}
+      ],
+      "abstract_inverted_index": null,
+      "primary_location": null,
+      "type": "article"
+    },
+    {
+      "id": "https://openalex.org/W4100005",
+      "title": "Diffusion Policy for Robotic Manipulation",
+      "display_name": "Diffusion Policy for Robotic Manipulation",
+      "doi": null,
+      "publication_date": "2026-04-05",
+      "authorships": [
+        {"author": {"display_name": "Fan Yang"}},
+        {"author": {"display_name": "George Li"}}
+      ],
+      "abstract_inverted_index": {
+        "Diffusion": [0],
+        "models": [1],
+        "applied": [2],
+        "to": [3],
+        "robot": [4],
+        "manipulation": [5],
+        "policy": [6],
+        "learning": [7],
+        "outperform": [8],
+        "prior": [9],
+        "methods.": [10]
+      },
+      "primary_location": {"pdf_url": "https://example.com/diffpolicy.pdf"},
+      "type": "article"
+    }
+  ]
+}

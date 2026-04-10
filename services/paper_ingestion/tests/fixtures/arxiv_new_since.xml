@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source URL: https://export.arxiv.org/api/query?search_query=submittedDate:[202404090000+TO+99999999]+AND+(ti:"neural+ODE"+OR+abs:"neural+ODE")&max_results=5 -->
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <entry>
+    <id>http://arxiv.org/abs/2404.01001v1</id>
+    <title>Neural ODEs for Continuous-Time Dynamics</title>
+    <author><name>Alice Smith</name></author>
+    <author><name>Bob Jones</name></author>
+    <summary>We present a novel approach to continuous-time dynamics using neural ordinary differential equations.</summary>
+    <published>2026-04-09T10:00:00Z</published>
+    <updated>2026-04-09T10:00:00Z</updated>
+    <link title="pdf" href="https://arxiv.org/pdf/2404.01001v1" rel="related" type="application/pdf"/>
+    <link rel="alternate" href="https://arxiv.org/abs/2404.01001" type="text/html"/>
+    <arxiv:primary_category term="cs.LG"/>
+    <category term="cs.LG"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2404.01002v1</id>
+    <title>Latent Diffusion with Score Matching</title>
+    <author><name>Carol White</name></author>
+    <summary>Score matching objectives for latent diffusion models in generative settings.</summary>
+    <published>2026-04-09T11:30:00Z</published>
+    <updated>2026-04-09T11:30:00Z</updated>
+    <link title="pdf" href="https://arxiv.org/pdf/2404.01002v1" rel="related" type="application/pdf"/>
+    <link rel="alternate" href="https://arxiv.org/abs/2404.01002" type="text/html"/>
+    <arxiv:primary_category term="cs.CV"/>
+    <category term="cs.CV"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2404.01003v1</id>
+    <title>Attention Mechanisms in Transformers: A Survey</title>
+    <author><name>David Lee</name></author>
+    <author><name>Eva Chen</name></author>
+    <summary>A comprehensive survey of attention mechanisms in transformer architectures.</summary>
+    <published>2026-04-09T12:00:00Z</published>
+    <updated>2026-04-09T12:00:00Z</updated>
+    <link title="pdf" href="https://arxiv.org/pdf/2404.01003v1" rel="related" type="application/pdf"/>
+    <link rel="alternate" href="https://arxiv.org/abs/2404.01003" type="text/html"/>
+    <arxiv:primary_category term="cs.AI"/>
+    <category term="cs.AI"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2404.01004v1</id>
+    <title>Graph Neural Networks for Knowledge Representation</title>
+    <author><name>Frank Miller</name></author>
+    <summary>Using graph neural networks to represent structured knowledge in relational reasoning tasks.</summary>
+    <published>2026-04-09T13:45:00Z</published>
+    <updated>2026-04-09T13:45:00Z</updated>
+    <link title="pdf" href="https://arxiv.org/pdf/2404.01004v1" rel="related" type="application/pdf"/>
+    <link rel="alternate" href="https://arxiv.org/abs/2404.01004" type="text/html"/>
+    <arxiv:primary_category term="cs.AI"/>
+    <category term="cs.AI"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2404.01005v1</id>
+    <title>Reinforcement Learning from Human Feedback: Alignment Techniques</title>
+    <author><name>Grace Kim</name></author>
+    <author><name>Henry Zhang</name></author>
+    <summary>Alignment techniques using reinforcement learning from human feedback for large language models.</summary>
+    <published>2026-04-09T15:00:00Z</published>
+    <updated>2026-04-09T15:00:00Z</updated>
+    <link title="pdf" href="https://arxiv.org/pdf/2404.01005v1" rel="related" type="application/pdf"/>
+    <link rel="alternate" href="https://arxiv.org/abs/2404.01005" type="text/html"/>
+    <arxiv:primary_category term="cs.AI"/>
+    <category term="cs.AI"/>
+  </entry>
+</feed>
