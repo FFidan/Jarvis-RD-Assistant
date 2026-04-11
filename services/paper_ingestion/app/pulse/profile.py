@@ -31,7 +31,8 @@ class UserProfile(BaseModel):
     """Snapshot of user context consumed by the Pulse scoring pipeline."""
 
     topics: list[TopicRef]
-    tracked_author_ids: list[str]  # author names (and s2_author_ids where present)
+    tracked_author_names: set[str]  # display names, lowercased for case-insensitive match
+    tracked_author_s2_ids: set[str]  # opaque S2 numeric IDs (e.g. "1730375")
     library_centroid: list[float] | None
     weights: dict[str, float]
     deck_size: int
@@ -71,18 +72,19 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
             for r in topic_rows
         ]
 
-        # 2. Tracked author identifiers (names + s2_author_ids)
+        # 2. Tracked author identifiers — split into names (lowercased) and S2 IDs
         author_rows = await conn.fetch(
             "SELECT author_name, s2_author_id FROM tracked_authors WHERE enabled = TRUE"
         )
-        tracked_author_ids: list[str] = []
+        tracked_author_names: set[str] = set()
+        tracked_author_s2_ids: set[str] = set()
         for r in author_rows:
-            # Prefer s2_author_id as the canonical ID; fall back to author name
             aid = r.get("s2_author_id")
             if aid:
-                tracked_author_ids.append(str(aid))
-            else:
-                tracked_author_ids.append(r["author_name"])
+                tracked_author_s2_ids.add(str(aid))
+            name = r.get("author_name")
+            if name:
+                tracked_author_names.add(str(name).lower())
 
         # 3. Library centroid: embed abstracts of "engaged" papers
         engaged_rows = await conn.fetch(
@@ -159,7 +161,8 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
 
     return UserProfile(
         topics=topics,
-        tracked_author_ids=tracked_author_ids,
+        tracked_author_names=tracked_author_names,
+        tracked_author_s2_ids=tracked_author_s2_ids,
         library_centroid=library_centroid,
         weights=weights,
         deck_size=deck_size,

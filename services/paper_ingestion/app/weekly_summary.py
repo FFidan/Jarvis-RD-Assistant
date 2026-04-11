@@ -4,7 +4,7 @@ Groups recent papers by topic and synthesizes cross-paper themes
 using LLM analysis for each topic cluster.
 
 Only papers the user has actively engaged with are included:
-- Library UI engagement: paper_user_state.user_state IN ('saved', 'reading', 'read')
+- Library UI engagement: paper_user_state.status IN ('starred', 'reading', 'read')
 - Pulse card engagement: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
 
 This is the Model C (Complementary) guarantee: Weekly Summary reflects
@@ -64,7 +64,7 @@ async def generate_weekly_summary(
     """Generate per-topic digests for papers the user engaged with in the lookback window.
 
     Only papers with active user engagement are included (Model C — Complementary):
-    - Library UI: paper_user_state.user_state IN ('saved', 'reading', 'read')
+    - Library UI: paper_user_state.status IN ('starred', 'reading', 'read')
     - Pulse cards: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
 
     Papers passively surfaced by Pulse but never rated or saved are excluded,
@@ -97,7 +97,7 @@ async def generate_weekly_summary(
                   EXISTS (
                       SELECT 1 FROM paper_user_state pus
                       WHERE pus.paper_id = p.id
-                        AND pus.user_state IN ('saved', 'reading', 'read')
+                        AND pus.status IN ('starred', 'reading', 'read')
                   )
                   OR
                   EXISTS (

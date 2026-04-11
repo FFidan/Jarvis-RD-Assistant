@@ -33,7 +33,7 @@ def _make_paper(idx: int = 0, title: str | None = None) -> PaperCreate:
     )
 
 
-def _make_scored(paper: PaperCreate, score: float = 0.5, idx: int = 0) -> ScoredCandidate:
+def _make_scored(paper: PaperCreate, score: float = 0.5) -> ScoredCandidate:
     return ScoredCandidate(
         paper=paper,
         signals={"embedding": score, "topic": 0.4, "recency": 0.9, "author_bonus": 0.0},
@@ -53,7 +53,7 @@ def _make_scored(paper: PaperCreate, score: float = 0.5, idx: int = 0) -> Scored
 async def test_assemble_deck_picks_top_n():
     """assemble_deck returns the top `size` candidates sorted by final_score desc."""
     papers = [_make_paper(i) for i in range(10)]
-    candidates = [_make_scored(p, score=float(i) / 10.0, idx=i) for i, p in enumerate(papers)]
+    candidates = [_make_scored(p, score=float(i) / 10.0) for i, p in enumerate(papers)]
 
     result = await assemble_deck(candidates, size=5)
 
@@ -105,17 +105,12 @@ async def test_persist_deck_inserts_deck_and_cards():
     pool, conn = _make_pool_and_conn()
     deck_date = date(2024, 1, 15)
     papers = [_make_paper(i) for i in range(3)]
-    # Simulate that paper IDs are looked up from the DB
-    conn.fetchrow.side_effect = [
-        FakeRecord({"id": 1, "paper_id": 10}),  # for deck UPSERT returning id
-        FakeRecord({"id": 101}),  # paper id lookup for paper 0
-        FakeRecord({"id": 102}),  # paper id lookup for paper 1
-        FakeRecord({"id": 103}),  # paper id lookup for paper 2
-    ]
-    # fetchval used for deck insert returning id
-    conn.fetchval.side_effect = [42]  # deck_id = 42
+    # fetchval call sequence with new persist_deck logic:
+    #   1: deck INSERT RETURNING id → deck_id=42
+    #   2,3,4: card INSERT RETURNING id → non-None means success
+    conn.fetchval.side_effect = [42, 101, 102, 103]
 
-    cards = [_make_scored(p, score=float(i) / 3.0, idx=i) for i, p in enumerate(papers)]
+    cards = [_make_scored(p, score=float(i) / 3.0) for i, p in enumerate(papers)]
 
     deck_id = await persist_deck(pool, deck_date, cards, stats={"candidate_count": 100})
 
@@ -291,3 +286,51 @@ async def test_load_history_uses_days_parameter():
 
     # Verify a DB call was made (with some parameters)
     conn.fetch.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# persist_deck — partial insert (missing paper rows)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_deck_counts_actual_inserts_when_paper_missing():
+    """persist_deck sets card_count to the number of successfully inserted cards.
+
+    3 cards are submitted but only 2 have corresponding papers rows.
+    The missing paper causes fetchval to return None for that card.
+    The final UPDATE must use card_count=2, and logger.warning must fire once.
+    """
+    from unittest.mock import patch
+
+    pool, conn = _make_pool_and_conn()
+    deck_date = date(2024, 2, 1)
+
+    # fetchval call sequence:
+    #   1st: deck upsert → deck_id = 7
+    #   2nd: card insert for paper 0 → inserted_id = 101 (success)
+    #   3rd: card insert for paper 1 → None (paper row missing)
+    #   4th: card insert for paper 2 → inserted_id = 103 (success)
+    conn.fetchval.side_effect = [7, 101, None, 103]
+
+    papers = [_make_paper(i) for i in range(3)]
+    cards = [_make_scored(p, score=float(i + 1) / 3.0) for i, p in enumerate(papers)]
+
+    with patch("app.pulse.deck.logger") as mock_logger:
+        deck_id = await persist_deck(pool, deck_date, cards, stats={"candidate_count": 50})
+
+    # deck_id must be whatever the upsert returned
+    assert deck_id == 7
+
+    # The final UPDATE must have been called with card_count=2
+    update_calls = [
+        call
+        for call in conn.execute.call_args_list
+        if "UPDATE pulse_decks SET card_count" in call.args[0]
+    ]
+    assert len(update_calls) == 1, "Expected exactly one UPDATE pulse_decks call"
+    _, actual_count, _ = update_calls[0].args  # ($1=successes, $2=deck_id)
+    assert actual_count == 2, f"Expected card_count=2 but got {actual_count}"
+
+    # logger.warning must have been called exactly once (for the missing paper)
+    mock_logger.warning.assert_called_once()

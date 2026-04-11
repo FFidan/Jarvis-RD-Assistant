@@ -59,6 +59,12 @@ function cronToHumanReadable(cron: string): string {
   return `Weekly on ${dayName} at ${time}`;
 }
 
+function isValidCron(s: string): boolean {
+  const parts = s.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  return parts.every((p) => /^[*/0-9,\-]+$/.test(p));
+}
+
 function cronToTime(cron: string): string {
   const parts = cron.split(/\s+/);
   const minute = parseInt(parts[0], 10);
@@ -121,6 +127,7 @@ function PulseSubsection() {
   const handleCronChange = (value: string) => {
     setLocalCron(value);
     if (cronTimeoutRef.current) clearTimeout(cronTimeoutRef.current);
+    if (!isValidCron(value)) return;
     cronTimeoutRef.current = setTimeout(() => {
       setMut.mutate({ key: 'pulse.cron', value });
     }, 400);
@@ -168,9 +175,13 @@ function PulseSubsection() {
             value={localCron}
             onChange={(e) => handleCronChange(e.target.value)}
             placeholder="0 4 * * *"
-            className="font-mono text-sm"
+            className={`font-mono text-sm${!isValidCron(localCron) && localCron.trim() !== '' ? ' border-destructive' : ''}`}
           />
-          <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
+          {!isValidCron(localCron) && localCron.trim() !== '' ? (
+            <p className="text-xs text-destructive">Invalid cron expression</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
+          )}
         </div>
 
         <div className="rounded-md border bg-muted/30 p-3 text-sm">

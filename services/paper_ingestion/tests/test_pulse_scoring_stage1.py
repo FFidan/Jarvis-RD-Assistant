@@ -37,11 +37,13 @@ def _make_paper(
 def _make_profile(
     centroid: list[float] | None = None,
     topics: list[TopicRef] | None = None,
-    tracked_author_ids: list[str] | None = None,
+    tracked_author_names: set[str] | None = None,
+    tracked_author_s2_ids: set[str] | None = None,
 ) -> UserProfile:
     return UserProfile(
         topics=topics or [],
-        tracked_author_ids=tracked_author_ids or [],
+        tracked_author_names=tracked_author_names or set(),
+        tracked_author_s2_ids=tracked_author_s2_ids or set(),
         library_centroid=centroid,
         weights={
             "embedding": 0.2,
@@ -182,10 +184,9 @@ async def test_stage1_recency_none_date_handled():
 @pytest.mark.asyncio
 async def test_stage1_author_bonus_applied():
     """Author bonus is 1.0 when candidate author name matches a tracked author."""
-    # Note: tracked_author_ids holds s2_author_ids (may be None for manual entries).
-    # The spec says "any candidate author.source_id in profile.tracked_author_ids".
-    # Since PaperCreate.authors is list[str] (names), we match by name instead.
-    # This test verifies the bonus is applied for tracked authors.
+    # Author bonus uses dual-set matching: display names (lowercased) OR s2 IDs.
+    # PaperCreate.authors is list[str] (display names); they are lowercased for comparison.
+    # This test verifies the bonus is applied when an author name matches.
     papers = [
         _make_paper(title="Tracked Author Paper", authors=["Jane Doe"], external_id="arxiv:t1"),
         _make_paper(
@@ -193,7 +194,7 @@ async def test_stage1_author_bonus_applied():
         ),
     ]
     vec = [1.0, 0.0]
-    profile = _make_profile(centroid=None, tracked_author_ids=["Jane Doe"])
+    profile = _make_profile(centroid=None, tracked_author_names={"jane doe"})
     embedder = _make_embedder([vec, vec])
 
     result = await stage1_embedding_filter(papers, profile, embedder, top_k=10)

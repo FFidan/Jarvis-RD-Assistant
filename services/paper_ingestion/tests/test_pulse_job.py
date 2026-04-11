@@ -17,7 +17,8 @@ from tests.conftest import _make_pool_and_conn
 def _make_profile(deck_size: int = 10, stage2_top_k: int = 30) -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="ml", query_terms=["ML"])],
-        tracked_author_ids=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
         library_centroid=None,
         weights={"embedding": 0.35, "topic": 0.25, "recency": 0.15, "author_bonus": 0.25},
         deck_size=deck_size,

@@ -55,7 +55,8 @@ def _make_scored(paper: PaperCreate, embedding: float = 0.5) -> ScoredCandidate:
 def _make_profile() -> UserProfile:
     return UserProfile(
         topics=[TopicRef(id=1, name="Neural ODEs", description="Continuous dynamics")],
-        tracked_author_ids=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
         library_centroid=None,
         weights={"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1},
         deck_size=10,

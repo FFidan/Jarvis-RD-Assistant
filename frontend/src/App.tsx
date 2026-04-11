@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { LoginPage } from '@/pages/LoginPage';
 import { HomePage } from '@/pages/HomePage';
 import { MyDayPage } from '@/pages/MyDayPage';
@@ -23,7 +24,7 @@ export function App() {
   if (!authed) {
     return (
       <Routes>
-        <Route path="*" element={<LoginPage />} />
+        <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
       </Routes>
     );
   }
@@ -32,18 +33,18 @@ export function App() {
     <ErrorBoundary>
       <AppShell>
         <Routes>
-          <Route path="/" element={<HomePage />} />
-          <Route path="/my-day" element={<MyDayPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-          <Route path="analytics" element={<AnalyticsPage />} />
-          <Route path="extractions" element={<ExtractionTablePage />} />
-          <Route path="projects" element={<ProjectsPage />} />
-          <Route path="cards" element={<LearningCardsPage />} />
-          <Route path="feed" element={<ResearchFeedPage />} />
-          <Route path="paper/:paperId" element={<PaperDetailPage />} />
-          <Route path="citations" element={<CitationGraphPage />} />
-          <Route path="knowledge" element={<KnowledgeGraphPage />} />
-          <Route path="*" element={<NotFoundPage />} />
+          <Route path="/" element={<RouteErrorBoundary><HomePage /></RouteErrorBoundary>} />
+          <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
+          <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
+          <Route path="analytics" element={<RouteErrorBoundary><AnalyticsPage /></RouteErrorBoundary>} />
+          <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
+          <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
+          <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
+          <Route path="feed" element={<RouteErrorBoundary><ResearchFeedPage /></RouteErrorBoundary>} />
+          <Route path="paper/:paperId" element={<RouteErrorBoundary><PaperDetailPage /></RouteErrorBoundary>} />
+          <Route path="citations" element={<RouteErrorBoundary><CitationGraphPage /></RouteErrorBoundary>} />
+          <Route path="knowledge" element={<RouteErrorBoundary><KnowledgeGraphPage /></RouteErrorBoundary>} />
+          <Route path="*" element={<RouteErrorBoundary><NotFoundPage /></RouteErrorBoundary>} />
         </Routes>
       </AppShell>
     </ErrorBoundary>

@@ -16,10 +16,9 @@ for _mod_name in ("fitz",):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
 
-import httpx
-import pytest
-from httpx import ASGITransport
-
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+from httpx import ASGITransport  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -175,8 +174,13 @@ async def test_list_nudges(_app):
     app, conn, _ = _app
     conn.fetch.return_value = [
         FakeRecord(
-            id=1, nudge_type="review_reminder", cron_expression="0 9 * * *",
-            enabled=True, config={}, last_fired_at=None, created_at=_now(),
+            id=1,
+            nudge_type="review_reminder",
+            cron_expression="0 9 * * *",
+            enabled=True,
+            config={},
+            last_fired_at=None,
+            created_at=_now(),
         ),
     ]
 
@@ -196,12 +200,22 @@ async def test_update_nudge_found(_app):
     """PUT /api/nudges/{id} updates the nudge when found."""
     app, conn, _ = _app
     existing = FakeRecord(
-        id=1, nudge_type="review_reminder", cron_expression="0 9 * * *",
-        enabled=True, config={}, last_fired_at=None, created_at=_now(),
+        id=1,
+        nudge_type="review_reminder",
+        cron_expression="0 9 * * *",
+        enabled=True,
+        config={},
+        last_fired_at=None,
+        created_at=_now(),
     )
     updated = FakeRecord(
-        id=1, nudge_type="review_reminder", cron_expression="0 10 * * *",
-        enabled=True, config={}, last_fired_at=None, created_at=_now(),
+        id=1,
+        nudge_type="review_reminder",
+        cron_expression="0 10 * * *",
+        enabled=True,
+        config={},
+        last_fired_at=None,
+        created_at=_now(),
     )
     conn.fetchrow.side_effect = [existing, updated]
 
@@ -243,8 +257,12 @@ async def test_list_sources(_app):
     app, conn, _ = _app
     conn.fetch.return_value = [
         FakeRecord(
-            id=1, source_type="arxiv", enabled=True, config={},
-            priority=1, created_at=_now(),
+            id=1,
+            source_type="arxiv",
+            enabled=True,
+            config={},
+            priority=1,
+            created_at=_now(),
         ),
     ]
 
@@ -264,12 +282,20 @@ async def test_update_source_found(_app):
     """PUT /api/sources/{id} updates the source when found."""
     app, conn, _ = _app
     existing = FakeRecord(
-        id=1, source_type="arxiv", enabled=True, config={},
-        priority=1, created_at=_now(),
+        id=1,
+        source_type="arxiv",
+        enabled=True,
+        config={},
+        priority=1,
+        created_at=_now(),
     )
     updated = FakeRecord(
-        id=1, source_type="arxiv", enabled=False, config={},
-        priority=1, created_at=_now(),
+        id=1,
+        source_type="arxiv",
+        enabled=False,
+        config={},
+        priority=1,
+        created_at=_now(),
     )
     conn.fetchrow.side_effect = [existing, updated]
 
@@ -342,3 +368,73 @@ async def test_papers_by_status(_app):
     assert len(body) == 2
     assert body[0]["status"] == "new"
     assert body[0]["count"] == 30
+
+
+# ---------------------------------------------------------------------------
+# Tests: pulse.* config key validation (F1.4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_config_invalid_cron_returns_400(_app):
+    """PUT /api/config/pulse.cron rejects an invalid cron expression."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.cron",
+            json={"key": "pulse.cron", "value": "not a cron"},
+        )
+
+    assert resp.status_code == 400
+    assert "cron" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_set_config_invalid_weights_returns_400(_app):
+    """PUT /api/config/pulse.weights rejects a dict with wrong keys."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.weights",
+            json={"key": "pulse.weights", "value": {"bad_key": 0.5}},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_config_string_deck_size_returns_400(_app):
+    """PUT /api/config/pulse.deck_size rejects a string value."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.deck_size",
+            json={"key": "pulse.deck_size", "value": "10"},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_config_valid_cron_accepted(_app):
+    """PUT /api/config/pulse.cron accepts a valid cron expression."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.cron",
+            json={"key": "pulse.cron", "value": "0 4 * * *"},
+        )
+
+    assert resp.status_code == 200

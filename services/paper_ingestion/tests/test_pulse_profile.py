@@ -123,8 +123,8 @@ async def test_load_profile_happy_path():
     assert len(profile.topics) == 2
     assert profile.topics[0].name == "Neural ODEs"
     assert profile.topics[1].description is None
-    # Tracked author IDs (only non-None s2_author_ids)
-    assert "A1234" in profile.tracked_author_ids
+    # Tracked author S2 IDs (only non-None s2_author_ids)
+    assert "A1234" in profile.tracked_author_s2_ids
     # centroid should be computed
     assert profile.library_centroid is not None
     assert len(profile.library_centroid) == 768
@@ -161,7 +161,8 @@ async def test_load_profile_empty_library_centroid_none():
 
     assert profile.library_centroid is None
     assert profile.topics == []
-    assert profile.tracked_author_ids == []
+    assert profile.tracked_author_names == set()
+    assert profile.tracked_author_s2_ids == set()
     assert profile.recent_positive_titles == []
     assert profile.recent_negative_titles == []
     # embed_texts should NOT be called (no papers to embed)
@@ -235,7 +236,8 @@ def test_user_profile_model_fields():
     """UserProfile Pydantic model accepts expected field types."""
     profile = UserProfile(
         topics=[TopicRef(id=1, name="Test", description=None, query_terms=[])],
-        tracked_author_ids=["A123"],
+        tracked_author_names={"alice smith"},
+        tracked_author_s2_ids={"A123"},
         library_centroid=[0.1, 0.2, 0.3],
         weights={"embedding": 0.5, "topic": 0.5},
         deck_size=10,
@@ -252,7 +254,8 @@ def test_user_profile_centroid_none_allowed():
     """UserProfile allows library_centroid=None."""
     profile = UserProfile(
         topics=[],
-        tracked_author_ids=[],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
         library_centroid=None,
         weights={},
         deck_size=5,

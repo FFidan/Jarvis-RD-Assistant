@@ -4,6 +4,7 @@ Provides assemble_deck, persist_deck, load_today, load_history.
 All DB operations use asyncpg pool patterns consistent with the rest of the service.
 """
 
+import json
 import logging
 from datetime import date, datetime
 from typing import Any
@@ -67,36 +68,32 @@ async def persist_deck(
     int
         The pulse_decks.id of the upserted deck.
     """
-    import json as _json
-
-    card_count = len(cards)
-    stats_json = _json.dumps(stats)
+    stats_json = json.dumps(stats)
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # Upsert pulse_decks row — returns the deck id
+            # Upsert pulse_decks row with card_count=0 initially — returns the deck id
             deck_id = await conn.fetchval(
                 """
                 INSERT INTO pulse_decks (deck_date, card_count, generated_at, stats)
-                VALUES ($1, $2, NOW(), $3::jsonb)
+                VALUES ($1, 0, NOW(), $2::jsonb)
                 ON CONFLICT (deck_date) DO UPDATE
-                    SET card_count    = EXCLUDED.card_count,
+                    SET card_count    = 0,
                         generated_at  = EXCLUDED.generated_at,
                         stats         = EXCLUDED.stats
                 RETURNING id
                 """,
                 deck_date,
-                card_count,
                 stats_json,
             )
 
             # Delete old cards for this deck (idempotent replace)
             await conn.execute("DELETE FROM pulse_cards WHERE deck_id = $1", deck_id)
 
-            # Insert new cards
+            # Insert new cards one by one, counting actual successes
+            successes = 0
             for rank, sc in enumerate(cards, start=1):
-                signals_json = _json.dumps(sc.signals)
-                await conn.execute(
+                inserted_id = await conn.fetchval(
                     """
                     INSERT INTO pulse_cards
                         (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
@@ -105,6 +102,7 @@ async def persist_deck(
                     FROM papers p
                     WHERE p.external_id = $2
                     ON CONFLICT (deck_id, paper_id) DO NOTHING
+                    RETURNING id
                     """,
                     deck_id,
                     sc.paper.external_id,
@@ -113,8 +111,22 @@ async def persist_deck(
                     sc.llm_relevance,
                     sc.llm_novelty,
                     sc.reasoning,
-                    signals_json,
+                    json.dumps(sc.signals),
                 )
+                if inserted_id is not None:
+                    successes += 1
+                else:
+                    logger.warning(
+                        "pulse.persist_deck: skipped %r — paper row missing",
+                        sc.paper.external_id,
+                    )
+
+            # Update deck row with the actual number of successfully inserted cards
+            await conn.execute(
+                "UPDATE pulse_decks SET card_count = $1 WHERE id = $2",
+                successes,
+                deck_id,
+            )
 
     return deck_id
 

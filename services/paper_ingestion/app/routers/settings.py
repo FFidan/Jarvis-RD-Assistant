@@ -3,7 +3,10 @@
 import asyncio
 import json
 import logging
+from collections.abc import Callable
+from typing import Any
 
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException, Request
 from jarvis_common import dynamic_update
 
@@ -60,6 +63,53 @@ _SOURCE_ALLOWED_COLUMNS = frozenset({"enabled", "priority", "config"})
 _SOURCE_JSONB_COLUMNS = frozenset({"config"})
 
 
+# --- Config key validators ---
+
+_PULSE_WEIGHT_KEYS = frozenset(
+    {"embedding", "topic", "llm_relevance", "llm_novelty", "author_bonus", "recency"}
+)
+
+
+def _validate_cron(v: Any) -> None:
+    if not isinstance(v, str):
+        raise ValueError("pulse.cron must be a string")
+    try:
+        CronTrigger.from_crontab(v)
+    except Exception as exc:
+        raise ValueError(f"invalid cron expression: {exc}") from exc
+
+
+def _validate_pulse_weights(v: Any) -> None:
+    if not isinstance(v, dict):
+        raise ValueError("pulse.weights must be a dict")
+    if set(v.keys()) != _PULSE_WEIGHT_KEYS:
+        raise ValueError(
+            f"pulse.weights must have exactly these keys: {sorted(_PULSE_WEIGHT_KEYS)}"
+        )
+    for k, val in v.items():
+        if not isinstance(val, int | float) or isinstance(val, bool) or not (0 <= val <= 1):
+            raise ValueError(f"pulse.weights.{k} must be a float between 0 and 1")
+
+
+def _validate_positive_int(v: Any) -> None:
+    if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+        raise ValueError("value must be a positive integer")
+
+
+def _validate_bool(v: Any) -> None:
+    if not isinstance(v, bool):
+        raise ValueError("value must be a boolean")
+
+
+_CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
+    "pulse.cron": _validate_cron,
+    "pulse.weights": _validate_pulse_weights,
+    "pulse.deck_size": _validate_positive_int,
+    "pulse.stage2_top_k": _validate_positive_int,
+    "pulse.enabled": _validate_bool,
+}
+
+
 # --- User Config ---
 
 
@@ -92,6 +142,12 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
                 status_code=400,
                 detail=f"Model name must be a string, got {type(body.value).__name__}",
             )
+    validator = _CONFIG_VALIDATORS.get(key)
+    if validator is not None:
+        try:
+            validator(body.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     value_json = json.dumps(body.value)
     async with request.app.state.db_pool.acquire() as conn:
         await conn.execute(

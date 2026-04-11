@@ -25,8 +25,8 @@ from app.pulse.prompts import build_scoring_prompt
 logger = logging.getLogger(__name__)
 
 _LLM_CONCURRENCY = 5
-_LLM_MODEL = "fast"
-_LLM_MAX_TOKENS = 256
+_LLM_MODEL = "smart"  # mistral-nemo: non-thinking model, reliable JSON output
+_LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0
 
 
@@ -134,7 +134,6 @@ async def stage1_embedding_filter(
         ][:top_k]
 
     centroid = profile.library_centroid
-    tracked_ids = set(profile.tracked_author_ids)
 
     scored: list[ScoredCandidate] = []
     for idx, candidate in enumerate(candidates):
@@ -151,13 +150,15 @@ async def stage1_embedding_filter(
         # Recency decay
         recency = _recency_decay(candidate.published_date)
 
-        # Author bonus: check if any author is in tracked_ids (by name or s2_author_id)
+        # Author bonus: dual-set match — display names (lowercased) OR s2 numeric IDs
         author_bonus = 0.0
-        if tracked_ids:
-            for author_name in candidate.authors:
-                if author_name in tracked_ids:
-                    author_bonus = 1.0
-                    break
+        if profile.tracked_author_names or profile.tracked_author_s2_ids:
+            candidate_names = {a.lower() for a in candidate.authors}
+            candidate_s2_ids = set(candidate.metadata.get("s2_author_ids", []))
+            if (candidate_names & profile.tracked_author_names) or (
+                candidate_s2_ids & profile.tracked_author_s2_ids
+            ):
+                author_bonus = 1.0
 
         signals = {
             "embedding": embedding_sim,

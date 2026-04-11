@@ -146,6 +146,19 @@ async def _simple_digest(
            JOIN topics t ON pt.topic_id = t.id
            LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
            WHERE p.created_at >= NOW() - INTERVAL '7 days'
+             AND (
+                 EXISTS (
+                     SELECT 1 FROM paper_user_state pus
+                     WHERE pus.paper_id = p.id
+                       AND pus.status IN ('starred', 'reading', 'read')
+                 )
+                 OR EXISTS (
+                     SELECT 1 FROM pulse_ratings pr
+                     WHERE pr.paper_id = p.id
+                       AND pr.rating IN ('up', 'save', 'open')
+                       AND pr.created_at >= NOW() - INTERVAL '7 days'
+                 )
+             )
            ORDER BY t.name, pt.relevance_score DESC NULLS LAST"""
     )
 
