@@ -223,6 +223,7 @@ async def run_pulse_wrapper(app: Any) -> None:
             db_pool=db_pool,
             http_client=app.state.http_client,
             embedder=app.state.embedder,
+            source_cache=getattr(app.state, "sources", None),
         )
     except Exception:
         logger.exception("pulse_overnight job failed")

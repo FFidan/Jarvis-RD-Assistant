@@ -132,12 +132,13 @@ async def resolve_pdf_url(
 
 def _fn_to_resolver_name(fn) -> str:  # type: ignore[type-arg]
     """Map private resolver function to its canonical resolver_name string."""
-    _map = {
+    _map: dict[str, str] = {
         "_try_arxiv": "arxiv",
         "_try_unpaywall": "unpaywall",
         "_try_core": "core",
     }
-    return _map.get(fn.__name__, fn.__name__)
+    name: str = str(fn.__name__)
+    return _map.get(name, name)
 
 
 def _emit_unpaywall_skip_log() -> None:

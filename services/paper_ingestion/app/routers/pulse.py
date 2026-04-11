@@ -52,6 +52,7 @@ async def generate_pulse(request: Request) -> PulseDeckResponse:
         db_pool=app.state.db_pool,
         http_client=app.state.http_client,
         embedder=app.state.embedder,
+        source_cache=getattr(app.state, "sources", None),
     )
     if stats.get("last_error"):
         logger.warning("pulse.generate: degraded run, last_error=%s", stats["last_error"])

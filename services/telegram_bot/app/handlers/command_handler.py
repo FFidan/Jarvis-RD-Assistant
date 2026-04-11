@@ -457,6 +457,43 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @auth_required
+async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/pulse_now`` — trigger immediate Pulse generation.
+
+    Parameters
+    ----------
+    update : Update
+        Incoming Telegram update.
+    context : ContextTypes.DEFAULT_TYPE
+        Bot context.
+    """
+    http = _get_http(context)
+    config = _get_config(context)
+    headers = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
+    try:
+        resp = await http.post(
+            f"{config.paper_ingestion_url}/api/pulse/generate",
+            headers=headers,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+    except Exception:
+        logger.exception("Failed to trigger Pulse generation")
+        await update.message.reply_text(
+            "Failed to trigger Pulse generation. Try again later.",
+            parse_mode="HTML",
+        )
+        return
+
+    await update.message.reply_text(
+        "⚡ Pulse generation started. Check back in a few minutes.",
+        parse_mode="HTML",
+    )
+
+
+@auth_required
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/next`` — recommend the next paper to read."""
     db = _get_db(context)
@@ -505,3 +542,4 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("newproject", newproject_command))
     app.add_handler(CommandHandler("focus", focus_command))
     app.add_handler(CommandHandler("next", next_command))
+    app.add_handler(CommandHandler("pulse_now", pulse_now_command))

@@ -17,7 +17,7 @@ _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 
 def safe_url(url: str) -> str:
-    """Sanitize URL — only allow safe schemes.
+    """Sanitize URL — only allow safe schemes, then HTML-escape for href attributes.
 
     Parameters
     ----------
@@ -27,7 +27,7 @@ def safe_url(url: str) -> str:
     Returns
     -------
     str
-        The original URL if scheme is allowed, ``'#'`` otherwise.
+        The HTML-escaped URL if scheme is allowed, ``'#'`` otherwise.
         Returns ``''`` for empty input (no URL to display).
     """
     if not url:
@@ -36,7 +36,7 @@ def safe_url(url: str) -> str:
         parsed = urlparse(url)
         if parsed.scheme.lower() not in _ALLOWED_SCHEMES:
             return "#"
-        return url
+        return html.escape(url, quote=True)
     except ValueError:
         return "#"
 
@@ -411,7 +411,7 @@ def format_weekly_digest(digest: dict) -> str:
 
         # Show top papers
         for paper in topic.get("top_papers", [])[:3]:
-            raw_title = (paper.get("title", "") or "")
+            raw_title = paper.get("title", "") or ""
             title = escape(raw_title[:80]) + ("…" if len(raw_title) > 80 else "")
             url = paper.get("url", "")
             conf = confidence_badge(paper.get("confidence")) if paper.get("confidence") else ""

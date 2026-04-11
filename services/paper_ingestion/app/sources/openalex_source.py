@@ -21,12 +21,14 @@ word at its positions in an output list, then joining with spaces.
 Rate limiting
 -------------
 OpenAlex recommends ≤10 requests/second for polite-pool users.  This plugin
-makes no active rate-limiting beyond what the shared ``httpx.AsyncClient``
-provides; callers should not hammer the endpoint.
+enforces ~9 req/s (0.11 s interval) via an asyncio.Lock-based rate limiter
+shared across all calls on the same instance.
 """
 
+import asyncio
 import logging
 import os
+import time
 from datetime import UTC, date, datetime
 
 import httpx
@@ -102,24 +104,52 @@ class OpenAlexSource(PaperSource):
         super().__init__(config, http_client)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("OPENALEX_API_KEY")
+        self._email: str = os.environ.get("OPENALEX_EMAIL", "")
         self._missing_key_warned = False
+        self._last_request_time: float = 0.0
+        self._rate_lock = asyncio.Lock()
+
+    async def _rate_limit(self) -> None:
+        """Enforce OpenAlex polite-pool rate limit: ≤10 req/s (~9 req/s target)."""
+        interval = 0.11
+        async with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_time
+            wait = max(0.0, interval - elapsed)
+            if wait:
+                await asyncio.sleep(wait)
+            self._last_request_time = time.monotonic()
 
     def _check_api_key(self) -> bool:
-        """Return True if API key is configured; log once at INFO if not."""
-        if self._api_key:
+        """Return True if the source has at least an email or API key configured.
+
+        Logs once at INFO level when neither ``OPENALEX_EMAIL`` nor
+        ``OPENALEX_API_KEY`` is set, then returns ``False`` so callers can
+        degrade gracefully.
+        """
+        if self._api_key or self._email:
             return True
         if not self._missing_key_warned:
             logger.info(
-                "OpenAlex source: OPENALEX_API_KEY is not set. "
-                "As of February 2026 an API key is required for sustained query volumes. "
-                "Returning empty results. Set OPENALEX_API_KEY to enable this source."
+                "OpenAlex source: neither OPENALEX_EMAIL nor OPENALEX_API_KEY is set. "
+                "Set OPENALEX_EMAIL for polite-pool access (recommended) or "
+                "OPENALEX_API_KEY for authenticated access. "
+                "Returning empty results."
             )
             self._missing_key_warned = True
         return False
 
     def _build_params(self, extra: dict | None = None) -> dict:
-        """Build base query params including the polite-pool mailto token."""
-        params: dict = {"mailto": self._api_key} if self._api_key else {}
+        """Build base query params including the polite-pool ``mailto`` token.
+
+        ``OPENALEX_EMAIL`` is sent as the ``mailto`` query parameter which
+        places this client in OpenAlex's polite pool (higher rate limits,
+        better cache behaviour).  ``OPENALEX_API_KEY``, when set, is sent as a
+        Bearer token via the ``Authorization`` header (handled separately in
+        each request) — it is not mixed into the query params.
+        """
+        params: dict = {}
+        if self._email:
+            params["mailto"] = self._email
         if extra:
             params.update(extra)
         return params
@@ -205,15 +235,20 @@ class OpenAlexSource(PaperSource):
         Returns
         -------
         list[PaperCreate]
-            Papers parsed from the OpenAlex response.  Returns ``[]`` if the
-            API key is missing or on HTTP 429/5xx.
+            Papers parsed from the OpenAlex response.  Returns ``[]`` if
+            neither ``OPENALEX_EMAIL`` nor ``OPENALEX_API_KEY`` is configured,
+            or on HTTP 429/5xx.
         """
         if not self._check_api_key():
             return []
 
+        await self._rate_limit()
         params = self._build_params({"search": query, "per-page": min(max_results, 200)})
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
+            response = await self.http_client.get(
+                OPENALEX_API_URL, params=params, headers=headers, timeout=30.0
+            )
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning(
                     "OpenAlex search returned %d; returning empty list",
@@ -222,7 +257,7 @@ class OpenAlexSource(PaperSource):
                 return []
             response.raise_for_status()
             data = response.json()
-        except httpx.HTTPStatusError as exc:
+        except httpx.HTTPError as exc:
             logger.warning("OpenAlex search failed: %s", exc)
             return []
 
@@ -257,10 +292,12 @@ class OpenAlexSource(PaperSource):
         if oa_id.startswith("10.") or oa_id.startswith("doi:"):
             oa_id = oa_id if oa_id.startswith("doi:") else f"doi:{oa_id}"
 
+        await self._rate_limit()
         url = f"{OPENALEX_API_URL}/{oa_id}"
         params = self._build_params()
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            response = await self.http_client.get(url, params=params, timeout=30.0)
+            response = await self.http_client.get(url, params=params, headers=headers, timeout=30.0)
             if response.status_code == 404:
                 return None
             if response.status_code in (429, 500, 502, 503, 504):
@@ -268,7 +305,7 @@ class OpenAlexSource(PaperSource):
                 return None
             response.raise_for_status()
             work = response.json()
-        except httpx.HTTPStatusError as exc:
+        except httpx.HTTPError as exc:
             logger.warning("OpenAlex fetch_by_id failed for %s: %s", oa_id, exc)
             return None
 
@@ -305,8 +342,9 @@ class OpenAlexSource(PaperSource):
         Returns
         -------
         list[PaperCreate]
-            Deduplicated works newer than *since*. Returns ``[]`` if the API
-            key is missing or on HTTP errors.
+            Deduplicated works newer than *since*. Returns ``[]`` if neither
+            ``OPENALEX_EMAIL`` nor ``OPENALEX_API_KEY`` is configured, or on
+            HTTP errors.
         """
         if not self._check_api_key():
             return []
@@ -326,16 +364,20 @@ class OpenAlexSource(PaperSource):
         seen_ids: set[str] = set()
         papers: list[PaperCreate] = []
         per_q = max(1, limit // max(len(queries), 1))
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         for q in queries:
             if len(papers) >= limit:
                 break
+            await self._rate_limit()
             params = self._build_params({"filter": date_filter, "per-page": min(per_q, 200)})
             if q:
                 params["search"] = q
 
             try:
-                response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
+                response = await self.http_client.get(
+                    OPENALEX_API_URL, params=params, headers=headers, timeout=30.0
+                )
                 if response.status_code in (429, 500, 502, 503, 504):
                     logger.warning(
                         "OpenAlex fetch_new_since returned %d; skipping query",
@@ -344,7 +386,7 @@ class OpenAlexSource(PaperSource):
                     continue
                 response.raise_for_status()
                 data = response.json()
-            except httpx.HTTPStatusError as exc:
+            except httpx.HTTPError as exc:
                 logger.warning("OpenAlex fetch_new_since failed: %s", exc)
                 continue
 

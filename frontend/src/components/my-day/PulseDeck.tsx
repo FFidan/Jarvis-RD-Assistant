@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
@@ -22,6 +23,7 @@ import type { PulseDeck as PulseDeckType, PulseRating } from '@/types';
 export function PulseDeck() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [ratedCards, setRatedCards] = useState<Set<number>>(new Set());
 
   const {
     data: deck,
@@ -45,8 +47,8 @@ export function PulseDeck() {
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
       ratePulseCard(paperId, rating),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+    onSuccess: (_data, { paperId }) => {
+      setRatedCards((prev) => new Set(prev).add(paperId));
     },
     onError: (err) => {
       // TODO(stream-I): replace with useToast once a toast hook lands.
@@ -139,6 +141,7 @@ export function PulseDeck() {
             card={card}
             onRate={handleRate}
             onOpen={handleOpen}
+            rated={ratedCards.has(card.paper_id)}
           />
         ))}
       </div>

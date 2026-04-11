@@ -141,7 +141,7 @@ async def lifespan(app: FastAPI):
 
     # C-8: Initialize source singletons so the rate limiter persists across requests.
     app.state.sources: dict = {}
-    for _source_type_val in ["arxiv", "semantic_scholar"]:
+    for _source_type_val in ["arxiv", "semantic_scholar", "pubmed", "openalex"]:
         try:
             _source_cls = get_source_class(_source_type_val)
             if not _source_cls:

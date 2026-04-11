@@ -59,6 +59,7 @@ async def discover_candidates(
     http_client: httpx.AsyncClient,
     profile: UserProfile,
     since: datetime,
+    source_cache: dict | None = None,
 ) -> list[PaperCreate]:
     """Fan out to all enabled sources and return a deduplicated candidate list.
 
@@ -73,6 +74,11 @@ async def discover_candidates(
     since:
         Lower bound on publication/submission date — sources translate this to
         their native filter (e.g. arXiv ``submittedDate``).
+    source_cache:
+        Optional dict mapping source_type string → singleton ``PaperSource``
+        instance (e.g. ``app.state.sources``).  When provided, cached instances
+        are preferred so rate-limiter state persists across Pulse runs.  A new
+        instance is created only for source types absent from the cache.
 
     Returns
     -------
@@ -91,6 +97,10 @@ async def discover_candidates(
     sources: list[PaperSource] = []
     for row in source_rows:
         source_type = row["source_type"]
+        # Use cached singleton when available to preserve rate-limiter state.
+        if source_cache and source_type in source_cache:
+            sources.append(source_cache[source_type])
+            continue
         cls = get_source_class(source_type)
         if cls is None:
             logger.warning("pulse.discover: no registered class for source_type=%s", source_type)

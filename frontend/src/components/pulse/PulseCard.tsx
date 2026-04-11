@@ -11,6 +11,7 @@ export interface PulseCardProps {
   card: PulseCardItem;
   onRate: (paperId: number, rating: PulseRating) => void;
   onOpen?: (paperId: number) => void;
+  rated?: boolean;
 }
 
 /**
@@ -21,7 +22,7 @@ export interface PulseCardProps {
  * layout with a primary content column and an action rail). Clicking the
  * card body (outside the action buttons) calls `onOpen(paper_id)`.
  */
-export function PulseCard({ card, onRate, onOpen }: PulseCardProps) {
+export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProps) {
   const authorsDisplay = React.useMemo(() => {
     const first = card.paper_authors.slice(0, 3).join(', ');
     return card.paper_authors.length > 3 ? `${first}, ...` : first;
@@ -83,6 +84,7 @@ export function PulseCard({ card, onRate, onOpen }: PulseCardProps) {
               variant="outline"
               size="sm"
               aria-label="Thumbs up"
+              disabled={rated}
               onClick={(e) => {
                 e.stopPropagation();
                 onRate(card.paper_id, 'up');
@@ -94,6 +96,7 @@ export function PulseCard({ card, onRate, onOpen }: PulseCardProps) {
               variant="outline"
               size="sm"
               aria-label="Thumbs down"
+              disabled={rated}
               onClick={(e) => {
                 e.stopPropagation();
                 onRate(card.paper_id, 'down');
@@ -105,6 +108,7 @@ export function PulseCard({ card, onRate, onOpen }: PulseCardProps) {
               variant="outline"
               size="sm"
               aria-label="Save"
+              disabled={rated}
               onClick={(e) => {
                 e.stopPropagation();
                 onRate(card.paper_id, 'save');

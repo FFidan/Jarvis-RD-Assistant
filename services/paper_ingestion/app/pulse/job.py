@@ -63,12 +63,20 @@ async def run_pulse(
     embedder: Any,
     *,
     now: datetime | None = None,
+    source_cache: dict | None = None,
 ) -> dict:
     """Run the full overnight Pulse pipeline.
 
     Returns a stats dict describing the run.  Never raises — any uncaught
     collaborator error is recorded in ``stats['last_error']`` and the pipeline
     continues from the best-known state.
+
+    Parameters
+    ----------
+    source_cache:
+        Optional dict of pre-initialized source singletons (e.g.
+        ``app.state.sources``).  Passed to ``discover_candidates`` so that
+        rate-limiter state is preserved across Pulse runs.
     """
     now = now or datetime.now(UTC)
     start = time.monotonic()
@@ -106,6 +114,7 @@ async def run_pulse(
             http_client,
             profile,
             since=now - timedelta(days=7),
+            source_cache=source_cache,
         )
     except Exception as exc:
         stats["last_error"] = f"discover_candidates: {exc}"

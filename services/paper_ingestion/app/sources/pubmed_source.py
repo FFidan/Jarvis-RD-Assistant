@@ -26,13 +26,17 @@ This plugin prefers ArticleDate when present; falls back to PubDate, using
 the first of the month when day is absent, and January 1 when month is absent.
 """
 
+import asyncio
 import logging
 import os
+import time
 from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
-from lxml import etree
+from lxml import (
+    etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
+)
 
 from app.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from app.sources.base import PaperSource
@@ -232,6 +236,18 @@ class PubMedSource(PaperSource):
         super().__init__(config, http_client)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("PUBMED_API_KEY")
+        self._last_request_time: float = 0.0
+        self._rate_lock = asyncio.Lock()
+
+    async def _rate_limit(self) -> None:
+        """Enforce NCBI rate limit: 10 req/s with API key, ~3 req/s otherwise."""
+        interval = 0.1 if self._api_key else 0.34
+        async with self._rate_lock:
+            elapsed = time.monotonic() - self._last_request_time
+            wait = max(0.0, interval - elapsed)
+            if wait:
+                await asyncio.sleep(wait)
+            self._last_request_time = time.monotonic()
 
     def _base_params(self) -> dict:
         """Build common NCBI E-utilities parameters."""
@@ -257,6 +273,7 @@ class PubMedSource(PaperSource):
         list[str]
             PMID strings, or ``[]`` on HTTP errors / XML parse errors.
         """
+        await self._rate_limit()
         params = self._base_params()
         params.update({"term": term, "retmax": retmax})
         if extra:
@@ -268,7 +285,7 @@ class PubMedSource(PaperSource):
                 return []
             response.raise_for_status()
             root = _parse_xml(response.content)
-        except (httpx.HTTPStatusError, etree.XMLSyntaxError) as exc:
+        except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
             logger.warning("PubMed esearch failed: %s", exc)
             return []
 
@@ -290,6 +307,7 @@ class PubMedSource(PaperSource):
         """
         if not pmids:
             return []
+        await self._rate_limit()
         params = self._base_params()
         params["id"] = ",".join(pmids)
         try:
@@ -299,7 +317,7 @@ class PubMedSource(PaperSource):
                 return []
             response.raise_for_status()
             root = _parse_xml(response.content)
-        except (httpx.HTTPStatusError, etree.XMLSyntaxError) as exc:
+        except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
             logger.warning("PubMed efetch failed: %s", exc)
             return []
 

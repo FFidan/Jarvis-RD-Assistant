@@ -158,6 +158,7 @@ export function TopicSection() {
                         onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
                         placeholder="Optional context for the Pulse scoring LLM"
                         rows={2}
+                        maxLength={1000}
                         className="flex-1 text-sm"
                       />
                     </div>
@@ -242,6 +243,7 @@ export function TopicSection() {
                 onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
                 placeholder="Optional context for the Pulse scoring LLM"
                 rows={2}
+                maxLength={1000}
               />
             </div>
             <div className="flex gap-2">
