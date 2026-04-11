@@ -6,24 +6,19 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
-import { Textarea } from '@/components/ui/textarea';
-import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Pencil, Trash2, Plus, Check, X, Tag } from 'lucide-react';
 import type { Topic } from '@/types';
 
-const DESCRIPTION_TOOLTIP =
-  'Free-text context that the Pulse scoring LLM uses when ranking candidate papers.';
-
 export function TopicSection() {
   const queryClient = useQueryClient();
   const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', query_terms: '', category: '', description: '' });
+  const [editForm, setEditForm] = useState({ name: '', query_terms: '', category: '' });
   const [showAdd, setShowAdd] = useState(false);
-  const [addForm, setAddForm] = useState({ name: '', query_terms: '', category: '', description: '' });
+  const [addForm, setAddForm] = useState({ name: '', query_terms: '', category: '' });
   const [deleteTarget, setDeleteTarget] = useState<number | null>(null);
 
   const { data: topics = [], isLoading } = useQuery({
@@ -36,7 +31,7 @@ export function TopicSection() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['topics'] });
       setShowAdd(false);
-      setAddForm({ name: '', query_terms: '', category: '', description: '' });
+      setAddForm({ name: '', query_terms: '', category: '' });
     },
   });
 
@@ -61,7 +56,6 @@ export function TopicSection() {
       name: topic.name,
       query_terms: topic.query_terms.join(', '),
       category: topic.category ?? '',
-      description: topic.description ?? '',
     });
   };
 
@@ -74,7 +68,6 @@ export function TopicSection() {
         name: editForm.name,
         query_terms: terms,
         category: editForm.category || undefined,
-        description: editForm.description.trim() || null,
       },
     });
   };
@@ -99,7 +92,6 @@ export function TopicSection() {
       name: addForm.name.trim(),
       query_terms: terms,
       category: addForm.category.trim() || undefined,
-      description: addForm.description.trim() || null,
     } as Partial<Topic>);
   };
 
@@ -117,50 +109,31 @@ export function TopicSection() {
             <Card key={topic.id}>
               <CardContent className="flex items-center gap-4 p-4">
                 {editingId === topic.id ? (
-                  <div className="flex flex-1 flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Input
-                        value={editForm.name}
-                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                        placeholder="Name"
-                        className="w-40"
-                      />
-                      <Input
-                        value={editForm.query_terms}
-                        onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
-                        placeholder="Query terms (comma-separated)"
-                        className="w-60"
-                      />
-                      <Input
-                        value={editForm.category}
-                        onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                        placeholder="Category"
-                        className="w-32"
-                      />
-                      <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending}>
-                        <Check className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => setEditingId(null)}>
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <Label
-                        htmlFor={`topic-edit-description-${topic.id}`}
-                        className="mt-2 flex items-center gap-1 text-xs"
-                      >
-                        Description
-                        <InfoTooltip content={DESCRIPTION_TOOLTIP} />
-                      </Label>
-                      <Textarea
-                        id={`topic-edit-description-${topic.id}`}
-                        value={editForm.description}
-                        onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-                        placeholder="Optional context for the Pulse scoring LLM"
-                        rows={2}
-                        className="flex-1 text-sm"
-                      />
-                    </div>
+                  <div className="flex flex-1 flex-wrap items-center gap-2">
+                    <Input
+                      value={editForm.name}
+                      onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                      placeholder="Name"
+                      className="w-40"
+                    />
+                    <Input
+                      value={editForm.query_terms}
+                      onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
+                      placeholder="Query terms (comma-separated)"
+                      className="w-60"
+                    />
+                    <Input
+                      value={editForm.category}
+                      onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                      placeholder="Category"
+                      className="w-32"
+                    />
+                    <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending}>
+                      <Check className="h-4 w-4" />
+                    </Button>
+                    <Button size="icon" variant="ghost" onClick={() => setEditingId(null)}>
+                      <X className="h-4 w-4" />
+                    </Button>
                   </div>
                 ) : (
                   <>
@@ -230,19 +203,6 @@ export function TopicSection() {
                   placeholder="NLP"
                 />
               </div>
-            </div>
-            <div>
-              <Label htmlFor="topic-description" className="flex items-center gap-1">
-                Description
-                <InfoTooltip content={DESCRIPTION_TOOLTIP} />
-              </Label>
-              <Textarea
-                id="topic-description"
-                value={addForm.description}
-                onChange={(e) => setAddForm({ ...addForm, description: e.target.value })}
-                placeholder="Optional context for the Pulse scoring LLM"
-                rows={2}
-              />
             </div>
             <div className="flex gap-2">
               <Button onClick={handleAdd} disabled={createMut.isPending}>

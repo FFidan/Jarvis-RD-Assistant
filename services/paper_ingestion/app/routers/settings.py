@@ -44,12 +44,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "recommendation.liked_weight",
         "recommendation.project_weight",
         "recommendation.enabled",
-        # Pulse (overnight deck subsystem)
-        "pulse.enabled",
-        "pulse.cron",
-        "pulse.deck_size",
-        "pulse.stage2_top_k",
-        "pulse.weights",
     }
 )
 

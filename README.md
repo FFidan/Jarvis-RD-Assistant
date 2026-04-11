@@ -18,8 +18,6 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations.
 
-- **Discovery & Pulse** *(coming soon)* -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day view and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Complements the existing weekly reflection tools without overlapping them.
-
 ### Key Design Choices
 
 - **Anti-hallucination pipeline**: Every LLM-generated finding must include an exact verbatim quote and page number. A 4-layer verification pipeline checks quotes against the source PDF. Unverifiable claims are discarded, never corrected.
@@ -118,9 +116,6 @@ If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidi
 | `DASHBOARD_HOST_PORT` | `3001` | Host port for the dashboard |
 | `PAPER_INGESTION_HOST_PORT` | `8010` | Host port for paper ingestion API |
 | `LEARNING_ENGINE_HOST_PORT` | `8011` | Host port for learning engine API |
-| `OPENALEX_API_KEY` | _(empty)_ | Enable OpenAlex as a paper discovery source. Free key at [openalex.org](https://openalex.org). *(Used by the upcoming Discovery & Pulse feature.)* |
-| `PUBMED_API_KEY` | _(empty)_ | Upgrade PubMed rate limit from 3 to 10 requests per second. Free key from [NCBI](https://www.ncbi.nlm.nih.gov/home/develop/api/). *(Used by the upcoming Discovery & Pulse feature.)* |
-| `UNPAYWALL_EMAIL` | _(empty)_ | Required by [Unpaywall](https://unpaywall.org) to resolve free legal PDFs for paywalled papers. Any email address. *(Used by the upcoming Discovery & Pulse feature.)* |
 
 See [`.env.example`](.env.example) for the full list with comments.
 
@@ -206,22 +201,6 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 | **Orchestration** | n8n |
 | **Notifications** | Telegram Bot API (optional) |
 | **Reverse Proxy** | nginx (in dashboard container) |
-
-## Inspiration & Prior Art
-
-JARVIS stands on the shoulders of excellent open-source and public research tools. The Discovery & Pulse subsystem in particular draws on ideas and patterns from:
-
-- [ChatGPT Pulse](https://openai.com/index/introducing-chatgpt-pulse/) — async overnight research, morning card deck, ephemeral delivery, and feedback loop pattern.
-- [zotero-arxiv-daily](https://github.com/TideDra/zotero-arxiv-daily) — using your existing library as a preference model via weighted centroid cosine similarity.
-- [GPT Paper Assistant](https://github.com/tatsu-lab/gpt_paper_assistant) — two-axis LLM scoring (relevance + novelty) and author watchlists via Semantic Scholar IDs.
-- [ArxivDigest](https://github.com/AutoLLM/ArxivDigest) — natural-language interest descriptions driving LLM relevance ranking.
-- [Scholar Inbox](https://scholar-inbox.com) — per-user logistic regression classifier trained on embedding vectors.
-- [Inciteful](https://inciteful.xyz) — citation graph algorithms (PageRank + Adamic/Adar) for paper discovery.
-- [BERTopic](https://github.com/MaartenGr/BERTopic) — neural topic modeling with dynamic temporal topics.
-- [OpenScholar](https://github.com/AkariAsai/OpenScholar) — iterative self-feedback RAG over scientific literature.
-- [PaperQA2](https://github.com/Future-House/paper-qa) — metadata-aware embeddings and agentic retrieval.
-
-These projects are credited for the ideas and patterns that informed JARVIS's design, not for copied code. All are MIT/Apache-licensed.
 
 ## License
 

@@ -233,6 +233,54 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+_PULSE_RATING_LABEL = {
+    "up": "\U0001f44d Rated up",
+    "down": "\U0001f44e Rated down",
+    "save": "\U0001f4be Saved",
+}
+
+
+async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``pulse_{up,down,save}_{id}`` — record a Pulse card rating.
+
+    POSTs to ``/api/pulse/rate`` on paper_ingestion and answers the callback
+    query with a short confirmation (or an error on failure).
+    """
+    query = update.callback_query
+    if query is None:
+        return
+    config = _get_config(context)
+    if not _auth_check(update, config):
+        await query.answer()
+        return
+
+    match = re.fullmatch(r"pulse_(up|down|save)_(\d+)", query.data or "")
+    if not match:
+        await query.answer(text="Invalid rating")
+        return
+    rating = match.group(1)
+    paper_id = int(match.group(2))
+
+    http = _get_http(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
+    try:
+        resp = await http.post(
+            f"{config.paper_ingestion_url}/api/pulse/rate",
+            json={"paper_id": paper_id, "rating": rating},
+            headers=headers,
+            timeout=15.0,
+        )
+        resp.raise_for_status()
+    except Exception:
+        logger.exception("Failed to rate Pulse card id=%s rating=%s", paper_id, rating)
+        await query.answer(text="Rating failed — try again later")
+        return
+
+    await query.answer(text=_PULSE_RATING_LABEL.get(rating, "Rated"))
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -251,3 +299,6 @@ def register_callback_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
     app.add_handler(CallbackQueryHandler(start_review_callback, pattern=r"^start_review$"))
+    app.add_handler(
+        CallbackQueryHandler(pulse_rating_callback, pattern=r"^pulse_(up|down|save)_\d+$")
+    )

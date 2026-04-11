@@ -1,14 +1,7 @@
-"""Weekly research summary generator.
+"""Weekly research digest generator.
 
 Groups recent papers by topic and synthesizes cross-paper themes
 using LLM analysis for each topic cluster.
-
-Only papers the user has actively engaged with are included:
-- Library UI engagement: paper_user_state.user_state IN ('saved', 'reading', 'read')
-- Pulse card engagement: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
-
-This is the Model C (Complementary) guarantee: Weekly Summary reflects
-what the user actually engaged with, not the full Pulse candidate firehose.
 """
 
 import logging
@@ -16,11 +9,12 @@ from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import httpx
+
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
-    LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
+    LLM_TIMEOUT_DEFAULT,
+    LITELLM_FALLBACK_ENV_NAMES,
     LiteLLMConfig,
     call_llm,
     get_litellm_config,
@@ -55,22 +49,16 @@ Respond in JSON format:
 """
 
 
-async def generate_weekly_summary(
+async def generate_weekly_digest(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     litellm_url: str | None = None,
     days: int = 7,
 ) -> dict:
-    """Generate per-topic digests for papers the user engaged with in the lookback window.
-
-    Only papers with active user engagement are included (Model C — Complementary):
-    - Library UI: paper_user_state.user_state IN ('saved', 'reading', 'read')
-    - Pulse cards: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
-
-    Papers passively surfaced by Pulse but never rated or saved are excluded,
-    preventing the Weekly Summary from becoming a noise-generator.
-    """
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    """Generate per-topic digests for papers ingested within the lookback window."""
+    litellm_config = get_litellm_config(
+        fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
+    )
     if litellm_url is not None:
         litellm_config = LiteLLMConfig(
             base_url=litellm_url,
@@ -93,41 +81,10 @@ async def generate_weekly_summary(
             JOIN topics t ON pt.topic_id = t.id
             LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
             WHERE p.created_at >= $1
-              AND (
-                  EXISTS (
-                      SELECT 1 FROM paper_user_state pus
-                      WHERE pus.paper_id = p.id
-                        AND pus.user_state IN ('saved', 'reading', 'read')
-                  )
-                  OR
-                  EXISTS (
-                      SELECT 1 FROM pulse_ratings pr
-                      WHERE pr.paper_id = p.id
-                        AND pr.rating IN ('up', 'save', 'open')
-                        AND pr.created_at >= $1
-                  )
-              )
             ORDER BY t.name, pt.relevance_score DESC NULLS LAST
             """,
             cutoff,
         )
-
-    # Empty-state honesty: short-circuit without calling the LLM.
-    if not rows:
-        logger.info(
-            "weekly_summary: no engaged papers in the last %d days — skipping LLM synthesis",
-            days,
-        )
-        return {
-            "topics": [],
-            "total_papers": 0,
-            "period_start": cutoff.isoformat(),
-            "period_end": datetime.now(UTC).isoformat(),
-            "message": (
-                "No engaged papers in the last 7 days. "
-                "Read or save some papers to see your weekly summary."
-            ),
-        }
 
     topics: dict[str, dict] = {}
     for row in rows:
@@ -171,8 +128,8 @@ async def generate_weekly_summary(
                 themes = llm_data.get("themes", [])
                 summary = llm_data.get("summary", summary)
             except Exception:
-                # weekly_summary generation degrades to the default summary if synthesis fails.
-                logger.exception("LLM weekly_summary generation failed for topic %s", topic_name)
+                # Digest generation degrades to the default summary if synthesis fails.
+                logger.exception("LLM digest generation failed for topic %s", topic_name)
 
         top_papers = [
             {

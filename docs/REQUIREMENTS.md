@@ -114,27 +114,6 @@ respx>=0.21.0                # Mock httpx for async tests
 | [arXiv API](https://arxiv.org/help/api) | 3 requests/second | Paper search and metadata |
 | [Semantic Scholar API](https://api.semanticscholar.org) | 100 requests/5 minutes (no key) | Paper search, citations, references |
 
-### Additional external APIs planned for Phase 1 Discovery & Pulse subsystem
-
-The following APIs are integrated in the planned Discovery & Pulse subsystem (see `docs/PRD.md` §3.1.1 and §8.5). They are all free-tier and configured as optional — if the user does not provide a key, the corresponding source gracefully disables itself and Pulse runs with whatever is available.
-
-| API | Rate Limit | Purpose | Key required? |
-|-----|-----------|---------|---------------|
-| [OpenAlex API](https://openalex.org) | 10k list calls/day / 1k search calls/day (free tier) | Cross-domain paper discovery — 250M+ works, author + topic filters, date-range polling | Yes (free, via `OPENALEX_API_KEY`) — mandatory since Feb 2026 |
-| [PubMed E-utilities](https://www.ncbi.nlm.nih.gov/home/develop/api/) | 3 req/s (no key), 10 req/s (with key) | Biomedical paper discovery — 36M+ citations, `elink neighbor_score` for related articles | Optional (via `PUBMED_API_KEY`) — rate-limit upgrade only |
-| [Unpaywall API](https://unpaywall.org) | 100k calls/day | Resolve free legal PDF URLs for paywalled papers by DOI | Yes (any email via `UNPAYWALL_EMAIL`) — required by ToS, not technical auth |
-
-**Phase 2 additions (not Phase 1):**
-
-| API | Purpose | Phase |
-|-----|---------|-------|
-| [CORE API](https://core.ac.uk) | Secondary PDF fallback source (400M+ scholarly resources) | Phase 2 |
-
-**Explicitly NOT integrated as Pulse sources:**
-
-- **[Consensus](https://consensus.app)** — wrong shape for Pulse polling (it is a synthesis engine, not a date-range discovery API) and the free tier is too limited for bulk polling. Deferred to Phase 3 as a separate "Ask the Literature" feature via a documented plugin interface.
-- **Google Scholar** — no official API, unofficial scrapers are fragile and against ToS. Skipped entirely.
-
 ## LLM Providers (user brings their own -- at least one required)
 
 Current reality note:
@@ -190,19 +169,9 @@ Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 | `DASHBOARD_PASSWORD` | `` (no auth) | Dashboard login password; empty = open access |
 | `DEV_MODE` | `false` | Bypass API key auth in services (dev only) |
 | `JARVIS_API_KEY` | `` | API key for inter-service auth; required in production |
-| `SEMANTIC_SCHOLAR_API_KEY` | `` | Optional; increases S2 rate limit from 100/5min to 1000/5min. Also unlocks the multi-seed recommendation endpoint used by the Phase 1 Pulse discovery pipeline. |
+| `SEMANTIC_SCHOLAR_API_KEY` | `` | Optional; increases S2 rate limit from 100/5min to 1000/5min |
 | `VITE_API_KEY` | `` | API key baked into React dashboard at build time |
 | `VITE_DASHBOARD_PASSWORD` | `` | Dashboard login password baked into React build |
-
-### Phase 1 Discovery & Pulse planned additions
-
-The following environment variables are planned for the Phase 1 Discovery & Pulse subsystem. They are all optional — Pulse runs with whatever is provided, using graceful degradation for the rest.
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `OPENALEX_API_KEY` | `` | Free key at openalex.org; enables OpenAlex as a paper discovery source. Mandatory since Feb 2026 for OpenAlex API access. |
-| `PUBMED_API_KEY` | `` | Optional free NCBI API key; upgrades PubMed rate limit from 3 to 10 requests per second. |
-| `UNPAYWALL_EMAIL` | `` | Any email address; required by Unpaywall's ToS to use their free PDF resolution API. |
 
 Note:
 - the table above records intended configuration knobs. During stabilization,
@@ -211,34 +180,6 @@ Note:
 
 ## Database Migrations
 
-17 migrations currently applied in `db/migrations/` (001-017). Fresh installs get all tables via `db/init.sql`.
+17 migrations exist in `db/migrations/` (001-017). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/app/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
-
-**Migration 018 is planned** for the Phase 1 Discovery & Pulse subsystem. It will add:
-
-- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), `pulse_ratings` (user feedback 👍/👎/💾/open/dismiss — collected silently from Phase 1 for the Phase 2 classifier).
-- One helper table: `pdf_resolutions` (caches results of the PDF resolution chain to dedupe resolver calls).
-- One new optional column: `topics.description TEXT NULL` (free-text context for the Pulse LLM scoring prompt).
-- New rows in `paper_sources` registering `openalex` and `pubmed` source types. `pubmed` ships with `enabled=TRUE` to match the "works out of the box, no key required" principle; `openalex` ships `enabled=FALSE` until the user provides a key.
-- New `user_config` entries seeding Pulse settings: `pulse.enabled` (default `false`), `pulse.cron` (default `"0 4 * * *"`), `pulse.deck_size` (default `10`), `pulse.stage2_top_k` (default `50`), `pulse.weights` (JSON of scoring signal weights).
-
-Migration 018 does not modify any existing column on any existing table — it is purely additive. See `docs/PRD.md` §3.1.1 and §8.5 for the full architectural context.
-
-## Phase 1 Discovery & Pulse planned dependencies
-
-The following Python dependencies are planned to be added for the Phase 1 subsystem. They are listed here as forward-looking — the actual `requirements.txt` additions happen during implementation.
-
-| Dependency | Service | Purpose |
-|------------|---------|---------|
-| `lxml>=5.0.0` | paper_ingestion | PubMed E-utilities returns XML; used by the new `pubmed_source.py` plugin for parsing. |
-
-**Phase 2 planned dependencies (not Phase 1):**
-
-| Dependency | Service | Purpose |
-|------------|---------|---------|
-| `scikit-learn>=1.5.0` | paper_ingestion | Per-user logistic regression classifier trained on `pulse_ratings` for Stage 4 scoring. |
-| `networkx>=3.3` or equivalent | paper_ingestion | Citation graph algorithms (PageRank, Adamic/Adar) as scoring signals. May be avoided by implementing the algorithms directly on top of asyncpg queries. |
-| `bertopic>=0.16` | paper_ingestion | Optional, for the monthly "Rising Topics" widget. Heavy dep — may be deferred further. |
-
-Phase 1 explicitly ships **without** `scikit-learn`, `networkx`, and `bertopic` to keep the Phase 1 footprint minimal. Phase 2 pulls them in only when the features that need them are implemented.

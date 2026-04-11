@@ -10,17 +10,17 @@ import logging
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import get_smart_model
-from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
-    LLM_TIMEOUT_DEFAULT,
-    ChatCompletionOptions,
-    get_litellm_config,
-    request_chat_completion_content,
-)
 from starlette.responses import StreamingResponse
 
 from app.deps import get_db_pool, get_http_client, get_verifier, limiter
+from jarvis_common import get_smart_model
+from jarvis_common.llm_client import (
+    ChatCompletionOptions,
+    LLM_TIMEOUT_DEFAULT,
+    LITELLM_FALLBACK_ENV_NAMES,
+    get_litellm_config,
+    request_chat_completion_content,
+)
 from app.models import (
     AskRequest,
     AskResponse,
@@ -56,9 +56,7 @@ async def summarize_paper(
     verifier: QuoteVerifier = Depends(get_verifier),
 ) -> SummaryResponse:
     """Generate an LLM summary with quote verification. Rate-limited to 5/minute."""
-    return await generate_paper_summary(
-        paper_id, db_pool, http_client, verifier, request.app.state.embedder
-    )
+    return await generate_paper_summary(paper_id, db_pool, http_client, verifier, request.app.state.embedder)
 
 
 # ---------------------------------------------------------------------------
@@ -88,11 +86,7 @@ async def batch_summarize_papers(
     for row in rows:
         try:
             await generate_paper_summary(
-                row["id"],
-                db_pool,
-                http_client,
-                verifier,
-                request.app.state.embedder,
+                row["id"], db_pool, http_client, verifier, request.app.state.embedder,
             )
             summarized += 1
         except Exception:
@@ -142,7 +136,9 @@ async def ask_paper(
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config(
+        fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
+    )
 
     try:
         answer = await request_chat_completion_content(
@@ -253,7 +249,9 @@ async def ask_cross_paper(
     embedder: Embedder = request.app.state.embedder
     http_client: httpx.AsyncClient = request.app.state.http_client
 
-    result = await _prepare_cross_paper_rag(embedder, request.app.state.db_pool, body, http_client)
+    result = await _prepare_cross_paper_rag(
+        embedder, request.app.state.db_pool, body, http_client
+    )
 
     # Short-circuit when no chunks were found (helper returns a dict)
     if isinstance(result, dict):
@@ -263,7 +261,9 @@ async def ask_cross_paper(
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config(
+        fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
+    )
 
     try:
         answer = await request_chat_completion_content(
@@ -329,9 +329,9 @@ async def ask_cross_paper_stream(
     if isinstance(result, dict):
 
         async def _no_results_stream():
-            yield f"data: {json.dumps({'type': 'token', 'content': result['answer']})}\n\n"
-            yield f"data: {json.dumps({'type': 'sources', 'sources': result['sources']})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'full_answer': result['answer']})}\n\n"
+            yield f'data: {json.dumps({"type": "token", "content": result["answer"]})}\n\n'
+            yield f'data: {json.dumps({"type": "sources", "sources": result["sources"]})}\n\n'
+            yield f'data: {json.dumps({"type": "done", "full_answer": result["answer"]})}\n\n'
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -377,6 +377,6 @@ async def get_weekly_digest(
     dict
         {topics, total_papers, period_start, period_end}
     """
-    from app.weekly_summary import generate_weekly_summary
+    from app.digest import generate_weekly_digest
 
-    return await generate_weekly_summary(db_pool, http_client, days=days)
+    return await generate_weekly_digest(db_pool, http_client, days=days)

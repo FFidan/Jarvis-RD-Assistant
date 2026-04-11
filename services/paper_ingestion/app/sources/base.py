@@ -5,11 +5,10 @@ Sources are discovered via the ``@register_source`` decorator in ``registry.py``
 """
 
 from abc import ABC, abstractmethod
-from datetime import datetime
 
 import httpx
 
-from app.models import PaperCreate, PaperSourceConfig, TopicRef
+from app.models import PaperCreate, PaperSourceConfig
 
 
 class PaperSource(ABC):
@@ -68,28 +67,3 @@ class PaperSource(ABC):
             The paper if found, None otherwise.
         """
         ...
-
-    async def fetch_new_since(
-        self,
-        since: datetime,
-        topics: list[TopicRef],
-        limit: int = 100,
-    ) -> list[PaperCreate]:
-        """Fetch papers newer than ``since`` relevant to any of the given topics.
-
-        Default: returns empty list. Sources that can poll by date override this.
-        """
-        return []
-
-    async def get_recommendations(
-        self,
-        positive_seeds: list[str],
-        negative_seeds: list[str] | None = None,
-        limit: int = 50,
-    ) -> list[PaperCreate]:
-        """Recommend papers similar to positive seeds, dissimilar to negative seeds.
-
-        ``positive_seeds``/``negative_seeds`` are source-native IDs (e.g. S2 paper IDs).
-        Default: returns empty list. Sources with a recommendation endpoint override this.
-        """
-        return []

@@ -7,13 +7,13 @@ Rate limit: 3 requests/second per arXiv Terms of Use.
 import asyncio
 import logging
 import re
-from datetime import UTC, date, datetime
+from datetime import date
 from typing import Any
+from defusedxml import ElementTree as ET
 
 import httpx
-from defusedxml import ElementTree as ET  # noqa: N817
 
-from app.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from app.models import PaperCreate, PaperSourceConfig, SourceType
 from app.sources.base import PaperSource
 from app.sources.registry import register_source
 
@@ -122,9 +122,13 @@ class ArxivSource(PaperSource):
 
         # Categories
         categories = [
-            cat.get("term", "") for cat in entry.findall(f"{{{ARXIV_NS}}}primary_category")
+            cat.get("term", "")
+            for cat in entry.findall(f"{{{ARXIV_NS}}}primary_category")
         ]
-        categories.extend(cat.get("term", "") for cat in entry.findall(f"{{{ATOM_NS}}}category"))
+        categories.extend(
+            cat.get("term", "")
+            for cat in entry.findall(f"{{{ATOM_NS}}}category")
+        )
 
         return PaperCreate(
             external_id=f"arxiv:{canonical_id}",
@@ -149,7 +153,7 @@ class ArxivSource(PaperSource):
             return raw_query
 
         # Clean up user input
-        safe = raw_query.replace('"', "").strip()
+        safe = raw_query.replace('"', '').strip()
         if not safe:
             return f"all:{raw_query}"
 
@@ -191,92 +195,6 @@ class ArxivSource(PaperSource):
                 entry_id = entry.findtext(f"{{{ATOM_NS}}}id", default="unknown")
                 logger.exception("Failed to parse arXiv entry: %s", entry_id)
                 continue
-
-        return papers
-
-    async def fetch_new_since(
-        self,
-        since: datetime,
-        topics: list[TopicRef],
-        limit: int = 100,
-    ) -> list[PaperCreate]:
-        """Fetch papers submitted after *since* that match any of the given topics.
-
-        Uses the arXiv ``submittedDate`` range filter combined with per-topic
-        title/abstract queries.  Each topic generates one API request (one per
-        topic query term group) to stay within the 3 req/sec rate limit.
-
-        Parameters
-        ----------
-        since : datetime
-            Lower bound (exclusive) for submission date.  Must be timezone-aware.
-        topics : list[TopicRef]
-            Topics to include; each topic's ``query_terms`` or ``name`` is used
-            to build an OR filter.  An empty list triggers a single undirected
-            date-range query.
-        limit : int
-            Maximum total results to return (across all topics).
-
-        Returns
-        -------
-        list[PaperCreate]
-            Deduplicated papers newer than *since*, ordered by submission date.
-        """
-        # Normalise *since* to UTC, then format as arXiv date string YYYYMMDDHHMM
-        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
-        since_str = since_utc.strftime("%Y%m%d%H%M")
-        date_filter = f"submittedDate:[{since_str} TO 99999999]"
-
-        if not topics:
-            # No topic filter — just poll by date
-            topic_queries = [""]
-        else:
-            topic_queries = []
-            for topic in topics:
-                terms = topic.query_terms if topic.query_terms else [topic.name]
-                parts = [f'(ti:"{t}" OR abs:"{t}")' for t in terms]
-                topic_queries.append(" OR ".join(parts))
-
-        seen_ids: set[str] = set()
-        papers: list[PaperCreate] = []
-
-        per_topic = max(1, limit // max(len(topic_queries), 1))
-
-        for topic_q in topic_queries:
-            if len(papers) >= limit:
-                break
-            if topic_q:
-                search_query = f"({topic_q}) AND {date_filter}"
-            else:
-                search_query = date_filter
-            params = {
-                "search_query": search_query,
-                "start": 0,
-                "max_results": per_topic,
-                "sortBy": "submittedDate",
-                "sortOrder": "descending",
-            }
-            try:
-                root = await self._fetch_xml(params)
-            except Exception:
-                logger.warning("arXiv fetch_new_since failed for query: %s", search_query)
-                continue
-
-            entries = root.findall(f"{{{ATOM_NS}}}entry")
-            for entry in entries:
-                try:
-                    paper = self._parse_entry(entry)
-                except Exception:
-                    entry_id = entry.findtext(f"{{{ATOM_NS}}}id", default="unknown")
-                    logger.exception("Failed to parse arXiv entry: %s", entry_id)
-                    continue
-
-                if paper.external_id in seen_ids:
-                    continue
-                seen_ids.add(paper.external_id)
-                papers.append(paper)
-                if len(papers) >= limit:
-                    break
 
         return papers
 
