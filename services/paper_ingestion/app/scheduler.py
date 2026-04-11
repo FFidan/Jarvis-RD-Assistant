@@ -5,6 +5,7 @@ import logging
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.recommender import refresh_recommendations
@@ -170,6 +171,63 @@ async def run_auto_pipeline(app) -> None:
         logger.error("auto_pipeline: unhandled error: %s", e, exc_info=True)
 
 
+_DEFAULT_PULSE_CRON = "0 4 * * *"
+
+
+async def _is_pulse_enabled(db_pool: Any) -> bool:
+    """Read ``user_config['pulse.enabled']`` — defaults to False if missing."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.enabled'")
+    except Exception:
+        logger.exception("pulse: failed to read pulse.enabled config")
+        return False
+    if row is None:
+        return False
+    # asyncpg JSONB auto-decodes — value may be bool directly
+    value = row["value"]
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+async def _get_pulse_cron(db_pool: Any) -> str:
+    """Read ``user_config['pulse.cron']`` — defaults to ``'0 4 * * *'``."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
+    except Exception:
+        logger.exception("pulse: failed to read pulse.cron config")
+        return _DEFAULT_PULSE_CRON
+    if row is None or row["value"] is None:
+        return _DEFAULT_PULSE_CRON
+    value = row["value"]
+    if isinstance(value, str) and value.strip():
+        return value
+    return _DEFAULT_PULSE_CRON
+
+
+async def run_pulse_wrapper(app: Any) -> None:
+    """APScheduler entrypoint — gated on ``pulse.enabled`` config."""
+    db_pool = app.state.db_pool
+    if not await _is_pulse_enabled(db_pool):
+        logger.info("pulse: disabled via user_config, skipping nightly run")
+        return
+    try:
+        # Local import to keep heavy app.pulse.* off the scheduler import path
+        from app.pulse.job import run_pulse
+
+        await run_pulse(
+            db_pool=db_pool,
+            http_client=app.state.http_client,
+            embedder=app.state.embedder,
+        )
+    except Exception:
+        logger.exception("pulse_overnight job failed")
+
+
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     """Start the APScheduler and return the scheduler instance."""
 
@@ -200,6 +258,23 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         replace_existing=True,
         max_instances=1,
     )
+
+    # Pulse overnight deck (cron-scheduled, gated on pulse.enabled)
+    try:
+        cron_expr = await _get_pulse_cron(app.state.db_pool)
+        scheduler.add_job(
+            run_pulse_wrapper,
+            trigger=CronTrigger.from_crontab(cron_expr),
+            args=[app],
+            id="pulse_overnight",
+            name="Overnight Pulse deck generation",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("pulse_overnight scheduler registered (cron=%s)", cron_expr)
+    except Exception:
+        logger.exception("Failed to register pulse_overnight job")
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
     return scheduler

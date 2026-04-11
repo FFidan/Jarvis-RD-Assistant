@@ -30,6 +30,7 @@ for _mod in (
     "apscheduler.schedulers.asyncio",
     "apscheduler.triggers",
     "apscheduler.triggers.interval",
+    "apscheduler.triggers.cron",
 ):
     _ensure_stub(_mod)
 
@@ -183,8 +184,7 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
 
     # The warning must have been logged
     assert any(
-        "Skipping paper 42" in msg and "outside storage dir" in msg
-        for msg in caplog.messages
+        "Skipping paper 42" in msg and "outside storage dir" in msg for msg in caplog.messages
     ), f"Expected traversal warning, got: {caplog.messages}"
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import verify_api_key
 
@@ -47,11 +48,13 @@ async def generate_pulse(request: Request) -> PulseDeckResponse:
     """
     app = request.app
     logger.info("pulse.generate: manual trigger")
-    await run_pulse(
+    stats = await run_pulse(
         db_pool=app.state.db_pool,
         http_client=app.state.http_client,
         embedder=app.state.embedder,
     )
+    if stats.get("last_error"):
+        logger.warning("pulse.generate: degraded run, last_error=%s", stats["last_error"])
     deck = await load_today(app.state.db_pool)
     if deck is None:
         raise HTTPException(status_code=500, detail="Pulse ran but no deck was persisted")
@@ -101,15 +104,18 @@ async def rate_card(request: Request, body: PulseRateRequest) -> dict:
     Rating is stored in ``pulse_ratings`` with ``source='pulse'`` so that the
     profile centroid refresh can distinguish Pulse clicks from library thumbs.
     """
-    async with request.app.state.db_pool.acquire() as conn:
-        await conn.execute(
-            """
-            INSERT INTO pulse_ratings (paper_id, rating, source)
-            VALUES ($1, $2, 'pulse')
-            """,
-            body.paper_id,
-            body.rating,
-        )
+    try:
+        async with request.app.state.db_pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO pulse_ratings (paper_id, rating, source)
+                VALUES ($1, $2, 'pulse')
+                """,
+                body.paper_id,
+                body.rating,
+            )
+    except asyncpg.ForeignKeyViolationError as exc:
+        raise HTTPException(status_code=404, detail="Paper not found") from exc
     return {"status": "ok"}
 
 
@@ -167,12 +173,12 @@ async def get_stats(
                     SELECT stats->>'last_error'
                     FROM pulse_decks
                     WHERE stats->>'last_error' IS NOT NULL
-                      AND generated_at >= NOW() - ($1::int || ' days')::interval
+                      AND generated_at >= NOW() - make_interval(days => $1)
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS last_error
             FROM pulse_decks
-            WHERE generated_at >= NOW() - ($1::int || ' days')::interval
+            WHERE generated_at >= NOW() - make_interval(days => $1)
             """,
             days,
         )

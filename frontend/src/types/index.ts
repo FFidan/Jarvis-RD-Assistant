@@ -554,3 +554,53 @@ export function priorityLevel(score: number | null): PriorityLevel {
   if (score > 0.4) return 'recommended';
   return 'background';
 }
+
+// --- Pulse ---
+//
+// NOTE: the backend `PulseCardResponse` is lean — it ships flat `paper_title`,
+// `paper_authors`, `paper_url` fields rather than a nested `paper` object.
+// Frontend streams that need abstract / source_type / published_date should
+// fetch full paper metadata separately via `getPaper(id)`.
+
+export type PulseRating = 'up' | 'down' | 'save' | 'dismiss' | 'open';
+
+export interface PulseCardItem {
+  card_id: number;
+  paper_id: number;
+  paper_title: string;
+  paper_authors: string[];
+  paper_url: string | null;
+  rank: number;
+  score: number;
+  llm_relevance: number | null;
+  llm_novelty: number | null;
+  reasoning: string | null;
+  signals: Record<string, number>;
+}
+
+export interface PulseDeck {
+  deck_id: number;
+  deck_date: string;
+  card_count: number;
+  generated_at: string;
+  cards: PulseCardItem[];
+  stats: Record<string, unknown>;
+}
+
+export interface PulseStats {
+  window_days: number;
+  decks_generated: number;
+  avg_candidates: number | null;
+  avg_llm_calls: number | null;
+  avg_duration_s: number | null;
+  last_run_at: string | null;
+  last_error: string | null;
+}
+
+export interface WhyExplanation {
+  card_id: number;
+  reasoning: string | null;
+  signals: Record<string, number>;
+  llm_relevance: number | null;
+  llm_novelty: number | null;
+}
