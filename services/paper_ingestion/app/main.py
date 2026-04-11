@@ -248,6 +248,7 @@ from app.routers import (  # noqa: E402
     snapshots,
     topics,
 )
+from app.routers import pulse as pulse_router  # noqa: E402
 
 app.include_router(topics.router)
 app.include_router(settings.router)
@@ -265,6 +266,7 @@ app.include_router(search.router)
 app.include_router(papers.router)
 app.include_router(pdf.router)
 app.include_router(rag.router)
+app.include_router(pulse_router.router)
 
 
 # ---------------------------------------------------------------------------

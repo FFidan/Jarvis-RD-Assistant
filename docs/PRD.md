@@ -1,14 +1,17 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 1.2
-**Date:** 2026-04-06
+**Version:** 1.3
+**Date:** 2026-04-10
 **Status:** Active
 
-> Implementation status note (2026-04-06):
-> This PRD has been updated to reflect features shipped through v1.2.
-> Section 3.4 tracks features delivered beyond the original MVP scope.
-> Section 8.2 marks shipped v2 targets. For current technical requirements,
-> see `docs/REQUIREMENTS.md`.
+> Implementation status note (2026-04-10):
+> This PRD has been updated to reflect features shipped through v1.2 and to
+> embed the approved architectural design for the Discovery & Pulse subsystem
+> (Phase 1 planned). Section 3.1 has been rewritten to reflect two distinct
+> sub-features (Pulse = discovery, Weekly Summary = reflection). Section 3.4
+> tracks features delivered beyond the original MVP scope. Section 8 records
+> the Phase 1/2/3 roadmap for the discovery layer. For current technical
+> requirements, see `docs/REQUIREMENTS.md`.
 
 ---
 
@@ -99,29 +102,81 @@ browser, without hallucinated claims, in under 2 minutes of reading.
 - **US-402:** As a researcher, I want a morning briefing combining paper digest, due flashcards, and task overview so that I start each day informed.
 - **US-403:** As a researcher, I want all Telegram interactions to respond within 10 seconds for simple queries so that the experience feels conversational.
 
+### 2.6 Discovery & Pulse (Shipped — Phase 1, 2026-04-11)
+
+- **US-601:** As a researcher, I want JARVIS to proactively discover new papers from external sources overnight so that I wake up to a curated reading list without having to search.
+- **US-602:** As a researcher, I want my morning Pulse deck to contain 5-10 curated papers (not 50) so that I can review it in under 10 minutes.
+- **US-603:** As a researcher, I want each Pulse card to explain *why* it was selected so that I trust the ranking and learn what the system understood about my interests.
+- **US-604:** As a researcher, I want to rate Pulse cards with 👍 / 👎 / 💾 buttons so that tomorrow's picks reflect what I actually care about.
+- **US-605:** As a researcher, I want Pulse to run with whatever external API keys I have provided (including none) so that I am never blocked by a paid-API requirement.
+- **US-606:** As a researcher, I want Pulse to add an optional free-text description to each topic so that the LLM relevance scorer has semantic context beyond keywords.
+- **US-607:** As a researcher, I want Pulse and the existing Weekly Summary to stay complementary — Pulse tells me what to read, Weekly Summary reflects on what I actually read — so that the two features never duplicate each other.
+- **US-608:** As a researcher, I want to save a Pulse card into my reading queue with one tap so that I can download and study it on my own schedule.
+- **US-609:** As a researcher, I want a Pulse History view so that I can look back at what was surfaced in past weeks and spot recurring topics I am ignoring.
+- **US-610:** As a researcher, I want Pulse to deliver its morning card deck to both the My Day page and optionally Telegram so that the channel matches where I start my day.
+
 ---
 
 ## 3. Feature Specifications (MVP)
 
-### 3.1 Research Pulse
+### 3.1 Research Pulse Module
 
-**Core (v1):**
-- Scheduled paper fetching from arXiv and Semantic Scholar APIs
-- Local PDF upload and bulk directory scan
-- Topic matching via embedding similarity (configurable threshold)
-- LLM-generated summaries with mandatory inline citations (see Section 5)
-- Daily/weekly briefing delivery to Telegram
-- Automated research pulse scheduling (APScheduler + optional n8n)
-- Paper bookmarking from Telegram
-- Briefing archive on dashboard
-- Cross-reference consistency checking between papers (semantic similarity via Qdrant)
-- Trend detection via relevance scoring and similarity search
-- Relevance feedback loop (rating 1-5, flagging suspicious summaries)
-- Paper Recommendation Engine (Phase 1: liked centroid + project context)
+The Research Pulse module combines two complementary sub-features: **Pulse (Discovery)** — a proactive overnight paper discovery layer — and **Weekly Summary (Reflection)** — a retrospective per-topic digest of papers the user actually engaged with. They interact as a handoff (discovery surfaces papers → engaged papers feed reflection) without overlap.
 
-**Nice-to-have (v2+):**
-- Additional source plugins (PubMed, IEEE, DBLP)
-- Collaborative briefings for lab groups
+#### 3.1.1 Pulse — Proactive Discovery (SHIPPED Phase 1, 2026-04-11)
+
+A ChatGPT-Pulse-inspired subsystem that discovers new papers from external sources while the user sleeps, scores them against the user's research interests, and delivers a small curated card deck each morning.
+
+**Core (Phase 1):**
+- Overnight scheduled job (default 04:00) polls enabled external sources in parallel.
+- Phase 1 sources: arXiv (existing plugin, extended), Semantic Scholar (existing, extended), OpenAlex (new plugin, free key required), PubMed (new plugin, enabled by default, optional key for rate limit upgrade).
+- Hybrid scoring pipeline: Stage 1 embedding similarity to library centroid + topic embeddings with recency decay → Stage 2 LLM relevance and novelty scoring (local Ollama fast model) on top 50 candidates → Stage 3 weighted combination with author-match bonus.
+- Morning delivery at configurable time (default 08:00) as a small card deck (5-10 cards) via the My Day page widget and optional Telegram message.
+- Lightweight feedback buttons per card: 👍 like, 👎 dismiss, 💾 save to reading queue, 📖 open paper detail. Ratings persisted to a new `pulse_ratings` table.
+- "Why this paper?" transparency popover on every card, displaying matched topics, matched authors, per-signal scores, and the LLM's one-sentence reasoning.
+- Ephemeral UX: today's deck shows in the main widget; after 24 hours it rolls into Pulse History tab on the Research Feed.
+- Graceful degradation: Pulse runs with any subset of sources enabled. No keys required for baseline operation (arXiv + PubMed both ship enabled by default).
+- PDF resolution chain (arXiv direct → Unpaywall fallback) triggered lazily when a card is saved, to obtain free legal PDFs for paywalled papers.
+- Rating data is collected silently from Phase 1; Phase 2 activates a per-user logistic-regression classifier that consumes the accumulated ratings as a rescoring layer.
+
+**Architectural footprint (Phase 1):**
+- New backend package `services/paper_ingestion/app/pulse/` contains all Pulse logic: `job.py` (overnight orchestrator), `profile.py` (load user profile), `discovery.py` (parallel source fan-out), `scoring.py` (3-stage pipeline), `prompts.py` (version-controlled LLM system prompt), `deck.py` (deck assembly and persistence), `resolver.py` (PDF resolution chain).
+- New source plugins: `services/paper_ingestion/app/sources/openalex_source.py` and `pubmed_source.py`.
+- Existing `PaperSource` ABC extended with two optional methods (`fetch_new_since`, `get_recommendations`) that default to empty lists so legacy sources do not need modification.
+- New database tables: `pulse_decks`, `pulse_cards`, `pulse_ratings`, `pdf_resolutions`. New optional column: `topics.description`.
+- New API router `services/paper_ingestion/app/routers/pulse.py` exposes six endpoints: `POST /api/pulse/generate`, `GET /api/pulse/today`, `GET /api/pulse/history`, `POST /api/pulse/rate`, `GET /api/pulse/explain/{card_id}`, `GET /api/pulse/stats`.
+- New frontend components: `PulseDeck` (My Day widget), `PulseCard` (card component matching existing Research Feed card style), `WhyPopover` (transparency dialog), and a reusable `InfoTooltip` primitive (generalized `(i)` info tooltip for Settings).
+- Settings extensions: Topics gain optional description field, Automation gains Pulse toggle + time picker, Sources gain API-key fields and provider tooltips, Recommendations section renamed to "Pulse & Recommendations" with weight sliders for the new signals.
+- Existing `services/telegram_bot/app/orchestration/research_pulse.py` (~165 lines of naive keyword search + notify) is gutted and rewritten as a ~40-line thin delivery wrapper over `GET /api/pulse/today`.
+- APScheduler gains one new job (`pulse_overnight`) in `scheduler.py`; no new scheduling mechanism.
+
+**Anti-bloat commitments (actual on ship 2026-04-11):** 4 new tables + 1 new column, 1 new migration (018), 1 new Python package, 11 new Python source files (8 pulse package + 2 source plugins + 1 new API router), 6 new API endpoints, 4 new frontend files, 0 new Docker services, 0 new pages. All Pulse logic is colocated in `pulse/` and `sources/*_source.py`; no scatter across existing modules. The router file is the "+1" over the pulse-package ≤10 limit called out in the original spec.
+
+#### 3.1.2 Weekly Summary — Retrospective Reflection (existing, renamed)
+
+The former weekly digest feature, renamed from `digest.py` to `weekly_summary.py` to free the "Pulse" name and to clarify its distinct purpose.
+
+**Core (shipped):**
+- Weekly LLM-synthesized per-topic digest of papers the user engaged with during the past 7 days.
+- Runs weekly (default Monday 09:00) via the existing `/api/digest` endpoint (URL unchanged after rename).
+- Delivered via the Research Feed weekly summary section and optional Telegram weekly digest message.
+
+**Engagement filter (narrowed during Phase 1 rename):** the SQL query now explicitly excludes papers that appeared in a Pulse deck but received no engagement (no save, no upvote, no open). Weekly Summary reflects only papers with `user_state IN ('saved', 'reading', 'read')` or with a positive `pulse_ratings` entry in the last 7 days. This is Model C — complementary, zero-overlap with Pulse by construction rather than by convention.
+
+**Complementarity guarantee (Model C):** Pulse and Weekly Summary answer different questions with different temporal stances and different corpora. Pulse is forward-looking ("what should I read today?"), external-corpus, daily, card-shaped. Weekly Summary is backward-looking ("what did my reading this week mean?"), internal-library-only, weekly, narrative-themes-shaped. They share infrastructure (embedder, LLM client, topics, authors) but never duplicate output. A dedicated drift-prevention test in `test_weekly_summary.py` asserts that Pulse-pending papers never leak into Weekly Summary output.
+
+#### 3.1.3 Historical Core (shipped, v1 baseline)
+
+Features shipped in v1 that form the foundation Pulse and Weekly Summary build on:
+- Scheduled paper fetching from arXiv and Semantic Scholar APIs.
+- Local PDF upload and bulk directory scan.
+- Topic matching via embedding similarity (configurable threshold).
+- LLM-generated summaries with mandatory inline citations (see Section 5).
+- Cross-reference consistency checking between papers (semantic similarity via Qdrant).
+- Trend detection via relevance scoring and similarity search.
+- Relevance feedback loop (rating 1-5, flagging suspicious summaries).
+- Paper Recommendation Engine Phase 1 (liked centroid + project context). This engine survives as one signal among several in the new Pulse scoring pipeline; it is not replaced.
+- Tracked authors with author alert orchestration; the `tracked_authors` table and author matching logic are reused verbatim as the author-bonus signal in Pulse scoring.
 
 **Out of scope:**
 - Full-text PDF annotation
@@ -335,16 +390,19 @@ Each paper summary must include:
 ## 8. v2 Roadmap
 
 Informed by competitive analysis of Elicit, ResearchRabbit, Semantic Scholar, Connected
-Papers, and ChatGPT Pulse. Full technical details in
-`docs/plans/2026-03-08-v2-roadmap.md`.
+Papers, and ChatGPT Pulse.
 
 ### 8.1 Competitive Positioning
 
 Our moat: **anti-hallucination verification** (4-layer pipeline with quote matching + PDF
-snapshots) and **spaced repetition from papers** (FSRS). No competitor offers either.
+snapshots), **spaced repetition from papers** (FSRS), and — once shipped — **a fully
+self-hosted proactive discovery layer** that draws on the best patterns from open-source
+research tools (see §8.5 attribution). No single competitor offers all three.
 
-Our biggest gap: **cross-paper intelligence**. Elicit can answer "What do studies say
-about X?" across thousands of papers. We can only ask about one paper at a time.
+Our previous biggest gap was **cross-paper intelligence** (addressed by cross-paper RAG
+with query decomposition). Our current biggest gap is **proactive discovery** — helping
+the researcher find papers they did not know existed. The Phase 1 Discovery & Pulse
+subsystem (§8.5) directly closes this gap.
 
 ### 8.2 Priority Features (from competitor best practices)
 
@@ -356,7 +414,7 @@ about X?" across thousands of papers. We can only ask about one paper at a time.
 **Tier 1 -- Important (daily-driver quality):**
 - ~~Hybrid search: fuse PostgreSQL full-text + Qdrant vectors via reciprocal rank fusion~~ DONE
 - ~~Cross-encoder reranking for retrieval quality~~ DONE
-- Weekly digest / research report (Pulse-inspired proactive briefing)
+- **Weekly digest / research report (Pulse-inspired proactive briefing) — SPEC'D, see §8.5 Phase 1**
 - ~~Paper notes and annotations~~ DONE
 - ~~Telegram bot activation (push-first UX is the core value proposition)~~ DONE
 
@@ -387,6 +445,66 @@ about X?" across thousands of papers. We can only ask about one paper at a time.
 ### 8.4 Design Principle
 
 **Never sacrifice verification quality for speed.** Every new feature (cross-paper RAG,
+Pulse discovery, Weekly Summary, and everything else) must preserve the anti-hallucination
+guarantees defined in §5. Pulse cards, in particular, surface papers from external sources
+before they have been ingested into the library. A Pulse card is a discovery pointer, not
+a verified finding. Once a paper is saved from Pulse and processed, the normal 4-layer
+verification pipeline applies to any summaries or flashcards generated from it. Pulse
+itself does not generate verified claims — it generates *reasons to look at a paper* with
+transparent per-signal scoring.
+
+### 8.5 Phase 1 — Discovery & Pulse Subsystem (SHIPPED 2026-04-11)
+
+A proactive overnight paper discovery subsystem that complements the existing library
+management features. The architectural design is embedded in §3.1.1; this section
+captures the roadmap phasing, acceptance criteria, and attribution.
+
+#### 8.5.1 Phase 1 (target)
+
+- Core loop: overnight discovery job → hybrid embedding + LLM scoring → morning card deck delivery → feedback capture.
+- Sources: arXiv (extend), Semantic Scholar (extend), OpenAlex (new plugin), PubMed (new plugin, enabled by default).
+- PDF resolution chain: arXiv → Unpaywall fallback.
+- Delivery: My Day widget, Research Feed "Today's Pulse" / "Pulse History" tabs, optional Telegram morning message.
+- Feedback: 👍 / 👎 / 💾 / 📖 / dismiss buttons; ratings persisted to `pulse_ratings` table from day one.
+- Transparency: "Why this paper?" popover on every card, showing per-signal breakdown and LLM reasoning.
+- Rename: `digest.py` → `weekly_summary.py`, with SQL filter narrowed to engaged papers only (Model C non-overlap with Pulse).
+- Existing telegram_bot `research_pulse.py` gutted and rewritten from ~164 lines to ~94 lines as a thin delivery wrapper over `GET /api/pulse/today`, with inline 👍/👎/💾 rating callbacks wired to `POST /api/pulse/rate`.
+
+**Acceptance targets (set during the brainstorm session 2026-04-10):**
+- Robustness: reliable daily operation for a full week without intervention; all graceful degradation paths tested; observability (per-source candidate counts, Stage 2 LLM call counts and latency, per-signal score breakdowns) logged to the existing JSON log formatter.
+- Testing: TDD-strict. Tests written before implementation for every function in the new `pulse/` package. Source plugins tested with recorded offline fixtures.
+- Evaluation: a labeled 30-paper eval set (10 yes, 10 maybe, 10 no) with acceptance target of ≥60% of "yes" papers in the top 10 and ≤10% of "no" papers in the top 10. Re-runnable whenever scoring weights or the LLM prompt change.
+
+#### 8.5.2 Phase 2 (deferred, after Phase 1 is daily-driver stable)
+
+- Per-user logistic-regression classifier trained nightly on the `pulse_ratings` table (scikit-learn). Becomes Stage 4 of the scoring pipeline once ≥30 ratings exist. No cold-start problem because Phase 1 collects ratings silently from day one.
+- Citation graph scoring signals using the existing T3-1 citation graph: PageRank on the local subgraph surfaces foundational papers; Adamic/Adar link prediction finds papers sharing rare citation partners.
+- "Missing Foundational Papers" widget — flags papers that are heavily cited within the user's library but missing from it.
+- BERTopic dynamic topic modeling monthly job → "Rising Topics in Your Field" widget.
+- CORE added to the PDF resolver chain as a secondary fallback alongside Unpaywall.
+
+#### 8.5.3 Phase 3 (aspirational)
+
+- "Ask the Literature" feature: a separate synthesis-style query path distinct from Pulse polling and from the existing library RAG. Operates on a synthesis-capable source adapter. Users with a Consensus Pro subscription can plug in their key (plugin interface documented; concrete plugin not shipped because we cannot quality-test without active access).
+- Multi-round RAG (OpenScholar-style iterative self-feedback loop) as an upgrade to the existing single-pass RAG.
+- Metadata-aware embeddings (PaperQA2 pattern) fusing chunk text with paper-level metadata during indexing.
+- Auto-populating author watchlist from starred papers.
+
+### 8.6 Inspiration and Prior Art
+
+JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-source and public research tools. These are credited for their intellectual contribution; no code is copied.
+
+- **[ChatGPT Pulse](https://openai.com/index/introducing-chatgpt-pulse/)** (OpenAI) — async overnight research, morning card deck UX, ephemeral delivery, feedback loop pattern.
+- **[zotero-arxiv-daily](https://github.com/TideDra/zotero-arxiv-daily)** — using the existing library as a preference model via weighted centroid cosine similarity.
+- **[GPT Paper Assistant](https://github.com/tatsu-lab/gpt_paper_assistant)** — two-axis LLM scoring (relevance + novelty) and author watchlist via Semantic Scholar author IDs.
+- **[ArxivDigest](https://github.com/AutoLLM/ArxivDigest)** — natural-language interest descriptions driving LLM-based relevance ranking over abstracts.
+- **[Scholar Inbox](https://scholar-inbox.com)** — per-user logistic regression classifier trained on explicit ratings over embedding vectors (Phase 2).
+- **[Inciteful](https://inciteful.xyz)** — citation graph algorithms (PageRank + Adamic/Adar) on local subgraphs for paper discovery (Phase 2).
+- **[BERTopic](https://github.com/MaartenGr/BERTopic)** — neural topic modeling with dynamic temporal topics for trend detection (Phase 2).
+- **[OpenScholar](https://github.com/AkariAsai/OpenScholar)** (Allen Institute) — iterative self-feedback RAG over scientific literature (Phase 3 inspiration).
+- **[PaperQA2](https://github.com/Future-House/paper-qa)** (FutureHouse) — metadata-aware embeddings and agentic retrieval (Phase 3 inspiration).
+
+All are MIT/Apache-licensed. Our use is at the idea/pattern level.
 digests, extraction) MUST pass through the anti-hallucination verification pipeline.
 This is what differentiates JARVIS from every competitor.
 

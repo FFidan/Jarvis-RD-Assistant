@@ -1,0 +1,314 @@
+{
+  "profile_topics": [
+    {
+      "name": "diffusion models for protein structure prediction",
+      "description": "Generative diffusion and flow-matching models applied to protein folding, docking, and structure prediction."
+    },
+    {
+      "name": "retrieval-augmented generation",
+      "description": "Retrieval-augmented language models, dense retrievers, and grounding long-form generation in external corpora."
+    }
+  ],
+  "papers": [
+    {
+      "external_id": "arxiv:2401.10001",
+      "source_type": "arxiv",
+      "title": "AlphaFold3: a unified diffusion backbone for protein structure prediction",
+      "authors": ["Jumper", "Evans", "Pritzel"],
+      "abstract": "We present AlphaFold3, a single diffusion-based architecture that jointly predicts protein, ligand, and nucleic-acid complexes. The model replaces the Evoformer/Structure module split with a continuous diffusion process over atomic coordinates conditioned on sequence and MSA features. We show that diffusion-based structure prediction matches or exceeds AlphaFold2 on CASP15 targets and extends naturally to protein-ligand and protein-RNA complexes without task-specific heads.",
+      "published_date": "2024-03-15",
+      "url": "https://arxiv.org/abs/2401.10001",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10002",
+      "source_type": "arxiv",
+      "title": "RFdiffusion: de novo protein design via denoising diffusion",
+      "authors": ["Watson", "Juergens", "Bennett"],
+      "abstract": "RFdiffusion adapts RoseTTAFold as the denoiser in a score-based generative model for protein backbones. Starting from Gaussian noise over residue frames, the model iteratively denoises toward valid structures satisfying user-specified constraints. We demonstrate success on binder design, symmetric oligomers, and motif scaffolding, establishing diffusion as a general framework for protein structure generation and prediction refinement.",
+      "published_date": "2024-01-22",
+      "url": "https://arxiv.org/abs/2401.10002",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10003",
+      "source_type": "arxiv",
+      "title": "Chroma: a generative model for proteins trained via diffusion",
+      "authors": ["Ingraham", "Baranov", "Costello"],
+      "abstract": "Chroma is a programmable generative model for protein structure based on a graph-augmented diffusion process. We show that the diffusion objective yields high-accuracy structure prediction and enables conditional sampling from arbitrary constraint sets. Benchmarks on structure prediction tasks indicate that diffusion-trained backbones capture secondary structure statistics more faithfully than regression-based models.",
+      "published_date": "2024-02-03",
+      "url": "https://arxiv.org/abs/2401.10003",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10004",
+      "source_type": "arxiv",
+      "title": "FrameDiff: equivariant diffusion on protein backbone frames",
+      "authors": ["Yim", "Trippe", "De Bortoli"],
+      "abstract": "We introduce FrameDiff, an SE(3)-equivariant diffusion model that operates directly on protein residue frames (rotation + translation). The framework unifies protein structure prediction and generation within a single score-matching objective. We report state-of-the-art designability and show that the same model can refine homology models toward experimental structures, improving TM-scores on challenging targets.",
+      "published_date": "2024-01-30",
+      "url": "https://arxiv.org/abs/2401.10004",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10005",
+      "source_type": "arxiv",
+      "title": "DiffDock: diffusion-based protein-ligand docking",
+      "authors": ["Corso", "Stark", "Jing"],
+      "abstract": "DiffDock formulates molecular docking as a diffusion generative process over the product space of ligand translation, rotation, and torsion angles. Compared with regression-based docking methods, the diffusion approach produces well-calibrated pose distributions and achieves higher success rates on PDBBind blind docking. We further show that confidence scores correlate with structure prediction quality in downstream protein structure prediction pipelines.",
+      "published_date": "2024-02-18",
+      "url": "https://arxiv.org/abs/2401.10005",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10006",
+      "source_type": "arxiv",
+      "title": "RAG-Fusion: multi-query retrieval-augmented generation",
+      "authors": ["Rackauckas", "Schmidt"],
+      "abstract": "RAG-Fusion extends retrieval-augmented generation by issuing multiple paraphrased queries, aggregating the retrieved passages with reciprocal rank fusion, and conditioning a long-form language model on the fused context. We show consistent improvements over vanilla RAG on open-domain QA and long-form summarization, with particular gains on ambiguous questions where a single query under-retrieves. Ablations isolate the contribution of the fusion step from query expansion.",
+      "published_date": "2024-03-02",
+      "url": "https://arxiv.org/abs/2401.10006",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10007",
+      "source_type": "arxiv",
+      "title": "Self-RAG: learning to retrieve, generate, and critique via reflection tokens",
+      "authors": ["Asai", "Wu", "Wang"],
+      "abstract": "Self-RAG trains a language model to decide when to retrieve, what to retrieve, and whether retrieved passages support its generation, using special reflection tokens during training. The resulting retrieval-augmented generation model outperforms strong RAG baselines on knowledge-intensive tasks and produces more factually-grounded long-form answers. We release data, checkpoints, and an evaluation harness for measuring retrieval faithfulness.",
+      "published_date": "2024-02-12",
+      "url": "https://arxiv.org/abs/2401.10007",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10008",
+      "source_type": "arxiv",
+      "title": "Dense Passage Retrieval at scale: improving retrievers for RAG",
+      "authors": ["Karpukhin", "Oguz", "Min"],
+      "abstract": "We study how to scale dense passage retrievers used in retrieval-augmented generation pipelines to web-scale corpora. By combining hard-negative mining, contrastive distillation, and late-interaction reranking, we build a retriever that reduces top-1 hallucination rates in downstream long-form RAG by 18% relative. We release the training data splits and recipes needed to reproduce the retriever on a single 8-GPU machine.",
+      "published_date": "2024-01-18",
+      "url": "https://arxiv.org/abs/2401.10008",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10009",
+      "source_type": "arxiv",
+      "title": "Atlas: few-shot learning with retrieval-augmented language models",
+      "authors": ["Izacard", "Lewis", "Lomeli"],
+      "abstract": "Atlas is a retrieval-augmented language model for knowledge-intensive few-shot learning. We couple a dense retriever with a sequence-to-sequence generator and train both jointly with a handful of labeled examples. Atlas matches or surpasses much larger parametric models on open-domain QA, fact checking, and entity linking, demonstrating that retrieval augmentation is a parameter-efficient route to factual generation.",
+      "published_date": "2024-02-25",
+      "url": "https://arxiv.org/abs/2401.10009",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.10010",
+      "source_type": "arxiv",
+      "title": "RETRO++: chunked cross-attention for retrieval-augmented language models",
+      "authors": ["Borgeaud", "Mensch", "Hoffmann"],
+      "abstract": "We revisit retrieval-augmented generation with chunked cross-attention over a multi-trillion token index. Our updated RETRO variant, RETRO++, improves retriever quality, uses rotary position embeddings, and scales to 70B parameters. On long-form generation benchmarks the model halves hallucination rate at matched perplexity compared to a non-retrieval baseline.",
+      "published_date": "2024-03-08",
+      "url": "https://arxiv.org/abs/2401.10010",
+      "label": "yes"
+    },
+    {
+      "external_id": "arxiv:2401.20001",
+      "source_type": "arxiv",
+      "title": "Denoising diffusion probabilistic models for image synthesis",
+      "authors": ["Ho", "Jain", "Abbeel"],
+      "abstract": "We present denoising diffusion probabilistic models as a class of latent variable models for high-quality image synthesis. We derive a simple training objective equivalent to score matching and demonstrate state-of-the-art sample quality on CIFAR-10 and LSUN. While our focus is natural images rather than biomolecules, the diffusion formulation has been influential in follow-up work on structured domains.",
+      "published_date": "2024-01-05",
+      "url": "https://arxiv.org/abs/2401.20001",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20002",
+      "source_type": "arxiv",
+      "title": "Flow matching for generative modeling",
+      "authors": ["Lipman", "Chen", "Ben-Hamu"],
+      "abstract": "Flow matching is a simulation-free approach for training continuous normalizing flows that generalizes the diffusion objective. We show that flow matching matches or exceeds diffusion baselines on image generation and discuss its connections to stochastic interpolants. Though we focus on natural images, the framework is directly applicable to structured domains including molecules and proteins.",
+      "published_date": "2024-02-07",
+      "url": "https://arxiv.org/abs/2401.20002",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20003",
+      "source_type": "arxiv",
+      "title": "ESM-2: scaling protein language models to evolutionary data",
+      "authors": ["Lin", "Akin", "Rao"],
+      "abstract": "ESM-2 scales masked protein language models to 15B parameters trained on UniRef. The resulting embeddings capture structural and functional information and power a single-sequence structure prediction system, ESMFold. While ESMFold does not use diffusion, its structure predictions serve as strong baselines for diffusion-based refinement methods.",
+      "published_date": "2024-02-14",
+      "url": "https://arxiv.org/abs/2401.20003",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20004",
+      "source_type": "arxiv",
+      "title": "In-context retrieval-augmented language models",
+      "authors": ["Ram", "Levine", "Dalmedigos"],
+      "abstract": "We show that retrieval-augmented generation can be achieved by simply prepending retrieved passages to the language model prompt, without any fine-tuning. In-context RAG matches the performance of trained retrieval-augmented models on several benchmarks, providing a lightweight alternative. The approach is compatible with any instruction-tuned language model.",
+      "published_date": "2024-03-11",
+      "url": "https://arxiv.org/abs/2401.20004",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20005",
+      "source_type": "arxiv",
+      "title": "Contrastive text encoders for dense retrieval",
+      "authors": ["Gao", "Callan"],
+      "abstract": "We study contrastive pretraining recipes for dense text encoders used in information retrieval. The encoders are general-purpose and have been dropped into retrieval-augmented generation pipelines in follow-up work. Our main contribution is a simplified contrastive objective that trains stably at batch sizes of 16 and matches specialized retriever training at much larger scales.",
+      "published_date": "2024-01-29",
+      "url": "https://arxiv.org/abs/2401.20005",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20006",
+      "source_type": "arxiv",
+      "title": "Equivariant neural networks for molecular property prediction",
+      "authors": ["Gasteiger", "Becker", "Gunnemann"],
+      "abstract": "We present an equivariant graph neural network for molecular property prediction using spherical harmonics and directional message passing. The model is evaluated on QM9 and OC20 and sets new benchmarks on force prediction. Although this paper focuses on property prediction rather than structure generation, the SE(3)-equivariant backbone is widely reused in protein diffusion models.",
+      "published_date": "2024-02-20",
+      "url": "https://arxiv.org/abs/2401.20006",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20007",
+      "source_type": "arxiv",
+      "title": "Chain-of-thought prompting elicits reasoning in large language models",
+      "authors": ["Wei", "Wang", "Schuurmans"],
+      "abstract": "We show that large language models can be guided to solve multi-step reasoning problems by prompting them with chain-of-thought exemplars. We compare with retrieval-augmented generation baselines on multi-hop QA and find that the two techniques are complementary: retrieval improves factuality while CoT improves reasoning.",
+      "published_date": "2024-01-11",
+      "url": "https://arxiv.org/abs/2401.20007",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20008",
+      "source_type": "arxiv",
+      "title": "Score-based generative models through stochastic differential equations",
+      "authors": ["Song", "Sohl-Dickstein", "Kingma"],
+      "abstract": "We present a unified view of score-based and diffusion generative models as solutions to stochastic differential equations. The framework enables new samplers and likelihood estimators. Applications include image generation, audio synthesis, and inverse problems in medical imaging. Downstream work has adapted the SDE formulation to protein structure prediction.",
+      "published_date": "2024-03-18",
+      "url": "https://arxiv.org/abs/2401.20008",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20009",
+      "source_type": "arxiv",
+      "title": "Long-context language models via rotary position interpolation",
+      "authors": ["Chen", "Wong", "Chen"],
+      "abstract": "We extend the context window of pretrained language models to 32k tokens by interpolating rotary position embeddings. The resulting models are evaluated on long-document summarization and retrieval-augmented QA, where longer context improves grounding. We do not modify the retrieval component itself.",
+      "published_date": "2024-02-28",
+      "url": "https://arxiv.org/abs/2401.20009",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.20010",
+      "source_type": "arxiv",
+      "title": "Generalist biomedical language models",
+      "authors": ["Singhal", "Azizi", "Tu"],
+      "abstract": "We build generalist biomedical language models that span clinical notes, literature, and structured databases. Applications include clinical decision support and drug discovery. Protein structure and sequence data are included in the pretraining corpus but are not the main focus.",
+      "published_date": "2024-01-15",
+      "url": "https://arxiv.org/abs/2401.20010",
+      "label": "maybe"
+    },
+    {
+      "external_id": "arxiv:2401.30001",
+      "source_type": "arxiv",
+      "title": "A variational approach to option pricing in stochastic volatility markets",
+      "authors": ["Smith", "Patel"],
+      "abstract": "We derive a variational method for pricing European options under stochastic volatility assumptions. The resulting algorithm is compared with Monte Carlo baselines on synthetic market data and shown to converge in fewer iterations. We also discuss calibration to historical S&P 500 data.",
+      "published_date": "2024-03-20",
+      "url": "https://arxiv.org/abs/2401.30001",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30002",
+      "source_type": "arxiv",
+      "title": "Topological quantum error correction on a 100-qubit device",
+      "authors": ["Kitaev", "Liu"],
+      "abstract": "We demonstrate topological quantum error correction on a 100-qubit superconducting device. The logical qubit achieves a 10^-5 error rate per syndrome extraction cycle. We analyze the error budget and discuss the path to fault-tolerant quantum computation.",
+      "published_date": "2024-02-02",
+      "url": "https://arxiv.org/abs/2401.30002",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30003",
+      "source_type": "arxiv",
+      "title": "Economic growth and total factor productivity in emerging markets",
+      "authors": ["Garcia", "Ahmed"],
+      "abstract": "We analyze total factor productivity growth across 30 emerging markets over 1990-2020. Using a panel vector autoregression, we identify capital deepening and education as the main drivers. Policy implications are discussed for low-income countries.",
+      "published_date": "2024-02-10",
+      "url": "https://arxiv.org/abs/2401.30003",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30004",
+      "source_type": "arxiv",
+      "title": "MRI segmentation of knee cartilage using a 3D U-Net",
+      "authors": ["Kim", "Park"],
+      "abstract": "We train a 3D U-Net to segment knee cartilage from high-resolution MRI scans. The model achieves Dice scores above 0.90 on the OAI dataset. Applications include osteoarthritis progression tracking in longitudinal clinical studies.",
+      "published_date": "2024-01-23",
+      "url": "https://arxiv.org/abs/2401.30004",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30005",
+      "source_type": "arxiv",
+      "title": "Autonomous underwater vehicle path planning with reinforcement learning",
+      "authors": ["Wilson", "Chen"],
+      "abstract": "We train a reinforcement learning policy for autonomous underwater vehicle path planning in uncertain currents. The agent is evaluated in a hydrodynamic simulator and outperforms A* and RRT* baselines on time-to-goal. Transfer to real hardware is left to future work.",
+      "published_date": "2024-03-05",
+      "url": "https://arxiv.org/abs/2401.30005",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30006",
+      "source_type": "arxiv",
+      "title": "Analytic continuation of zeta-like Dirichlet series",
+      "authors": ["Nguyen"],
+      "abstract": "We establish analytic continuation and functional equations for a family of Dirichlet series generalizing the Riemann zeta function. Applications include explicit bounds on prime gaps conditional on a generalized Riemann hypothesis. No computational experiments are reported.",
+      "published_date": "2024-02-17",
+      "url": "https://arxiv.org/abs/2401.30006",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30007",
+      "source_type": "arxiv",
+      "title": "Effects of soil microbiome on tomato yield in greenhouse conditions",
+      "authors": ["Rossi", "Bianchi"],
+      "abstract": "We study the effect of rhizosphere microbiome composition on tomato fruit yield across three cultivars in controlled greenhouse conditions. 16S rRNA sequencing identifies several beneficial Pseudomonas strains. The work informs biofertilizer development for sustainable agriculture.",
+      "published_date": "2024-02-22",
+      "url": "https://arxiv.org/abs/2401.30007",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30008",
+      "source_type": "arxiv",
+      "title": "Ion channel blockers for the treatment of atrial fibrillation",
+      "authors": ["Johnson", "Williams"],
+      "abstract": "We review the pharmacology of sodium and potassium channel blockers used in the management of atrial fibrillation. Meta-analysis of 14 clinical trials shows modest benefit over placebo with elevated risk of torsades de pointes. Guidance for clinicians is provided.",
+      "published_date": "2024-01-08",
+      "url": "https://arxiv.org/abs/2401.30008",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30009",
+      "source_type": "arxiv",
+      "title": "Holographic reconstruction of black hole interiors from boundary entanglement",
+      "authors": ["Maldacena", "Susskind"],
+      "abstract": "We propose a holographic reconstruction scheme for black hole interiors using boundary entanglement entropy. The construction relies on the ER=EPR correspondence and is consistent with tensor network models of AdS/CFT. We discuss implications for the firewall paradox.",
+      "published_date": "2024-03-25",
+      "url": "https://arxiv.org/abs/2401.30009",
+      "label": "no"
+    },
+    {
+      "external_id": "arxiv:2401.30010",
+      "source_type": "arxiv",
+      "title": "Seismic hazard assessment in the San Andreas fault system using InSAR",
+      "authors": ["Gomez", "Okada"],
+      "abstract": "We present a seismic hazard assessment for the San Andreas fault system based on a decade of Interferometric Synthetic Aperture Radar observations. The method identifies two previously unrecognized slow-slip events. Implications for earthquake early warning systems are discussed.",
+      "published_date": "2024-02-14",
+      "url": "https://arxiv.org/abs/2401.30010",
+      "label": "no"
+    }
+  ]
+}

@@ -130,6 +130,10 @@ import type {
   KnowledgeGraph,
   Entity,
   MyDayResponse,
+  PulseDeck,
+  PulseRating,
+  PulseStats,
+  WhyExplanation,
 } from '@/types';
 
 // --- Dashboard ---
@@ -507,3 +511,37 @@ export const logFocusSession = (data: { duration_hours: number; task_id?: number
     method: 'POST',
     body: JSON.stringify(data),
   });
+
+// --- Pulse ---
+
+/** Fetch today's Pulse deck. Returns `null` when the backend reports 404. */
+export async function fetchPulseToday(): Promise<PulseDeck | null> {
+  try {
+    return await apiFetch<PulseDeck>('/api/pulse/today');
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export const fetchPulseHistory = (days = 30) =>
+  apiFetch<PulseDeck[]>(`/api/pulse/history?days=${days}`);
+
+export async function ratePulseCard(
+  paperId: number,
+  rating: PulseRating,
+): Promise<void> {
+  await apiFetch<{ status: string }>('/api/pulse/rate', {
+    method: 'POST',
+    body: JSON.stringify({ paper_id: paperId, rating }),
+  });
+}
+
+export const explainPulseCard = (cardId: number) =>
+  apiFetch<WhyExplanation>(`/api/pulse/explain/${cardId}`);
+
+export const generatePulseNow = () =>
+  apiFetch<PulseDeck>('/api/pulse/generate', { method: 'POST' });
+
+export const fetchPulseStats = (days = 30) =>
+  apiFetch<PulseStats>(`/api/pulse/stats?days=${days}`);

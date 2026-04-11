@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Source URL: https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=neural+networks&retmode=xml&retmax=5 -->
+<!DOCTYPE eSearchResult PUBLIC "-//NLM//DTD esearch 20060628//EN" "https://eutils.ncbi.nlm.nih.gov/eutils/dtd/20060628/esearch.dtd">
+<eSearchResult>
+  <Count>5</Count>
+  <RetMax>5</RetMax>
+  <RetStart>0</RetStart>
+  <IdList>
+    <Id>38000001</Id>
+    <Id>38000002</Id>
+    <Id>38000003</Id>
+    <Id>38000004</Id>
+    <Id>38000005</Id>
+  </IdList>
+  <TranslationSet/>
+  <QueryTranslation>neural networks[All Fields]</QueryTranslation>
+</eSearchResult>

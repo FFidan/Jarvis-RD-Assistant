@@ -1,0 +1,420 @@
+"""Tests for PubMedSource.
+
+TDD — written before the implementation was added.
+Uses respx to mock the NCBI E-utilities (esearch + efetch).
+Fixtures: tests/fixtures/pubmed_esearch.xml, tests/fixtures/pubmed_efetch.xml
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import httpx
+import respx
+from app.models import PaperSourceConfig, SourceType, TopicRef
+from app.sources.pubmed_source import (
+    EFETCH_URL,
+    ESEARCH_URL,
+    PubMedSource,
+    _parse_abstract,
+    _parse_authors,
+    _parse_doi,
+    _parse_pub_date,
+)
+from lxml import etree
+
+FIXTURES = Path(__file__).parent / "fixtures"
+ESEARCH_XML = (FIXTURES / "pubmed_esearch.xml").read_bytes()
+EFETCH_XML = (FIXTURES / "pubmed_efetch.xml").read_bytes()
+
+
+def _make_source(api_key: str | None = None) -> PubMedSource:
+    config = PaperSourceConfig(
+        id=4,
+        source_type=SourceType.PUBMED,
+        enabled=True,
+        config={"api_key": api_key} if api_key else {},
+    )
+    client = httpx.AsyncClient()
+    return PubMedSource(config, client)
+
+
+# ---------------------------------------------------------------------------
+# XML helper unit tests
+# ---------------------------------------------------------------------------
+
+
+def _article_xml(xml_str: str) -> etree._Element:
+    """Wrap xml_str in a MedlineCitation shell for helper tests."""
+    medline_xml = f"""<MedlineCitation>
+  <PMID>99999</PMID>
+  <Article>{xml_str}</Article>
+</MedlineCitation>"""
+    root = etree.fromstring(medline_xml.encode())
+    return root.find("Article")
+
+
+def test_parse_abstract_structured():
+    """Structured abstract (multiple AbstractText sections) is concatenated."""
+    article_el = _article_xml("""
+    <Abstract>
+      <AbstractText Label="BACKGROUND">Some background here.</AbstractText>
+      <AbstractText Label="METHODS">Methods described here.</AbstractText>
+      <AbstractText Label="RESULTS">Results reported here.</AbstractText>
+    </Abstract>
+    """)
+    result = _parse_abstract(article_el)
+    assert result is not None
+    assert "BACKGROUND: Some background here." in result
+    assert "METHODS: Methods described here." in result
+    assert "RESULTS: Results reported here." in result
+
+
+def test_parse_abstract_simple():
+    """Single AbstractText (no Label) is returned as-is."""
+    article_el = _article_xml("""
+    <Abstract>
+      <AbstractText>Simple abstract text without labels.</AbstractText>
+    </Abstract>
+    """)
+    result = _parse_abstract(article_el)
+    assert result == "Simple abstract text without labels."
+
+
+def test_parse_abstract_missing_returns_none():
+    """Missing Abstract element returns None."""
+    article_el = _article_xml("<ArticleTitle>No abstract here</ArticleTitle>")
+    assert _parse_abstract(article_el) is None
+
+
+def test_parse_authors_full_name():
+    """Authors with LastName + ForeName are combined as 'ForeName LastName'."""
+    article_el = _article_xml("""
+    <AuthorList>
+      <Author><LastName>Smith</LastName><ForeName>Alice</ForeName></Author>
+      <Author><LastName>Jones</LastName><ForeName>Bob</ForeName></Author>
+    </AuthorList>
+    """)
+    authors = _parse_authors(article_el)
+    assert authors == ["Alice Smith", "Bob Jones"]
+
+
+def test_parse_authors_last_only():
+    """Author with only LastName (no ForeName) uses just the last name."""
+    article_el = _article_xml("""
+    <AuthorList>
+      <Author><LastName>Doe</LastName></Author>
+    </AuthorList>
+    """)
+    authors = _parse_authors(article_el)
+    assert authors == ["Doe"]
+
+
+def test_parse_doi_extracts_doi():
+    """DOI is extracted from ArticleIdList when IdType='doi'."""
+    medline_xml = b"""<MedlineCitation>
+      <PMID>12345</PMID>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">12345</ArticleId>
+        <ArticleId IdType="doi">10.1016/j.test.2026.001</ArticleId>
+      </ArticleIdList>
+    </MedlineCitation>"""
+    root = etree.fromstring(medline_xml)
+    doi = _parse_doi(root)
+    assert doi == "10.1016/j.test.2026.001"
+
+
+def test_parse_doi_missing_returns_none():
+    """Returns None when no doi ArticleId is present."""
+    medline_xml = b"""<MedlineCitation>
+      <PMID>12345</PMID>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">12345</ArticleId>
+      </ArticleIdList>
+    </MedlineCitation>"""
+    root = etree.fromstring(medline_xml)
+    assert _parse_doi(root) is None
+
+
+def test_parse_pub_date_article_date():
+    """ArticleDate is preferred when present."""
+    article_el = _article_xml("""
+    <ArticleDate DateType="Electronic">
+      <Year>2026</Year><Month>03</Month><Day>15</Day>
+    </ArticleDate>
+    """)
+    result = _parse_pub_date(article_el)
+    assert result is not None
+    assert result.year == 2026
+    assert result.month == 3
+    assert result.day == 15
+
+
+def test_parse_pub_date_pubdate_fallback():
+    """Falls back to PubDate when ArticleDate is absent."""
+    article_el = _article_xml("""
+    <Journal><JournalIssue><PubDate>
+      <Year>2025</Year><Month>Jan</Month>
+    </PubDate></JournalIssue></Journal>
+    """)
+    result = _parse_pub_date(article_el)
+    assert result is not None
+    assert result.year == 2025
+    assert result.month == 1
+
+
+def test_parse_pub_date_year_only():
+    """Year-only PubDate defaults to January 1."""
+    article_el = _article_xml("""
+    <Journal><JournalIssue><PubDate>
+      <Year>2025</Year>
+    </PubDate></JournalIssue></Journal>
+    """)
+    result = _parse_pub_date(article_el)
+    assert result is not None
+    assert result.year == 2025
+    assert result.month == 1
+    assert result.day == 1
+
+
+def test_parse_pub_date_missing_returns_none():
+    """Returns None when neither ArticleDate nor PubDate is present."""
+    article_el = _article_xml("<ArticleTitle>Test</ArticleTitle>")
+    assert _parse_pub_date(article_el) is None
+
+
+# ---------------------------------------------------------------------------
+# search() pipeline: esearch → efetch
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_search_esearch_then_efetch():
+    """search() calls esearch then efetch and returns parsed papers."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("neural networks", max_results=5)
+
+    assert len(papers) == 5
+    assert all(p.source_type == SourceType.PUBMED for p in papers)
+    assert papers[0].title == "Deep Neural Networks for Medical Image Analysis"
+    assert papers[0].external_id == "pubmed:38000001"
+
+
+@respx.mock
+async def test_search_structured_abstract_concatenated():
+    """First paper from efetch fixture has structured abstract correctly concatenated."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("deep learning", max_results=5)
+
+    abstract = papers[0].abstract
+    assert abstract is not None
+    assert "BACKGROUND:" in abstract
+    assert "METHODS:" in abstract
+    assert "RESULTS:" in abstract
+    assert "CONCLUSIONS:" in abstract
+
+
+@respx.mock
+async def test_search_doi_extracted():
+    """DOI is extracted from ArticleIdList into metadata."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("neural networks", max_results=5)
+
+    # First paper has DOI in fixture
+    assert papers[0].metadata.get("doi") == "10.1016/j.media.2026.001"
+    # Third paper (PMID 38000003) has no DOI
+    assert papers[2].metadata.get("doi") is None
+
+
+@respx.mock
+async def test_search_authors_parsed():
+    """Authors are parsed with ForeName + LastName format."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("test", max_results=5)
+
+    assert "Wei Zhang" in papers[0].authors
+    assert "Raj Patel" in papers[0].authors
+
+
+# ---------------------------------------------------------------------------
+# fetch_by_id() with single PMID
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_by_id_single_pmid():
+    """fetch_by_id fetches a single PMID and returns one paper."""
+    # efetch with single PMID returns full fixture (we use first paper)
+    single_paper_xml = b"""<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID>38000001</PMID>
+      <Article>
+        <ArticleTitle>Single Paper Test</ArticleTitle>
+        <Abstract><AbstractText>Test abstract.</AbstractText></Abstract>
+        <AuthorList><Author><LastName>Test</LastName><ForeName>Author</ForeName></Author></AuthorList>
+        <ArticleDate DateType="Electronic">
+          <Year>2026</Year><Month>01</Month><Day>10</Day>
+        </ArticleDate>
+      </Article>
+      <ArticleIdList>
+        <ArticleId IdType="pubmed">38000001</ArticleId>
+      </ArticleIdList>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>"""
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=single_paper_xml))
+
+    source = _make_source()
+    paper = await source.fetch_by_id("38000001")
+
+    assert paper is not None
+    assert paper.title == "Single Paper Test"
+    assert paper.external_id == "pubmed:38000001"
+    assert paper.metadata["pmid"] == "38000001"
+
+
+@respx.mock
+async def test_fetch_by_id_strips_prefix():
+    """fetch_by_id accepts 'pubmed:PMID' format."""
+    single_xml = b"""<?xml version="1.0"?>
+<PubmedArticleSet>
+  <PubmedArticle>
+    <MedlineCitation>
+      <PMID>12345</PMID>
+      <Article>
+        <ArticleTitle>Title</ArticleTitle>
+        <AuthorList/>
+      </Article>
+      <ArticleIdList><ArticleId IdType="pubmed">12345</ArticleId></ArticleIdList>
+    </MedlineCitation>
+  </PubmedArticle>
+</PubmedArticleSet>"""
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=single_xml))
+
+    source = _make_source()
+    paper = await source.fetch_by_id("pubmed:12345")
+    assert paper is not None
+    assert paper.external_id == "pubmed:12345"
+
+
+# ---------------------------------------------------------------------------
+# Empty esearch result → no efetch call
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_search_empty_esearch_no_efetch():
+    """Empty esearch result skips efetch and returns []."""
+    empty_esearch = b"""<?xml version="1.0"?>
+<eSearchResult>
+  <Count>0</Count>
+  <IdList/>
+</eSearchResult>"""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=empty_esearch))
+    efetch_route = respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("xyzzy quantum foam", max_results=10)
+
+    assert papers == []
+    assert efetch_route.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# HTTP errors → return []
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_search_esearch_http_error_returns_empty():
+    """HTTP error from esearch returns []."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(500))
+
+    source = _make_source()
+    papers = await source.search("test", max_results=5)
+    assert papers == []
+
+
+@respx.mock
+async def test_search_efetch_http_error_returns_empty():
+    """HTTP error from efetch returns []."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(503))
+
+    source = _make_source()
+    papers = await source.search("test", max_results=5)
+    assert papers == []
+
+
+# ---------------------------------------------------------------------------
+# fetch_new_since()
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_new_since_uses_mindate():
+    """fetch_new_since passes mindate param to esearch."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
+    topics = [TopicRef(id=1, name="AI", query_terms=["artificial intelligence"])]
+
+    papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
+
+    called_params = dict(route.calls[0].request.url.params)
+    assert called_params.get("mindate") == "2026/04/01"
+    assert called_params.get("datetype") == "pdat"
+    assert len(papers) == 5
+
+
+@respx.mock
+async def test_fetch_new_since_empty_topics():
+    """Empty topics uses a fallback term for date-only search."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    since = datetime(2026, 4, 1, 0, 0, 0, tzinfo=UTC)
+
+    await source.fetch_new_since(since=since, topics=[], limit=10)
+
+    assert route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Missing ArticleDate → year-only fallback (integration via fixture)
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_missing_article_date_falls_back_to_pubdate():
+    """Paper with no ArticleDate falls back to PubDate (year-only → Jan 1)."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    papers = await source.search("graph neural", max_results=5)
+
+    # PMID 38000004 (index 3) has only <PubDate><Year>2025</Year></PubDate>
+    paper = next(p for p in papers if p.metadata.get("pmid") == "38000004")
+    assert paper.published_date is not None
+    assert paper.published_date.year == 2025
+    assert paper.published_date.month == 1
+    assert paper.published_date.day == 1

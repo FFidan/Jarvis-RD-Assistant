@@ -7,6 +7,7 @@ Rate limit: 1 request/second on the free tier.
 
 import asyncio
 import logging
+import os
 from datetime import date
 from typing import Any
 from urllib.parse import quote as _url_quote
@@ -20,6 +21,7 @@ from app.sources.registry import register_source
 logger = logging.getLogger(__name__)
 
 S2_API_URL = "https://api.semanticscholar.org/graph/v1"
+S2_RECOMMENDATIONS_URL = "https://api.semanticscholar.org/recommendations/v1"
 RATE_LIMIT_DELAY = 1.05  # seconds between requests (free tier: 1 req/sec)
 S2_FIELDS = (
     "paperId,externalIds,title,authors,authors.authorId,abstract,year,"
@@ -43,8 +45,9 @@ class SemanticScholarSource(PaperSource):
         super().__init__(config, http_client)
         self._last_request_time: float = 0.0
         self._rate_lock = asyncio.Lock()
-        # Optional API key for higher rate limits
-        self._api_key: str | None = config.config.get("api_key") if config.config else None
+        # Optional API key for higher rate limits (config overrides env var)
+        cfg_key = config.config.get("api_key") if config.config else None
+        self._api_key: str | None = cfg_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
 
     async def _rate_limit(self) -> None:
         """Enforce Semantic Scholar free-tier rate limit (1 req/sec)."""
@@ -109,9 +112,7 @@ class SemanticScholarSource(PaperSource):
         title = (data.get("title") or "").strip()
 
         authors = [
-            author.get("name", "")
-            for author in (data.get("authors") or [])
-            if author.get("name")
+            author.get("name", "") for author in (data.get("authors") or []) if author.get("name")
         ]
 
         abstract = (data.get("abstract") or "").strip()
@@ -123,7 +124,9 @@ class SemanticScholarSource(PaperSource):
             try:
                 published_date = date.fromisoformat(pub_date_str)
             except ValueError:
-                logger.warning("Invalid publicationDate for S2 paper %s: %s", paper_id, pub_date_str)
+                logger.warning(
+                    "Invalid publicationDate for S2 paper %s: %s", paper_id, pub_date_str
+                )  # noqa: E501
         if published_date is None and data.get("year"):
             published_date = date(data["year"], 1, 1)
 
@@ -247,13 +250,129 @@ class SemanticScholarSource(PaperSource):
             List of citation data dicts from S2 API.
         """
         params = {
-            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",
+            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",  # noqa: E501
             "limit": min(limit, 1000),
         }
         data = await self._fetch_json(
             f"/paper/{_url_quote(paper_id, safe='')}/citations", params=params
         )
         return data.get("data", [])
+
+    async def get_recommendations(
+        self,
+        positive_seeds: list[str],
+        negative_seeds: list[str] | None = None,
+        limit: int = 50,
+    ) -> list[PaperCreate]:
+        """Recommend papers similar to positive seeds using the S2 Recommendations API.
+
+        Primary path (API key present): ``POST /recommendations/v1/papers`` with
+        multi-seed body — uses the full positive/negative seed list.
+
+        Fallback path (no API key): loops over the top-3 positive seeds and calls
+        ``GET /recommendations/v1/papers/forpaper/{id}`` for each, then dedupes by
+        S2 paper ID and trims to ``limit``.
+
+        Parameters
+        ----------
+        positive_seeds : list[str]
+            S2 paper IDs to use as positive examples.
+        negative_seeds : list[str] | None
+            Optional S2 paper IDs to steer away from.
+        limit : int
+            Maximum number of recommendations to return.
+
+        Returns
+        -------
+        list[PaperCreate]
+            Recommended papers parsed from the S2 API. Returns ``[]`` on 429/5xx.
+        """
+        if not positive_seeds:
+            return []
+
+        rec_fields = (
+            "paperId,externalIds,title,authors,authors.authorId,abstract,year,"
+            "publicationDate,url,citationCount,openAccessPdf,tldr"
+        )
+
+        if self._api_key:
+            # Primary path: multi-seed POST endpoint
+            body: dict[str, Any] = {
+                "positivePaperIds": positive_seeds,
+                "negativePaperIds": negative_seeds or [],
+            }
+            params = {"limit": min(limit, 500), "fields": rec_fields}
+            try:
+                await self._rate_limit()
+                response = await self.http_client.post(
+                    f"{S2_RECOMMENDATIONS_URL}/papers",
+                    json=body,
+                    params=params,
+                    headers=self._build_headers(),
+                    timeout=30.0,
+                )
+                if response.status_code in (429, 500, 502, 503, 504):
+                    logger.warning(
+                        "S2 recommendations POST returned %d; returning empty list",
+                        response.status_code,
+                    )
+                    return []
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                logger.warning("S2 recommendations POST failed: %s", exc)
+                return []
+
+            papers = []
+            for item in data.get("recommendedPapers") or []:
+                try:
+                    papers.append(self._parse_paper(item))
+                except Exception:
+                    logger.exception("Failed to parse S2 recommendation: %s", item.get("paperId"))
+            return papers[:limit]
+
+        # Fallback: per-paper GET loop over top-3 seeds
+        seen_ids: set[str] = set()
+        papers = []
+        per_seed = max(17, limit)  # over-fetch so trimming works
+        for seed_id in positive_seeds[:3]:
+            params = {"limit": per_seed, "fields": rec_fields}
+            try:
+                await self._rate_limit()
+                response = await self.http_client.get(
+                    f"{S2_RECOMMENDATIONS_URL}/papers/forpaper/{_url_quote(seed_id, safe='')}",
+                    params=params,
+                    headers=self._build_headers(),
+                    timeout=30.0,
+                )
+                if response.status_code in (429, 500, 502, 503, 504):
+                    logger.warning(
+                        "S2 forpaper/%s returned %d; skipping this seed",
+                        seed_id,
+                        response.status_code,
+                    )
+                    continue
+                response.raise_for_status()
+                data = response.json()
+            except httpx.HTTPStatusError as exc:
+                logger.warning("S2 forpaper/%s failed: %s; skipping", seed_id, exc)
+                continue
+
+            for item in data.get("recommendedPapers") or []:
+                pid = item.get("paperId", "")
+                if not pid or pid in seen_ids:
+                    continue
+                seen_ids.add(pid)
+                try:
+                    papers.append(self._parse_paper(item))
+                except Exception:
+                    logger.exception("Failed to parse S2 recommendation: %s", pid)
+                if len(papers) >= limit:
+                    break
+            if len(papers) >= limit:
+                break
+
+        return papers[:limit]
 
     async def fetch_references(self, paper_id: str, limit: int = 100) -> list[dict]:
         """Fetch papers cited BY the given paper.
@@ -271,7 +390,7 @@ class SemanticScholarSource(PaperSource):
             List of reference data dicts from S2 API.
         """
         params = {
-            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",
+            "fields": "paperId,externalIds,title,authors,year,citationCount,contexts,isInfluential,intents",  # noqa: E501
             "limit": min(limit, 1000),
         }
         data = await self._fetch_json(

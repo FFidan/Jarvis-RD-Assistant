@@ -14,12 +14,27 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 # --- Enums ---
 
 
+class TopicRef(BaseModel):
+    """Lightweight topic reference passed to source polling methods.
+
+    Used by PaperSource.fetch_new_since() so sources can filter by topic
+    without a round-trip to the database.
+    """
+
+    id: int
+    name: str
+    description: str | None = None
+    query_terms: list[str] = []
+
+
 class SourceType(str, Enum):
     """Supported paper source types."""
 
     ARXIV = "arxiv"
     SEMANTIC_SCHOLAR = "semantic_scholar"
     LOCAL = "local"
+    OPENALEX = "openalex"
+    PUBMED = "pubmed"
 
 
 class PaperStatus(str, Enum):
@@ -257,6 +272,7 @@ class TopicCreate(BaseModel):
     name: str = Field(..., max_length=255)
     query_terms: list[str] = Field(..., min_length=1)
     category: str | None = Field(default=None, max_length=100)
+    description: str | None = None
     enabled: bool = True
 
     @field_validator("query_terms")
@@ -272,6 +288,7 @@ class TopicUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     query_terms: list[str] | None = Field(default=None, min_length=1)
     category: str | None = None
+    description: str | None = None
     enabled: bool | None = None
 
     @field_validator("query_terms")
@@ -291,6 +308,7 @@ class TopicResponse(BaseModel):
     name: str
     query_terms: list[str]
     category: str | None = None
+    description: str | None = None
     enabled: bool = True
     created_at: datetime
 
@@ -928,3 +946,52 @@ class PapersByStatusItem(BaseModel):
 
     status: str
     count: int
+
+
+# --- Pulse models ---
+
+
+class PulseCardResponse(BaseModel):
+    """A single scored card within a Pulse deck."""
+
+    card_id: int
+    paper_id: int
+    paper_title: str
+    paper_authors: list[str]
+    paper_url: str | None
+    rank: int
+    score: float
+    llm_relevance: int | None
+    llm_novelty: int | None
+    reasoning: str | None
+    signals: dict[str, float]
+
+
+class PulseDeckResponse(BaseModel):
+    """A full Pulse deck for one day, including all scored cards."""
+
+    deck_id: int
+    deck_date: date
+    card_count: int
+    generated_at: datetime
+    cards: list[PulseCardResponse]
+    stats: dict
+
+
+class PulseStatsResponse(BaseModel):
+    """Aggregate Pulse pipeline stats over a sliding window of past runs."""
+
+    window_days: int
+    decks_generated: int
+    avg_candidates: float | None
+    avg_llm_calls: float | None
+    avg_duration_s: float | None
+    last_run_at: datetime | None
+    last_error: str | None
+
+
+class PulseRateRequest(BaseModel):
+    """Body for POST /api/pulse/rate."""
+
+    paper_id: int
+    rating: Literal["up", "down", "save", "dismiss", "open"]

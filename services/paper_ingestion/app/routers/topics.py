@@ -11,7 +11,7 @@ from app.models import TopicCreate, TopicResponse, TopicUpdate
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
-_TOPIC_ALLOWED_COLUMNS = frozenset({"name", "query_terms", "enabled", "category"})
+_TOPIC_ALLOWED_COLUMNS = frozenset({"name", "query_terms", "enabled", "category", "description"})
 
 
 @router.get("", response_model=list[TopicResponse])
@@ -27,9 +27,13 @@ async def list_topics(request: Request) -> list[TopicResponse]:
 async def create_topic(request: Request, body: TopicCreate) -> TopicResponse:
     async with request.app.state.db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            """INSERT INTO topics (name, query_terms, category, enabled)
-            VALUES ($1, $2, $3, $4) RETURNING *""",
-            body.name, body.query_terms, body.category, body.enabled,
+            """INSERT INTO topics (name, query_terms, category, description, enabled)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *""",
+            body.name,
+            body.query_terms,
+            body.category,
+            body.description,
+            body.enabled,
         )
     return TopicResponse(**dict(row))
 
