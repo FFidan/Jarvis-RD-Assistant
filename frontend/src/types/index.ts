@@ -148,6 +148,7 @@ export interface Topic {
   name: string;
   query_terms: string[];
   category: string | null;
+  description: string | null;
   enabled: boolean;
   created_at: string;
 }

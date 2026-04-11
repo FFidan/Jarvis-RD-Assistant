@@ -4,7 +4,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PomodoroTimer } from '@/components/my-day/PomodoroTimer';
-import { PulseDeck } from '@/components/my-day/PulseDeck';
 import { QuickAddTask } from '@/components/my-day/QuickAddTask';
 import { TaskList } from '@/components/my-day/TaskList';
 import { ProjectPulse } from '@/components/my-day/ProjectPulse';
@@ -53,9 +52,6 @@ export function MyDayPage() {
         <h1 className="text-3xl font-bold">My Day</h1>
         <p className="text-muted-foreground">{todayStr}</p>
       </div>
-
-      {/* Today's Pulse deck */}
-      <PulseDeck />
 
       {/* Pomodoro Timer */}
       <PomodoroTimer

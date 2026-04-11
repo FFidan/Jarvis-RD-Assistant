@@ -1,9 +1,58 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { fetchConfig, setConfig, triggerRecommendationRefresh } from '@/lib/api';
+
+const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
+  embedding: 0.2,
+  topic: 0.2,
+  llm_relevance: 0.3,
+  llm_novelty: 0.1,
+  author_bonus: 0.15,
+  recency: 0.05,
+};
+
+type PulseWeightKey =
+  | 'embedding'
+  | 'topic'
+  | 'llm_relevance'
+  | 'llm_novelty'
+  | 'author_bonus'
+  | 'recency';
+
+const PULSE_WEIGHT_KEYS: PulseWeightKey[] = [
+  'embedding',
+  'topic',
+  'llm_relevance',
+  'llm_novelty',
+  'author_bonus',
+  'recency',
+];
+
+const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
+  embedding: 'Embedding similarity',
+  topic: 'Topic match',
+  llm_relevance: 'LLM relevance',
+  llm_novelty: 'LLM novelty',
+  author_bonus: 'Tracked-author bonus',
+  recency: 'Recency',
+};
+
+function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
+  const out = { ...DEFAULT_PULSE_WEIGHTS };
+  if (raw && typeof raw === 'object') {
+    for (const key of PULSE_WEIGHT_KEYS) {
+      const value = (raw as Record<string, unknown>)[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        out[key] = value;
+      }
+    }
+  }
+  return out;
+}
 
 export function RecommendationSection() {
   const queryClient = useQueryClient();
@@ -24,12 +73,35 @@ export function RecommendationSection() {
   const enabled = getConfigValue('recommendation.enabled', true) as boolean;
   const likedWeight = Number(getConfigValue('recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue('recommendation.project_weight', 0.4));
+  const pulseWeights = coerceWeights(getConfigValue('pulse.weights', DEFAULT_PULSE_WEIGHTS));
 
   const [localLikedWeight, setLocalLikedWeight] = useState<number>(likedWeight);
   const [localProjectWeight, setLocalProjectWeight] = useState<number>(projectWeight);
+  const [localPulseWeights, setLocalPulseWeights] =
+    useState<Record<PulseWeightKey, number>>(pulseWeights);
+  const pulseWeightsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => { setLocalLikedWeight(likedWeight); }, [likedWeight]);
   useEffect(() => { setLocalProjectWeight(projectWeight); }, [projectWeight]);
+  useEffect(() => {
+    setLocalPulseWeights(pulseWeights);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    pulseWeights.embedding,
+    pulseWeights.topic,
+    pulseWeights.llm_relevance,
+    pulseWeights.llm_novelty,
+    pulseWeights.author_bonus,
+    pulseWeights.recency,
+  ]);
+  useEffect(
+    () => () => {
+      if (pulseWeightsDebounceRef.current !== null) {
+        clearTimeout(pulseWeightsDebounceRef.current);
+      }
+    },
+    [],
+  );
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -37,6 +109,20 @@ export function RecommendationSection() {
   });
 
   const save = (key: string, value: unknown) => setMut.mutate({ key, value });
+
+  const updatePulseWeight = (key: PulseWeightKey, value: number) => {
+    const next = { ...localPulseWeights, [key]: value };
+    setLocalPulseWeights(next);
+    if (pulseWeightsDebounceRef.current !== null) {
+      clearTimeout(pulseWeightsDebounceRef.current);
+    }
+    pulseWeightsDebounceRef.current = setTimeout(() => {
+      save('pulse.weights', next);
+    }, 400);
+  };
+
+  const pulseWeightSum = PULSE_WEIGHT_KEYS.reduce((acc, k) => acc + localPulseWeights[k], 0);
+  const pulseWeightSumOutOfRange = pulseWeightSum < 0.8 || pulseWeightSum > 1.2;
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -55,9 +141,9 @@ export function RecommendationSection() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Recommendation Engine</CardTitle>
+        <CardTitle>Pulse & Recommendations</CardTitle>
         <CardDescription>
-          Personalized paper suggestions based on your reading history
+          Personalized paper suggestions and Pulse deck scoring weights
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -112,6 +198,41 @@ export function RecommendationSection() {
           />
           <p className="text-xs text-muted-foreground">
             How much to weight relevance to your active projects
+          </p>
+        </div>
+
+        <div className="space-y-3 border-t pt-4">
+          <div className="flex items-center gap-1">
+            <h3 className="text-sm font-semibold">Pulse scoring weights</h3>
+            <InfoTooltip content="Weights applied to each signal when ranking Pulse candidate papers. Individual weights blend into a final score; values should roughly sum to 1.0." />
+          </div>
+          {PULSE_WEIGHT_KEYS.map((key) => (
+            <div key={key} className="space-y-1">
+              <Label className="flex items-center justify-between text-xs">
+                <span>{PULSE_WEIGHT_LABELS[key]}</span>
+                <span className="font-mono text-muted-foreground">
+                  {localPulseWeights[key].toFixed(2)}
+                </span>
+              </Label>
+              <input
+                type="range"
+                aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
+                min={0}
+                max={1}
+                step={0.05}
+                value={localPulseWeights[key]}
+                onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
+                className="w-full accent-primary"
+              />
+            </div>
+          ))}
+          <p
+            className={`text-xs ${
+              pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
+            }`}
+          >
+            Sum: {pulseWeightSum.toFixed(2)}
+            {pulseWeightSumOutOfRange && ' (target ~1.0)'}
           </p>
         </div>
 

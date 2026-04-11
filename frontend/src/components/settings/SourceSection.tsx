@@ -5,9 +5,27 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { EmptyState } from '@/components/EmptyState';
-import { Plug, Key, Pencil, Check, X } from 'lucide-react';
+import { Plug, Key, Pencil, Check, X, AlertTriangle } from 'lucide-react';
 import type { SourceConfig } from '@/types';
+
+function getConfigString(
+  config: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  if (!config) return null;
+  const value = config[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function getConfigBool(
+  config: Record<string, unknown> | null | undefined,
+  key: string,
+): boolean {
+  if (!config) return false;
+  return config[key] === true;
+}
 
 export function SourceSection() {
   const queryClient = useQueryClient();
@@ -41,9 +59,16 @@ export function SourceSection() {
 
   return (
     <div className="space-y-2">
-      {sources.map((source) => (
+      {sources.map((source) => {
+        const config = source.config as Record<string, unknown> | null | undefined;
+        const keyEnv = getConfigString(config, 'key_env');
+        const docsUrl = getConfigString(config, 'docs');
+        const requiresKey = getConfigBool(config, 'requires_key');
+        const showKeyEnvBlock = !!keyEnv && source.source_type !== 'semantic_scholar';
+        const isComplex = source.source_type === 'semantic_scholar' || showKeyEnvBlock;
+        return (
         <Card key={source.id}>
-          <CardContent className={source.source_type === 'semantic_scholar' ? 'flex flex-col gap-3 p-4' : 'flex items-center gap-4 p-4'}>
+          <CardContent className={isComplex ? 'flex flex-col gap-3 p-4' : 'flex items-center gap-4 p-4'}>
             <div className="flex items-center gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
@@ -52,6 +77,12 @@ export function SourceSection() {
                     {source.enabled ? 'Enabled' : 'Disabled'}
                   </Badge>
                   <Badge variant="secondary">Priority: {source.priority}</Badge>
+                  {requiresKey && (
+                    <Badge variant="outline" className="gap-1 text-amber-600">
+                      <AlertTriangle className="h-3 w-3" />
+                      Requires API key
+                    </Badge>
+                  )}
                 </div>
               </div>
               <Button
@@ -63,6 +94,38 @@ export function SourceSection() {
                 {source.enabled ? 'Disable' : 'Enable'}
               </Button>
             </div>
+            {showKeyEnvBlock && (
+              <div className="flex items-start gap-2 rounded-md bg-muted/30 p-2 text-xs">
+                <Key className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-1">
+                    <span className="font-medium">Set env var:</span>
+                    <code className="rounded bg-background px-1 py-0.5 font-mono">{keyEnv}</code>
+                    {docsUrl && (
+                      <InfoTooltip
+                        content={
+                          <span>
+                            See provider docs:{' '}
+                            <a
+                              href={docsUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="underline"
+                            >
+                              {docsUrl}
+                            </a>
+                          </span>
+                        }
+                      />
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-muted-foreground">
+                    API key values are never transmitted to the frontend — set this environment
+                    variable on the server to enable authenticated requests.
+                  </p>
+                </div>
+              </div>
+            )}
             {source.source_type === 'semantic_scholar' && (
               <div>
                 {editingId !== source.id ? (
@@ -126,7 +189,8 @@ export function SourceSection() {
             )}
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }

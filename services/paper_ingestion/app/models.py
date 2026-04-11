@@ -272,6 +272,7 @@ class TopicCreate(BaseModel):
     name: str = Field(..., max_length=255)
     query_terms: list[str] = Field(..., min_length=1)
     category: str | None = Field(default=None, max_length=100)
+    description: str | None = None
     enabled: bool = True
 
     @field_validator("query_terms")
@@ -287,6 +288,7 @@ class TopicUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
     query_terms: list[str] | None = Field(default=None, min_length=1)
     category: str | None = None
+    description: str | None = None
     enabled: bool | None = None
 
     @field_validator("query_terms")
@@ -306,6 +308,7 @@ class TopicResponse(BaseModel):
     name: str
     query_terms: list[str]
     category: str | None = None
+    description: str | None = None
     enabled: bool = True
     created_at: datetime
 
