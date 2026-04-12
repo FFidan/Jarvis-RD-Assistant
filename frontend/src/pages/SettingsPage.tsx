@@ -7,6 +7,7 @@ import { AutomationSection } from '@/components/settings/AutomationSection';
 import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
 import { RecommendationSection } from '@/components/settings/RecommendationSection';
 import { TimerSection } from '@/components/settings/TimerSection';
+import { PairTelegram } from '@/components/setup/PairTelegram';
 
 export function SettingsPage() {
   return (
@@ -23,6 +24,7 @@ export function SettingsPage() {
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
           <TabsTrigger value="recommendation">Recommendations</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
+          <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
         <TabsContent value="topics">
@@ -55,6 +57,18 @@ export function SettingsPage() {
 
         <TabsContent value="timer">
           <TimerSection />
+        </TabsContent>
+
+        <TabsContent value="integrations">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold">Telegram</h2>
+              <p className="text-sm text-muted-foreground">
+                Pair a Telegram chat to receive briefings and interact with JARVIS from your phone.
+              </p>
+            </div>
+            <PairTelegram />
+          </div>
         </TabsContent>
       </Tabs>
     </div>

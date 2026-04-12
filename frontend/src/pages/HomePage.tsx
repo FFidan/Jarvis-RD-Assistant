@@ -11,6 +11,7 @@ import { MetricTileGrid } from '@/components/home/MetricTileGrid';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
+import { SetupBanner } from '@/components/setup/SetupBanner';
 
 const quickLinks = [
   { label: 'Research Feed', icon: Newspaper, href: '/feed' },
@@ -116,6 +117,8 @@ export function HomePage() {
   return (
     <div className="space-y-8">
       <h1 className="text-3xl font-bold">Dashboard</h1>
+
+      <SetupBanner />
 
       {showChecklist && (
         <Card>

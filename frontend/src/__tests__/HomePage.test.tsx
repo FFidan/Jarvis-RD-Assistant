@@ -11,6 +11,14 @@ vi.mock('@/lib/api', () => ({
   batchProcessPapers: vi.fn(),
   batchSummarizePapers: vi.fn(),
   batchExtractEntities: vi.fn(),
+  getSetupStatus: vi.fn().mockResolvedValue({
+    setup_completed: true,
+    models_ready: true,
+    models_downloading: [],
+    topics_count: 1,
+    telegram_configured: false,
+    telegram_paired: false,
+  }),
 }));
 
 const { fetchDashboardMetrics } = await import('@/lib/api');
