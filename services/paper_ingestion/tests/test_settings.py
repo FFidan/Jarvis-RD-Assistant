@@ -438,3 +438,91 @@ async def test_set_config_valid_cron_accepted(_app):
         )
 
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Setup wizard whitelist (A1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_setup_completed_accepts_bool(_app):
+    """PUT /api/config/setup.completed accepts a boolean value."""
+    app, _conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/setup.completed",
+            json={"key": "setup.completed", "value": True},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["value"] is True
+
+
+@pytest.mark.asyncio
+async def test_set_setup_completed_rejects_string(_app):
+    """PUT /api/config/setup.completed rejects a non-boolean value."""
+    app, _conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/setup.completed",
+            json={"key": "setup.completed", "value": "true"},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_set_telegram_owner_chat_id_accepts_int(_app):
+    """PUT /api/config/telegram.owner_chat_id accepts integer chat ids."""
+    app, _conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/telegram.owner_chat_id",
+            json={"key": "telegram.owner_chat_id", "value": 123456789},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["value"] == 123456789
+
+
+@pytest.mark.asyncio
+async def test_set_telegram_owner_chat_id_accepts_none(_app):
+    """PUT /api/config/telegram.owner_chat_id accepts null to clear pairing."""
+    app, _conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/telegram.owner_chat_id",
+            json={"key": "telegram.owner_chat_id", "value": None},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["value"] is None
+
+
+@pytest.mark.asyncio
+async def test_set_telegram_owner_chat_id_rejects_string(_app):
+    """PUT /api/config/telegram.owner_chat_id rejects a non-integer value."""
+    app, _conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/telegram.owner_chat_id",
+            json={"key": "telegram.owner_chat_id", "value": "123"},
+        )
+
+    assert resp.status_code == 400

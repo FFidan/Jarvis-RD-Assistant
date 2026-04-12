@@ -53,6 +53,9 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "pulse.deck_size",
         "pulse.stage2_top_k",
         "pulse.weights",
+        # Setup wizard
+        "setup.completed",
+        "telegram.owner_chat_id",
     }
 )
 
@@ -101,12 +104,21 @@ def _validate_bool(v: Any) -> None:
         raise ValueError("value must be a boolean")
 
 
+def _validate_optional_int(v: Any) -> None:
+    if v is None:
+        return
+    if not isinstance(v, int) or isinstance(v, bool):
+        raise ValueError("value must be an integer or null")
+
+
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.cron": _validate_cron,
     "pulse.weights": _validate_pulse_weights,
     "pulse.deck_size": _validate_positive_int,
     "pulse.stage2_top_k": _validate_positive_int,
     "pulse.enabled": _validate_bool,
+    "setup.completed": _validate_bool,
+    "telegram.owner_chat_id": _validate_optional_int,
 }
 
 

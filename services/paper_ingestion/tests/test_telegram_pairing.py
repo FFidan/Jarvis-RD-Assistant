@@ -1,0 +1,176 @@
+"""Tests for /api/telegram/pairing endpoints (A1 setup wizard backend)."""
+
+from __future__ import annotations
+
+import re
+import sys
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+
+# Stub heavy native modules unavailable outside Docker.
+for _mod_name in ("fitz",):
+    if _mod_name not in sys.modules:
+        sys.modules[_mod_name] = MagicMock()
+
+import httpx  # noqa: E402
+import pytest  # noqa: E402
+from httpx import ASGITransport  # noqa: E402
+
+
+class FakeRecord(dict):
+    """Dict subclass that mimics asyncpg.Record."""
+
+    def keys(self):
+        return super().keys()
+
+
+def _make_pool_and_conn():
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool, conn
+
+
+@pytest.fixture()
+def _app():
+    from app.main import app, get_db_pool
+    from jarvis_common import verify_api_key
+
+    mock_pool, conn = _make_pool_and_conn()
+    app.state.db_pool = mock_pool
+    app.state.limiter.enabled = False
+
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    yield app, conn
+    app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# POST /api/telegram/pairing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_code_returns_12_hex_chars(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(
+        value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telegram/pairing")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert re.fullmatch(r"[0-9a-f]{12}", body["code"])
+    assert body["deep_link"] == f"https://t.me/jarvis_bot?start=PAIR_{body['code']}"
+    assert body["bot_username_missing"] is False
+    assert "expires_at" in body
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_deletes_existing_codes(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(
+        value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telegram/pairing")
+
+    assert resp.status_code == 200
+    # execute should be called at least twice: DELETE then INSERT
+    calls = conn.execute.await_args_list
+    sql_statements = [c.args[0] if c.args else "" for c in calls]
+    assert any("DELETE FROM telegram_pairing" in s for s in sql_statements)
+    assert any("INSERT INTO telegram_pairing" in s for s in sql_statements)
+    # DELETE must precede INSERT
+    delete_idx = next(
+        i for i, s in enumerate(sql_statements) if "DELETE FROM telegram_pairing" in s
+    )
+    insert_idx = next(
+        i for i, s in enumerate(sql_statements) if "INSERT INTO telegram_pairing" in s
+    )
+    assert delete_idx < insert_idx
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_bot_username_missing_flag(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = None  # telegram.bot_username not in user_config
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telegram/pairing")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["bot_username_missing"] is True
+    assert body["deep_link"].startswith("https://t.me/?start=PAIR_")
+
+
+# ---------------------------------------------------------------------------
+# GET /api/telegram/pairing/status
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_pairing_status_returns_paired_false_when_null(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(value=None)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/telegram/pairing/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["paired"] is False
+    assert body["chat_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_pairing_status_returns_paired_true_with_chat_id(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(value=123456789)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/telegram/pairing/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["paired"] is True
+    assert body["chat_id"] == 123456789
+
+
+@pytest.mark.asyncio
+async def test_get_pairing_status_returns_paired_false_when_literal_null_string(_app):
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(value="null")
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/telegram/pairing/status")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["paired"] is False
+    assert body["chat_id"] is None
+
+
+# Keep a module-level reference to silence "unused import" warnings when the
+# tests are collected without running (e.g. pyright strict mode).
+_ = datetime(2026, 1, 1, tzinfo=UTC)
