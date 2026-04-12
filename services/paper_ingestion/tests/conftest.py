@@ -28,6 +28,11 @@ for p in (_SERVICE_ROOT, _JARVIS_COMMON):
 # 2. Module stubs for Docker-only dependencies
 #    Guards ensure existing per-file stubs are not overwritten.
 # ---------------------------------------------------------------------------
+# Pre-import apscheduler.triggers.cron so that per-file stubs in
+# test_pulse_scheduler.py cannot replace the real CronTrigger (needed by
+# the _validate_cron validator in app.routers.settings).
+import apscheduler.triggers.cron  # noqa: F401, E402
+
 if "fitz" not in sys.modules:
     sys.modules["fitz"] = MagicMock()
 

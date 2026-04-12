@@ -23,6 +23,7 @@ from app.formatters import (
     truncate,
 )
 from app.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
+from app.handlers.rate_limit import rate_limit
 from app.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/papers [query]`` — search or list recent papers.
 
@@ -173,6 +175,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/stats`` — show learning statistics.
 
@@ -201,6 +204,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @auth_required
+@rate_limit(max_calls=3, window_seconds=60)
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/briefing`` — composite morning briefing.
 
@@ -412,11 +416,15 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
+_MAX_FOCUS_MINUTES = 480  # 8 hours — prevents resource exhaustion
+
+
 @auth_required
+@rate_limit(max_calls=3, window_seconds=60)
 async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/focus [duration]`` — start a focus session."""
     try:
-        minutes = int(context.args[0]) if context.args else 25
+        minutes = min(int(context.args[0]) if context.args else 25, _MAX_FOCUS_MINUTES)
     except ValueError:
         await update.message.reply_text(
             "Please provide a valid integer for duration.",
@@ -457,6 +465,7 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @auth_required
+@rate_limit(max_calls=1, window_seconds=60, cooldown_seconds=300)
 async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/pulse_now`` — trigger immediate Pulse generation.
 

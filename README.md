@@ -18,7 +18,7 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations.
 
-- **Discovery & Pulse** *(coming soon)* -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day view and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Complements the existing weekly reflection tools without overlapping them.
+- **Discovery & Pulse** -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day view and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations.
 
 ### Key Design Choices
 
@@ -100,6 +100,8 @@ If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidi
 | `POSTGRES_PASSWORD` | Database password |
 | `N8N_ENCRYPTION_KEY` | n8n credential encryption key |
 | `LITELLM_MASTER_KEY` | LiteLLM API gateway key |
+| `JARVIS_API_KEY` | API key for backend auth. Must be at least 32 characters in production. Generate with `openssl rand -hex 32`. |
+| `ENVIRONMENT` | Set to `production` for any non-local deployment. In `production`, the service refuses to start if `DEV_MODE=true` or if `JARVIS_API_KEY` is unset / shorter than 32 chars. |
 
 ### Optional Variables
 
@@ -113,16 +115,71 @@ If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidi
 | `EMBEDDING_MODEL` | `embed` | LiteLLM alias for embedding model |
 | `EMBEDDING_DIMENSION` | `768` | Must match the embedding model |
 | `DASHBOARD_PASSWORD` | _(empty)_ | Dashboard login password (empty = no auth) |
-| `DEV_MODE` | `false` | Skip API key checks when `true` |
+| `DEV_MODE` | `false` | **⚠️ Bypasses ALL authentication on every endpoint when `true`.** Only for local development. The service refuses to start with `DEV_MODE=true` if `ENVIRONMENT=production`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `DASHBOARD_HOST_PORT` | `3001` | Host port for the dashboard |
 | `PAPER_INGESTION_HOST_PORT` | `8010` | Host port for paper ingestion API |
 | `LEARNING_ENGINE_HOST_PORT` | `8011` | Host port for learning engine API |
-| `OPENALEX_API_KEY` | _(empty)_ | Enable OpenAlex as a paper discovery source. Free key at [openalex.org](https://openalex.org). *(Used by the upcoming Discovery & Pulse feature.)* |
-| `PUBMED_API_KEY` | _(empty)_ | Upgrade PubMed rate limit from 3 to 10 requests per second. Free key from [NCBI](https://www.ncbi.nlm.nih.gov/home/develop/api/). *(Used by the upcoming Discovery & Pulse feature.)* |
-| `UNPAYWALL_EMAIL` | _(empty)_ | Required by [Unpaywall](https://unpaywall.org) to resolve free legal PDFs for paywalled papers. Any email address. *(Used by the upcoming Discovery & Pulse feature.)* |
+| `OPENALEX_API_KEY` | _(empty)_ | Enable OpenAlex as a paper discovery source. Free key at [openalex.org](https://openalex.org). |
+| `PUBMED_API_KEY` | _(empty)_ | Upgrade PubMed rate limit from 3 to 10 requests per second. Free key from [NCBI](https://www.ncbi.nlm.nih.gov/home/develop/api/). |
+| `UNPAYWALL_EMAIL` | _(empty)_ | Required by [Unpaywall](https://unpaywall.org) to resolve free legal PDFs for paywalled papers. Any email address. |
 
 See [`.env.example`](.env.example) for the full list with comments.
+
+### Telegram Bot Setup (optional)
+
+The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 rating buttons, and answers RAG questions over your library from your phone. It uses **long-polling**, so no inbound port needs to be opened on the host.
+
+1. Message [@BotFather](https://t.me/BotFather) → `/newbot` → follow prompts → copy the token it gives you.
+2. Start a DM with your new bot and send any message (e.g. `hi`).
+3. Get your chat ID:
+   ```bash
+   curl "https://api.telegram.org/bot<TOKEN>/getUpdates" | jq '.result[0].message.chat.id'
+   ```
+4. Add to `.env`:
+   ```
+   TELEGRAM_BOT_TOKEN=<token from BotFather>
+   TELEGRAM_CHAT_ID=<your numeric chat ID>
+   ```
+5. Start the bot:
+   ```bash
+   docker compose --profile telegram up -d
+   ```
+6. Send `/start` to the bot — it should reply.
+
+**Security note on `TELEGRAM_CHAT_ID`:** The bot only checks this single chat ID. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. For personal use, keep the bot in a private DM. For a shared setup, add a per-user allowlist in `services/telegram_bot/app/handlers/` (not currently supported out of the box).
+
+## Remote Access (LAN)
+
+By default every port in [docker-compose.yml](docker-compose.yml) binds to `127.0.0.1`, so the dashboard is only reachable from the host machine. To access it from another device on your LAN, drop a `docker-compose.override.yml` next to the tracked compose file (it is already in `.gitignore`):
+
+```yaml
+services:
+  dashboard:
+    ports:
+      - "0.0.0.0:3001:3000"
+```
+
+Then `docker compose up -d`. From another device, open `http://<host-lan-ip>:3001`. You only need to expose the **dashboard** — its nginx reverse proxies to the backends over the internal Docker network, so `paper_ingestion`, `learning_engine`, `postgres`, `qdrant`, and `ollama` stay localhost-only.
+
+**Before exposing anything beyond your own workstation, set all of these in `.env`:**
+
+```
+ENVIRONMENT=production
+DEV_MODE=false
+JARVIS_API_KEY=<at least 32 random chars, e.g. openssl rand -hex 32>
+DASHBOARD_PASSWORD=<strong password>
+```
+
+With those set the dashboard requires login and the backend API requires `X-API-Key` with timing-safe comparison. Anyone on your LAN who cannot authenticate cannot do anything. This is safe on a trusted home network. **Do not expose any of these ports to the public internet without a proper TLS reverse proxy.**
+
+For a zero-config alternative, SSH-tunnel from your client device instead of editing compose:
+
+```bash
+ssh -L 3001:localhost:3001 user@<host-machine>
+```
+
+Then browse `http://localhost:3001` on your client.
 
 ## Development
 
@@ -183,7 +240,7 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-017)
+│   └── migrations/             # Versioned schema changes (001-019)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -222,6 +279,29 @@ JARVIS stands on the shoulders of excellent open-source and public research tool
 - [PaperQA2](https://github.com/Future-House/paper-qa) — metadata-aware embeddings and agentic retrieval.
 
 These projects are credited for the ideas and patterns that informed JARVIS's design, not for copied code. All are MIT/Apache-licensed.
+
+## Troubleshooting
+
+**Ollama first-boot is slow.** On first start, Ollama pulls `mistral-nemo`, `qwen3:4b`, and `nomic-embed-text`. Expect 5–10 minutes on a decent connection. Watch progress with `docker compose logs -f ollama`.
+
+**`paper_ingestion` exits with "JARVIS_API_KEY not set" in production.** Set `JARVIS_API_KEY` to at least 32 chars in `.env`, or set `ENVIRONMENT=development` for local-only use.
+
+**Migrations fail with "advisory lock held".** A previous startup crashed mid-migration. Restart with `docker compose down && docker compose up -d` — the lock is released on clean shutdown and the runner will retry.
+
+**GPU not detected.** Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host, then `docker compose restart ollama`. Verify with `docker compose exec ollama nvidia-smi`.
+
+**Pulse cards are empty or stage-2 scoring times out.** The scoring pipeline uses the `smart` Ollama model (mistral-nemo). With 50 candidates and `_LLM_CONCURRENCY=5`, a cold model can take several minutes on first run. Subsequent runs are faster. Check logs with `docker compose logs paper_ingestion | grep pulse.stage2`.
+
+**Dashboard shows "Network Error" on every API call.** The frontend calls `/api/*` through the dashboard's nginx, which proxies to `paper_ingestion:8000` and `learning_engine:8001` over the internal Docker network. If the backends are unhealthy, the dashboard still loads but every call fails. Check `docker compose ps` — all services should be `healthy`.
+
+**Tests fail on the host with `ModuleNotFoundError: No module named 'fitz'`.** The backend test suite has Docker-only dependencies (PyMuPDF, marker, qdrant). Run tests inside the container instead: `docker compose exec paper_ingestion pytest tests/`.
+
+## Further Reading
+
+- [docs/PRD.md](docs/PRD.md) — Product requirements and feature-level spec, including the Discovery & Pulse design.
+- [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — Non-functional requirements and technical constraints.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the [1.2.1] post-audit hotfix.
+- [AGENTS.md](AGENTS.md) — Repository-level guidance for contributors (human or AI).
 
 ## License
 

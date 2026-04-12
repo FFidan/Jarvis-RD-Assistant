@@ -13,28 +13,33 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness"})
 
 
-async def verify_api_key(
-    request: Request, api_key: str | None = Depends(_api_key_header)
-) -> None:
-    """Validate API key. Requires JARVIS_API_KEY unless DEV_MODE=true."""
+async def verify_api_key(request: Request, api_key: str | None = Depends(_api_key_header)) -> None:
+    """Validate API key.
+
+    SECURITY: DEV_MODE only bypasses auth when JARVIS_API_KEY is *not set*.
+    If a key is configured, it is always enforced — even in DEV_MODE.
+    """
     jarvis_api_key = os.environ.get("JARVIS_API_KEY", "")
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     if request.url.path in _HEALTH_PATHS:
         return
-    if not jarvis_api_key:
-        if dev_mode:
-            logger.warning(
-                "DEV_MODE=true — ALL authentication bypassed on %s. "
-                "DO NOT USE IN PRODUCTION.",
-                request.url.path,
-            )
-            return
-        raise HTTPException(
-            status_code=401,
-            detail="API key not configured. Set JARVIS_API_KEY or enable DEV_MODE.",
+    # If a real key is configured, always enforce it (even in DEV_MODE)
+    if jarvis_api_key:
+        if not hmac.compare_digest(api_key or "", jarvis_api_key):
+            raise HTTPException(status_code=403, detail="Invalid or missing API key")
+        return
+    # No key configured — fall back to DEV_MODE check
+    if dev_mode:
+        logger.warning(
+            "DEV_MODE=true AND no JARVIS_API_KEY set — ALL authentication "
+            "bypassed on %s. DO NOT USE IN PRODUCTION.",
+            request.url.path,
         )
-    if not hmac.compare_digest(api_key or "", jarvis_api_key):
-        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+        return
+    raise HTTPException(
+        status_code=401,
+        detail="API key not configured. Set JARVIS_API_KEY or enable DEV_MODE.",
+    )
 
 
 def validate_production_config() -> None:

@@ -103,6 +103,28 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+async def _check_pulse_enabled(db_pool) -> bool:
+    """Return True if pulse.enabled is set to true in user_config."""
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.enabled'")
+        if row is None:
+            return False
+        value = row["value"]
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() in ("true", "1", "yes")
+        return bool(value)
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -140,7 +162,7 @@ async def lifespan(app: FastAPI):
     app.state.verifier = QuoteVerifier()
 
     # C-8: Initialize source singletons so the rate limiter persists across requests.
-    app.state.sources: dict = {}
+    app.state.sources = {}
     for _source_type_val in ["arxiv", "semantic_scholar", "pubmed", "openalex"]:
         try:
             _source_cls = get_source_class(_source_type_val)
@@ -179,7 +201,8 @@ async def lifespan(app: FastAPI):
         )
 
     _interval = float(os.environ.get("AUTO_FETCH_INTERVAL_HOURS", "0"))
-    if _interval > 0:
+    _pulse_enabled = await _check_pulse_enabled(app.state.db_pool)
+    if _interval > 0 or _pulse_enabled:
         from .scheduler import start_scheduler
 
         app.state.scheduler = await start_scheduler(app, interval_hours=_interval)

@@ -18,7 +18,7 @@ x-shared-env: &shared-env
   QDRANT_API_KEY: ${QDRANT_API_KEY:-}
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
+  CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost:3001}
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}
@@ -29,7 +29,7 @@ services:
   # ==========================================================================
 
   postgres:
-    image: postgres:16.8
+    image: ${POSTGRES_IMAGE:-postgres:16.8}
     restart: unless-stopped
     mem_limit: 2g
     environment:
@@ -51,7 +51,7 @@ services:
       - jarvis
 
   n8n:
-    image: docker.n8n.io/n8nio/n8n:1.77.0
+    image: ${N8N_IMAGE:-docker.n8n.io/n8nio/n8n:1.77.0}
     profiles: ["n8n"]
     restart: unless-stopped
     mem_limit: 2g
@@ -85,7 +85,7 @@ services:
       - jarvis
 
   ollama:
-    image: ollama/ollama:0.17.7
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.17.7}
     restart: unless-stopped
     mem_limit: 20g
     ports:
@@ -114,7 +114,7 @@ services:
       - jarvis
 
   qdrant:
-    image: qdrant/qdrant:v1.13.2
+    image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.13.2}
     restart: unless-stopped
     mem_limit: 2g
     environment:
@@ -136,13 +136,12 @@ services:
   # ==========================================================================
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
-    pull_policy: never  # M-20: prevent silent upgrades; run `docker pull ghcr.io/berriai/litellm:main-latest` to upgrade explicitly
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm:main-stable}
     restart: unless-stopped
     ports:
       - "127.0.0.1:4000:4000"
     volumes:
-      - ./litellm/config.yaml:/app/config.yaml
+      - ./litellm/config.yaml:/app/config.yaml:ro
     environment:
       - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
@@ -262,16 +261,16 @@ services:
     build:
       context: ./frontend
       args:
-        VITE_DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:-}
+        NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22-alpine}
+        NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:alpine}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${DASHBOARD_HOST_PORT:-3001}:3000"
-    environment:
-      JARVIS_API_KEY: ${JARVIS_API_KEY:-}
-      NGINX_ENVSUBST_FILTER: "JARVIS_API_KEY"
+    volumes:
+      - dashboard_certs:/etc/nginx/certs
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -ksf https://127.0.0.1:3000/ > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -284,7 +283,7 @@ services:
       - jarvis
 
   postgres-backup:
-    image: postgres:16.8
+    image: ${POSTGRES_IMAGE:-postgres:16.8}
     profiles: [backup]
     restart: unless-stopped
     mem_limit: 256m
@@ -306,6 +305,25 @@ services:
     networks:
       - jarvis
 
+  cloudflared:
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    container_name: jarvis-cloudflared
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    profiles: [tunnel]
+    networks: [jarvis]
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   postgres_data:
   n8n_data:
@@ -313,6 +331,7 @@ volumes:
   qdrant_data:
   postgres_backups:
   marker_models:
+  dashboard_certs:
 
 networks:
   jarvis:

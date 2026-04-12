@@ -1,7 +1,26 @@
 /**
  * Fetch-based API client with X-API-Key authentication.
  * No axios dependency — uses the native fetch API.
+ *
+ * SECURITY: Every request includes the X-API-Key header from the auth store.
+ * nginx does NOT inject API keys — the browser must send them.
+ * On 401/403, the user is automatically logged out.
  */
+
+import { useAuthStore } from '@/stores/auth-store';
+
+/** Build auth headers from the current session API key. */
+function authHeaders(): Record<string, string> {
+  const apiKey = useAuthStore.getState().getApiKey();
+  return apiKey ? { 'X-API-Key': apiKey } : {};
+}
+
+/** Auto-logout on authentication failure. */
+function handleAuthFailure(status: number): void {
+  if (status === 401 || status === 403) {
+    useAuthStore.getState().logout();
+  }
+}
 
 export class ApiError extends Error {
   public detail: string;
@@ -35,10 +54,12 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
       signal: init?.signal ?? controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders(),
         ...init?.headers,
       },
     });
     if (!res.ok) {
+      handleAuthFailure(res.status);
       throw new ApiError(res.status, await res.text());
     }
     if (res.status === 204) {
@@ -67,10 +88,12 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
       ...init,
       signal: init?.signal ?? controller.signal,
       headers: {
+        ...authHeaders(),
         ...init?.headers,
       },
     });
     if (!res.ok) {
+      handleAuthFailure(res.status);
       throw new ApiError(res.status, await res.text());
     }
     return res;

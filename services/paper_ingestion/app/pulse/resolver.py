@@ -211,7 +211,7 @@ async def _cache_result(
 
 
 async def _try_arxiv(
-    doi: str | None,
+    _doi: str | None,
     arxiv_id: str | None,
     http_client: httpx.AsyncClient,
     _email: str | None = None,
@@ -238,7 +238,7 @@ async def _try_arxiv(
 
 async def _try_unpaywall(
     doi: str | None,
-    arxiv_id: str | None,
+    _arxiv_id: str | None,
     http_client: httpx.AsyncClient,
     email: str | None = None,
 ) -> str | None:

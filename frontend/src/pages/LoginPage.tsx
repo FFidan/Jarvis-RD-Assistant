@@ -7,15 +7,23 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 
 export function LoginPage() {
   const { login } = useAuthStore();
-  const [password, setPassword] = useState('');
+  const [apiKey, setApiKey] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const success = login(password);
+    if (!apiKey.trim()) {
+      setError('API key is required');
+      return;
+    }
+    setLoading(true);
+    setError('');
+    const success = await login(apiKey.trim());
+    setLoading(false);
     if (!success) {
-      setError('Invalid password');
-      setPassword('');
+      setError('Invalid API key or backend unreachable');
+      setApiKey('');
     }
   }
 
@@ -24,27 +32,28 @@ export function LoginPage() {
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">JARVIS RD Assistant</CardTitle>
-          <CardDescription>Enter your dashboard password to continue</CardDescription>
+          <CardDescription>Enter your API key to continue</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="apiKey">API Key</Label>
               <Input
-                id="password"
+                id="apiKey"
                 type="password"
-                value={password}
+                value={apiKey}
                 onChange={(e) => {
-                  setPassword(e.target.value);
+                  setApiKey(e.target.value);
                   setError('');
                 }}
-                placeholder="Enter password"
+                placeholder="Enter JARVIS_API_KEY"
                 autoFocus
+                disabled={loading}
               />
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full">
-              Sign In
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? 'Verifying...' : 'Sign In'}
             </Button>
           </form>
         </CardContent>

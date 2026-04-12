@@ -11,13 +11,15 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Stub apscheduler before importing scheduler
+# Stub the apscheduler scheduler modules before importing scheduler.
+# NOTE: apscheduler.triggers.cron is intentionally NOT stubbed here so that
+# CronTrigger.from_crontab() remains functional in tests that run after this
+# module is collected (e.g. test_settings.py::test_set_config_invalid_cron_*).
 for _mod in (
     "apscheduler",
     "apscheduler.schedulers",
     "apscheduler.schedulers.asyncio",
     "apscheduler.triggers",
-    "apscheduler.triggers.cron",
     "apscheduler.triggers.interval",
 ):
     if _mod not in sys.modules:

@@ -56,11 +56,11 @@ _ALLOWED_CONFIG_KEYS = frozenset(
     }
 )
 
-_NUDGE_ALLOWED_COLUMNS = frozenset({"cron_expression", "enabled"})
-_NUDGE_JSONB_COLUMNS = frozenset()
+_NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
+_NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
 
-_SOURCE_ALLOWED_COLUMNS = frozenset({"enabled", "priority", "config"})
-_SOURCE_JSONB_COLUMNS = frozenset({"config"})
+_SOURCE_ALLOWED_COLUMNS: set[str] = {"enabled", "priority", "config"}
+_SOURCE_JSONB_COLUMNS: frozenset[str] = frozenset({"config"})
 
 
 # --- Config key validators ---
@@ -163,6 +163,20 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
             updated = await asyncio.to_thread(update_litellm_model, key, body.value)
         if updated:
             await reload_litellm()
+    if key == "pulse.cron":
+        try:
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                scheduler.reschedule_job(
+                    "pulse_overnight",
+                    trigger=CronTrigger.from_crontab(body.value),
+                )
+                logger.info("pulse_overnight rescheduled live (cron=%s)", body.value)
+        except Exception:
+            logger.warning(
+                "pulse_overnight live reschedule failed (job may not exist yet)",
+                exc_info=True,
+            )
     return ConfigEntry(key=key, value=body.value)
 
 

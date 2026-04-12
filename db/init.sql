@@ -609,9 +609,10 @@ CREATE TABLE IF NOT EXISTS pdf_resolutions (
     resolved_url    TEXT,         -- null = resolution failed
     resolver_name   VARCHAR(32),  -- 'arxiv' / 'unpaywall' / 'core' / 'failed'
     resolved_at     TIMESTAMPTZ DEFAULT NOW(),
-    -- NULL=NULL distinctness is intentional: rows with neither DOI nor arXiv ID
-    -- are allowed to coexist (unknown-identifier cache misses).
-    UNIQUE (doi, arxiv_id)
+    -- NULLS NOT DISTINCT: two rows with the same (doi, arxiv_id) pair are
+    -- considered duplicates even when one or both columns are NULL.
+    -- Requires PostgreSQL 15+.
+    UNIQUE NULLS NOT DISTINCT (doi, arxiv_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_resolutions_doi
     ON pdf_resolutions(doi) WHERE doi IS NOT NULL;

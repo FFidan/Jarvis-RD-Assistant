@@ -4,6 +4,39 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-04-11
+
+### Post-Audit Hotfix — Round 5 findings (F1 + F2)
+
+Six production-blocking bugs fixed and nine HIGH-priority hardening items addressed following the Round-5 deep audit of Phase 1 Discovery & Pulse. All fixes verified against the audit report at `docs/plans/2026-04-11-deep-audit-round5-report.md`.
+
+#### Critical bug fixes (F1)
+
+- **Weekly Summary SQL column** (`weekly_summary.py`) — The engagement subquery used `pus.user_state IN ('saved', 'reading', 'read')`. The actual schema column is `status` and the starred state is `'starred'`. Resulted in 500 on every weekly digest request. Fixed column name and value.
+- **Stage-2 LLM scoring 100% failure** (`pulse/scoring.py`) — `_LLM_MODEL = "fast"` (qwen3.5:4b) is a thinking model that fills its `<think>` block with the full chain-of-thought when `_LLM_MAX_TOKENS = 256`, leaving no budget for JSON output. `strip_think_blocks()` left an empty string; `json.loads("")` raised on every call. Fixed by switching to `"smart"` (mistral-nemo, non-thinking) and raising max_tokens to 512.
+- **PubMed XXE hardening** (`sources/pubmed_source.py`) — `etree.fromstring()` with the default lxml parser resolved external entities and fetched network DTDs. Replaced with a hardened `etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False)`. Added XXE regression test `tests/test_source_pubmed_xxe.py`.
+- **Config validation** (`routers/settings.py`) — `PUT /api/config/pulse.cron` accepted any string silently. Added per-key validator dict: cron via `CronTrigger.from_crontab()`, weights shape + value range, deck_size/stage2_top_k positive-int check. Invalid values now return 400. Frontend cron input gains `isValidCron()` guard and inline error text.
+- **Author-bonus dual-set fix** (`pulse/profile.py`, `pulse/scoring.py`) — `UserProfile.tracked_author_ids` stored opaque S2 IDs; stage-1 compared them against display names → 0% match rate → 15% of ranking power dead. Split into `tracked_author_names` (lowercased display names) and `tracked_author_s2_ids` (S2 IDs). Stage-1 now does dual-set intersection.
+- **`persist_deck` card_count divergence** (`pulse/deck.py`) — `card_count` was set to `len(cards)` before cards were inserted. If a `papers` row was missing, `INSERT … SELECT … WHERE external_id=$X` returned 0 rows silently, so card_count was always too high. Refactored to insert deck with count=0, use `RETURNING id` per card, count successes, then UPDATE. Wrapped in a transaction.
+- **Telegram `_simple_digest` engagement filter** (`telegram_bot/orchestration/paper_digest.py`) — fallback digest fetched ALL papers from the last 7 days with no engagement gate. Added `WHERE EXISTS` subquery matching starred/reading/read state or positive pulse rating. Keeps the fallback consistent with Model C.
+
+#### HIGH-priority hardening (F2)
+
+- **Source rate-limiting** — PubMed and OpenAlex source plugins now mirror the arxiv_source rate-limiter pattern (`asyncio.Lock` + `time.monotonic()`). PubMed: 3 req/s free, 10 req/s with API key. OpenAlex: 9 req/s.
+- **Broadened HTTP exception catch** — both PubMed and OpenAlex plugins now catch `httpx.HTTPError` (parent class) instead of `httpx.HTTPStatusError` only, covering `RequestError`, `TimeoutException`, and `ConnectError`.
+- **OpenAlex mailto parameter** — correctly sends `mailto=<OPENALEX_EMAIL>` query param for the polite pool. API key is sent as a separate `Authorization: Bearer` header.
+- **Discovery source cache** (`pulse/discovery.py`) — `discover_candidates` now accepts an optional `source_cache` dict and reuses singleton source instances instead of constructing fresh instances (which reset rate-limiter state). Callers pass `app.state.sources`.
+- **Scheduler starts pulse job independently** (`scheduler.py`, `main.py`) — the pulse overnight job now starts when `pulse.enabled=true` even when `AUTO_FETCH_INTERVAL_HOURS=0`. Previously, both jobs were gated on the interval.
+- **Live cron reschedule** (`routers/settings.py`) — `PUT /api/config/pulse.cron` now immediately calls `scheduler.reschedule_job("pulse_overnight", trigger=CronTrigger.from_crontab(value))` via `request.app.state.scheduler`.
+- **`pdf_resolutions` NULLS NOT DISTINCT** (`db/migrations/019_pdf_resolutions_nulls_not_distinct.sql`) — The unique constraint `(doi, arxiv_id)` previously treated every NULL pair as distinct (PostgreSQL default), making the cache ineffective for papers with only one identifier. Migration 019 adds `NULLS NOT DISTINCT`.
+- **Telegram `/pulse_now` command** — registered in `handlers/command_handler.py`; posts to `/api/pulse/generate` and replies with outcome.
+- **Telegram HTML URL escaping** — `format_paper_card` now passes paper URLs through `html.escape(url, quote=True)`.
+- **Per-route error boundaries** (`frontend/src/App.tsx`) — all 12 routes are now wrapped in `<RouteErrorBoundary>` to contain render errors to the current route.
+- **Rate mutation UX** (`PulseDeck.tsx`, `PulseCard.tsx`) — removed spurious `pulse-today` invalidation on rate; rated card IDs tracked in local state to disable buttons and show chosen rating.
+- **Topic description max length** — `TopicCreate.description` / `TopicUpdate.description` gain `max_length=1000` validation; frontend textareas gain `maxLength={1000}`.
+- **Pyright: resolver unused parameters** — `_try_arxiv` and `_try_unpaywall` unused parameters renamed with `_` prefix.
+- **Test isolation** — `test_pulse_scheduler.py` no longer stubs `apscheduler.triggers.cron` in `sys.modules` (it was poisoning `CronTrigger.from_crontab()` for all downstream tests in the same session). `conftest.py` pre-imports the real module to anchor it before collection-time stubs can replace it.
+
 ## [1.2.0] - 2026-04-11
 
 ### Phase 1 Shipped — Discovery & Pulse subsystem

@@ -240,16 +240,16 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             logger.exception("Nightly recommendation refresh failed")
 
     scheduler = AsyncIOScheduler()
-    trigger = IntervalTrigger(hours=int(interval_hours))
-    scheduler.add_job(
-        run_auto_pipeline,
-        trigger=trigger,
-        args=[app],
-        id="auto_pipeline",
-        name="Auto fetch->process pipeline",
-        replace_existing=True,
-        max_instances=1,  # prevent overlap if a run takes longer than the interval
-    )
+    if interval_hours > 0:
+        scheduler.add_job(
+            run_auto_pipeline,
+            trigger=IntervalTrigger(hours=int(interval_hours)),
+            args=[app],
+            id="auto_pipeline",
+            name="Auto fetch->process pipeline",
+            replace_existing=True,
+            max_instances=1,  # prevent overlap if a run takes longer than the interval
+        )
     scheduler.add_job(
         _run_recommendations,
         IntervalTrigger(hours=24),

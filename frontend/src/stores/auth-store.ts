@@ -2,61 +2,65 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 /**
- * UI-only gate — not a security boundary.
- * Real API authentication is handled by nginx injecting X-API-Key proxy headers.
- * This password only prevents casual access to the dashboard UI.
+ * Real API-key-based authentication.
+ *
+ * The user enters their JARVIS_API_KEY to log in. The key is validated
+ * against the backend (GET /api/topics) and stored locally so every
+ * subsequent fetch includes the X-API-Key header.
+ *
+ * nginx does NOT inject the API key — the browser must send it.
  */
-const DASHBOARD_PASSWORD = import.meta.env.VITE_DASHBOARD_PASSWORD || '';
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 hours
 
 interface AuthState {
   isAuthenticated: boolean;
   authTime: number | null;
-  login: (password: string) => boolean;
+  apiKey: string | null;
+  login: (apiKey: string) => Promise<boolean>;
   logout: () => void;
   checkSession: () => boolean;
+  getApiKey: () => string | null;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
-      isAuthenticated: DASHBOARD_PASSWORD === '',
-      authTime: DASHBOARD_PASSWORD === '' ? Date.now() : null,
+      isAuthenticated: false,
+      authTime: null,
+      apiKey: null,
 
-      login(password: string): boolean {
-        // Bypass if no password configured
-        if (DASHBOARD_PASSWORD === '') {
-          set({ isAuthenticated: true, authTime: Date.now() });
-          return true;
-        }
-        // Constant-time comparison to mitigate timing attacks
-        const maxLen = Math.max(password.length, DASHBOARD_PASSWORD.length);
-        let mismatch = password.length ^ DASHBOARD_PASSWORD.length;
-        for (let i = 0; i < maxLen; i++) {
-          mismatch |= (password.charCodeAt(i) || 0) ^ (DASHBOARD_PASSWORD.charCodeAt(i) || 0);
-        }
-        if (mismatch !== 0) {
+      async login(apiKey: string): Promise<boolean> {
+        try {
+          // Validate the API key against the backend
+          const res = await fetch('/api/topics', {
+            headers: { 'X-API-Key': apiKey },
+          });
+          if (res.ok || res.status === 200) {
+            set({ isAuthenticated: true, authTime: Date.now(), apiKey });
+            return true;
+          }
+          return false;
+        } catch {
           return false;
         }
-        set({ isAuthenticated: true, authTime: Date.now() });
-        return true;
       },
 
       logout() {
-        set({ isAuthenticated: false, authTime: null });
+        set({ isAuthenticated: false, authTime: null, apiKey: null });
       },
 
       checkSession(): boolean {
-        // If no password configured, always valid
-        if (DASHBOARD_PASSWORD === '') return true;
-
-        const { authTime, isAuthenticated } = get();
-        if (!isAuthenticated || authTime === null) return false;
+        const { authTime, isAuthenticated, apiKey } = get();
+        if (!isAuthenticated || authTime === null || !apiKey) return false;
         if (Date.now() - authTime > SESSION_DURATION_MS) {
-          set({ isAuthenticated: false, authTime: null });
+          set({ isAuthenticated: false, authTime: null, apiKey: null });
           return false;
         }
         return true;
+      },
+
+      getApiKey(): string | null {
+        return get().apiKey;
       },
     }),
     {
@@ -64,6 +68,7 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         authTime: state.authTime,
+        apiKey: state.apiKey,
       }),
     },
   ),

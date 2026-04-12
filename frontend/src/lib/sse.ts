@@ -4,7 +4,11 @@
  * The backend uses POST for SSE endpoints (not GET), so we cannot use
  * the browser's EventSource API. Instead we read the response body as
  * a stream and parse SSE frames manually.
+ *
+ * SECURITY: X-API-Key header is included on every SSE request.
  */
+
+import { useAuthStore } from '@/stores/auth-store';
 
 export interface StreamEvent {
   type: 'token' | 'sources' | 'done' | 'error';
@@ -73,10 +77,12 @@ export async function* streamSSE(
   body: object,
   signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent> {
+  const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     },
     body: JSON.stringify(body),
     signal,
@@ -104,10 +110,12 @@ export async function* streamAnalyze(
   paperId: number,
   signal?: AbortSignal,
 ): AsyncGenerator<AnalyzeEvent> {
+  const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(`/api/papers/${paperId}/analyze`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...(apiKey ? { 'X-API-Key': apiKey } : {}),
     },
     body: '{}',
     signal,

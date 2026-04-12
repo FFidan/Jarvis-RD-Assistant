@@ -27,6 +27,9 @@ credentials.json
 # Docker local overrides
 docker-compose.override.yml
 
+# Personal / per-machine setup notes (maintainer only)
+PERSONAL-SETUP.md
+
 # Generated data (large, user-specific)
 shared/pdf_storage/
 shared/snapshots/
