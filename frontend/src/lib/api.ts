@@ -157,6 +157,9 @@ import type {
   PulseRating,
   PulseStats,
   WhyExplanation,
+  SetupStatus,
+  TelegramPairing,
+  TelegramPairingStatus,
 } from '@/types';
 
 // --- Dashboard ---
@@ -194,6 +197,28 @@ export const checkTrackedAuthors = () =>
 export const fetchConfig = () => apiFetch<ConfigEntry[]>('/api/config');
 export const setConfig = (key: string, value: unknown) =>
   apiFetch<ConfigEntry>(`/api/config/${key}`, { method: 'PUT', body: JSON.stringify({ key, value }) });
+
+// --- Setup / Pairing ---
+export const getSetupStatus = () =>
+  apiFetch<SetupStatus>('/api/system/setup-status');
+
+export const createPairingCode = () =>
+  apiFetch<TelegramPairing>('/api/telegram/pairing', { method: 'POST' });
+
+export const getPairingStatus = () =>
+  apiFetch<TelegramPairingStatus>('/api/telegram/pairing/status');
+
+export const unpairTelegram = () =>
+  apiFetch<void>('/api/config/telegram.owner_chat_id', {
+    method: 'PUT',
+    body: JSON.stringify({ key: 'telegram.owner_chat_id', value: null }),
+  });
+
+export const markSetupCompleted = () =>
+  apiFetch<void>('/api/config/setup.completed', {
+    method: 'PUT',
+    body: JSON.stringify({ key: 'setup.completed', value: true }),
+  });
 
 // --- Nudges ---
 export const fetchNudges = () => apiFetch<Nudge[]>('/api/nudges');

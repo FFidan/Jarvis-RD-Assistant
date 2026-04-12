@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from app.formatters import format_card_back, format_card_front
-from app.handlers.helpers import _auth_check, _get_config, _get_http
+from app.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +104,8 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         Next conversation state, or ``ConversationHandler.END``.
     """
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     context.user_data["cards_reviewed"] = 0
@@ -112,16 +113,12 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     card = await _fetch_next_card(context)
     if card is None:
-        await update.message.reply_text(
-            "No cards due! You're all caught up.", parse_mode="HTML"
-        )
+        await update.message.reply_text("No cards due! You're all caught up.", parse_mode="HTML")
         return ConversationHandler.END
 
     context.user_data["current_card"] = card
     text = format_card_front(card)
-    await update.message.reply_text(
-        text, parse_mode="HTML", reply_markup=_show_answer_keyboard()
-    )
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=_show_answer_keyboard())
     return SHOWING_FRONT
 
 
@@ -149,7 +146,8 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     await query.answer()
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     card = context.user_data.get("current_card")
@@ -160,9 +158,7 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         return ConversationHandler.END
 
     text = format_card_back(card)
-    await query.edit_message_text(
-        text, parse_mode="HTML", reply_markup=_rating_keyboard()
-    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=_rating_keyboard())
     return SHOWING_BACK
 
 
@@ -190,7 +186,8 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await query.answer()
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     rating = int(query.data.split("_")[1])
@@ -248,12 +245,9 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data["current_card"] = next_card
     text = (
         f"Rated: <b>{label}</b>. Next review: {next_review_str}\n\n"
-        "━━━━━━━━━━━━━━━━━━\n\n"
-        + format_card_front(next_card)
+        "━━━━━━━━━━━━━━━━━━\n\n" + format_card_front(next_card)
     )
-    await query.edit_message_text(
-        text, parse_mode="HTML", reply_markup=_show_answer_keyboard()
-    )
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=_show_answer_keyboard())
     return SHOWING_FRONT
 
 
@@ -278,7 +272,8 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         ``ConversationHandler.END``.
     """
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     reviewed = context.user_data.get("cards_reviewed", 0)

@@ -45,7 +45,8 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return
 
     match = re.search(r"paper_detail_(\d+)", query.data)
@@ -92,7 +93,8 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return
 
     match = re.search(r"paper_bookmark_(\d+)", query.data)
@@ -135,7 +137,8 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
         return
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return
 
     match = re.search(r"project_detail_(\d+)", query.data)
@@ -186,7 +189,8 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return
 
     await query.message.reply_text(
@@ -213,7 +217,8 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         return
 
     match = re.search(r"task_done_(\d+)", query.data)
@@ -250,7 +255,8 @@ async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if query is None:
         return
     config = _get_config(context)
-    if not _auth_check(update, config):
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
         await query.answer()
         return
 

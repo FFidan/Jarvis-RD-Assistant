@@ -40,7 +40,35 @@ def _get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     return context.application.bot_data["http_client"]
 
 
-def _auth_check(update: Update, config: BotConfig) -> bool:
-    """Check whether the incoming chat is authorised."""
+async def _auth_check(
+    update: Update,
+    config: BotConfig,
+    db_pool: asyncpg.Pool,
+) -> bool:
+    """Check whether the incoming chat is authorised.
+
+    Priority order:
+    1. ``TELEGRAM_CHAT_ID`` env var (via ``config.telegram_chat_id``) — if set
+       and matches, allow immediately.
+    2. DB fallback: ``user_config.telegram.owner_chat_id`` (populated by the
+       dashboard pairing flow). asyncpg's JSONB codec decodes the value, which
+       may be ``None``, ``int``, or ``str``.
+    """
     chat = update.effective_chat
-    return chat is not None and chat.id == config.telegram_chat_id
+    if chat is None:
+        return False
+    env_chat_id = getattr(config, "telegram_chat_id", None)
+    if env_chat_id and chat.id == env_chat_id:
+        return True
+    try:
+        row = await db_pool.fetchval(
+            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id'"
+        )
+    except Exception:
+        return False
+    if row is None:
+        return False
+    try:
+        return chat.id == int(row)
+    except (ValueError, TypeError):
+        return False

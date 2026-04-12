@@ -6,6 +6,7 @@ Implements all slash-command interactions: /start, /help, /papers, /stats,
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from functools import wraps
@@ -40,7 +41,8 @@ def auth_required(func):
     @wraps(func)
     async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Any:
         config = _get_config(context)
-        if not _auth_check(update, config):
+        db_pool = _get_db(context)
+        if not await _auth_check(update, config, db_pool):
             chat_id = update.effective_chat.id if update.effective_chat else "unknown"
             logger.warning(
                 "Unauthorised access attempt from chat_id=%s",
@@ -50,6 +52,52 @@ def auth_required(func):
         return await func(update, context)
 
     return wrapper
+
+
+async def _handle_pairing(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    code: str,
+) -> None:
+    """Complete the dashboard-initiated Telegram pairing flow.
+
+    Looks up ``telegram_pairing`` for the given ``code`` under a row lock.
+    If the code exists and has not expired, persists the current chat id into
+    ``user_config.telegram.owner_chat_id`` (as a JSON integer) and deletes the
+    used code. Invalid/expired codes are also cleaned up opportunistically.
+    """
+    db_pool = _get_db(context)
+    chat = update.effective_chat
+    message = update.message
+    if chat is None or message is None:
+        return
+
+    try:
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT expires_at FROM telegram_pairing WHERE code = $1 FOR UPDATE",
+                    code,
+                )
+                if row is None:
+                    await message.reply_text("Invalid or expired pairing code.")
+                    return
+                if row["expires_at"] < datetime.now(UTC):
+                    await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)
+                    await message.reply_text("Invalid or expired pairing code.")
+                    return
+                await conn.execute(
+                    "INSERT INTO user_config (key, value) "
+                    "VALUES ('telegram.owner_chat_id', $1::jsonb) "
+                    "ON CONFLICT (key) DO UPDATE "
+                    "SET value = $1::jsonb, updated_at = NOW()",
+                    json.dumps(chat.id),
+                )
+                await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)
+        await message.reply_text("✅ Paired! You'll now receive JARVIS notifications here.")
+    except Exception:
+        logger.exception("pairing_failed code=%s", code)
+        await message.reply_text("Pairing failed — please try again from the dashboard.")
 
 
 def _paper_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
@@ -80,9 +128,14 @@ def _project_keyboard(project_id: int | str) -> InlineKeyboardMarkup:
 # ---------------------------------------------------------------------------
 
 
-@auth_required
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/start`` — send welcome message and help text.
+    """Handle ``/start`` — pairing deep-link or welcome message.
+
+    A Telegram deep-link of the form ``/start PAIR_<code>`` completes the
+    dashboard-initiated pairing flow (sets ``user_config.telegram.owner_chat_id``
+    to this chat's id) without requiring a pre-configured ``TELEGRAM_CHAT_ID``.
+    This is the ONLY un-authed bot entrypoint; all other ``/start`` invocations
+    still go through :func:`_auth_check` before replying.
 
     Parameters
     ----------
@@ -91,6 +144,21 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    message = update.message
+    raw_text = getattr(message, "text", None) if message is not None else None
+    if isinstance(raw_text, str):
+        parts = raw_text.split(maxsplit=1)
+        if len(parts) > 1 and parts[1].startswith("PAIR_"):
+            await _handle_pairing(update, context, parts[1][len("PAIR_") :])
+            return
+
+    config = _get_config(context)
+    db_pool = _get_db(context)
+    if not await _auth_check(update, config, db_pool):
+        chat_id = update.effective_chat.id if update.effective_chat else "unknown"
+        logger.warning("Unauthorised /start attempt from chat_id=%s", chat_id)
+        return
+
     text = (
         "Welcome to <b>JARVIS RD Assistant</b>!\n\n"
         "I help you manage research papers, flashcard reviews, and projects.\n\n" + format_help()

@@ -262,6 +262,29 @@ export interface Nudge {
   created_at: string;
 }
 
+// --- Setup / Pairing ---
+
+export interface SetupStatus {
+  setup_completed: boolean;
+  models_ready: boolean;
+  models_downloading: string[];
+  topics_count: number;
+  telegram_configured: boolean;
+  telegram_paired: boolean;
+}
+
+export interface TelegramPairing {
+  code: string;
+  deep_link: string;
+  expires_at: string; // ISO 8601
+  bot_username_missing?: boolean;
+}
+
+export interface TelegramPairingStatus {
+  paired: boolean;
+  chat_id: number | null;
+}
+
 // --- Analytics ---
 
 export interface ActivityRow {
