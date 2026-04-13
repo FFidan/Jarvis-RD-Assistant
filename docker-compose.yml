@@ -265,7 +265,9 @@ services:
         NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:alpine}
     restart: unless-stopped
     ports:
-      - "127.0.0.1:${DASHBOARD_HOST_PORT:-3001}:3000"
+      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3001}:3000"
+    environment:
+      JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:localhost,IP:127.0.0.1}
     volumes:
       - dashboard_certs:/etc/nginx/certs
     mem_limit: 256m
