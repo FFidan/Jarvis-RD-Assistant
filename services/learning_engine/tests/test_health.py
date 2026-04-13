@@ -31,7 +31,7 @@ def _make_mock_pool(raise_on_acquire: bool = False) -> MagicMock:
 
 
 @pytest.fixture()
-def _app_with_deps():
+def app_with_deps():
     """Yield app with overridable state; clears overrides on teardown."""
     from app.main import app
     from jarvis_common import verify_api_key
@@ -42,9 +42,9 @@ def _app_with_deps():
 
 
 @pytest.mark.asyncio
-async def test_health_returns_200_when_ok(_app_with_deps):
+async def test_health_returns_200_when_ok(app_with_deps):
     """GET /health → 200 when all dependencies are reachable."""
-    app = _app_with_deps
+    app = app_with_deps
     app.state.db_pool = _make_mock_pool(raise_on_acquire=False)
 
     mock_http = AsyncMock()
@@ -61,9 +61,9 @@ async def test_health_returns_200_when_ok(_app_with_deps):
 
 
 @pytest.mark.asyncio
-async def test_health_returns_503_when_degraded(_app_with_deps):
+async def test_health_returns_503_when_degraded(app_with_deps):
     """GET /health → 503 when a dependency is unavailable."""
-    app = _app_with_deps
+    app = app_with_deps
     # Simulate DB failure
     app.state.db_pool = _make_mock_pool(raise_on_acquire=True)
 
