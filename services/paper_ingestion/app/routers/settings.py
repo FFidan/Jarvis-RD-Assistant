@@ -189,6 +189,31 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
                 "pulse_overnight live reschedule failed (job may not exist yet)",
                 exc_info=True,
             )
+    if key == "auto_fetch_interval_hours":
+        try:
+            import os as _os
+
+            new_interval = float(body.value)
+            # Persist into the process environment so run_auto_pipeline self-gate sees the new value
+            _os.environ["AUTO_FETCH_INTERVAL_HOURS"] = str(new_interval)
+            scheduler = getattr(request.app.state, "scheduler", None)
+            if scheduler is not None:
+                if new_interval > 0:
+                    from apscheduler.triggers.interval import IntervalTrigger
+
+                    scheduler.reschedule_job(
+                        "auto_pipeline",
+                        trigger=IntervalTrigger(hours=int(new_interval)),
+                    )
+                    logger.info("auto_pipeline rescheduled live (interval=%.2fh)", new_interval)
+                else:
+                    # interval disabled: job stays registered but self-gates at runtime
+                    logger.info("auto_fetch_interval_hours set to 0; auto_pipeline will self-gate")
+        except Exception:
+            logger.warning(
+                "auto_pipeline live reschedule failed",
+                exc_info=True,
+            )
     return ConfigEntry(key=key, value=body.value)
 
 

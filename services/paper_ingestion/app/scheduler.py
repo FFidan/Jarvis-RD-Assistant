@@ -14,7 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 async def run_auto_pipeline(app) -> None:
-    """Fetch new papers from enabled sources, download PDFs, and process them."""
+    """Fetch new papers from enabled sources, download PDFs, and process them.
+
+    Self-gates when ``AUTO_FETCH_INTERVAL_HOURS`` is 0 (or unset), which
+    happens when the scheduler is running but the user has disabled auto-fetch.
+    """
+    import os as _os
+
+    _interval = float(_os.environ.get("AUTO_FETCH_INTERVAL_HOURS", "0"))
+    if _interval <= 0:
+        logger.debug("auto_pipeline: interval_hours=0, skipping run")
+        return
+
     db_pool = app.state.db_pool
     sem = asyncio.Semaphore(3)  # cap concurrent embedding tasks; leaves headroom for HTTP requests
 
@@ -240,16 +251,19 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
             logger.exception("Nightly recommendation refresh failed")
 
     scheduler = AsyncIOScheduler()
-    if interval_hours > 0:
-        scheduler.add_job(
-            run_auto_pipeline,
-            trigger=IntervalTrigger(hours=int(interval_hours)),
-            args=[app],
-            id="auto_pipeline",
-            name="Auto fetch->process pipeline",
-            replace_existing=True,
-            max_instances=1,  # prevent overlap if a run takes longer than the interval
-        )
+
+    # Register auto_pipeline unconditionally — the job self-gates when interval_hours <= 0.
+    # This allows live-enabling via the Settings UI without restarting the service.
+    _effective_interval = max(int(interval_hours), 1) if interval_hours > 0 else 24
+    scheduler.add_job(
+        run_auto_pipeline,
+        trigger=IntervalTrigger(hours=_effective_interval),
+        args=[app],
+        id="auto_pipeline",
+        name="Auto fetch->process pipeline",
+        replace_existing=True,
+        max_instances=1,  # prevent overlap if a run takes longer than the interval
+    )
     scheduler.add_job(
         _run_recommendations,
         IntervalTrigger(hours=24),

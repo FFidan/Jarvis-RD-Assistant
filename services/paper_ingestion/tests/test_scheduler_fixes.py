@@ -144,9 +144,12 @@ async def test_source_instantiated_with_http_client() -> None:
         topics_rows=[topic_row],
     )
 
-    with patch(
-        "app.sources.registry.get_source_class",
-        return_value=fake_source_class,
+    with (
+        patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
+        patch(
+            "app.sources.registry.get_source_class",
+            return_value=fake_source_class,
+        ),
     ):
         await run_auto_pipeline(app)
 
@@ -176,7 +179,10 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
     # Reset the shared mock so we can assert it was NOT called
     _main_stub._run_process_pdf.reset_mock()
 
-    with caplog.at_level(logging.WARNING, logger="app.scheduler"):
+    with (
+        patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
+        caplog.at_level(logging.WARNING, logger="app.scheduler"),
+    ):
         await run_auto_pipeline(app)
 
     # _run_process_pdf must NOT have been called for the traversal path
@@ -200,10 +206,75 @@ async def test_valid_pdf_path_is_processed() -> None:
     # Reset the shared mock
     _main_stub._run_process_pdf.reset_mock()
 
-    await run_auto_pipeline(app)
+    with patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}):
+        await run_auto_pipeline(app)
 
     # _run_process_pdf should have been called for the valid path
     _main_stub._run_process_pdf.assert_called_once()
     call_args = _main_stub._run_process_pdf.call_args
     assert call_args.args[0] == 7
     assert call_args.args[1] == Path("/data/pdfs/paper_7.pdf")
+
+
+# ---------------------------------------------------------------------------
+# H14/H15: scheduler always starts; auto_pipeline self-gates on zero interval
+# ---------------------------------------------------------------------------
+
+
+async def test_scheduler_always_starts() -> None:
+    """start_scheduler must return a scheduler even when interval=0 and pulse is disabled.
+
+    Previously, the lifespan hook gated ``start_scheduler`` on interval > 0
+    or pulse enabled.  With the fix, the scheduler is always started so that
+    live-toggles (Settings UI) take effect without a restart.
+    """
+    from app.scheduler import start_scheduler
+
+    # Minimal app with a db_pool that returns a cron value for _get_pulse_cron
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"value": '"0 2 * * *"'})
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    fake_app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=pool,
+        )
+    )
+
+    with patch("app.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
+        scheduler = await start_scheduler(fake_app, interval_hours=0)
+
+    try:
+        assert scheduler is not None, "scheduler must not be None when interval=0"
+        # auto_pipeline job must be registered (self-gated, not absent)
+        job = scheduler.get_job("auto_pipeline")
+        assert job is not None, "auto_pipeline job must be registered even when interval=0"
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+async def test_auto_pipeline_self_gates_on_zero_interval(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_auto_pipeline must return early without touching the DB when interval=0."""
+    monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
+
+    # Track whether the DB pool was accessed
+    pool_acquire_called = False
+
+    class _TrackingPool:
+        def acquire(self):
+            nonlocal pool_acquire_called
+            pool_acquire_called = True
+            raise AssertionError("DB pool must not be acquired when interval=0")
+
+    fake_app = SimpleNamespace(
+        state=SimpleNamespace(
+            db_pool=_TrackingPool(),
+        )
+    )
+
+    # Should return immediately without any DB calls
+    await run_auto_pipeline(fake_app)
+
+    assert not pool_acquire_called, "DB pool must not be acquired when interval_hours=0"

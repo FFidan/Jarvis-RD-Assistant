@@ -289,12 +289,12 @@ async def lifespan(app: FastAPI):
             "JARVIS_API_KEY not set and DEV_MODE not enabled -- service will reject requests"
         )
 
+    # Always start the scheduler so live-toggles (interval / pulse.enabled) take effect
+    # without requiring a restart.  Each job self-gates on its own condition at runtime.
     _interval = float(os.environ.get("AUTO_FETCH_INTERVAL_HOURS", "0"))
-    _pulse_enabled = await _check_pulse_enabled(app.state.db_pool)
-    if _interval > 0 or _pulse_enabled:
-        from .scheduler import start_scheduler
+    from .scheduler import start_scheduler
 
-        app.state.scheduler = await start_scheduler(app, interval_hours=_interval)
+    app.state.scheduler = await start_scheduler(app, interval_hours=_interval)
 
     logger.info("Paper Ingestion Service started")
     yield
@@ -396,6 +396,8 @@ async def health_check(request: Request) -> HealthCheckResponse:
 
     Checks PostgreSQL, Qdrant, and LiteLLM connectivity. Returns ``"ok"``
     when all dependencies are reachable, ``"degraded"`` if any check fails.
+    Returns HTTP 503 when degraded so Docker healthchecks and upstreams can
+    detect failure by status code.
     """
     checks: dict[str, str] = {}
 
@@ -429,7 +431,12 @@ async def health_check(request: Request) -> HealthCheckResponse:
         checks["litellm"] = "unavailable"
 
     status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
-    return {"status": status, "service": "paper_ingestion", "checks": checks}
+    body = HealthCheckResponse(status=status, service="paper_ingestion", checks=checks)
+    if status == "degraded":
+        from fastapi.responses import JSONResponse
+
+        return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]
+    return body
 
 
 # ---------------------------------------------------------------------------
