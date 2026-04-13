@@ -94,9 +94,10 @@ class _FakeTxnCM:
         return None
 
 
-def _make_conn(fetchrow_return=None, fetchrow_side_effect=None):
+def _make_conn(fetchrow_return=None, fetchrow_side_effect=None, fetchval_return=None):
     conn = MagicMock()
     conn.fetchrow = AsyncMock(return_value=fetchrow_return, side_effect=fetchrow_side_effect)
+    conn.fetchval = AsyncMock(return_value=fetchval_return)  # existing-owner check
     conn.execute = AsyncMock(return_value="EXECUTE 1")
     conn.transaction = MagicMock(return_value=_FakeTxnCM())
     return conn

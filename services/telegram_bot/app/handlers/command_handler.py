@@ -65,16 +65,50 @@ async def _handle_pairing(
     If the code exists and has not expired, persists the current chat id into
     ``user_config.telegram.owner_chat_id`` (as a JSON integer) and deletes the
     used code. Invalid/expired codes are also cleaned up opportunistically.
+
+    Rate-limited to 5 attempts per 60 s per chat to prevent brute-forcing.
     """
+    import hashlib
+    import time
+
+    from app.handlers.rate_limit import _timestamps
+
     db_pool = _get_db(context)
     chat = update.effective_chat
     message = update.message
     if chat is None or message is None:
         return
 
+    # --- inline rate-limit: 5 pairing attempts per 60 s per chat ---
+    _rl_key = f"{chat.id}:_handle_pairing"
+    _now = time.monotonic()
+    _window = 60
+    _max = 5
+    _stamps = _timestamps[_rl_key]
+    _stamps[:] = [t for t in _stamps if _now - t < _window]
+    if len(_stamps) >= _max:
+        logger.warning("pairing rate-limited chat_id=%s", chat.id)
+        await message.reply_text(
+            f"Too many pairing attempts — please wait {_window}s before trying again."
+        )
+        return
+    _stamps.append(_now)
+
+    code_hash = hashlib.sha256(code.encode()).hexdigest()[:8]
     try:
         async with db_pool.acquire() as conn:
             async with conn.transaction():
+                # Refuse if an owner is already paired (takeover prevention)
+                current_owner = await conn.fetchval(
+                    "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id'"
+                )
+                if current_owner not in (None, "null"):
+                    await message.reply_text(
+                        "This JARVIS instance is already paired. "
+                        "Unpair from the dashboard first (Settings → Integrations)."
+                    )
+                    logger.info("pairing refused: owner already set, code_hash=%s", code_hash)
+                    return
                 row = await conn.fetchrow(
                     "SELECT expires_at FROM telegram_pairing WHERE code = $1 FOR UPDATE",
                     code,
@@ -87,16 +121,14 @@ async def _handle_pairing(
                     await message.reply_text("Invalid or expired pairing code.")
                     return
                 await conn.execute(
-                    "INSERT INTO user_config (key, value) "
-                    "VALUES ('telegram.owner_chat_id', $1::jsonb) "
-                    "ON CONFLICT (key) DO UPDATE "
-                    "SET value = $1::jsonb, updated_at = NOW()",
+                    "UPDATE user_config SET value = $1::jsonb, updated_at = NOW() "
+                    "WHERE key = 'telegram.owner_chat_id'",
                     json.dumps(chat.id),
                 )
                 await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)
         await message.reply_text("✅ Paired! You'll now receive JARVIS notifications here.")
     except Exception:
-        logger.exception("pairing_failed code=%s", code)
+        logger.exception("pairing_failed code_hash=%s", code_hash)  # hash only — not raw code
         await message.reply_text("Pairing failed — please try again from the dashboard.")
 
 
