@@ -238,7 +238,9 @@ if [ -n "$OLD_SAN" ] && [ "$OLD_SAN" != "$JARVIS_CERT_SAN" ]; then
   read -r -p "Regenerate certificate? This will restart the dashboard container. [y/N] " confirm
   if [[ "$confirm" =~ ^[Yy]$ ]]; then
     docker compose down dashboard 2>/dev/null || true
-    docker volume rm jarvis_dashboard_certs 2>/dev/null || true
+    # Use 'down -v' scoped to dashboard: Compose resolves the volume name
+    # with the correct project prefix (not a hardcoded jarvis_ prefix).
+    docker compose down -v dashboard 2>/dev/null || true
     ok "Certificate volume removed — a new cert will be generated on next start."
   else
     warn "Skipping cert regeneration. Certificate SAN may be stale — browser may show a security warning."

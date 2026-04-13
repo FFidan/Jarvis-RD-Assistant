@@ -40,7 +40,7 @@ def _make_pool_and_conn():
 
 
 @pytest.fixture()
-def _app():
+def app_fixture():
     from app.main import app, get_db_pool
     from jarvis_common import verify_api_key
 
@@ -60,8 +60,8 @@ def _app():
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_code_returns_12_hex_chars(_app):
-    app, conn = _app
+async def test_create_pairing_code_returns_12_hex_chars(app_fixture):
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
     )
@@ -80,9 +80,9 @@ async def test_create_pairing_code_returns_12_hex_chars(_app):
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_expires_stale_codes(_app):
+async def test_create_pairing_expires_stale_codes(app_fixture):
     """create_pairing must issue an expire-only DELETE (WHERE expires_at < NOW()) before INSERT."""
-    app, conn = _app
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
     )
@@ -114,8 +114,8 @@ async def test_create_pairing_expires_stale_codes(_app):
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_bot_username_missing_flag(_app):
-    app, conn = _app
+async def test_create_pairing_bot_username_missing_flag(app_fixture):
+    app, conn = app_fixture
     conn.fetchrow.return_value = None  # telegram.bot_username not in user_config
 
     async with httpx.AsyncClient(
@@ -135,8 +135,8 @@ async def test_create_pairing_bot_username_missing_flag(_app):
 
 
 @pytest.mark.asyncio
-async def test_get_pairing_status_returns_paired_false_when_null(_app):
-    app, conn = _app
+async def test_get_pairing_status_returns_paired_false_when_null(app_fixture):
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(value=None)
 
     async with httpx.AsyncClient(
@@ -151,8 +151,8 @@ async def test_get_pairing_status_returns_paired_false_when_null(_app):
 
 
 @pytest.mark.asyncio
-async def test_get_pairing_status_returns_paired_true_with_chat_id(_app):
-    app, conn = _app
+async def test_get_pairing_status_returns_paired_true_with_chat_id(app_fixture):
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(value=123456789)
 
     async with httpx.AsyncClient(
@@ -167,8 +167,8 @@ async def test_get_pairing_status_returns_paired_true_with_chat_id(_app):
 
 
 @pytest.mark.asyncio
-async def test_get_pairing_status_returns_paired_false_when_literal_null_string(_app):
-    app, conn = _app
+async def test_get_pairing_status_returns_paired_false_when_literal_null_string(app_fixture):
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(value="null")
 
     async with httpx.AsyncClient(
@@ -188,14 +188,14 @@ async def test_get_pairing_status_returns_paired_false_when_literal_null_string(
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_is_transactional(_app):
+async def test_create_pairing_is_transactional(app_fixture):
     """Verify that DELETE and INSERT run inside a single DB transaction.
 
     If the transaction is omitted, a crash between DELETE and INSERT leaves
     the table empty with no valid code. We assert conn.transaction() is
     called exactly once, and that both statements execute inside it.
     """
-    app, conn = _app
+    app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
     )
@@ -220,14 +220,20 @@ async def test_create_pairing_rate_limited():
     """11th request within a minute from the same IP must receive HTTP 429."""
     from app.main import app, get_db_pool
     from jarvis_common import verify_api_key
+    from jarvis_common.ratelimit import create_limiter
 
     mock_pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
     )
     app.state.db_pool = mock_pool
-    # Re-enable the limiter (the shared _app fixture disables it).
-    app.state.limiter.enabled = True
+
+    # Use a fresh limiter with clean in-memory storage to avoid accumulated
+    # hit counts from earlier tests that also POST /api/telegram/pairing.
+    original_limiter = app.state.limiter
+    fresh_limiter = create_limiter()
+    fresh_limiter.enabled = True
+    app.state.limiter = fresh_limiter
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
@@ -245,18 +251,18 @@ async def test_create_pairing_rate_limited():
         )
         assert statuses[10] == 429, f"Expected 429 on request 11, got {statuses[10]}"
     finally:
-        app.state.limiter.enabled = False
+        app.state.limiter = original_limiter
         app.dependency_overrides.clear()
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_preserves_non_expired_codes(_app):
+async def test_create_pairing_preserves_non_expired_codes(app_fixture):
     """Expire-only sweep must NOT wipe non-expired codes from concurrent callers.
 
     The DELETE statement must include 'WHERE expires_at < NOW()' so that
     a code inserted by a concurrent caller (not yet expired) survives.
     """
-    app, conn = _app
+    app, conn = app_fixture
     conn.fetchrow.return_value = None  # bot_username not configured
 
     async with httpx.AsyncClient(

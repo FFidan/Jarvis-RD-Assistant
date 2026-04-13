@@ -9,6 +9,7 @@ import os
 import sys
 
 import httpx
+from jarvis_common.logging_config import configure_logging
 from telegram.ext import Application
 
 from app.config import BotConfig, create_db_pool
@@ -18,7 +19,6 @@ from app.handlers import (
     register_command_handlers,
 )
 from app.scheduler import JarvisScheduler
-from jarvis_common.logging_config import configure_logging
 
 configure_logging("telegram_bot", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -99,9 +99,7 @@ def main() -> None:
     application.add_handler(get_review_conversation_handler())
     register_callback_handlers(application)
 
-    logger.info(
-        "JARVIS Telegram Bot starting (chat_id=%d)", config.telegram_chat_id
-    )
+    logger.info("JARVIS Telegram Bot starting (chat_id=%s)", config.telegram_chat_id)
     application.run_polling(allowed_updates=["message", "callback_query"])
 
 

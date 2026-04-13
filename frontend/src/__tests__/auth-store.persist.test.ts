@@ -1,0 +1,77 @@
+/**
+ * Tests for W2.4: API key uses sessionStorage (not localStorage),
+ * and logout clears the jarvis-ui localStorage entry.
+ *
+ * The Zustand persist middleware writes to the storage engine on every
+ * state change. In the jsdom environment, sessionStorage and localStorage
+ * are real (in-memory) implementations, so we can assert on them directly.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Stub fetch BEFORE importing the store so the login call can be controlled.
+const mockFetch = vi.fn();
+vi.stubGlobal('fetch', mockFetch);
+
+// Dynamic import ensures the stub is in place when the module initialises.
+const { useAuthStore } = await import('@/stores/auth-store');
+
+describe('auth-store — sessionStorage persistence (W2.4)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Reset in-memory storage between tests.
+    sessionStorage.clear();
+    localStorage.clear();
+    // Reset Zustand state.
+    useAuthStore.setState({
+      isAuthenticated: false,
+      authTime: null,
+      apiKey: null,
+    });
+  });
+
+  it('API key is written to sessionStorage (not localStorage) after login', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
+
+    // sessionStorage must contain the persisted auth entry.
+    const raw = sessionStorage.getItem('jarvis-auth');
+    expect(raw).not.toBeNull();
+    const parsed = JSON.parse(raw!);
+    expect(parsed.state.apiKey).toBe('test-api-key-32chars-xxxxxxxxxx');
+
+    // localStorage must NOT contain the auth entry.
+    expect(localStorage.getItem('jarvis-auth')).toBeNull();
+  });
+
+  it('logout clears the apiKey from sessionStorage', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
+    expect(sessionStorage.getItem('jarvis-auth')).not.toBeNull();
+
+    useAuthStore.getState().logout();
+
+    // After logout the persisted state must have apiKey: null.
+    const raw = sessionStorage.getItem('jarvis-auth');
+    // The persist middleware may keep the key with null values, or remove it.
+    if (raw !== null) {
+      const parsed = JSON.parse(raw);
+      expect(parsed.state.apiKey).toBeNull();
+      expect(parsed.state.isAuthenticated).toBe(false);
+    }
+    // Either way, the store state must be cleared.
+    expect(useAuthStore.getState().apiKey).toBeNull();
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  it('logout removes jarvis-ui from localStorage', async () => {
+    // Simulate pre-existing UI state from a previous session.
+    localStorage.setItem('jarvis-ui', JSON.stringify({ state: { checklistDismissed: true }, version: 0 }));
+
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
+
+    useAuthStore.getState().logout();
+
+    expect(localStorage.getItem('jarvis-ui')).toBeNull();
+  });
+});
