@@ -73,6 +73,7 @@ htmlcov/
 .serena/
 .ralph/
 .playwright-mcp/
+.superpowers/
 inspection/
 
 # Test artifacts

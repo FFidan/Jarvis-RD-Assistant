@@ -108,33 +108,63 @@ done
 printf '\n'
 
 # -----------------------------------------------------------------------------
-# 4. Short-circuit if nothing to do
+# 4. Pull and restart pinned third-party services (if any are stale).
 # -----------------------------------------------------------------------------
-if [ "${#TO_UPDATE[@]}" -eq 0 ]; then
-  ok "All services up to date."
-  exit 0
+if [ "${#TO_UPDATE[@]}" -gt 0 ]; then
+  info "Updates available for: ${TO_UPDATE[*]}"
+  read -rp "Pull and restart affected services? (y/N): " reply
+  case "$reply" in
+    [yY]|[yY][eE][sS])
+      info "Pulling images..."
+      if ! docker compose pull "${TO_UPDATE[@]}"; then
+        die "docker compose pull failed." \
+            "Check network / registry auth, then re-run ./update.sh"
+      fi
+      info "Recreating services..."
+      if ! docker compose up -d "${TO_UPDATE[@]}"; then
+        die "docker compose up failed." \
+            "Inspect logs: docker compose logs --tail=200 ${TO_UPDATE[*]}"
+      fi
+      ;;
+    *)
+      info "Skipped third-party image pull."
+      TO_UPDATE=()
+      ;;
+  esac
+else
+  ok "All pinned third-party services up to date."
 fi
 
-info "Updates available for: ${TO_UPDATE[*]}"
-read -rp "Pull and restart affected services? (y/N): " reply
+# -----------------------------------------------------------------------------
+# 4b. Locally-built services — rebuild if the user wants to pick up code changes.
+# -----------------------------------------------------------------------------
+# These services build from this repo. `git pull` may have changed their source
+# without changing versions.env, so we always offer to rebuild them.
+LOCAL_SERVICES=(paper_ingestion learning_engine telegram_bot dashboard)
+printf '\n'
+read -rp "Rebuild locally-built services (paper_ingestion, learning_engine, telegram_bot, dashboard) to pick up code changes? (y/N): " reply
 case "$reply" in
-  [yY]|[yY][eE][sS]) ;;
-  *) info "Aborted — no changes made."; exit 0 ;;
+  [yY]|[yY][eE][sS])
+    info "Building local images..."
+    if ! docker compose build "${LOCAL_SERVICES[@]}"; then
+      die "docker compose build failed." \
+          "Inspect output above; re-run ./update.sh after fixing."
+    fi
+    info "Recreating local services..."
+    if ! docker compose up -d "${LOCAL_SERVICES[@]}"; then
+      die "docker compose up failed." \
+          "Inspect logs: docker compose logs --tail=200 ${LOCAL_SERVICES[*]}"
+    fi
+    TO_UPDATE+=("${LOCAL_SERVICES[@]}")
+    ;;
+  *)
+    info "Skipped local rebuild — running containers keep their current code."
+    ;;
 esac
 
-# -----------------------------------------------------------------------------
-# 5. Pull and restart only the affected services.
-# -----------------------------------------------------------------------------
-info "Pulling images..."
-if ! docker compose pull "${TO_UPDATE[@]}"; then
-  die "docker compose pull failed." \
-      "Check network / registry auth, then re-run ./update.sh"
-fi
-
-info "Recreating services..."
-if ! docker compose up -d "${TO_UPDATE[@]}"; then
-  die "docker compose up failed." \
-      "Inspect logs: docker compose logs --tail=200 ${TO_UPDATE[*]}"
+if [ "${#TO_UPDATE[@]}" -eq 0 ]; then
+  ok "Nothing to do."
+  exit 0
 fi
 
 # -----------------------------------------------------------------------------

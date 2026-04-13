@@ -67,29 +67,56 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 ## Quick Start
 
 ```bash
-# 1. Clone and configure
 git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
-cp .env.example .env
-
-# 2. Edit .env -- at minimum, set these:
-#    POSTGRES_PASSWORD=<strong-password>
-#    N8N_ENCRYPTION_KEY=<random-string>
-#    LITELLM_MASTER_KEY=<random-string>
-
-# 3. Start everything
-docker compose up -d
-
-# 4. Wait for Ollama to pull models (first run only, ~5-10 min)
-docker compose logs -f ollama
-
-# 5. Open the dashboard
-open http://localhost:3001
+./setup.sh
 ```
+
+`setup.sh` generates all secrets, asks 2 questions (access mode, optional Telegram token), and starts the Docker stack. Open the dashboard URL it prints and complete setup via the guided 6-step wizard.
+
+- **Upgrading:** `git pull && ./update.sh`
+- **Global access:** Re-run `./setup.sh` and pick option 3 (Cloudflare Tunnel — free, no inbound ports).
+
+First boot pulls ~10 GB of Ollama models (`mistral-nemo`, `qwen3:4b`, `nomic-embed-text`); watch progress with `docker compose logs -f ollama`. The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
 
 ### GPU Acceleration (optional)
 
-If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html), then the Ollama container will automatically use it. Speeds up inference significantly.
+If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) before running `setup.sh`; the Ollama container will pick it up automatically.
+
+## Advanced Configuration
+
+If you would rather not run `setup.sh`, you can bring the stack up by hand. Copy the env template, generate secrets with `openssl rand -hex 32`, optionally `source versions.env` (or rely on the compose fallbacks), then `docker compose up -d`:
+
+```bash
+cp .env.example .env
+# Fill in POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, N8N_JWT_SECRET,
+# LITELLM_MASTER_KEY, and JARVIS_API_KEY with: openssl rand -hex 32
+bash scripts/init-dirs.sh
+source versions.env    # optional — docker-compose.yml has fallbacks
+docker compose up -d
+```
+
+Then open the dashboard URL (default `https://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
+
+## Upgrading
+
+`versions.env` is the source of truth for pinned image versions; every Docker image in `docker-compose.yml` uses `${VAR:-fallback}`, so committing a new pin is the upgrade. `update.sh` compares the pinned versions against what is currently running, prints a diff, and prompts before pulling. To **rollback** after a bad upgrade:
+
+```bash
+git checkout HEAD~1 -- versions.env && ./update.sh
+```
+
+Never auto-rollback; always review the diff first.
+
+## Global Access
+
+The supported way to reach JARVIS from outside your LAN is **Cloudflare Tunnel** — free, outbound-only, no router port forwarding, terminates TLS upstream so the self-signed cert warning goes away. Create a tunnel at [dash.cloudflare.com](https://dash.cloudflare.com) → Zero Trust → Networks → Tunnels, copy the token, then either re-run `setup.sh` and pick mode 3, or paste `CLOUDFLARE_TUNNEL_TOKEN=<token>` into `.env` and run:
+
+```bash
+docker compose --profile tunnel up -d
+```
+
+Alternatives, in rough order of simplicity: **Tailscale** (mesh VPN, zero config on every device), **Caddy + Let's Encrypt** (real public hostname, you manage the certs and DNS), or **SSH tunnel** (`ssh -L 3001:localhost:3001 user@host`, ad-hoc only). None of these are scripted — use Cloudflare Tunnel unless you have a specific reason not to.
 
 ## Configuration
 
@@ -295,6 +322,19 @@ These projects are credited for the ideas and patterns that informed JARVIS's de
 **Dashboard shows "Network Error" on every API call.** The frontend calls `/api/*` through the dashboard's nginx, which proxies to `paper_ingestion:8000` and `learning_engine:8001` over the internal Docker network. If the backends are unhealthy, the dashboard still loads but every call fails. Check `docker compose ps` — all services should be `healthy`.
 
 **Tests fail on the host with `ModuleNotFoundError: No module named 'fitz'`.** The backend test suite has Docker-only dependencies (PyMuPDF, marker, qdrant). Run tests inside the container instead: `docker compose exec paper_ingestion pytest tests/`.
+
+**I already had a `.env` and `setup.sh` asks to overwrite.** By design — `setup.sh` is idempotent and will not clobber secrets without confirmation. Pick **no** to keep your existing config; pick **yes** only if you intend to regenerate secrets from scratch and accept being logged out everywhere.
+
+**The setup wizard won't go away.** The wizard is gated on the `setup.completed` flag in `user_config`. You can flip it three ways: click **Done** on the final wizard step, toggle it from **Settings → Integrations**, or do it directly in psql:
+
+```bash
+docker compose exec postgres psql -U jarvis -d jarvis -c \
+  "UPDATE user_config SET value='true'::jsonb WHERE key='setup.completed';"
+```
+
+**Telegram pairing code expired.** Pairing codes are valid for 10 minutes. Generate a new one from **Settings → Integrations → Generate pairing code**, then send `/start <code>` to your bot within the window.
+
+**`cloudflared` container won't start.** Verify `CLOUDFLARE_TUNNEL_TOKEN` is set in `.env` and that you passed the profile flag (`docker compose --profile tunnel up -d`). Then check `docker compose logs cloudflared` — a valid registration prints `Registered tunnel connection`. The most common failure is copying the token with a trailing newline or a space — re-paste it from the Cloudflare dashboard.
 
 ## Further Reading
 

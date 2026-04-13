@@ -16,8 +16,6 @@ interface PairTelegramProps {
   onPaired?: () => void;
 }
 
-const QR_BASE = 'https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=';
-
 /**
  * Reusable Telegram pairing UI.
  *
@@ -169,29 +167,24 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
   }
 
   if (state.kind === 'polling') {
-    const qrUrl = QR_BASE + encodeURIComponent(state.pairing.deep_link);
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Open Telegram and send this code to the JARVIS bot, or scan the QR code below.
+          Tap the link below on the device running Telegram, or open the bot manually and
+          send <span className="font-mono">/start PAIR_{state.pairing.code}</span>.
         </p>
-        <div className="flex flex-col items-start gap-4 sm:flex-row sm:items-center">
-          <div className="rounded-md border bg-background p-2">
-            <img src={qrUrl} alt="Telegram pairing QR code" width={180} height={180} />
+        <div className="space-y-2">
+          <div>
+            <p className="text-xs uppercase text-muted-foreground">Pairing code</p>
+            <p className="font-mono text-2xl tracking-widest">{state.pairing.code}</p>
           </div>
-          <div className="space-y-2">
-            <div>
-              <p className="text-xs uppercase text-muted-foreground">Pairing code</p>
-              <p className="font-mono text-2xl tracking-widest">{state.pairing.code}</p>
-            </div>
-            <a
-              href={state.pairing.deep_link}
-              className="inline-flex items-center text-sm text-primary underline"
-              rel="noopener noreferrer"
-            >
-              Open in Telegram
-            </a>
-          </div>
+          <a
+            href={state.pairing.deep_link}
+            className="inline-flex items-center text-sm text-primary underline"
+            rel="noopener noreferrer"
+          >
+            Open in Telegram
+          </a>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />

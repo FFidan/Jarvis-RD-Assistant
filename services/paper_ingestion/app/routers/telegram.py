@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, Request
 from jarvis_common import verify_api_key
 from pydantic import BaseModel
 
+from app.deps import limiter
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
@@ -57,19 +59,29 @@ def _extract_bot_username(value: Any) -> str | None:
 
 
 @router.post("/pairing", response_model=PairingResponse)
+@limiter.limit("10/minute")
 async def create_pairing(request: Request) -> PairingResponse:
-    """Generate a pairing code, invalidate any prior codes, return deep link."""
+    """Generate a pairing code, expire stale codes, return deep link.
+
+    Changes from original:
+    - Expire-only sweep instead of full table wipe (preserves concurrent callers' codes).
+    - DELETE + INSERT wrapped in a single transaction so a crash cannot leave
+      the table empty without a valid code.
+    - Rate-limited to 10 requests per minute per IP.
+    """
     code = secrets.token_hex(6)  # 12 hex chars
     expires_at = datetime.now(UTC) + _PAIRING_TTL
 
     pool = request.app.state.db_pool
     async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM telegram_pairing")
-        await conn.execute(
-            "INSERT INTO telegram_pairing (code, expires_at) VALUES ($1, $2)",
-            code,
-            expires_at,
-        )
+        async with conn.transaction():
+            # Expire-only sweep — preserve valid codes from concurrent callers.
+            await conn.execute("DELETE FROM telegram_pairing WHERE expires_at < NOW()")
+            await conn.execute(
+                "INSERT INTO telegram_pairing (code, expires_at) VALUES ($1, $2)",
+                code,
+                expires_at,
+            )
         row = await conn.fetchrow(
             "SELECT value FROM user_config WHERE key = $1",
             "telegram.bot_username",

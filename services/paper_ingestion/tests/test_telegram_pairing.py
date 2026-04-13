@@ -26,6 +26,11 @@ class FakeRecord(dict):
 
 def _make_pool_and_conn():
     conn = AsyncMock()
+    # Transaction context manager mock (needed by create_pairing's conn.transaction()).
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)
@@ -75,7 +80,8 @@ async def test_create_pairing_code_returns_12_hex_chars(_app):
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_deletes_existing_codes(_app):
+async def test_create_pairing_expires_stale_codes(_app):
+    """create_pairing must issue an expire-only DELETE (WHERE expires_at < NOW()) before INSERT."""
     app, conn = _app
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
@@ -87,10 +93,13 @@ async def test_create_pairing_deletes_existing_codes(_app):
         resp = await client.post("/api/telegram/pairing")
 
     assert resp.status_code == 200
-    # execute should be called at least twice: DELETE then INSERT
+    # execute should be called at least twice: expire-only DELETE then INSERT
     calls = conn.execute.await_args_list
     sql_statements = [c.args[0] if c.args else "" for c in calls]
-    assert any("DELETE FROM telegram_pairing" in s for s in sql_statements)
+    # Must use expire-only sweep, not a full wipe (WHERE clause required).
+    assert any("DELETE FROM telegram_pairing" in s and "WHERE" in s for s in sql_statements), (
+        "Expected expire-only DELETE with WHERE clause"
+    )
     assert any("INSERT INTO telegram_pairing" in s for s in sql_statements)
     # DELETE must precede INSERT
     delete_idx = next(
@@ -100,6 +109,8 @@ async def test_create_pairing_deletes_existing_codes(_app):
         i for i, s in enumerate(sql_statements) if "INSERT INTO telegram_pairing" in s
     )
     assert delete_idx < insert_idx
+    # Transaction must be used.
+    conn.transaction.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -169,6 +180,100 @@ async def test_get_pairing_status_returns_paired_false_when_literal_null_string(
     body = resp.json()
     assert body["paired"] is False
     assert body["chat_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# W1.6 — transaction + rate-limit + expire-only sweep tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_is_transactional(_app):
+    """Verify that DELETE and INSERT run inside a single DB transaction.
+
+    If the transaction is omitted, a crash between DELETE and INSERT leaves
+    the table empty with no valid code. We assert conn.transaction() is
+    called exactly once, and that both statements execute inside it.
+    """
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(
+        value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telegram/pairing")
+
+    assert resp.status_code == 200
+    # Transaction context must have been entered exactly once.
+    conn.transaction.assert_called_once()
+    # Both the expire sweep and the INSERT must have been executed.
+    calls = conn.execute.await_args_list
+    sql_statements = [c.args[0] if c.args else "" for c in calls]
+    assert any("DELETE FROM telegram_pairing" in s for s in sql_statements)
+    assert any("INSERT INTO telegram_pairing" in s for s in sql_statements)
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_rate_limited():
+    """11th request within a minute from the same IP must receive HTTP 429."""
+    from app.main import app, get_db_pool
+    from jarvis_common import verify_api_key
+
+    mock_pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(
+        value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
+    )
+    app.state.db_pool = mock_pool
+    # Re-enable the limiter (the shared _app fixture disables it).
+    app.state.limiter.enabled = True
+
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            statuses = []
+            for _ in range(11):
+                r = await client.post("/api/telegram/pairing")
+                statuses.append(r.status_code)
+        # First 10 must succeed; 11th must be rate-limited.
+        assert all(s == 200 for s in statuses[:10]), (
+            f"Unexpected failures in first 10: {statuses[:10]}"
+        )
+        assert statuses[10] == 429, f"Expected 429 on request 11, got {statuses[10]}"
+    finally:
+        app.state.limiter.enabled = False
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_pairing_preserves_non_expired_codes(_app):
+    """Expire-only sweep must NOT wipe non-expired codes from concurrent callers.
+
+    The DELETE statement must include 'WHERE expires_at < NOW()' so that
+    a code inserted by a concurrent caller (not yet expired) survives.
+    """
+    app, conn = _app
+    conn.fetchrow.return_value = None  # bot_username not configured
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/telegram/pairing")
+
+    assert resp.status_code == 200
+    calls = conn.execute.await_args_list
+    sql_statements = [c.args[0] if c.args else "" for c in calls]
+    # The DELETE must be conditional — a full wipe would remove non-expired codes.
+    for stmt in sql_statements:
+        if "DELETE FROM telegram_pairing" in stmt:
+            assert "WHERE" in stmt, (
+                "create_pairing must use an expire-only DELETE (WHERE expires_at < NOW()), "
+                "not a full table wipe"
+            )
 
 
 # Keep a module-level reference to silence "unused import" warnings when the
