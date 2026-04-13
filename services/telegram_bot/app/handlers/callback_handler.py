@@ -14,6 +14,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from app.formatters import format_paper_detail, format_project_status
 from app.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
+from app.handlers.rate_limit import rate_limit
 from app.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper_detail_{id}`` — show detailed paper view.
 
@@ -49,8 +51,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not await _auth_check(update, config, db_pool):
         return
 
-    match = re.search(r"paper_detail_(\d+)", query.data)
-    if not match:
+    if not query.data or not (match := re.search(r"paper_detail_(\d+)", query.data)):
         return
     paper_id = int(match.group(1))
 
@@ -73,6 +74,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     await query.message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper.
 
@@ -97,8 +99,7 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
     if not await _auth_check(update, config, db_pool):
         return
 
-    match = re.search(r"paper_bookmark_(\d+)", query.data)
-    if not match:
+    if not query.data or not (match := re.search(r"paper_bookmark_(\d+)", query.data)):
         return
     paper_id = int(match.group(1))
 
@@ -116,6 +117,7 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
         await query.message.reply_text("Failed to bookmark paper.", parse_mode="HTML")
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``project_detail_{id}`` — show detailed project status.
 
@@ -141,8 +143,7 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     if not await _auth_check(update, config, db_pool):
         return
 
-    match = re.search(r"project_detail_(\d+)", query.data)
-    if not match:
+    if not query.data or not (match := re.search(r"project_detail_(\d+)", query.data)):
         return
     project_id = int(match.group(1))
 
@@ -175,6 +176,7 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     await query.message.reply_text(text, parse_mode="HTML")
 
 
+@rate_limit(max_calls=5, window_seconds=60)
 async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``start_review`` — sent by the review reminder inline button.
 
@@ -199,6 +201,7 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``task_done_{id}`` — mark a task as complete.
 
@@ -221,8 +224,7 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not await _auth_check(update, config, db_pool):
         return
 
-    match = re.search(r"task_done_(\d+)", query.data)
-    if not match:
+    if not query.data or not (match := re.search(r"task_done_(\d+)", query.data)):
         return
     task_id = int(match.group(1))
 
@@ -245,6 +247,7 @@ _PULSE_RATING_LABEL = {
 }
 
 
+@rate_limit(max_calls=20, window_seconds=60)
 async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``pulse_{up,down,save}_{id}`` — record a Pulse card rating.
 

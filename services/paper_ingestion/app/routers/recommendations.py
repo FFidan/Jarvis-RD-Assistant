@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import verify_api_key
 from pydantic import BaseModel
 
+from app.deps import limiter
 from app.recommender import refresh_recommendations
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
@@ -18,6 +19,7 @@ class RecommendationItem(BaseModel):
 
 
 @router.get("", response_model=list[RecommendationItem], dependencies=[Depends(verify_api_key)])
+@limiter.limit("5/minute")
 async def list_recommendations(
     request: Request, limit: int = Query(default=20, ge=1, le=200)
 ) -> list[RecommendationItem]:
@@ -32,12 +34,14 @@ async def list_recommendations(
 
 
 @router.post("/refresh", dependencies=[Depends(verify_api_key)])
+@limiter.limit("2/hour")
 async def trigger_refresh(request: Request) -> dict[str, int]:
     count = await refresh_recommendations(request.app)
     return {"refreshed": count}
 
 
 @router.post("/{paper_id}/dismiss", dependencies=[Depends(verify_api_key)])
+@limiter.limit("30/minute")
 async def dismiss_recommendation(paper_id: int, request: Request) -> dict[str, bool]:
     async with request.app.state.db_pool.acquire() as conn:
         result = await conn.execute(

@@ -199,6 +199,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/help`` — display available commands.
 
@@ -362,6 +363,7 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/projects`` — list active projects.
 
@@ -400,6 +402,7 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/tasks [project_id]`` — list in-progress tasks.
 
@@ -451,6 +454,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 @auth_required
+@rate_limit(max_calls=10, window_seconds=60)
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/done <task_id>`` — mark a task as complete.
 
@@ -484,6 +488,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/newproject <name>`` — create a new project.
 
@@ -603,6 +608,7 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 
 @auth_required
+@rate_limit(max_calls=5, window_seconds=60)
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/next`` — recommend the next paper to read."""
     db = _get_db(context)

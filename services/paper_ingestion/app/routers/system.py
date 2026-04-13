@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, Request
 from jarvis_common import verify_api_key
 from pydantic import BaseModel
+
+from app.deps import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +29,9 @@ _EXPECTED_MODEL_PREFIXES: tuple[str, ...] = (
     "qwen",
     "nomic-embed-text",
 )
+
+# TTL cache for Ollama probe: (timestamp, (models_ready, downloading))
+_ollama_probe_cache: tuple[float, tuple[bool, list[str]]] | None = None
 
 
 class SetupStatus(BaseModel):
@@ -78,24 +84,35 @@ def _models_match(installed_names: list[str]) -> bool:
 async def _probe_ollama() -> tuple[bool, list[str]]:
     """Probe ``{OLLAMA_BASE_URL}/api/tags``; return (models_ready, downloading).
 
-    Any failure (network, timeout, non-200) yields ``(False, [])``. The
-    caller must never crash on this.
+    Results are cached for 10 seconds to avoid hammering Ollama on every
+    setup-status request. Any failure (network, timeout, non-200) yields
+    ``(False, [])``. The caller must never crash on this.
     """
+    global _ollama_probe_cache
+    now = time.monotonic()
+    if _ollama_probe_cache is not None and now - _ollama_probe_cache[0] < 10:
+        return _ollama_probe_cache[1]
+
     ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
-            return False, []
+            result: tuple[bool, list[str]] = (False, [])
+            _ollama_probe_cache = (now, result)
+            return result
         data = resp.json()
         installed = [m.get("name", "") for m in data.get("models", [])]
-        return _models_match(installed), []
+        result = (_models_match(installed), [])
     except Exception:
         logger.warning("setup-status: Ollama probe failed", exc_info=True)
-        return False, []
+        result = (False, [])
+    _ollama_probe_cache = (now, result)
+    return result
 
 
 @router.get("/setup-status", response_model=SetupStatus)
+@limiter.limit("30/minute")
 async def get_setup_status(request: Request) -> SetupStatus:
     """Return a point-in-time snapshot of setup wizard readiness signals."""
     pool = request.app.state.db_pool
