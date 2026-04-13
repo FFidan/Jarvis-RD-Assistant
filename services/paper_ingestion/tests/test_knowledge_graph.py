@@ -28,6 +28,7 @@ def _make_pool(conn: AsyncMock):
     pool.acquire.return_value = ctx
     return pool
 
+
 # ---------------------------------------------------------------------------
 # Model validation tests
 # ---------------------------------------------------------------------------
@@ -50,8 +51,13 @@ def test_entity_response():
     """EntityResponse validates correctly."""
     now = datetime.now(tz=UTC)
     resp = EntityResponse(
-        id=1, name="BERT", canonical_name="bert", entity_type="method",
-        description="A model", paper_count=5, created_at=now,
+        id=1,
+        name="BERT",
+        canonical_name="bert",
+        entity_type="method",
+        description="A model",
+        paper_count=5,
+        created_at=now,
     )
     assert resp.paper_count == 5
 
@@ -59,8 +65,10 @@ def test_entity_response():
 def test_relationship_create():
     """RelationshipCreate accepts valid data."""
     r = RelationshipCreate(
-        source_entity="BERT", target_entity="GLUE",
-        relationship_type="evaluates", evidence_quote="We evaluate...",
+        source_entity="BERT",
+        target_entity="GLUE",
+        relationship_type="evaluates",
+        evidence_quote="We evaluate...",
     )
     assert r.relationship_type == "evaluates"
 
@@ -69,9 +77,13 @@ def test_relationship_response():
     """RelationshipResponse validates correctly."""
     now = datetime.now(tz=UTC)
     resp = RelationshipResponse(
-        id=1, source_entity_id=1, target_entity_id=2,
-        relationship_type="used_on", paper_id=10,
-        evidence_quote="Applied to...", confidence=0.9,
+        id=1,
+        source_entity_id=1,
+        target_entity_id=2,
+        relationship_type="used_on",
+        paper_id=10,
+        evidence_quote="Applied to...",
+        confidence=0.9,
         created_at=now,
     )
     assert resp.confidence == 0.9
@@ -88,7 +100,9 @@ def test_knowledge_graph_response():
     """KnowledgeGraphResponse composes entities and relationships."""
     now = datetime.now(tz=UTC)
     graph = KnowledgeGraphResponse(
-        entities=[EntityResponse(id=1, name="X", canonical_name="x", entity_type="method", created_at=now)],
+        entities=[
+            EntityResponse(id=1, name="X", canonical_name="x", entity_type="method", created_at=now)
+        ],
         relationships=[],
     )
     assert len(graph.entities) == 1
@@ -98,7 +112,9 @@ def test_entity_detail_response():
     """EntityDetailResponse validates correctly."""
     now = datetime.now(tz=UTC)
     detail = EntityDetailResponse(
-        entity=EntityResponse(id=1, name="BERT", canonical_name="bert", entity_type="method", created_at=now),
+        entity=EntityResponse(
+            id=1, name="BERT", canonical_name="bert", entity_type="method", created_at=now
+        ),
         relationships=[],
         papers=[{"id": 1, "title": "Paper A", "mention_count": 3}],
     )
@@ -181,7 +197,11 @@ async def test_find_or_create_entity_merges_by_precomputed_similarity():
     mock_conn.execute = AsyncMock()
 
     entity_id, was_merged = await _find_or_create_entity(
-        mock_conn, "BERT", "method", "A language model", None,
+        mock_conn,
+        "BERT",
+        "method",
+        "A language model",
+        None,
         similar_entity_id=77,
     )
 
@@ -203,8 +223,13 @@ async def test_find_or_create_entity_falls_back_to_insert_when_no_similarity():
     mock_conn.execute = AsyncMock()
 
     entity_id, was_merged = await _find_or_create_entity(
-        mock_conn, "BERT", "method", "A language model", None,
-        embedding=None, similar_entity_id=None,
+        mock_conn,
+        "BERT",
+        "method",
+        "A language model",
+        None,
+        embedding=None,
+        similar_entity_id=None,
     )
 
     assert entity_id == 55
@@ -239,12 +264,10 @@ async def test_embed_entity_text_returns_none_on_failure():
 @pytest.mark.asyncio
 async def test_find_similar_entity_returns_matched_id():
     """_find_similar_entity returns entity_id from Qdrant match."""
-    from app.entity_extractor import KG_COLLECTION, _find_similar_entity
+    from app.entity_extractor import _find_similar_entity
 
     qdrant = AsyncMock()
-    qdrant.query_points.return_value = MagicMock(
-        points=[MagicMock(payload={"entity_id": 77})]
-    )
+    qdrant.query_points.return_value = MagicMock(points=[MagicMock(payload={"entity_id": 77})])
 
     fake_models = types.ModuleType("qdrant_client.models")
     fake_models.FieldCondition = MagicMock()
@@ -340,11 +363,22 @@ async def test_get_knowledge_graph_returns_display_sizes_and_type_counts():
 async def test_extract_entities_for_paper_returns_counts():
     """extract_entities_for_paper persists valid entities and relationships."""
     from app.entity_extractor import extract_entities_for_paper
+    from app.models import VerificationResult
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
     mock_conn.fetch.return_value = [
-        {"id": 11, "chunk_index": 0, "content": "BERT evaluates GLUE", "page_number": 2}
+        {
+            "id": 11,
+            "chunk_index": 0,
+            "content": "BERT evaluates GLUE",
+            "page_number": 2,
+            "start_char": 0,
+            "end_char": 19,
+            "embedding_id": None,
+            "created_at": datetime.now(tz=UTC),
+            "paper_id": 1,
+        }
     ]
     mock_conn.execute = AsyncMock(return_value="UPDATE 1")
     mock_conn.fetchval = AsyncMock(return_value=1)
@@ -357,19 +391,39 @@ async def test_extract_entities_for_paper_returns_counts():
             {"name": "GLUE", "type": "dataset", "description": "benchmark"},
         ],
         "relationships": [
-            {"source": "BERT", "target": "GLUE", "type": "evaluates", "confidence": 0.9}
+            {
+                "source": "BERT",
+                "target": "GLUE",
+                "type": "evaluates",
+                "confidence": 0.9,
+                "evidence": "BERT evaluates GLUE",
+            }
         ],
     }
 
+    verified_result = VerificationResult(
+        quote="BERT evaluates GLUE",
+        verified=True,
+        match_type="exact",
+        match_score=1.0,
+        matched_text="BERT evaluates GLUE",
+        page_number=2,
+    )
+
     with (
         patch("app.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
-        patch("app.entity_extractor._find_or_create_entity", AsyncMock(side_effect=[(1, False), (2, True)])),
+        patch(
+            "app.entity_extractor._find_or_create_entity",
+            AsyncMock(side_effect=[(1, False), (2, True)]),
+        ),
+        patch("app.entity_extractor.QuoteVerifier.verify_quote", return_value=verified_result),
     ):
         result = await extract_entities_for_paper(http_client, pool, paper_id=1)
 
     assert result.entities_added == 1
     assert result.entities_merged == 1
     assert result.relationships_added == 1
+    assert result.dropped_relationships == 0
     assert mock_conn.execute.await_count == 2
     assert mock_conn.fetchval.await_count == 1
 
@@ -396,7 +450,17 @@ async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
     mock_conn.fetch.return_value = [
-        {"id": 11, "chunk_index": 0, "content": "BERT evaluates GLUE", "page_number": 2}
+        {
+            "id": 11,
+            "chunk_index": 0,
+            "content": "BERT evaluates GLUE",
+            "page_number": 2,
+            "start_char": 0,
+            "end_char": 19,
+            "embedding_id": None,
+            "created_at": datetime.now(tz=UTC),
+            "paper_id": 1,
+        }
     ]
     mock_conn.execute = AsyncMock(return_value="INSERT 0 1")
     pool = _make_pool(mock_conn)

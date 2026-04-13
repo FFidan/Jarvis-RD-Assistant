@@ -12,10 +12,12 @@ from typing import Any
 
 import asyncpg
 import httpx
-
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
+
+from app.converters import row_to_chunk_response
 from app.models import EntityExtractionResponse
+from app.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +29,8 @@ ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore
 
 def build_entity_prompt(title: str, text: str) -> str:
     """Build the knowledge-graph extraction prompt for a single paper."""
-    return f"""You are a knowledge graph extractor for research papers. Extract entities and relationships from the following paper.
+    return f"""You are a knowledge graph extractor for research papers. \
+Extract entities and relationships from the following paper.
 
 PAPER TITLE: {title}
 
@@ -51,7 +54,7 @@ RULES:
 1. Extract 3-15 entities that are central to the paper's contribution
 2. Extract 2-10 relationships between the entities
 3. For each entity: provide name, type, and brief description
-4. For each relationship: provide source entity name, target entity name, type, and supporting evidence quote
+4. For each relationship: provide source, target, type, and supporting evidence quote
 5. Use exact entity names as they appear in the paper
 6. Only include relationships that are explicitly supported by the text
 
@@ -62,10 +65,11 @@ Respond with ONLY a JSON object with two keys: "entities" and "relationships".
 Example format:
 {{
   "entities": [
-    {{"name": "BERT", "type": "method", "description": "Bidirectional encoder representations from transformers"}}
+    {{"name": "BERT", "type": "method", "description": "Bidirectional encoder"}}
   ],
   "relationships": [
-    {{"source": "BERT", "target": "GLUE", "type": "evaluates", "evidence": "We evaluate BERT on the GLUE benchmark"}}
+    {{"source": "BERT", "target": "GLUE", "type": "evaluates",
+      "evidence": "We evaluate BERT on the GLUE benchmark"}}
   ]
 }}
 
@@ -169,7 +173,8 @@ async def _store_entity_embedding(
         )
         await conn.execute(
             "UPDATE entities SET embedding_id = $1 WHERE id = $2",
-            point_id, entity_id,
+            point_id,
+            entity_id,
         )
     except Exception:
         # Recoverable: storing the embedding is optional; future dedup calls
@@ -198,7 +203,8 @@ async def _find_or_create_entity(
 
     existing = await conn.fetchrow(
         "SELECT id FROM entities WHERE canonical_name = $1 AND entity_type = $2",
-        canonical, entity_type,
+        canonical,
+        entity_type,
     )
     if existing:
         await conn.execute(
@@ -221,13 +227,21 @@ async def _find_or_create_entity(
            ON CONFLICT (canonical_name, entity_type) DO UPDATE
            SET paper_count = entities.paper_count + 1
            RETURNING id""",
-        name, canonical, entity_type, description,
+        name,
+        canonical,
+        entity_type,
+        description,
     )
     entity_id: int = row["id"]  # type: ignore[index]
 
     if embedding is not None and qdrant_client is not None:
         await _store_entity_embedding(
-            conn, qdrant_client, entity_id, name, entity_type, embedding,
+            conn,
+            qdrant_client,
+            entity_id,
+            name,
+            entity_type,
+            embedding,
         )
 
     return entity_id, False
@@ -242,14 +256,13 @@ async def extract_entities_for_paper(
 ) -> EntityExtractionResponse:
     """Extract and persist entities and relationships for one paper."""
     async with db_pool.acquire() as conn:
-        paper = await conn.fetchrow(
-            "SELECT id, title FROM papers WHERE id = $1", paper_id
-        )
+        paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
         if not paper:
             raise ValueError(f"Paper {paper_id} not found")
 
         chunks = await conn.fetch(
-            """SELECT id, chunk_index, content, page_number
+            """SELECT id, chunk_index, content, page_number,
+                      start_char, end_char, embedding_id, created_at, paper_id
                FROM paper_chunks WHERE paper_id = $1
                ORDER BY chunk_index""",
             paper_id,
@@ -259,7 +272,8 @@ async def extract_entities_for_paper(
 
         fast_model = get_fast_model()
 
-    full_text = "\n\n".join(c["content"] for c in chunks)
+    chunk_responses = [row_to_chunk_response(c) for c in chunks]
+    full_text = "\n\n".join(c.content for c in chunk_responses)
     if len(full_text) > 12000:
         full_text = full_text[:12000]
 
@@ -282,6 +296,7 @@ async def extract_entities_for_paper(
     entities_added = 0
     entities_merged = 0
     relationships_added = 0
+    dropped_count = 0
 
     entity_map: dict[str, int] = {}
 
@@ -306,18 +321,29 @@ async def extract_entities_for_paper(
             embedding = await _embed_entity_text(embedder, ve["type"], ve["name"])
             if embedding is not None:
                 similar_entity_id = await _find_similar_entity(
-                    qdrant_client, ve["type"], embedding,
+                    qdrant_client,
+                    ve["type"],
+                    embedding,
                 )
-        precomputed.append({
-            "embedding": embedding,
-            "similar_entity_id": similar_entity_id,
-        })
+        precomputed.append(
+            {
+                "embedding": embedding,
+                "similar_entity_id": similar_entity_id,
+            }
+        )
+
+    # Instantiate verifier once for this extraction run
+    quote_verifier = QuoteVerifier()
 
     # --- Phase 2: DB reads + writes (connection held, no external HTTP) ---
     async with db_pool.acquire() as conn:
         for ve, pc in zip(valid_entities, precomputed):
             entity_id, was_merged = await _find_or_create_entity(
-                conn, ve["name"], ve["type"], ve["description"], qdrant_client,
+                conn,
+                ve["name"],
+                ve["type"],
+                ve["description"],
+                qdrant_client,
                 embedding=pc["embedding"],
                 similar_entity_id=pc["similar_entity_id"],
             )
@@ -334,7 +360,9 @@ async def extract_entities_for_paper(
                    VALUES ($1, $2, 1, $3)
                    ON CONFLICT (paper_id, entity_id) DO UPDATE
                    SET mention_count = paper_entities.mention_count + 1""",
-                paper_id, entity_id, first_chunk_id,
+                paper_id,
+                entity_id,
+                first_chunk_id,
             )
 
         for rel in relationships_data:
@@ -356,6 +384,30 @@ async def extract_entities_for_paper(
             except (ValueError, TypeError):
                 confidence = 1.0
 
+            # --- Anti-hallucination: verify evidence quote before persisting ---
+            if evidence:
+                vr = quote_verifier.verify_quote(evidence, full_text, chunk_responses)
+                if not vr.verified:
+                    logger.info(
+                        "dropping unverified kg edge: subject=%s predicate=%s object=%s",
+                        source_name,
+                        rel_type,
+                        target_name,
+                    )
+                    dropped_count += 1
+                    continue
+                verified_evidence: str | None = vr.matched_text
+            else:
+                # No evidence provided — treat as unverified, drop the row
+                logger.info(
+                    "dropping kg edge with no evidence: subject=%s predicate=%s object=%s",
+                    source_name,
+                    rel_type,
+                    target_name,
+                )
+                dropped_count += 1
+                continue
+
             inserted = await conn.fetchval(
                 """INSERT INTO entity_relationships
                        (source_entity_id, target_entity_id, relationship_type,
@@ -364,7 +416,12 @@ async def extract_entities_for_paper(
                    ON CONFLICT (source_entity_id, target_entity_id, relationship_type, paper_id)
                    DO NOTHING
                    RETURNING 1""",
-                source_id, target_id, rel_type, paper_id, evidence, confidence,
+                source_id,
+                target_id,
+                rel_type,
+                paper_id,
+                verified_evidence,
+                confidence,
             )
             if inserted is not None:
                 relationships_added += 1
@@ -373,6 +430,7 @@ async def extract_entities_for_paper(
         entities_added=entities_added,
         relationships_added=relationships_added,
         entities_merged=entities_merged,
+        dropped_relationships=dropped_count,
     )
 
 
@@ -389,14 +447,17 @@ async def get_knowledge_graph(
                 """SELECT * FROM entities
                    WHERE entity_type = $1 AND paper_count >= $2
                    ORDER BY paper_count DESC LIMIT $3""",
-                entity_type, min_paper_count, limit,
+                entity_type,
+                min_paper_count,
+                limit,
             )
         else:
             entities = await conn.fetch(
                 """SELECT * FROM entities
                    WHERE paper_count >= $1
                    ORDER BY paper_count DESC LIMIT $2""",
-                min_paper_count, limit,
+                min_paper_count,
+                limit,
             )
     except asyncpg.exceptions.UndefinedTableError:
         return {"entities": [], "relationships": []}

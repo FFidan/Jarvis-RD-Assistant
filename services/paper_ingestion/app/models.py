@@ -586,6 +586,7 @@ class EntityExtractionResponse(BaseModel):
     entities_added: int
     relationships_added: int
     entities_merged: int
+    dropped_relationships: int = 0
 
 
 class KnowledgeGraphResponse(BaseModel):
