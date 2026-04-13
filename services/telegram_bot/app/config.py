@@ -15,7 +15,7 @@ class BotConfig:
     """Immutable configuration loaded from environment variables."""
 
     telegram_token: str
-    telegram_chat_id: int
+    telegram_chat_id: int | None
     database_url: str
     paper_ingestion_url: str
     learning_engine_url: str
@@ -35,15 +35,22 @@ class BotConfig:
             logger.critical("TELEGRAM_BOT_TOKEN is not set")
             raise SystemExit(1)
 
-        chat_id_str = os.environ.get("TELEGRAM_CHAT_ID", "")
+        chat_id_str = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+        chat_id: int | None
         if not chat_id_str:
-            logger.critical("TELEGRAM_CHAT_ID is not set")
-            raise SystemExit(1)
-        try:
-            chat_id = int(chat_id_str)
-        except ValueError as exc:
-            logger.critical("TELEGRAM_CHAT_ID must be an integer, got: %s", chat_id_str)
-            raise SystemExit(1) from exc
+            logger.info(
+                "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
+            )
+            chat_id = None
+        else:
+            try:
+                chat_id = int(chat_id_str)
+            except ValueError:
+                logger.warning(
+                    "TELEGRAM_CHAT_ID=%r not parseable as integer; treating as unset",
+                    chat_id_str,
+                )
+                chat_id = None
 
         database_url = os.environ.get("DATABASE_URL", "")
         if not database_url:

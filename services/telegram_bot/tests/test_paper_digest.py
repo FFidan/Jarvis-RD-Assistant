@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-
 from app.config import BotConfig
 from app.orchestration import paper_digest
 
@@ -132,4 +131,4 @@ async def test_run_paper_digest_falls_back_to_simple_digest():
     ):
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
-    simple_digest.assert_awaited_once_with(db_pool, bot, config)
+    simple_digest.assert_awaited_once_with(db_pool, bot, config, 1234)

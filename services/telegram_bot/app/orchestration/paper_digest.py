@@ -125,6 +125,7 @@ async def _simple_digest(
     db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
+    owner: int,
 ) -> None:
     """Fallback: send a simple digest built from direct DB queries.
 
@@ -136,6 +137,8 @@ async def _simple_digest(
         Telegram bot instance.
     config : BotConfig
         Bot configuration.
+    owner : int
+        Resolved owner chat ID (already validated by caller).
     """
     rows = await db_pool.fetch(
         """SELECT p.id, p.title, p.url, p.published_date, p.authors,
@@ -193,7 +196,7 @@ async def _simple_digest(
             lines.append(f"   <i>... and {len(papers) - 5} more</i>")
 
     try:
-        await _send_chunked(bot, config.telegram_chat_id, lines)
+        await _send_chunked(bot, owner, lines)
     except Exception:
         logger.exception("Failed to send simple digest fallback")
         return
@@ -227,13 +230,20 @@ async def run_paper_digest(
     config : BotConfig
         Bot configuration.
     """
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping paper digest: no telegram owner paired")
+        return
+
     # Try the LLM-powered digest first
     digest = await _fetch_digest_from_api(http_client, config)
 
     if digest and digest.get("topics"):
         text = format_weekly_digest(digest)
         lines = text.split("\n")
-        await _send_chunked(bot, config.telegram_chat_id, lines)
+        await _send_chunked(bot, owner, lines)
         logger.info(
             "LLM digest sent: %d papers in %d topics",
             digest.get("total_papers", 0),
@@ -243,4 +253,4 @@ async def run_paper_digest(
 
     # Fallback to simple digest
     logger.warning("Falling back to simple digest (API returned no data)")
-    await _simple_digest(db_pool, bot, config)
+    await _simple_digest(db_pool, bot, config, owner)

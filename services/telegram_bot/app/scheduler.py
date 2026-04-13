@@ -6,7 +6,7 @@ configured in the scheduled_nudges database table.
 
 import importlib
 import logging
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 
 import asyncpg
 import httpx
@@ -74,9 +74,7 @@ class JarvisScheduler:
             try:
                 parts = cron_expr.split()
                 if len(parts) != 5:
-                    logger.warning(
-                        "Invalid cron expression: %s (id=%d)", cron_expr, nudge_id
-                    )
+                    logger.warning("Invalid cron expression: %s (id=%d)", cron_expr, nudge_id)
                     continue
 
                 trigger = CronTrigger(
@@ -85,7 +83,7 @@ class JarvisScheduler:
                     day=parts[2],
                     month=parts[3],
                     day_of_week=parts[4],
-                    timezone=timezone.utc,
+                    timezone=UTC,
                 )
 
                 self.scheduler.add_job(
@@ -143,8 +141,18 @@ class JarvisScheduler:
                 "Please check service logs for details."
             )
             try:
+                from app.owner import resolve_owner_chat_id
+
+                owner = await resolve_owner_chat_id(self.db_pool, self.config)
+                if owner is None:
+                    logger.info(
+                        "Skipping failure alert for job %s (id=%d): no telegram owner paired",
+                        nudge_type,
+                        nudge_id,
+                    )
+                    return
                 await self.bot.send_message(
-                    chat_id=self.config.telegram_chat_id,
+                    chat_id=owner,
                     text=alert,
                     parse_mode="HTML",
                 )

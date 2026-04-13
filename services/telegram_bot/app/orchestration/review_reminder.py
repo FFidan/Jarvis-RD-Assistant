@@ -30,6 +30,13 @@ async def run_review_reminder(
     config : BotConfig
         Bot configuration.
     """
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping review reminder: no telegram owner paired")
+        return
+
     try:
         resp = await http_client.get(f"{config.learning_engine_url}/api/stats")
         resp.raise_for_status()
@@ -49,7 +56,7 @@ async def run_review_reminder(
 
     try:
         await bot.send_message(
-            chat_id=config.telegram_chat_id,
+            chat_id=owner,
             text=f"\U0001f4da You have <b>{due_now}</b> cards due for review!",
             parse_mode="HTML",
             reply_markup=keyboard,
@@ -58,6 +65,6 @@ async def run_review_reminder(
     except Exception:
         logger.exception(
             "Failed to send review reminder for chat_id=%s with due cards=%d",
-            config.telegram_chat_id,
+            owner,
             due_now,
         )

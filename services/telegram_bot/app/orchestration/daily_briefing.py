@@ -31,10 +31,16 @@ async def run_daily_briefing(
     config : BotConfig
         Bot configuration.
     """
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping daily briefing: no telegram owner paired")
+        return
+
     # New papers in last 24h
     row = await db_pool.fetchrow(
-        "SELECT COUNT(*) as count FROM papers "
-        "WHERE created_at >= NOW() - INTERVAL '24 hours'"
+        "SELECT COUNT(*) as count FROM papers WHERE created_at >= NOW() - INTERVAL '24 hours'"
     )
     new_papers_count = row["count"] if row else 0
 
@@ -75,9 +81,7 @@ async def run_daily_briefing(
     )
 
     try:
-        await bot.send_message(
-            chat_id=config.telegram_chat_id, text=message, parse_mode="HTML"
-        )
+        await bot.send_message(chat_id=owner, text=message, parse_mode="HTML")
         logger.info("Daily briefing sent")
     except Exception:  # noqa: BLE001 — top-level send; must not crash the scheduler
         logger.exception("Failed to send message")

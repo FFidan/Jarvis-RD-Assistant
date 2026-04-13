@@ -32,6 +32,13 @@ async def run_deadline_warning(
     config : BotConfig
         Bot configuration.
     """
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping deadline warning: no telegram owner paired")
+        return
+
     milestones = await db_pool.fetch(
         """SELECT m.name, m.deadline, p.name as project_name
         FROM milestones m
@@ -58,11 +65,7 @@ async def run_deadline_warning(
             days_left = (deadline.date() - now.date()).days
         else:
             days_left = "?"
-        urgency = (
-            "\U0001f534"
-            if isinstance(days_left, int) and days_left <= 1
-            else "\U0001f7e1"
-        )
+        urgency = "\U0001f534" if isinstance(days_left, int) and days_left <= 1 else "\U0001f7e1"
         lines.append(f"{urgency} <b>{name}</b> ({project})")
         lines.append(f"   Due in {days_left} day(s)")
 
@@ -71,7 +74,7 @@ async def run_deadline_warning(
 
     try:
         await bot.send_message(
-            chat_id=config.telegram_chat_id,
+            chat_id=owner,
             text=truncate("\n".join(lines)),
             parse_mode="HTML",
         )

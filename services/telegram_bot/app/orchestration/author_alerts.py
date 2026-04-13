@@ -33,9 +33,14 @@ async def run_author_alerts(
     config : BotConfig
         Bot configuration.
     """
-    authors = await db_pool.fetch(
-        "SELECT * FROM tracked_authors WHERE enabled = TRUE"
-    )
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping author alerts: no telegram owner paired")
+        return
+
+    authors = await db_pool.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
     if not authors:
         logger.info("No enabled tracked authors")
         return
@@ -100,7 +105,7 @@ async def run_author_alerts(
                 message = format_author_alert(tracked_name, matched_papers)
                 try:
                     await bot.send_message(
-                        chat_id=config.telegram_chat_id,
+                        chat_id=owner,
                         text=message,
                         parse_mode="HTML",
                     )
@@ -110,9 +115,7 @@ async def run_author_alerts(
                         len(matched_papers),
                     )
                 except Exception:
-                    logger.exception(
-                        "Failed to send author alert for %s", tracked_name
-                    )
+                    logger.exception("Failed to send author alert for %s", tracked_name)
 
             # Update last_checked_at
             await db_pool.execute(

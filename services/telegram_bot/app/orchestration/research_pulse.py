@@ -45,12 +45,18 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> None:
 
 async def run_research_pulse(
     http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,  # kept for scheduler signature compat, unused
+    db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
 ) -> None:
     """Fetch today's Pulse deck and deliver the top cards to Telegram."""
-    del db_pool
+    from app.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping research pulse: no telegram owner paired")
+        return
+
     headers = {"X-API-Key": config.jarvis_api_key} if config.jarvis_api_key else {}
     try:
         resp = await http_client.get(
@@ -64,34 +70,28 @@ async def run_research_pulse(
         if exc.response is not None and exc.response.status_code == 404:
             await _send(
                 bot,
-                config.telegram_chat_id,
+                owner,
                 "\U0001f4ed No Pulse deck yet — run /pulse_now to generate one.",
             )
             return
         logger.warning("Pulse fetch failed: %s", exc)
-        await _send(
-            bot, config.telegram_chat_id, "\u26a0\ufe0f Pulse fetch failed — try again later."
-        )
+        await _send(bot, owner, "\u26a0\ufe0f Pulse fetch failed — try again later.")
         return
     except Exception:  # noqa: BLE001 — top-level catch-all
         logger.exception("Unexpected error fetching Pulse deck")
-        await _send(
-            bot, config.telegram_chat_id, "\u26a0\ufe0f Pulse fetch failed — try again later."
-        )
+        await _send(bot, owner, "\u26a0\ufe0f Pulse fetch failed — try again later.")
         return
 
     cards = deck.get("cards") or []
     if not cards:
         await _send(
             bot,
-            config.telegram_chat_id,
+            owner,
             "\U0001f4ed No Pulse cards today — run /pulse_now to generate a fresh deck.",
         )
         return
 
-    await _send(
-        bot, config.telegram_chat_id, f"\U0001f4e1 <b>Pulse — {len(cards)} scored paper(s)</b>"
-    )
+    await _send(bot, owner, f"\U0001f4e1 <b>Pulse — {len(cards)} scored paper(s)</b>")
     for card in cards[:PULSE_TELEGRAM_TOP_N]:
         paper_id = card.get("paper_id")
         if paper_id is None:
@@ -105,7 +105,7 @@ async def run_research_pulse(
         }
         await _send(
             bot,
-            config.telegram_chat_id,
+            owner,
             truncate(format_paper_card(paper)),
             reply_markup=_pulse_keyboard(int(paper_id)),
         )
