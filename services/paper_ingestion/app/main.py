@@ -62,9 +62,16 @@ logger = logging.getLogger(__name__)
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply unapplied SQL migrations from db/migrations/ on startup."""
     async with pool.acquire() as conn:
-        # Advisory lock prevents concurrent migration runs across service instances
-        await conn.execute("SELECT pg_advisory_lock(42)")
-        try:
+        async with conn.transaction():
+            # Bound the advisory-lock wait so a crashed holder never stalls startup.
+            await conn.execute("SET LOCAL lock_timeout = '60s'")
+            try:
+                await conn.execute("SELECT pg_advisory_xact_lock(42)")
+            except asyncpg.LockNotAvailableError:
+                logger.warning(
+                    "migration lock contended — another instance is running migrations; skipping"
+                )
+                return  # Other instance handles migrations; treat as success
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INTEGER PRIMARY KEY,
@@ -99,8 +106,6 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                         "INSERT INTO schema_migrations (version) VALUES ($1)", version
                     )
                 logger.info("Migration %s applied successfully", version)
-        finally:
-            await conn.execute("SELECT pg_advisory_unlock(42)")
 
 
 # ---------------------------------------------------------------------------

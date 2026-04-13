@@ -5,19 +5,22 @@ resolves to the real db/migrations/ directory in the repo. This avoids
 fragile monkeypatching of Path internals.
 """
 
-import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
+import asyncpg
 
 # The real migrations directory in this repo
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
 
 
 def _make_pool_and_conn():
-    """Create mock asyncpg Pool + Connection with transaction support."""
+    """Create mock asyncpg Pool + Connection with transaction support.
+
+    The outer transaction (wraps the advisory lock) and each per-migration
+    transaction are all handled by the same reusable transaction context
+    manager mock.
+    """
     conn = AsyncMock()
     txn_cm = MagicMock()
     txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
@@ -46,11 +49,12 @@ def _count_real_migrations() -> int:
 def _import_run_migrations():
     """Lazy import to avoid module-level import chain issues with Docker deps."""
     from app.main import run_migrations
+
     return run_migrations
 
 
 async def test_creates_schema_migrations_table():
-    """run_migrations should always create the schema_migrations table first."""
+    """run_migrations should create the schema_migrations table after acquiring the lock."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
     total = _count_real_migrations()
@@ -58,8 +62,11 @@ async def test_creates_schema_migrations_table():
 
     await run_migrations(pool)
 
-    first_execute_call = conn.execute.call_args_list[0]
-    assert "CREATE TABLE IF NOT EXISTS schema_migrations" in str(first_execute_call)
+    # First execute: SET LOCAL lock_timeout
+    # Second execute: SELECT pg_advisory_xact_lock(42)
+    # Third execute: CREATE TABLE IF NOT EXISTS schema_migrations
+    all_calls = [str(c) for c in conn.execute.call_args_list]
+    assert any("CREATE TABLE IF NOT EXISTS schema_migrations" in c for c in all_calls)
 
 
 async def test_skips_already_applied_migrations():
@@ -71,8 +78,8 @@ async def test_skips_already_applied_migrations():
 
     await run_migrations(pool)
 
-    # No migration SQL (via transaction) should have been executed.
-    assert conn.transaction.call_count == 0
+    # Only the outer wrapping transaction should have been opened (no migration transactions).
+    assert conn.transaction.call_count == 1
 
 
 async def test_applies_unapplied_migration():
@@ -85,8 +92,8 @@ async def test_applies_unapplied_migration():
 
     await run_migrations(pool)
 
-    # Should have opened exactly one transaction (for version 1)
-    assert conn.transaction.call_count == 1
+    # Outer transaction (1) + one migration transaction (1) = 2
+    assert conn.transaction.call_count == 2
     # The INSERT into schema_migrations should include version 1
     execute_calls = [str(c) for c in conn.execute.call_args_list]
     assert any("1" in c and "schema_migrations" in c for c in execute_calls[1:])
@@ -96,14 +103,15 @@ async def test_applies_multiple_unapplied_in_order():
     """Multiple unapplied migrations should be applied in numeric order."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    # Only mark first 10 as applied; rest (11-16) should be applied
+    # Only mark first 10 as applied; rest should be applied
     conn.fetch.return_value = [{"version": i} for i in range(1, 11)]
 
     await run_migrations(pool)
 
     total = _count_real_migrations()
     expected_new = total - 10
-    assert conn.transaction.call_count == expected_new
+    # Outer transaction (1) + one transaction per new migration
+    assert conn.transaction.call_count == expected_new + 1
 
 
 async def test_no_migrations_applied_when_all_fresh():
@@ -115,7 +123,8 @@ async def test_no_migrations_applied_when_all_fresh():
     await run_migrations(pool)
 
     total = _count_real_migrations()
-    assert conn.transaction.call_count == total
+    # Outer transaction (1) + one transaction per migration
+    assert conn.transaction.call_count == total + 1
 
 
 async def test_schema_migrations_select_called():
@@ -128,3 +137,44 @@ async def test_schema_migrations_select_called():
     await run_migrations(pool)
 
     conn.fetch.assert_awaited_once_with("SELECT version FROM schema_migrations")
+
+
+async def test_migration_uses_xact_lock():
+    """run_migrations must use pg_advisory_xact_lock (not session-level pg_advisory_lock)."""
+    run_migrations = _import_run_migrations()
+    pool, conn = _make_pool_and_conn()
+    total = _count_real_migrations()
+    conn.fetch.return_value = [{"version": i} for i in range(1, total + 1)]
+
+    await run_migrations(pool)
+
+    execute_calls = [str(c) for c in conn.execute.call_args_list]
+    # xact lock must be present
+    assert any("pg_advisory_xact_lock" in c for c in execute_calls), (
+        "Expected pg_advisory_xact_lock to be called"
+    )
+    # session-level lock must NOT be present
+    assert not any("pg_advisory_lock(" in c and "xact" not in c for c in execute_calls), (
+        "Session-level pg_advisory_lock must not be used"
+    )
+
+
+async def test_migration_lock_timeout_returns_gracefully():
+    """LockNotAvailableError from pg_advisory_xact_lock causes run_migrations to return
+    gracefully without raising."""
+    run_migrations = _import_run_migrations()
+    pool, conn = _make_pool_and_conn()
+
+    # Make execute raise LockNotAvailableError on the advisory lock call
+    async def _execute_side_effect(sql, *args, **kwargs):
+        if "pg_advisory_xact_lock" in sql:
+            raise asyncpg.LockNotAvailableError()
+
+    conn.execute.side_effect = _execute_side_effect
+
+    # Must not raise — returns gracefully, letting the other instance run migrations
+    await run_migrations(pool)
+
+    # fetch (SELECT version FROM schema_migrations) must NOT have been called —
+    # we bailed out before reaching it
+    conn.fetch.assert_not_awaited()
