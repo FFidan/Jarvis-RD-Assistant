@@ -1,41 +1,52 @@
 """Rate limiting shared across JARVIS services."""
 
 import ipaddress
+import os
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
-_TRUSTED_NETS = (
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),   # Docker default bridge
-    ipaddress.ip_network("192.168.0.0/16"),
-)
+# Trusted proxy CIDRs loaded once at import time.
+# Override / extend via TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs).
+# Defaults include Docker bridge / RFC-1918 ranges so Docker-internal hops are
+# always skipped when walking X-Forwarded-For left-to-right.
+_DEFAULT_PROXY_CIDRS = [
+    "127.0.0.0/8",
+    "10.0.0.0/8",
+    "172.16.0.0/12",  # Docker default bridge
+    "192.168.0.0/16",
+]
 
-
-def _in_trusted_nets(ip: str) -> bool:
-    try:
-        addr = ipaddress.ip_address(ip)
-        return any(addr in net for net in _TRUSTED_NETS)
-    except ValueError:
-        return False
+_TRUSTED_PROXIES: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network(c.strip())
+    for c in (os.environ.get("TRUSTED_PROXY_CIDRS", "").split(",") + _DEFAULT_PROXY_CIDRS)
+    if c.strip()
+]
 
 
 def _real_ip(request: Request) -> str:
-    """Return actual client IP, using rightmost XFF entry only when direct connection is trusted."""
-    direct_ip = (request.client.host if request.client else None) or "unknown"
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for and _in_trusted_nets(direct_ip):
-        ips = [ip.strip() for ip in forwarded_for.split(",")]
-        candidate = ips[-1]  # rightmost = IP our reverse proxy appended
+    """Return actual client IP via CF-Connecting-IP or XFF walk-left past trusted proxies."""
+    # 1. Cloudflare tunnel: CF-Connecting-IP is not forgeable when the tunnel
+    #    is the only ingress path — prefer it unconditionally.
+    cf = request.headers.get("cf-connecting-ip")
+    if cf:
+        return cf.strip()
+    # 2. Walk XFF left-to-right, return first non-trusted entry.
+    xff = request.headers.get("x-forwarded-for", "")
+    if not xff:
+        return request.client.host if request.client else "unknown"
+    ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
+    for ip in ips:
         try:
-            ipaddress.ip_address(candidate)
-            return candidate
+            addr = ipaddress.ip_address(ip)
         except ValueError:
-            pass  # fall through to direct_ip
-    return direct_ip
+            continue  # skip malformed entries
+        if not any(addr in net for net in _TRUSTED_PROXIES):
+            return ip
+    # All entries were trusted proxies (e.g. single-hop behind Docker bridge).
+    return ips[-1] if ips else (request.client.host if request.client else "unknown")
 
 
 def create_limiter() -> Limiter:
@@ -43,9 +54,7 @@ def create_limiter() -> Limiter:
     return Limiter(key_func=_real_ip)
 
 
-async def rate_limit_exceeded_handler(
-    request: Request, exc: RateLimitExceeded
-) -> JSONResponse:
+async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     """Handle rate limit exceeded errors with a JSON 429 response."""
     return JSONResponse(
         status_code=429,
