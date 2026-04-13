@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { streamSSE, type StreamEvent } from '@/lib/sse';
 
+// Mock auth store — must be defined before importing sse to ensure
+// the module-level import in sse.ts resolves to this mock.
+vi.mock('@/stores/auth-store', () => ({
+  useAuthStore: {
+    getState: vi.fn(() => ({
+      getApiKey: vi.fn(() => null),
+      logout: vi.fn(),
+    })),
+  },
+}));
+
 function createMockReadableStream(chunks: string[]): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   let index = 0;
@@ -81,5 +92,66 @@ describe('streamSSE', () => {
     expect(events).toHaveLength(1);
     expect(events[0].type).toBe('error');
     expect(events[0].message).toBe('Something failed');
+  });
+
+  it('calls logout and throws on 401 response', async () => {
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const logoutMock = vi.fn();
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => null),
+      logout: logoutMock,
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Unauthorized', { status: 401 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    await expect(gen.next()).rejects.toThrow('Unauthorized — session ended');
+    expect(logoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('calls logout and throws on 403 response', async () => {
+    const { useAuthStore } = await import('@/stores/auth-store');
+    const logoutMock = vi.fn();
+    vi.mocked(useAuthStore.getState).mockReturnValue({
+      getApiKey: vi.fn(() => null),
+      logout: logoutMock,
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Forbidden', { status: 403 }),
+    );
+
+    const gen = streamSSE('/api/ask/stream', { question: 'test' });
+    await expect(gen.next()).rejects.toThrow('Unauthorized — session ended');
+    expect(logoutMock).toHaveBeenCalledOnce();
+  });
+
+  it('reader.cancel is called in finally block after stream completes', async () => {
+    const cancelMock = vi.fn().mockResolvedValue(undefined);
+    const stream = createMockReadableStream([
+      'data: {"type":"token","content":"Hi"}\n\n',
+      'data: [DONE]\n\n',
+    ]);
+    // Wrap the real reader to spy on cancel
+    const originalGetReader = stream.getReader.bind(stream);
+    vi.spyOn(stream, 'getReader').mockImplementation(() => {
+      const reader = originalGetReader();
+      reader.cancel = cancelMock;
+      return reader;
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamSSE('/api/ask/stream', { question: 'test' })) {
+      events.push(event);
+    }
+
+    expect(events).toHaveLength(1);
+    expect(cancelMock).toHaveBeenCalledOnce();
   });
 });

@@ -48,10 +48,13 @@ export class ApiError extends Error {
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5 min
+  // Combine caller signal with the 5-min timeout: abort on whichever fires first
+  const signals = [controller.signal, init?.signal].filter(Boolean) as AbortSignal[];
+  const combinedSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   try {
     const res = await fetch(url, {
       ...init,
-      signal: init?.signal ?? controller.signal,
+      signal: combinedSignal,
       headers: {
         'Content-Type': 'application/json',
         ...authHeaders(),
@@ -83,10 +86,13 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
 export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Response> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 300_000);
+  // Combine caller signal with the 5-min timeout: abort on whichever fires first
+  const signals = [controller.signal, init?.signal].filter(Boolean) as AbortSignal[];
+  const combinedSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
   try {
     const res = await fetch(url, {
       ...init,
-      signal: init?.signal ?? controller.signal,
+      signal: combinedSignal,
       headers: {
         ...authHeaders(),
         ...init?.headers,

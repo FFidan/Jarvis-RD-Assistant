@@ -6,6 +6,7 @@
  * a stream and parse SSE frames manually.
  *
  * SECURITY: X-API-Key header is included on every SSE request.
+ * AUTH: 401/403 responses trigger automatic logout.
  */
 
 import { useAuthStore } from '@/stores/auth-store';
@@ -57,18 +58,22 @@ async function* parseSSEFrames(response: Response): AsyncGenerator<string> {
   const decoder = new TextDecoder();
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-    for (const line of lines) {
-      if (!line.startsWith('data: ')) continue;
-      const data = line.slice(6).trim();
-      if (data === '[DONE]') return;
-      yield data;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') return;
+        yield data;
+      }
     }
+  } finally {
+    await reader.cancel().catch(() => {});
   }
 }
 
@@ -89,6 +94,10 @@ export async function* streamSSE(
   });
 
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      useAuthStore.getState().logout();
+      throw new Error('Unauthorized — session ended');
+    }
     throw new Error(`SSE ${res.status}: ${await res.text()}`);
   }
 
@@ -122,6 +131,10 @@ export async function* streamAnalyze(
   });
 
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) {
+      useAuthStore.getState().logout();
+      throw new Error('Unauthorized — session ended');
+    }
     throw new Error(`Analyze SSE ${res.status}: ${await res.text()}`);
   }
 
