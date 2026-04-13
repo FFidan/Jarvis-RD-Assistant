@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -65,24 +65,43 @@ def _now():
     return datetime.now(UTC)
 
 
-def _make_deck_row(id=1, name="Test Deck", description=None, topic_id=None,
-                   card_count=0, due_count=0):
+def _make_deck_row(
+    id=1, name="Test Deck", description=None, topic_id=None, card_count=0, due_count=0
+):
     return FakeRecord(
-        id=id, name=name, description=description, topic_id=topic_id,
-        card_count=card_count, due_count=due_count, created_at=_now(),
+        id=id,
+        name=name,
+        description=description,
+        topic_id=topic_id,
+        card_count=card_count,
+        due_count=due_count,
+        created_at=_now(),
     )
 
 
-def _make_card_row(id=1, deck_id=1, paper_id=None, card_type="concept",
-                   front="Q?", back="A.", evidence=None, fsrs_state=None,
-                   due_at=None):
+def _make_card_row(
+    id=1,
+    deck_id=1,
+    paper_id=None,
+    card_type="concept",
+    front="Q?",
+    back="A.",
+    evidence=None,
+    fsrs_state=None,
+    due_at=None,
+):
     return FakeRecord(
-        id=id, deck_id=deck_id, paper_id=paper_id, card_type=card_type,
-        front=front, back=back,
+        id=id,
+        deck_id=deck_id,
+        paper_id=paper_id,
+        card_type=card_type,
+        front=front,
+        back=back,
         evidence=evidence or {},
         fsrs_state=fsrs_state or {},
         due_at=due_at or _now(),
-        created_at=_now(), updated_at=_now(),
+        created_at=_now(),
+        updated_at=_now(),
     )
 
 
@@ -303,12 +322,15 @@ async def test_create_card_success(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/cards", json={
-            "deck_id": 1,
-            "card_type": "concept",
-            "front": "What is ML?",
-            "back": "Machine Learning",
-        })
+        resp = await client.post(
+            "/api/cards",
+            json={
+                "deck_id": 1,
+                "card_type": "concept",
+                "front": "What is ML?",
+                "back": "Machine Learning",
+            },
+        )
 
     assert resp.status_code == 201
     body = resp.json()
@@ -480,7 +502,9 @@ async def test_submit_review_success(_app):
     card = _make_card_row(id=1, fsrs_state={"stability": 1.0})
     next_due = _now() + timedelta(days=3)
     mock_fsrs.schedule_review.return_value = (
-        {"stability": 2.5}, {"rating": 3}, next_due,
+        {"stability": 2.5},
+        {"rating": 3},
+        next_due,
     )
     conn.fetchrow.return_value = card
     conn.fetchval.return_value = 42  # review_log_id
@@ -521,8 +545,12 @@ async def test_get_stats_success(_app):
     """GET /api/stats returns retention statistics."""
     app, conn, *_ = _app
     stats_row = FakeRecord(
-        total_cards=50, due_now=10, reviewed_today=5,
-        by_rating={"3": 20, "4": 10}, total_recent=35, good_easy=30,
+        total_cards=50,
+        due_now=10,
+        reviewed_today=5,
+        by_rating={"3": 20, "4": 10},
+        total_recent=35,
+        good_easy=30,
     )
     conn.fetchrow.return_value = stats_row
     conn.fetch.return_value = []  # streak rows
@@ -556,9 +584,13 @@ async def test_generate_paper_not_found(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/generate", json={
-            "paper_id": 999, "deck_id": 1,
-        })
+        resp = await client.post(
+            "/api/generate",
+            json={
+                "paper_id": 999,
+                "deck_id": 1,
+            },
+        )
 
     assert resp.status_code == 404
 
@@ -577,9 +609,13 @@ async def test_generate_no_chunks_returns_400(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/generate", json={
-            "paper_id": 1, "deck_id": 1,
-        })
+        resp = await client.post(
+            "/api/generate",
+            json={
+                "paper_id": 1,
+                "deck_id": 1,
+            },
+        )
 
     assert resp.status_code == 400
     assert "chunks" in resp.json()["detail"].lower()
@@ -593,10 +629,9 @@ async def test_generate_no_chunks_returns_400(_app):
 @pytest.mark.asyncio
 async def test_batch_generate_deck_not_found(_app):
     """batch_generate_cards returns 404 when the target deck does not exist."""
-    from fastapi import HTTPException
-
     from app.models import BatchGenerateRequest
     from app.routers import generation
+    from fastapi import BackgroundTasks, HTTPException
 
     _, conn, _, mock_fsrs, mock_generator, _ = _app
     conn.fetchval.return_value = None
@@ -606,10 +641,15 @@ async def test_batch_generate_deck_not_found(_app):
         await handler(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=999),
-            db_pool=MagicMock(acquire=MagicMock(return_value=MagicMock(
-                __aenter__=AsyncMock(return_value=conn),
-                __aexit__=AsyncMock(return_value=False),
-            ))),
+            background_tasks=BackgroundTasks(),
+            db_pool=MagicMock(
+                acquire=MagicMock(
+                    return_value=MagicMock(
+                        __aenter__=AsyncMock(return_value=conn),
+                        __aexit__=AsyncMock(return_value=False),
+                    )
+                )
+            ),
             fsrs_manager=mock_fsrs,
             card_generator=mock_generator,
         )
@@ -618,8 +658,41 @@ async def test_batch_generate_deck_not_found(_app):
 
 
 @pytest.mark.asyncio
-async def test_batch_generate_success_counts_created_cards(_app):
-    """batch_generate_cards reports processed papers and created cards."""
+async def test_batch_generate_success_returns_202_accepted(_app):
+    """batch_generate_cards immediately returns 202 with a job_id."""
+    from app.jobs import get_job
+    from app.models import BatchGenerateRequest
+    from app.routers import generation
+    from fastapi import BackgroundTasks
+
+    _, conn, _, mock_fsrs, mock_generator, _ = _app
+    pool, _ = _make_pool_and_conn()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    conn.fetchval.return_value = 1  # deck exists
+    handler = generation.batch_generate_cards.__wrapped__
+
+    resp = await handler(
+        MagicMock(),
+        body=BatchGenerateRequest(deck_id=1),
+        background_tasks=BackgroundTasks(),
+        db_pool=pool,
+        fsrs_manager=mock_fsrs,
+        card_generator=mock_generator,
+    )
+
+    assert resp.status == "pending"
+    assert resp.job_id
+    job = get_job(resp.job_id)
+    assert job is not None
+    assert job["status"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_batch_generate_job_completes_with_created_cards(_app):
+    """_run_batch_job processes papers and reports created cards in the job record."""
+    from app.jobs import create_job, get_job
     from app.models import BatchGenerateRequest
     from app.routers import generation
 
@@ -639,7 +712,6 @@ async def test_batch_generate_success_counts_created_cards(_app):
         ]
     }
 
-    conn.fetchval.side_effect = [1, None]
     conn.fetch.side_effect = [
         [FakeRecord(id=101)],
         [FakeRecord(id=1, content="chunk text", page_number=2)],
@@ -648,28 +720,34 @@ async def test_batch_generate_success_counts_created_cards(_app):
         FakeRecord(id=101, title="Paper 101", authors=["Ada"], abstract="A"),
         _make_card_row(id=501, deck_id=1, paper_id=101),
     ]
-    handler = generation.batch_generate_cards.__wrapped__
 
-    resp = await handler(
-        MagicMock(),
-        body=BatchGenerateRequest(deck_id=1),
-        db_pool=pool,
-        fsrs_manager=mock_fsrs,
-        card_generator=mock_generator,
-    )
+    with patch.object(
+        generation, "_insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
+    ):
+        job_id = "test-batch-success"
+        create_job(job_id)
+        await generation._run_batch_job(
+            job_id=job_id,
+            body=BatchGenerateRequest(deck_id=1),
+            db_pool=pool,
+            fsrs_manager=mock_fsrs,
+            card_generator=mock_generator,
+        )
 
-    assert resp.papers_processed == 1
-    assert resp.cards_created == 1
-    assert resp.errors == []
+    job = get_job(job_id)
+    assert job["status"] == "done"
+    assert job["result"]["papers_processed"] == 1
+    assert job["result"]["cards_created"] == 1
+    assert job["result"]["errors"] == []
 
 
-def test_batch_generate_declares_batch_response_type():
-    """batch_generate_cards keeps its declared response type aligned with the route model."""
-    from app.models import BatchGenerateResponse
+def test_batch_generate_declares_accepted_response_type():
+    """batch_generate_cards is typed as returning BatchAcceptedResponse (202)."""
+    from app.models import BatchAcceptedResponse
     from app.routers import generation
 
     handler = generation.batch_generate_cards.__wrapped__
-    assert inspect.signature(handler).return_annotation is BatchGenerateResponse
+    assert inspect.signature(handler).return_annotation is BatchAcceptedResponse
 
 
 # ---------------------------------------------------------------------------
@@ -696,8 +774,13 @@ async def test_export_no_cards_returns_400(_app):
     """GET /api/export/anki/{deck_id} returns 400 when deck has no cards."""
     app, conn, *_ = _app
     conn.fetchrow.return_value = FakeRecord(
-        id=1, name="Empty Deck", description=None, topic_id=None,
-        card_count=0, due_count=0, created_at=_now(),
+        id=1,
+        name="Empty Deck",
+        description=None,
+        topic_id=None,
+        card_count=0,
+        due_count=0,
+        created_at=_now(),
     )
     conn.fetch.return_value = []
 
@@ -719,9 +802,7 @@ async def test_export_no_cards_returns_400(_app):
 async def test_get_next_review_respects_limit(_app):
     """GET /api/review/next?limit=5 passes limit to SQL query."""
     app, conn, *_ = _app
-    conn.fetch.return_value = [
-        _make_card_row(id=i) for i in range(5)
-    ]
+    conn.fetch.return_value = [_make_card_row(id=i) for i in range(5)]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -744,20 +825,26 @@ async def test_create_card_with_evidence(_app):
     mock_fsrs.create_new_card.return_value = ({}, _now())
     evidence = {"quote": "Some text", "page_number": 3, "chunk_id": 10}
     conn.fetchrow.return_value = _make_card_row(
-        id=20, deck_id=1, front="Q?", back="A.",
+        id=20,
+        deck_id=1,
+        front="Q?",
+        back="A.",
         evidence=evidence,
     )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/cards", json={
-            "deck_id": 1,
-            "card_type": "quote",
-            "front": "What is this?",
-            "back": "That.",
-            "evidence": {"quote": "Some text", "page_number": 3, "chunk_id": 10},
-        })
+        resp = await client.post(
+            "/api/cards",
+            json={
+                "deck_id": 1,
+                "card_type": "quote",
+                "front": "What is this?",
+                "back": "That.",
+                "evidence": {"quote": "Some text", "page_number": 3, "chunk_id": 10},
+            },
+        )
 
     assert resp.status_code == 201
     body = resp.json()
@@ -775,15 +862,21 @@ async def test_create_deck_with_description(_app):
     """POST /api/decks with optional description succeeds."""
     app, conn, *_ = _app
     conn.fetchrow.return_value = _make_deck_row(
-        id=3, name="My Deck", description="A great deck",
+        id=3,
+        name="My Deck",
+        description="A great deck",
     )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/decks", json={
-            "name": "My Deck", "description": "A great deck",
-        })
+        resp = await client.post(
+            "/api/decks",
+            json={
+                "name": "My Deck",
+                "description": "A great deck",
+            },
+        )
 
     assert resp.status_code == 201
     body = resp.json()

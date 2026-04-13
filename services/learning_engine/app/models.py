@@ -298,6 +298,23 @@ class BatchGenerateResponse(BaseModel):
     errors: list[str] = Field(default_factory=list)
 
 
+class BatchAcceptedResponse(BaseModel):
+    """202 Accepted response for POST /api/generate/batch."""
+
+    job_id: str
+    status: str = "pending"
+
+
+class BatchJobStatusResponse(BaseModel):
+    """Response for GET /api/generate/batch/{job_id}."""
+
+    job_id: str
+    status: str  # pending | running | done | failed
+    created_at: str
+    result: BatchGenerateResponse | None = None
+    error: str | None = None
+
+
 class ProjectDetailResponse(BaseModel):
     """Response for GET /api/projects/{project_id} with task/milestone counts."""
 
