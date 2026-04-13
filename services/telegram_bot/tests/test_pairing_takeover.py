@@ -11,6 +11,7 @@ from __future__ import annotations
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -31,12 +32,12 @@ for _mod_name in (
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
 
-_tg = sys.modules["telegram"]
+_tg = cast(Any, sys.modules["telegram"])
 _tg.Update = MagicMock
-_tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
-_tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
+_tg.InlineKeyboardButton = MagicMock
+_tg.InlineKeyboardMarkup = MagicMock
 
-_tg_ext = sys.modules["telegram.ext"]
+_tg_ext = cast(Any, sys.modules["telegram.ext"])
 _tg_ext.Application = MagicMock
 _tg_ext.CommandHandler = MagicMock
 _tg_ext.CallbackQueryHandler = MagicMock
@@ -70,7 +71,7 @@ class _FakeAcquireCM:
     async def __aenter__(self):
         return self._conn
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, *_):
         return None
 
 
@@ -78,7 +79,7 @@ class _FakeTxnCM:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, exc_type, exc, tb):
+    async def __aexit__(self, *_):
         return None
 
 

@@ -56,7 +56,8 @@ def create_limiter() -> Limiter:
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     """Handle rate limit exceeded errors with a JSON 429 response."""
+    _ = request  # Starlette requires (request, exc) interface; path not needed in 429 body
     return JSONResponse(
         status_code=429,
-        content={"detail": "Rate limit exceeded. Please try again later."},
+        content={"detail": f"Rate limit exceeded ({exc.limit}). Please try again later."},
     )

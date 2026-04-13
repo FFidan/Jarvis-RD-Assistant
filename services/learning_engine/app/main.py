@@ -14,6 +14,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from jarvis_common import (
     RequestIDMiddleware,
     configure_logging,
@@ -169,7 +170,7 @@ app.include_router(executive.router)
 
 
 @app.get("/health", dependencies=[], response_model=HealthCheckResponse)
-async def health_check(request: Request) -> HealthCheckResponse:
+async def health_check(request: Request) -> HealthCheckResponse | JSONResponse:
     """Return service health status with dependency probing (no auth required)."""
     checks: dict[str, str] = {}
 
@@ -194,8 +195,8 @@ async def health_check(request: Request) -> HealthCheckResponse:
         checks["litellm"] = "unavailable"
 
     all_ok = all(v == "ok" for v in checks.values())
-    return {
-        "status": "ok" if all_ok else "degraded",
-        "service": "learning_engine",
-        "checks": checks,
-    }
+    status = "ok" if all_ok else "degraded"
+    body = {"status": status, "service": "learning_engine", "checks": checks}
+    if status == "degraded":
+        return JSONResponse(status_code=503, content=body)
+    return body

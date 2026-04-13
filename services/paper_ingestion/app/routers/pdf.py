@@ -64,24 +64,27 @@ async def download_pdf(
     """
     import httpx
 
-    # Use advisory lock to prevent duplicate downloads (TOCTOU race)
+    # Phase 1: load and validate (short transaction — no lock held during I/O)
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Paper not found")
+    if not row["pdf_url"]:
+        raise HTTPException(status_code=400, detail="Paper has no PDF URL")
+    if row["pdf_downloaded"]:
+        return row_to_paper_response(row)
+
+    # Phase 2: download (no DB connection held across slow HTTP)
+    try:
+        pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="PDF download failed")
+
+    # Phase 3: write back (new short transaction — pdf_downloaded=TRUE is idempotent guard)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1 FOR UPDATE", paper_id)
-            if not row:
-                raise HTTPException(status_code=404, detail="Paper not found")
-            if not row["pdf_url"]:
-                raise HTTPException(status_code=400, detail="Paper has no PDF URL")
-            if row["pdf_downloaded"]:
-                return row_to_paper_response(row)
-
-            try:
-                pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
-            except httpx.HTTPStatusError:
-                raise HTTPException(status_code=502, detail="PDF download failed")
-
             updated = await conn.fetchrow(
                 """
                 UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE
@@ -301,43 +304,45 @@ async def scan_local_pdfs(
     storage_path = Path(PDF_STORAGE_PATH)
     storage_path.mkdir(parents=True, exist_ok=True)
 
-    async with db_pool.acquire() as conn:
-        for pdf_file in pdf_files:
-            # H-4: reject symlinks to prevent directory traversal via symlink
-            if pdf_file.is_symlink():
-                skipped += 1
-                continue
+    for pdf_file in pdf_files:
+        # H-4: reject symlinks to prevent directory traversal via symlink
+        if pdf_file.is_symlink():
+            skipped += 1
+            continue
 
-            # C-7: stat before read to avoid loading large files into RAM.
-            # Synchronous stat() is acceptable here -- local filesystem syscall, no I/O wait.
-            # asyncio.to_thread(lambda: ...) is NOT used to avoid lambda closure bugs in loops.
-            try:
-                file_size = pdf_file.stat().st_size
-            except OSError:
-                skipped += 1
-                continue
-            if file_size > MAX_PDF_SIZE:
-                skipped += 1
-                continue
+        # C-7: stat before read to avoid loading large files into RAM.
+        # Synchronous stat() is acceptable here -- local filesystem syscall, no I/O wait.
+        # asyncio.to_thread(lambda: ...) is NOT used to avoid lambda closure bugs in loops.
+        try:
+            file_size = pdf_file.stat().st_size
+        except OSError:
+            skipped += 1
+            continue
+        if file_size > MAX_PDF_SIZE:
+            skipped += 1
+            continue
 
-            # Read file for magic bytes and hashing
-            try:
-                content = await asyncio.to_thread(pdf_file.read_bytes)
-            except OSError:
-                skipped += 1
-                continue
+        # Read file for magic bytes and hashing
+        try:
+            content = await asyncio.to_thread(pdf_file.read_bytes)
+        except OSError:
+            skipped += 1
+            continue
 
-            # Check magic bytes
-            if not content.startswith(b"%PDF-"):
-                skipped += 1
-                continue
+        # Check magic bytes
+        if not content.startswith(b"%PDF-"):
+            skipped += 1
+            continue
 
-            # Compute hash
-            file_hash = hashlib.sha256(content).hexdigest()
-            external_id = f"local:{file_hash[:16]}"
+        # Compute hash
+        file_hash = hashlib.sha256(content).hexdigest()
+        external_id = f"local:{file_hash[:16]}"
 
+        # Each file gets its own short-lived connection — avoids holding a pool connection
+        # across file I/O and copy operations.
+        async with db_pool.acquire() as file_conn:
             # Check if already imported
-            existing = await conn.fetchrow(
+            existing = await file_conn.fetchrow(
                 "SELECT id FROM papers WHERE external_id = $1", external_id
             )
             if existing:
@@ -357,9 +362,9 @@ async def scan_local_pdfs(
                 continue
 
             try:
-                async with conn.transaction():
+                async with file_conn.transaction():
                     # Insert paper
-                    row = await conn.fetchrow(
+                    row = await file_conn.fetchrow(
                         """
                         INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                             url, metadata)
@@ -382,7 +387,7 @@ async def scan_local_pdfs(
                     dest_path = final_path
 
                     # Mark as downloaded -- inside the same transaction so INSERT+UPDATE are atomic
-                    await conn.execute(
+                    await file_conn.execute(
                         """
                         UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
                         WHERE id = $2
@@ -395,7 +400,7 @@ async def scan_local_pdfs(
                 skipped += 1
                 continue
 
-            imported += 1
+        imported += 1
 
     return {"scanned": scanned, "imported": imported, "skipped": skipped}
 

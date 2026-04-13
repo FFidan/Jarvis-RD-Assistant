@@ -15,9 +15,9 @@ import httpx
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
 
-from app.converters import row_to_chunk_response
+from app.converters import row_to_chunk_response  # pyright: ignore[reportUnusedImport]
 from app.models import EntityExtractionResponse
-from app.verification import QuoteVerifier
+from app.verification import QuoteVerifier  # pyright: ignore[reportUnusedImport]
 
 logger = logging.getLogger(__name__)
 

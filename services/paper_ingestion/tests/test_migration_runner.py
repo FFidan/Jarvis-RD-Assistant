@@ -166,7 +166,7 @@ async def test_migration_lock_timeout_returns_gracefully():
     pool, conn = _make_pool_and_conn()
 
     # Make execute raise LockNotAvailableError on the advisory lock call
-    async def _execute_side_effect(sql, *args, **kwargs):
+    async def _execute_side_effect(sql, *_):
         if "pg_advisory_xact_lock" in sql:
             raise asyncpg.LockNotAvailableError()
 

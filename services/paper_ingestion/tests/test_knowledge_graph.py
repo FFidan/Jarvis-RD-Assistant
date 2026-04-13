@@ -3,6 +3,7 @@
 import sys
 import types
 from datetime import UTC, datetime
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
@@ -269,7 +270,7 @@ async def test_find_similar_entity_returns_matched_id():
     qdrant = AsyncMock()
     qdrant.query_points.return_value = MagicMock(points=[MagicMock(payload={"entity_id": 77})])
 
-    fake_models = types.ModuleType("qdrant_client.models")
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
     fake_models.FieldCondition = MagicMock()
     fake_models.Filter = MagicMock()
     fake_models.MatchValue = MagicMock()
@@ -291,7 +292,7 @@ async def test_find_similar_entity_returns_none_on_failure():
     qdrant = AsyncMock()
     qdrant.get_collections.side_effect = RuntimeError("qdrant offline")
 
-    fake_models = types.ModuleType("qdrant_client.models")
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
     fake_models.FieldCondition = MagicMock()
     fake_models.Filter = MagicMock()
     fake_models.MatchValue = MagicMock()

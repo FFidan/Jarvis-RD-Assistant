@@ -16,8 +16,12 @@ echo "[$(date -Iseconds)] Backup saved to $BACKUP_FILE ($(du -h "$BACKUP_FILE" |
 
 # Optional S3 upload
 if [ -n "${BACKUP_S3_BUCKET:-}" ]; then
-  aws s3 cp "$BACKUP_FILE" "s3://${BACKUP_S3_BUCKET}/$(basename "$BACKUP_FILE")"
-  echo "[$(date -Iseconds)] Uploaded to s3://${BACKUP_S3_BUCKET}/"
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "[$(date -Iseconds)] aws CLI not available; skipping S3 upload (install awscli or use the amazon/aws-cli sidecar)"
+  else
+    aws s3 cp "$BACKUP_FILE" "s3://${BACKUP_S3_BUCKET}/$(basename "$BACKUP_FILE")"
+    echo "[$(date -Iseconds)] Uploaded to s3://${BACKUP_S3_BUCKET}/"
+  fi
 fi
 
 # Prune old backups
