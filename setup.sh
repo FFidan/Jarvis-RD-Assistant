@@ -79,20 +79,23 @@ else
   info "No NVIDIA GPU detected — Ollama will run on CPU (slower)."
 fi
 
-# Port 3001 pre-check — warn only.
-PORT_IN_USE=0
-if command -v ss >/dev/null 2>&1; then
-  # shellcheck disable=SC2143  # grep -q is sufficient; we only care about exit code
-  if ss -tlnp 2>/dev/null | grep -q ':3001 '; then
-    PORT_IN_USE=1
+# Port pre-check — warn only. Probes all ports JARVIS exposes on the host.
+JARVIS_PORTS=(3001 4000 5432 5678 6333 8010 8011 11434)
+PORTS_IN_USE=()
+for port in "${JARVIS_PORTS[@]}"; do
+  if command -v ss >/dev/null 2>&1; then
+    # shellcheck disable=SC2143  # grep -q is sufficient; we only care about exit code
+    if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+      PORTS_IN_USE+=("$port")
+    fi
+  elif command -v lsof >/dev/null 2>&1; then
+    if lsof -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
+      PORTS_IN_USE+=("$port")
+    fi
   fi
-elif command -v lsof >/dev/null 2>&1; then
-  if lsof -iTCP:3001 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; then
-    PORT_IN_USE=1
-  fi
-fi
-if [ "$PORT_IN_USE" -eq 1 ]; then
-  warn "Port 3001 is already in use. Dashboard may conflict on startup."
+done
+if [ "${#PORTS_IN_USE[@]}" -gt 0 ]; then
+  warn "Ports already in use: ${PORTS_IN_USE[*]}. Services on these ports may conflict on startup."
 fi
 
 # -----------------------------------------------------------------------------

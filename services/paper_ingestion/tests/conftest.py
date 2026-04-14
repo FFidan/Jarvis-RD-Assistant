@@ -19,9 +19,14 @@ import pytest
 # 1. Path setup (replaces per-file sys.path.insert boilerplate)
 # ---------------------------------------------------------------------------
 _SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-_JARVIS_COMMON = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
+# In Docker the service is mounted at /app (only 2 parents above conftest.py).
+# On the host the path has more components.  Use try/except to stay portable.
+try:
+    _JARVIS_COMMON = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
+except IndexError:
+    _JARVIS_COMMON = None  # type: ignore[assignment]
 for p in (_SERVICE_ROOT, _JARVIS_COMMON):
-    if p not in sys.path:
+    if p is not None and p not in sys.path:
         sys.path.insert(0, p)
 
 # ---------------------------------------------------------------------------

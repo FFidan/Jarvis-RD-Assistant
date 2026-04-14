@@ -66,7 +66,7 @@ async def refresh_recommendations(app: Any) -> int:
         for pid in all_paper_ids:
             liked_s, liked_r = liked_scores.get(pid, (0.0, ""))
             proj_s, proj_r = project_scores.get(pid, (0.0, ""))
-            score = liked_s * liked_weight + proj_s * project_weight
+            score = _compute_score(liked_s, proj_s, liked_weight, project_weight)
             if score < _MIN_SCORE:
                 continue
             modes = []
@@ -133,6 +133,25 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
 async def _get_starred_ids(conn: asyncpg.Connection) -> list[int]:
     rows = await conn.fetch("SELECT paper_id FROM paper_user_state WHERE status = 'starred'")
     return [r["paper_id"] for r in rows]
+
+
+def _compute_score(
+    liked: float, project: float, liked_weight: float, project_weight: float
+) -> float:
+    """Return the weighted recommendation score for a candidate paper.
+
+    Parameters
+    ----------
+    liked:
+        Similarity score from the liked-centroid signal (0.0–1.0).
+    project:
+        Similarity score from the project-context signal (0.0–1.0).
+    liked_weight:
+        Weight applied to *liked* (default ``_DEFAULT_LIKED_WEIGHT = 0.6``).
+    project_weight:
+        Weight applied to *project* (default ``_DEFAULT_PROJECT_WEIGHT = 0.4``).
+    """
+    return liked * liked_weight + project * project_weight
 
 
 async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[int]:

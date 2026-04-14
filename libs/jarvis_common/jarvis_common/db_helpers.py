@@ -119,9 +119,16 @@ async def dynamic_update(
 
     Raises
     ------
+    ValueError
+        If *updates* contains the ``"id"`` key (primary key must not be mutated).
     HTTPException(400)
         If *updates* contains a key not in *allowed_columns*.
     """
+    if "id" in updates:
+        raise ValueError(
+            "'id' column cannot be updated via dynamic_update — use a dedicated SQL statement"
+        )
+
     if not updates and not extra_sets:
         raise ValueError("No updates to apply")
 

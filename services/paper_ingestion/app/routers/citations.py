@@ -42,7 +42,7 @@ def _get_s2_source(request: Request) -> SemanticScholarSource:
 @limiter.limit("60/minute")
 async def get_citation_graph(
     request: Request,
-    paper_ids: Annotated[list[int], Query()],
+    paper_ids: Annotated[list[int], Query(max_length=100)],
     depth: int = Query(default=1, ge=1, le=2),
 ) -> CitationGraphResponse:
     """Build a citation graph for the given paper IDs."""
@@ -52,9 +52,7 @@ async def get_citation_graph(
 
 @router.post("/batch-fetch", response_model=BatchCitationFetchResponse)
 @limiter.limit("2/minute")
-async def batch_fetch_citations(
-    request: Request, background_tasks: BackgroundTasks
-):
+async def batch_fetch_citations(request: Request, background_tasks: BackgroundTasks):
     """Queue citation fetching for all papers without citations_fetched_at."""
     async with request.app.state.db_pool.acquire() as conn:
         rows = await conn.fetch(
@@ -75,7 +73,9 @@ async def batch_fetch_citations(
     s2_source = _get_s2_source(request)
     db_pool = request.app.state.db_pool
 
-    async def _fetch_batch(pool: asyncpg.Pool, source: SemanticScholarSource, pids: list[int]) -> None:
+    async def _fetch_batch(
+        pool: asyncpg.Pool, source: SemanticScholarSource, pids: list[int]
+    ) -> None:
         for pid in pids:
             try:
                 await sync_citations_for_paper(pool, source, pid)
@@ -88,9 +88,7 @@ async def batch_fetch_citations(
 
 @router.post("/{paper_id}/fetch", response_model=CitationFetchResponse)
 @limiter.limit("10/minute")
-async def fetch_citations_for_paper(
-    request: Request, paper_id: int
-) -> CitationFetchResponse:
+async def fetch_citations_for_paper(request: Request, paper_id: int) -> CitationFetchResponse:
     """Trigger citation fetch from S2 for a single paper."""
     s2_source = _get_s2_source(request)
     db_pool = request.app.state.db_pool

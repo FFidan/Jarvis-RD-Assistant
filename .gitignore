@@ -29,6 +29,7 @@ docker-compose.override.yml
 
 # Personal / per-machine setup notes (maintainer only)
 PERSONAL-SETUP.md
+docs/personal/
 
 # Generated data (large, user-specific)
 shared/pdf_storage/
@@ -74,6 +75,7 @@ htmlcov/
 .ralph/
 .playwright-mcp/
 .superpowers/
+.gemini/
 inspection/
 
 # Test artifacts
