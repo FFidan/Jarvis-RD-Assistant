@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from jarvis_common import (
+    HealthCheckResponse,
     RequestIDMiddleware,
     configure_logging,
     generic_exception_handler,
@@ -45,7 +46,7 @@ from app.deps import (  # noqa: F401
     limiter,
 )
 from app.embedder import Embedder
-from app.models import HealthCheckResponse, PaperSourceConfig, SystemModelsResponse
+from app.models import PaperSourceConfig, SystemModelsResponse
 from app.pdf_processor import PDFProcessor
 from app.sources.registry import get_source_class
 from app.verification import QuoteVerifier
@@ -498,4 +499,4 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
         result["issues"]["runtime"] = "Could not load Ollama runtime status."
 
     result["status"] = "ok" if not result["issues"] else "degraded"
-    return result
+    return SystemModelsResponse.model_validate(result)

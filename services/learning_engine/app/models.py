@@ -8,13 +8,12 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Literal
 
-from jarvis_common import HealthCheckResponse  # noqa: F401 — re-exported
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 # --- Enums ---
 
 
-class CardType(str, Enum):
+class CardType(str, Enum):  # noqa: UP042 — keep str+Enum for Pydantic v2 compat
     """Supported flashcard types."""
 
     CONCEPT = "concept"
@@ -94,7 +93,7 @@ class ReviewRequest(BaseModel):
     """Request body for submitting a review."""
 
     rating: Rating
-    review_duration_ms: int | None = None
+    review_duration_ms: int | None = Field(default=None, ge=0)
 
 
 class GenerateCardsRequest(BaseModel):

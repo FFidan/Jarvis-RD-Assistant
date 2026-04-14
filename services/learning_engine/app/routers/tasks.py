@@ -5,14 +5,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update
 
 from app.deps import get_db_pool, limiter
-from app.models import TaskCreate, TaskPaperLinkCreate, TaskPaperLinkResponse, TaskResponse, TaskUpdate
+from app.models import (
+    TaskCreate,
+    TaskPaperLinkCreate,
+    TaskPaperLinkResponse,
+    TaskResponse,
+    TaskUpdate,
+)
 
 router = APIRouter(tags=["tasks"])
 
-_TASK_ALLOWED_COLUMNS = frozenset({
-    "title", "status", "priority", "deadline", "description",
-    "estimated_hours", "actual_hours", "sort_order",
-})
+_TASK_ALLOWED_COLUMNS: set[str] = {
+    "title",
+    "status",
+    "priority",
+    "deadline",
+    "description",
+    "estimated_hours",
+    "actual_hours",
+    "sort_order",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -38,9 +50,7 @@ async def list_tasks(
         )
     async with db_pool.acquire() as conn:
         # Verify project exists (same connection as data query to avoid TOCTOU)
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
+        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -66,6 +76,7 @@ async def list_tasks(
 # POST /api/projects/{project_id}/tasks
 # ---------------------------------------------------------------------------
 
+
 @router.post("/api/projects/{project_id}/tasks", response_model=TaskResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_task(
@@ -77,16 +88,17 @@ async def create_task(
     """Create a task in a project."""
     async with db_pool.acquire() as conn:
         # Verify project exists (same connection as insert to avoid TOCTOU)
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
+        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
         try:
             row = await conn.fetchrow(
                 """
-                INSERT INTO tasks (project_id, parent_task_id, title, description, status, priority, deadline, estimated_hours)
+                INSERT INTO tasks (
+                    project_id, parent_task_id, title, description,
+                    status, priority, deadline, estimated_hours
+                )
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING *
                 """,
@@ -111,6 +123,7 @@ async def create_task(
 # PUT /api/tasks/{task_id}
 # ---------------------------------------------------------------------------
 
+
 @router.put("/api/tasks/{task_id}", response_model=TaskResponse)
 @limiter.limit("30/minute")
 async def update_task(
@@ -122,9 +135,7 @@ async def update_task(
     """Update a task. Auto-sets completed_at when status changes to done."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            existing = await conn.fetchrow(
-                "SELECT * FROM tasks WHERE id = $1 FOR UPDATE", task_id
-            )
+            existing = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1 FOR UPDATE", task_id)
             if not existing:
                 raise HTTPException(status_code=404, detail="Task not found")
 
@@ -156,6 +167,7 @@ async def update_task(
 # DELETE /api/tasks/{task_id}
 # ---------------------------------------------------------------------------
 
+
 @router.delete("/api/tasks/{task_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_task(
@@ -176,6 +188,7 @@ async def delete_task(
 # POST /api/tasks/{task_id}/papers  (link paper to task)
 # ---------------------------------------------------------------------------
 
+
 @router.post("/api/tasks/{task_id}/papers", status_code=201, response_model=TaskPaperLinkResponse)
 @limiter.limit("30/minute")
 async def link_paper_to_task(
@@ -187,9 +200,7 @@ async def link_paper_to_task(
     """Link a paper to a task."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            task = await conn.fetchval(
-                "SELECT id FROM tasks WHERE id = $1 FOR UPDATE", task_id
-            )
+            task = await conn.fetchval("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", task_id)
             if not task:
                 raise HTTPException(status_code=404, detail="Task not found")
             try:
@@ -201,9 +212,7 @@ async def link_paper_to_task(
                     body.note,
                 )
             except asyncpg.UniqueViolationError:
-                raise HTTPException(
-                    status_code=409, detail="Paper already linked to this task"
-                )
+                raise HTTPException(status_code=409, detail="Paper already linked to this task")
             except asyncpg.ForeignKeyViolationError:
                 raise HTTPException(status_code=404, detail="Paper not found")
     return dict(row)
@@ -212,6 +221,7 @@ async def link_paper_to_task(
 # ---------------------------------------------------------------------------
 # DELETE /api/tasks/{task_id}/papers/{paper_id}  (unlink)
 # ---------------------------------------------------------------------------
+
 
 @router.delete("/api/tasks/{task_id}/papers/{paper_id}", status_code=204)
 @limiter.limit("30/minute")

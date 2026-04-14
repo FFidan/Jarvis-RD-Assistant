@@ -11,7 +11,7 @@ from app.models import TopicCreate, TopicResponse, TopicUpdate
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/topics", tags=["topics"])
 
-_TOPIC_ALLOWED_COLUMNS = frozenset({"name", "query_terms", "enabled", "category", "description"})
+_TOPIC_ALLOWED_COLUMNS: set[str] = {"name", "query_terms", "enabled", "category", "description"}
 
 
 @router.get("", response_model=list[TopicResponse])

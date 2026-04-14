@@ -6,8 +6,9 @@ our JSONB database storage and the fsrs library's Card objects.
 
 import logging
 from datetime import datetime
+from typing import cast
 
-from fsrs import Card, Rating, Scheduler
+from fsrs import Card, CardDict, Rating, Scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,9 @@ class FSRSManager:
             (fsrs_state_dict, due_at) for database insertion.
         """
         card = Card()
-        return card.to_dict(), card.due
+        return dict(card.to_dict()), card.due
 
-    def schedule_review(
-        self, fsrs_state: dict, rating: int
-    ) -> tuple[dict, dict, datetime]:
+    def schedule_review(self, fsrs_state: dict, rating: int) -> tuple[dict, dict, datetime]:
         """Schedule a review and return updated state.
 
         Parameters
@@ -47,10 +46,10 @@ class FSRSManager:
             (new_fsrs_state, review_log_dict, next_due_at).
         """
         try:
-            card = Card.from_dict(fsrs_state)
+            card = Card.from_dict(cast(CardDict, fsrs_state))
         except (KeyError, TypeError, ValueError):
             logger.warning("Invalid fsrs_state, treating as new card: %s", fsrs_state)
             card = Card()
         fsrs_rating = Rating(rating)
         new_card, review_log = self.scheduler.review_card(card, fsrs_rating)
-        return new_card.to_dict(), review_log.to_dict(), new_card.due
+        return dict(new_card.to_dict()), dict(review_log.to_dict()), new_card.due

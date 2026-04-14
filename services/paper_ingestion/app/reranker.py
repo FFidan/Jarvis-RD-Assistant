@@ -62,6 +62,7 @@ class Reranker:
         if not passages:
             return []
         self._load_model_if_needed()
+        assert self._model is not None, "reranker model should be loaded"
         pairs = [[query, p] for p in passages]
         scores = self._model.predict(pairs)
         indexed_scores = list(

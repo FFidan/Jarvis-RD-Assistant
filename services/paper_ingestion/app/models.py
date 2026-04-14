@@ -8,7 +8,6 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from jarvis_common import HealthCheckResponse  # noqa: F401 — re-exported
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # --- Enums ---

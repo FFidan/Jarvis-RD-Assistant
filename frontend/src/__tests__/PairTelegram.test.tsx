@@ -110,4 +110,36 @@ describe('PairTelegram', () => {
     expect(await screen.findByText(/bot username unknown/i)).toBeInTheDocument();
     expect(screen.getByText('NOBOT123456')).toBeInTheDocument();
   });
+
+  it('renders deep_link as anchor with target="_blank" when URL is a valid t.me link', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createPairingCode).mockResolvedValue({
+      code: 'VALID123456',
+      deep_link: 'https://t.me/testbot?start=VALID123456',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    renderPair();
+    await user.click(
+      await screen.findByRole('button', { name: /generate pairing code/i }),
+    );
+    const link = await screen.findByRole('link', { name: /open in telegram/i });
+    expect(link).toHaveAttribute('href', 'https://t.me/testbot?start=VALID123456');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+  it('shows "Invalid pairing link" when deep_link is not a t.me URL', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.createPairingCode).mockResolvedValue({
+      code: 'BADLINK123456',
+      deep_link: 'https://evil.example.com/start=BADLINK123456',
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+    });
+    renderPair();
+    await user.click(
+      await screen.findByRole('button', { name: /generate pairing code/i }),
+    );
+    expect(await screen.findByText(/invalid pairing link/i)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /open in telegram/i })).not.toBeInTheDocument();
+  });
 });

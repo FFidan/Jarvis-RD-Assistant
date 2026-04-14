@@ -1,4 +1,7 @@
-"""Tests for GET /health endpoint of the learning_engine service."""
+"""Tests for GET /health endpoint of the learning_engine service.
+
+Also covers M26 regression: HealthCheckResponse importable from jarvis_common.
+"""
 
 from __future__ import annotations
 
@@ -80,3 +83,10 @@ async def test_health_returns_503_when_degraded(app_with_deps):
     body = resp.json()
     assert body["status"] == "degraded"
     assert body["checks"]["postgres"] == "unavailable"
+
+
+def test_health_check_response_importable():
+    """M26 regression: HealthCheckResponse must be exported from jarvis_common."""
+    from jarvis_common import HealthCheckResponse
+
+    assert HealthCheckResponse is not None

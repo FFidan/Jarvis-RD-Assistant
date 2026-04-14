@@ -103,6 +103,9 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     int
         Next conversation state, or ``ConversationHandler.END``.
     """
+    if update.message is None or context.user_data is None:
+        return ConversationHandler.END
+
     config = _get_config(context)
     db_pool = _get_db(context)
     if not await _auth_check(update, config, db_pool):
@@ -143,6 +146,8 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         Next conversation state.
     """
     query = update.callback_query
+    if query is None or context.user_data is None:
+        return ConversationHandler.END
     await query.answer()
 
     config = _get_config(context)
@@ -183,6 +188,8 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         Next conversation state, or ``ConversationHandler.END``.
     """
     query = update.callback_query
+    if query is None or query.data is None or context.user_data is None:
+        return ConversationHandler.END
     await query.answer()
 
     config = _get_config(context)
@@ -271,6 +278,9 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     int
         ``ConversationHandler.END``.
     """
+    if update.message is None or context.user_data is None:
+        return ConversationHandler.END
+
     config = _get_config(context)
     db_pool = _get_db(context)
     if not await _auth_check(update, config, db_pool):

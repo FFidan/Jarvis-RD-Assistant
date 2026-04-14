@@ -13,6 +13,7 @@ router = APIRouter(tags=["analytics"])
 # GET /api/analytics/activity
 # ---------------------------------------------------------------------------
 
+
 @router.get("/api/analytics/activity", response_model=list[ActivityItem])
 @limiter.limit("60/minute")
 async def get_activity(
@@ -30,12 +31,13 @@ async def get_activity(
         """,
         days,
     )
-    return [dict(row) for row in rows]
+    return [ActivityItem(**dict(row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
 # GET /api/analytics/reviews
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/analytics/reviews", response_model=list[ReviewDistributionItem])
 @limiter.limit("60/minute")
@@ -55,12 +57,13 @@ async def get_reviews(
         """,
         days,
     )
-    return [dict(row) for row in rows]
+    return [ReviewDistributionItem(**dict(row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
 # GET /api/analytics/retention
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/analytics/retention", response_model=list[RetentionItem])
 @limiter.limit("60/minute")
@@ -87,12 +90,13 @@ async def get_retention(
         """,
         days,
     )
-    return [dict(row) for row in rows]
+    return [RetentionItem(**dict(row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
 # GET /api/analytics/llm-cost
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/analytics/llm-cost", response_model=list[LLMCostItem])
 @limiter.limit("60/minute")
@@ -115,4 +119,4 @@ async def get_llm_cost(
         """,
         days,
     )
-    return [dict(row) for row in rows]
+    return [LLMCostItem(**dict(row)) for row in rows]

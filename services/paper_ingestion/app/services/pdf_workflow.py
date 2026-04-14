@@ -48,9 +48,9 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
 # ---------------------------------------------------------------------------
 
 
-async def upsert_paper(conn: ConnLike, paper: "PaperCreate") -> asyncpg.Record:
+async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
     """Insert or update a paper, returning the row."""
-    return await conn.fetchrow(
+    row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, pdf_url, citation_count, metadata)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
@@ -72,6 +72,8 @@ async def upsert_paper(conn: ConnLike, paper: "PaperCreate") -> asyncpg.Record:
         paper.citation_count,
         paper.metadata,
     )
+    assert row is not None, "upsert_paper RETURNING always yields a row"
+    return row
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +85,8 @@ async def run_process_pdf(
     paper_id: int,
     pdf_path: Path,
     db_pool: asyncpg.Pool,
-    pdf_processor: "PDFProcessor",
-    embedder: "Embedder",
+    pdf_processor: PDFProcessor,
+    embedder: Embedder,
     force: bool = False,
 ) -> dict:
     """Core PDF processing logic: idempotency check, embed, store.
@@ -118,7 +120,8 @@ async def run_process_pdf(
                 }
             if existing_count > 0 and force:
                 old_rows = await conn.fetch(
-                    "SELECT embedding_id FROM paper_chunks WHERE paper_id = $1 AND embedding_id IS NOT NULL",
+                    "SELECT embedding_id FROM paper_chunks "
+                    "WHERE paper_id = $1 AND embedding_id IS NOT NULL",
                     paper_id,
                 )
                 await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)

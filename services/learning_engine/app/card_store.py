@@ -15,7 +15,7 @@ import asyncpg
 async def insert_card(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     deck_id: int,
-    paper_id: int,
+    paper_id: int | None,
     card_type: str,
     front: str,
     back: str,

@@ -12,7 +12,7 @@ from app.models import NoteCreate, NoteResponse, NoteUpdate
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["notes"])
 
-_NOTE_ALLOWED_COLUMNS = frozenset({"user_note", "highlight_text", "page_number"})
+_NOTE_ALLOWED_COLUMNS: set[str] = {"user_note", "highlight_text", "page_number"}
 
 
 @router.get("/api/papers/{paper_id}/notes", response_model=list[NoteResponse])

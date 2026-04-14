@@ -16,6 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from jarvis_common import (
+    HealthCheckResponse,
     RequestIDMiddleware,
     configure_logging,
     generic_exception_handler,
@@ -33,7 +34,6 @@ from app.anki_exporter import AnkiExporter
 from app.card_generator import CardGenerator
 from app.deps import limiter
 from app.fsrs_manager import FSRSManager
-from app.models import HealthCheckResponse
 
 configure_logging("learning_engine", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)

@@ -246,30 +246,41 @@ async def load_history(
             str(days),
         )
 
-        result: list[PulseDeckResponse] = []
-        for deck_row in deck_rows:
-            card_rows = await conn.fetch(
-                """
-                SELECT
-                    pc.id,
-                    pc.deck_id,
-                    pc.paper_id,
-                    p.title   AS paper_title,
-                    p.authors AS paper_authors,
-                    p.url     AS paper_url,
-                    pc.rank,
-                    pc.score,
-                    pc.llm_relevance,
-                    pc.llm_novelty,
-                    pc.reasoning,
-                    pc.signals
-                FROM pulse_cards pc
-                JOIN papers p ON p.id = pc.paper_id
-                WHERE pc.deck_id = $1
-                ORDER BY pc.rank ASC
-                """,
-                deck_row["id"],
-            )
-            result.append(_build_deck_response(deck_row, card_rows))
+        if not deck_rows:
+            return []
 
-    return result
+        deck_ids = [row["id"] for row in deck_rows]
+
+        # Batch-fetch all cards for all decks in a single query (avoids N+1)
+        all_card_rows = await conn.fetch(
+            """
+            SELECT
+                pc.id,
+                pc.deck_id,
+                pc.paper_id,
+                p.title   AS paper_title,
+                p.authors AS paper_authors,
+                p.url     AS paper_url,
+                pc.rank,
+                pc.score,
+                pc.llm_relevance,
+                pc.llm_novelty,
+                pc.reasoning,
+                pc.signals
+            FROM pulse_cards pc
+            JOIN papers p ON p.id = pc.paper_id
+            WHERE pc.deck_id = ANY($1::int[])
+            ORDER BY pc.deck_id, pc.rank ASC
+            """,
+            deck_ids,
+        )
+
+    # Group cards by deck_id in Python
+    cards_by_deck: dict[int, list] = {}
+    for card_row in all_card_rows:
+        cards_by_deck.setdefault(card_row["deck_id"], []).append(card_row)
+
+    return [
+        _build_deck_response(deck_row, cards_by_deck.get(deck_row["id"], []))
+        for deck_row in deck_rows
+    ]

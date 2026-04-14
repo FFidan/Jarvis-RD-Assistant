@@ -64,11 +64,12 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _recency_decay(published_date: date | None) -> float:
+def _recency_decay(published_date: date | None, now: date | None = None) -> float:
     """Compute recency decay: exp(-age_days / 30), clamped to [0, 1]."""
     if published_date is None:
         return 0.0
-    age_days = max(0, (date.today() - published_date).days)
+    today = now or date.today()
+    age_days = max(0, (today - published_date).days)
     return max(0.0, min(1.0, math.exp(-age_days / 30.0)))
 
 
@@ -82,6 +83,7 @@ async def stage1_embedding_filter(
     profile: UserProfile,
     embedder: Any,
     top_k: int = 50,
+    now: date | None = None,
 ) -> list[ScoredCandidate]:
     """Filter and rank candidates using embedding similarity, recency, and author signals.
 
@@ -95,6 +97,9 @@ async def stage1_embedding_filter(
         Embedder instance providing embed_texts().
     top_k:
         Maximum number of candidates to return.
+    now:
+        Reference date for recency calculations (defaults to today). Injected
+        for testability.
 
     Returns
     -------
@@ -148,7 +153,7 @@ async def stage1_embedding_filter(
             topic_sim = max((_cosine(cand_vec, tv) for tv in topic_embeddings), default=0.0)
 
         # Recency decay
-        recency = _recency_decay(candidate.published_date)
+        recency = _recency_decay(candidate.published_date, now=now)
 
         # Author bonus: dual-set match — display names (lowercased) OR s2 numeric IDs
         author_bonus = 0.0

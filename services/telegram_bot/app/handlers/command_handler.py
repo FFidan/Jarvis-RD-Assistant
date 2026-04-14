@@ -191,6 +191,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.warning("Unauthorised /start attempt from chat_id=%s", chat_id)
         return
 
+    if update.message is None:
+        return
     text = (
         "Welcome to <b>JARVIS RD Assistant</b>!\n\n"
         "I help you manage research papers, flashcard reviews, and projects.\n\n" + format_help()
@@ -210,6 +212,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     await update.message.reply_text(format_help(), parse_mode="HTML")
 
 
@@ -225,6 +229,8 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     query = (" ".join(context.args) if context.args else "")[:500]
 
     if query:
@@ -287,6 +293,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     http = _get_http(context)
     config = _get_config(context)
     try:
@@ -319,6 +327,8 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     db = _get_db(context)
     http = _get_http(context)
     config = _get_config(context)
@@ -374,6 +384,8 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     db = _get_db(context)
     rows = await db.fetch(
         "SELECT id, name, status, description, deadline "
@@ -413,6 +425,8 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     db = _get_db(context)
     project_id = None
     if context.args:
@@ -465,6 +479,8 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     if not context.args:
         await update.message.reply_text("Usage: /done &lt;task_id&gt;", parse_mode="HTML")
         return
@@ -499,6 +515,8 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     if not context.args:
         await update.message.reply_text("Usage: /newproject &lt;name&gt;", parse_mode="HTML")
         return
@@ -528,8 +546,17 @@ _MAX_FOCUS_MINUTES = 480  # 8 hours — prevents resource exhaustion
 @rate_limit(max_calls=3, window_seconds=60)
 async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/focus [duration]`` — start a focus session."""
+    if update.message is None or update.effective_chat is None:
+        return
+    if context.job_queue is None:
+        await update.message.reply_text(
+            "Focus sessions are unavailable (job queue not initialised).",
+            parse_mode="HTML",
+        )
+        return
+    args = context.args or []
     try:
-        minutes = min(int(context.args[0]) if context.args else 25, _MAX_FOCUS_MINUTES)
+        minutes = min(int(args[0]) if args else 25, _MAX_FOCUS_MINUTES)
     except ValueError:
         await update.message.reply_text(
             "Please provide a valid integer for duration.",
@@ -541,16 +568,19 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     async def focus_alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
         job = context.job
+        if job is None or job.chat_id is None:
+            return
+        data_minutes = job.data if isinstance(job.data, int | float) else 0
         await context.bot.send_message(
             job.chat_id,
-            text=f"🍅 Focus session complete ({job.data} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
+            text=f"🍅 Focus session complete ({data_minutes} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
         )
         try:
             http = _get_http(context)
             config = _get_config(context)
             await http.post(
                 f"{config.learning_engine_url}/api/executive/focus/log",
-                json={"duration_hours": job.data / 60},
+                json={"duration_hours": data_minutes / 60},
                 timeout=10.0,
             )
         except Exception:
@@ -581,6 +611,8 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context : ContextTypes.DEFAULT_TYPE
         Bot context.
     """
+    if update.message is None:
+        return
     http = _get_http(context)
     config = _get_config(context)
     headers = {}
@@ -611,6 +643,8 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 @rate_limit(max_calls=5, window_seconds=60)
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/next`` — recommend the next paper to read."""
+    if update.message is None:
+        return
     db = _get_db(context)
     row = await db.fetchrow(
         """

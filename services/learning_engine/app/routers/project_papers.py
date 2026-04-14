@@ -49,7 +49,7 @@ async def link_paper(
     project_id: int,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict:
+) -> dict | JSONResponse:
     """Link a paper to a project."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():

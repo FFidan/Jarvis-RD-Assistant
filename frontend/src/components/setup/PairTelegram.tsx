@@ -167,6 +167,8 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
   }
 
   if (state.kind === 'polling') {
+    const isValidTelegramLink = (url: string): boolean => /^https:\/\/t\.me\//.test(url);
+
     return (
       <div className="space-y-4">
         <p className="text-sm text-muted-foreground">
@@ -178,13 +180,18 @@ export function PairTelegram({ onPaired }: PairTelegramProps) {
             <p className="text-xs uppercase text-muted-foreground">Pairing code</p>
             <p className="font-mono text-2xl tracking-widest">{state.pairing.code}</p>
           </div>
-          <a
-            href={state.pairing.deep_link}
-            className="inline-flex items-center text-sm text-primary underline"
-            rel="noopener noreferrer"
-          >
-            Open in Telegram
-          </a>
+          {state.pairing.deep_link && isValidTelegramLink(state.pairing.deep_link) ? (
+            <a
+              href={state.pairing.deep_link}
+              className="inline-flex items-center text-sm text-primary underline"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open in Telegram
+            </a>
+          ) : state.pairing.deep_link ? (
+            <p className="text-sm text-destructive">Invalid pairing link</p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3 w-3 animate-spin" />

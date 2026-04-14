@@ -68,12 +68,34 @@ describe('SetupWizard', () => {
     expect(await screen.findByText('HOME')).toBeInTheDocument();
   });
 
-  it('step 6 calls markSetupCompleted on mount', async () => {
+  it('step 6 calls markSetupCompleted on mount and navigates home on success', async () => {
     renderWizard('/setup?step=6');
     await waitFor(() => {
       expect(api.markSetupCompleted).toHaveBeenCalled();
     });
-    expect(screen.getByText(/you're all set/i)).toBeInTheDocument();
+    // On success, navigation to '/' happens — HOME page should appear.
+    expect(await screen.findByText('HOME')).toBeInTheDocument();
+  });
+
+  it('step 6 calls markSetupCompleted exactly once (hasTriggered guard)', async () => {
+    renderWizard('/setup?step=6');
+    await waitFor(() => {
+      expect(api.markSetupCompleted).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('step 6 shows error state with retry button when markSetupCompleted fails', async () => {
+    vi.mocked(api.markSetupCompleted).mockRejectedValueOnce(new Error('Server error'));
+    const user = userEvent.setup();
+    renderWizard('/setup?step=6');
+    expect(await screen.findByText(/setup completion failed/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+    // Clicking retry fires another mutation call.
+    vi.mocked(api.markSetupCompleted).mockResolvedValueOnce(undefined);
+    await user.click(screen.getByRole('button', { name: /retry/i }));
+    await waitFor(() => {
+      expect(api.markSetupCompleted).toHaveBeenCalledTimes(2);
+    });
   });
 
   it('renders step 3 topic form', () => {

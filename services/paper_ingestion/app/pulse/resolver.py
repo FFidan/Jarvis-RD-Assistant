@@ -1,13 +1,14 @@
 """PDF resolution chain for Discovery & Pulse.
 
-Tries arXiv → Unpaywall (→ CORE in Phase 2) to resolve a free legal PDF URL
-for a given DOI / arXiv ID. Results are cached in the ``pdf_resolutions``
-table so repeated requests for the same paper don't re-query external APIs.
+DEPRECATED (2026-04-14): no production call sites. ``download_pdf`` handles
+all resolution today. Module is retained only because its unit tests and the
+``pdf_resolutions`` table (migration 019) still exist. Do not wire new call
+sites here; fix ``download_pdf`` instead. Scheduled for removal in a future
+sprint after test + table cleanup (see Round-6 audit M15).
 
-Called lazily — NOT during Pulse scoring (would waste 100s of API calls on
-papers the user never reads). Call sites:
-- When a user saves or opens a Pulse card
-- As a fallback in the existing ingestion pipeline when S2's pdf_url is broken
+Originally: tried arXiv → Unpaywall (→ CORE in Phase 2) to resolve a free
+legal PDF URL for a given DOI / arXiv ID. Results were cached in
+``pdf_resolutions`` so repeated requests for the same paper didn't re-query.
 """
 
 from __future__ import annotations

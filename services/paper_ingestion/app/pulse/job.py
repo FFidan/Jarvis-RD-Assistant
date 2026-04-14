@@ -126,7 +126,7 @@ async def run_pulse(
     # --- 3. stage 1 (embedding filter) -----------------------------------
     try:
         stage1_out = await stage1_embedding_filter(
-            candidates, profile, embedder, top_k=profile.stage2_top_k
+            candidates, profile, embedder, top_k=profile.stage2_top_k, now=now.date()
         )
     except Exception as exc:
         stats["last_error"] = f"stage1: {exc}"
@@ -148,7 +148,8 @@ async def run_pulse(
                 stage2_llm_rerank(stage1_out, profile, http_client),
                 timeout=_STAGE2_TIMEOUT_SECONDS,
             )
-            stats["llm_calls"] = len(stage1_out)
+            # Count actual LLM calls: candidates where llm_relevance was set
+            stats["llm_calls"] = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
         except TimeoutError:
             stats["last_error"] = f"llm_timeout after {_STAGE2_TIMEOUT_SECONDS}s"
             logger.warning("pulse.stage2 timed out — falling back to stage1")

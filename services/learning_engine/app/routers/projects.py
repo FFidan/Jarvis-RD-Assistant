@@ -9,13 +9,14 @@ from app.models import ProjectCreate, ProjectDetailResponse, ProjectResponse, Pr
 
 router = APIRouter(tags=["projects"])
 
-_PROJECT_ALLOWED_COLUMNS = frozenset({"name", "description", "status", "deadline", "color"})
+_PROJECT_ALLOWED_COLUMNS: set[str] = {"name", "description", "status", "deadline", "color"}
 _VALID_STATUSES = frozenset({"active", "paused", "completed", "archived"})
 
 
 # ---------------------------------------------------------------------------
 # GET /api/projects
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/projects", response_model=list[ProjectResponse])
 @limiter.limit("60/minute")
@@ -37,15 +38,14 @@ async def list_projects(
             status,
         )
     else:
-        rows = await db_pool.fetch(
-            "SELECT * FROM projects ORDER BY created_at DESC"
-        )
+        rows = await db_pool.fetch("SELECT * FROM projects ORDER BY created_at DESC")
     return [ProjectResponse(**dict(row)) for row in rows]
 
 
 # ---------------------------------------------------------------------------
 # POST /api/projects
 # ---------------------------------------------------------------------------
+
 
 @router.post("/api/projects", response_model=ProjectResponse, status_code=201)
 @limiter.limit("30/minute")
@@ -74,6 +74,7 @@ async def create_project(
 # GET /api/projects/{project_id}
 # ---------------------------------------------------------------------------
 
+
 @router.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
 @limiter.limit("60/minute")
 async def get_project(
@@ -83,9 +84,7 @@ async def get_project(
 ):
     """Get a project with task and milestone counts."""
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM projects WHERE id = $1", project_id
-        )
+        row = await conn.fetchrow("SELECT * FROM projects WHERE id = $1", project_id)
         if not row:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -122,6 +121,7 @@ async def get_project(
 # ---------------------------------------------------------------------------
 # PUT /api/projects/{project_id}
 # ---------------------------------------------------------------------------
+
 
 @router.put("/api/projects/{project_id}", response_model=ProjectResponse)
 @limiter.limit("30/minute")
@@ -160,6 +160,7 @@ async def update_project(
 # ---------------------------------------------------------------------------
 # DELETE /api/projects/{project_id}
 # ---------------------------------------------------------------------------
+
 
 @router.delete("/api/projects/{project_id}", status_code=204)
 @limiter.limit("30/minute")

@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/authors", tags=["authors"])
 
-_AUTHOR_ALLOWED_COLUMNS = frozenset({"enabled", "s2_author_id"})
+_AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
 
 
 # ---------------------------------------------------------------------------
@@ -73,9 +73,7 @@ async def update_tracked_author(
 ) -> TrackedAuthorResponse:
     """Update a tracked author (enable/disable, change S2 ID)."""
     async with request.app.state.db_pool.acquire() as conn:
-        existing = await conn.fetchrow(
-            "SELECT * FROM tracked_authors WHERE id = $1", author_id
-        )
+        existing = await conn.fetchrow("SELECT * FROM tracked_authors WHERE id = $1", author_id)
         if not existing:
             raise HTTPException(404, f"Tracked author {author_id} not found")
 
@@ -144,7 +142,8 @@ async def auto_detect_authors(request: Request) -> AutoDetectResponse:
                 source = "auto_starred" if row["is_starred"] else "auto_rated"
 
                 existing = await conn.fetchrow(
-                    "SELECT id FROM tracked_authors WHERE author_name = $1 AND s2_author_id IS NULL",
+                    "SELECT id FROM tracked_authors "
+                    "WHERE author_name = $1 AND s2_author_id IS NULL",
                     author_name,
                 )
                 if existing:
@@ -185,9 +184,7 @@ async def check_tracked_authors(request: Request) -> AuthorCheckResponse:
     Logs matches in author_alert_log for deduplication.
     """
     async with request.app.state.db_pool.acquire() as conn:
-        authors = await conn.fetch(
-            "SELECT * FROM tracked_authors WHERE enabled = TRUE"
-        )
+        authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
         if not authors:
             return AuthorCheckResponse(new_papers=0, authors_checked=0)
 

@@ -5,13 +5,26 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from app.deps import limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analyze"])
+
+
+def _sanitize_sse_error(exc: Exception) -> str:
+    """Return a safe error message that doesn't leak implementation details.
+
+    Only passes through messages from known safe exception types (ValueError,
+    HTTPException). All other exceptions return a generic message.
+    """
+    if isinstance(exc, HTTPException):
+        return str(exc.detail)
+    if isinstance(exc, ValueError):
+        return str(exc)
+    return "Analysis failed. Please try again."
 
 
 def _sse_event(data: dict | str) -> str:
@@ -33,15 +46,15 @@ async def _analyze_stream(request: Request, paper_id: int):
     try:
         # Phase 1a: Check paper state (short query, no lock)
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT * FROM papers WHERE id = $1", paper_id
-            )
+            row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not row:
             yield _sse_event({"type": "error", "step": "downloading", "message": "Paper not found"})
             yield _sse_event("[DONE]")
             return
         if not row["pdf_url"]:
-            yield _sse_event({"type": "error", "step": "downloading", "message": "Paper has no PDF URL"})
+            yield _sse_event(
+                {"type": "error", "step": "downloading", "message": "Paper has no PDF URL"}
+            )
             yield _sse_event("[DONE]")
             return
 
@@ -53,7 +66,8 @@ async def _analyze_stream(request: Request, paper_id: int):
                 row = await conn.fetchrow(
                     "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
                     "WHERE id = $2 RETURNING *",
-                    str(pdf_path), paper_id,
+                    str(pdf_path),
+                    paper_id,
                 )
     except Exception as exc:
         logger.error("Download failed for paper %d: %s", paper_id, exc)
@@ -68,7 +82,13 @@ async def _analyze_stream(request: Request, paper_id: int):
     try:
         pdf_local_path = row["pdf_local_path"]
         if not pdf_local_path:
-            yield _sse_event({"type": "error", "step": "processing", "message": "PDF path not set despite download flag"})
+            yield _sse_event(
+                {
+                    "type": "error",
+                    "step": "processing",
+                    "message": "PDF path not set despite download flag",
+                }
+            )
             yield _sse_event("[DONE]")
             return
         pdf_path = Path(pdf_local_path)
@@ -78,23 +98,32 @@ async def _analyze_stream(request: Request, paper_id: int):
             yield _sse_event("[DONE]")
             return
         if not pdf_path.exists():
-            yield _sse_event({"type": "error", "step": "processing", "message": "PDF file missing from disk"})
+            yield _sse_event(
+                {"type": "error", "step": "processing", "message": "PDF file missing from disk"}
+            )
             yield _sse_event("[DONE]")
             return
 
         from app.services.pdf_workflow import run_process_pdf
 
-        result = await run_process_pdf(
-            paper_id, pdf_path, db_pool, pdf_processor, embedder
-        )
+        result = await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder)
         chunk_count = result.get("chunk_count", 0)
     except Exception as exc:
         logger.error("Processing failed for paper %d: %s", paper_id, exc)
-        yield _sse_event({"type": "error", "step": "processing", "message": "PDF processing failed"})
+        yield _sse_event(
+            {"type": "error", "step": "processing", "message": "PDF processing failed"}
+        )
         yield _sse_event("[DONE]")
         return
 
-    yield _sse_event({"type": "step", "step": "processing", "status": "completed", "chunk_count": chunk_count})
+    yield _sse_event(
+        {
+            "type": "step",
+            "step": "processing",
+            "status": "completed",
+            "chunk_count": chunk_count,
+        }
+    )
 
     # ---- Step 3: Summarize ----
     yield _sse_event({"type": "step", "step": "summarizing", "status": "started"})
@@ -103,13 +132,21 @@ async def _analyze_stream(request: Request, paper_id: int):
         from app.services.summarization import generate_paper_summary
 
         await generate_paper_summary(
-            paper_id, db_pool, http_client,
-            request.app.state.verifier, embedder,
+            paper_id,
+            db_pool,
+            http_client,
+            request.app.state.verifier,
+            embedder,
         )
     except Exception as exc:
         logger.error("Summarization failed for paper %d: %s", paper_id, exc)
-        msg = str(exc.detail) if hasattr(exc, "detail") else "Summarization failed"
-        yield _sse_event({"type": "error", "step": "summarizing", "message": msg})
+        yield _sse_event(
+            {
+                "type": "error",
+                "step": "summarizing",
+                "message": _sanitize_sse_error(exc),
+            }
+        )
         yield _sse_event("[DONE]")
         return
 

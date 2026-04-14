@@ -9,12 +9,13 @@ from app.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
 
 router = APIRouter(tags=["milestones"])
 
-_MILESTONE_ALLOWED_COLUMNS = frozenset({"name", "description", "deadline", "completed"})
+_MILESTONE_ALLOWED_COLUMNS: set[str] = {"name", "description", "deadline", "completed"}
 
 
 # ---------------------------------------------------------------------------
 # GET /api/projects/{project_id}/milestones
 # ---------------------------------------------------------------------------
+
 
 @router.get("/api/projects/{project_id}/milestones", response_model=list[MilestoneResponse])
 @limiter.limit("60/minute")
@@ -25,9 +26,7 @@ async def list_milestones(
 ) -> list[MilestoneResponse]:
     """List milestones for a project."""
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
+        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -43,6 +42,7 @@ async def list_milestones(
 # POST /api/projects/{project_id}/milestones
 # ---------------------------------------------------------------------------
 
+
 @router.post(
     "/api/projects/{project_id}/milestones",
     response_model=MilestoneResponse,
@@ -57,9 +57,7 @@ async def create_milestone(
 ) -> MilestoneResponse:
     """Create a milestone in a project."""
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1", project_id
-        )
+        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -80,6 +78,7 @@ async def create_milestone(
 # ---------------------------------------------------------------------------
 # PUT /api/milestones/{milestone_id}
 # ---------------------------------------------------------------------------
+
 
 @router.put("/api/milestones/{milestone_id}", response_model=MilestoneResponse)
 @limiter.limit("30/minute")
@@ -125,6 +124,7 @@ async def update_milestone(
 # ---------------------------------------------------------------------------
 # DELETE /api/milestones/{milestone_id}
 # ---------------------------------------------------------------------------
+
 
 @router.delete("/api/milestones/{milestone_id}", status_code=204)
 @limiter.limit("30/minute")

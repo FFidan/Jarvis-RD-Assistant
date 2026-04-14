@@ -275,7 +275,7 @@ class PubMedSource(PaperSource):
         """
         await self._rate_limit()
         params = self._base_params()
-        params.update({"term": term, "retmax": retmax})
+        params.update({"term": term, "retmax": retmax, "sort": "pub_date"})
         if extra:
             params.update(extra)
         try:

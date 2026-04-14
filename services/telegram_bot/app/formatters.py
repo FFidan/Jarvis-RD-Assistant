@@ -172,9 +172,9 @@ def format_paper_detail(paper: dict, summary: dict | None = None) -> str:
                 finding_text = escape(f.get("finding", ""))
                 quote = f.get("quote", "")
                 page = f.get("page_number", "?")
-                lines.append(
-                    f'{i}. {finding_text}\n   <i>"...{escape(quote[:150])}..."</i> (p.{page})'
-                )
+                quote_html = escape(quote[:150])
+                page_html = escape(str(page))
+                lines.append(f'{i}. {finding_text}\n   <i>"...{quote_html}..."</i> (p.{page_html})')
 
     return truncate("\n".join(lines))
 
@@ -226,7 +226,7 @@ def format_card_back(card: dict) -> str:
         lines.append(f'\n<i>"...{escape(quote[:200])}..."</i>')
     page = evidence.get("page_number")
     if page:
-        lines.append(f"📖 Page {page}")
+        lines.append(f"📖 Page {escape(str(page))}")
 
     return "\n".join(lines)
 
@@ -354,7 +354,7 @@ def format_project_status(project: dict, tasks: list[dict], milestones: list[dic
     progress = f"{done_count}/{total_tasks}" if total_tasks else "No tasks"
 
     lines = [
-        f"{status_emoji} <b>{name}</b> [{status}]",
+        f"{status_emoji} <b>{name}</b> [{escape(status)}]",
     ]
     if description:
         lines.append(f"{escape(description[:200])}")
