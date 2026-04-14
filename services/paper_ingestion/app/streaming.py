@@ -13,13 +13,14 @@ import asyncpg
 import httpx
 from fastapi import HTTPException
 from jarvis_common import fmt_safe, get_fast_model
-
-from app.decomposition import decompose_query
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     build_litellm_headers,
     get_litellm_config,
 )
+from jarvis_common.prompt_safety import escape_llm_text
+
+from app.decomposition import decompose_query
 from app.models import AskRequest, CrossPaperAskRequest
 
 if TYPE_CHECKING:
@@ -37,7 +38,7 @@ _SEARCH_SCORE_THRESHOLD = 0.05
 
 async def _sse_error_stream(message: str):
     """Yield a single SSE error event followed by [DONE] sentinel."""
-    yield f'data: {json.dumps({"type": "error", "message": message})}\n\n'
+    yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
     yield "data: [DONE]\n\n"
 
 
@@ -84,11 +85,9 @@ async def _prepare_single_paper_rag(
     # Build RAG prompt — full chunk text flows through to the prompt.
     # C-10: Wrap question in XML-style delimiters to prevent prompt injection.
     # M-1: Also XML-encode the question to prevent tag injection via user input.
-    safe_question = fmt_safe(body.question).replace("<", "&lt;").replace(">", "&gt;")
+    safe_question = escape_llm_text(fmt_safe(body.question))
     context_blocks = "\n\n".join(
-        f'<excerpt page="{c["page_number"] or "?"}">'
-        f"{c['content'].replace('<', '&lt;').replace('>', '&gt;')}"
-        f"</excerpt>"
+        f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
         for c in chunks
     )
     prompt = (
@@ -156,7 +155,8 @@ async def _prepare_cross_paper_rag(
     if not all_chunks:
         logger.warning(
             "Cross-paper RAG found 0 chunks for query: %.100s (decompose=%s)",
-            body.question, body.decompose,
+            body.question,
+            body.decompose,
         )
         return {
             "answer": "No relevant information found in the paper collection.",
@@ -164,9 +164,7 @@ async def _prepare_cross_paper_rag(
         }
 
     # 1b. Cross-encoder rerank merged results using original question
-    all_chunks = await embedder.rerank_chunks(
-        body.question, all_chunks, top_k=body.max_chunks * 2
-    )
+    all_chunks = await embedder.rerank_chunks(body.question, all_chunks, top_k=body.max_chunks * 2)
 
     # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
     chunks_by_paper: dict[int, list[dict]] = {}
@@ -205,7 +203,7 @@ async def _prepare_cross_paper_rag(
     paper_meta = {row["id"]: row for row in rows}
 
     # 5. Build prompt with per-paper sections
-    safe_question = fmt_safe(body.question).replace("<", "&lt;").replace(">", "&gt;")
+    safe_question = escape_llm_text(fmt_safe(body.question))
 
     # Group selected chunks by paper for the prompt
     prompt_chunks_by_paper: dict[int, list[dict]] = {}
@@ -223,9 +221,7 @@ async def _prepare_cross_paper_rag(
         paper_number_map[pid] = i
 
         excerpts = "\n".join(
-            f'<excerpt page="{c["page_number"] or "?"}">'
-            f"{c['content'].replace('<', '&lt;').replace('>', '&gt;')}"
-            f"</excerpt>"
+            f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
             for c in prompt_chunks_by_paper[pid]
         )
         context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
@@ -270,9 +266,7 @@ async def _stream_rag_events(
     model: str = "smart",
 ):
     """Stream LLM response as SSE events (token → sources → done → [DONE])."""
-    litellm_config = get_litellm_config(
-        fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
-    )
+    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
     full_answer = ""
     try:
         async with http_client.stream(
@@ -302,7 +296,7 @@ async def _stream_rag_events(
                 content = choices[0].get("delta", {}).get("content", "")
                 if content:
                     full_answer += content
-                    yield f'data: {json.dumps({"type": "token", "content": content})}\n\n'
+                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
     except Exception as e:
         _err_msgs = {
             httpx.TimeoutException: "LLM request timed out. Please try again.",
@@ -316,6 +310,6 @@ async def _stream_rag_events(
         async for event in _sse_error_stream(msg):
             yield event
         return
-    yield f'data: {json.dumps({"type": "sources", "sources": sources_list})}\n\n'
-    yield f'data: {json.dumps({"type": "done", "full_answer": full_answer})}\n\n'
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources_list})}\n\n"
+    yield f"data: {json.dumps({'type': 'done', 'full_answer': full_answer})}\n\n"
     yield "data: [DONE]\n\n"

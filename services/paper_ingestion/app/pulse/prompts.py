@@ -4,6 +4,8 @@ Provides a version-controlled system prompt and a builder function that
 assembles the chat completion message list for a single candidate paper.
 """
 
+from jarvis_common.prompt_safety import escape_llm_text
+
 from app.models import PaperCreate, TopicRef
 
 _ABSTRACT_MAX_CHARS = 1500
@@ -56,34 +58,37 @@ def build_scoring_prompt(
         topic_lines = []
         for t in topic_context:
             if t.description:
-                topic_lines.append(f"- {t.name}: {t.description}")
+                topic_lines.append(f"- {escape_llm_text(t.name)}: {escape_llm_text(t.description)}")
             else:
-                topic_lines.append(f"- {t.name}")
+                topic_lines.append(f"- {escape_llm_text(t.name)}")
         topics_section = "Research topics:\n" + "\n".join(topic_lines)
     else:
         topics_section = "Research topics: (none specified)"
 
     # --- Positive examples ---
     if positive_examples:
-        pos_lines = "\n".join(f"- {t}" for t in positive_examples)
+        pos_lines = "\n".join(f"- {escape_llm_text(t)}" for t in positive_examples)
         pos_section = f"Recently liked papers (high relevance examples):\n{pos_lines}"
     else:
         pos_section = "Recently liked papers: (none yet)"
 
     # --- Negative examples ---
     if negative_examples:
-        neg_lines = "\n".join(f"- {t}" for t in negative_examples)
+        neg_lines = "\n".join(f"- {escape_llm_text(t)}" for t in negative_examples)
         neg_section = f"Recently dismissed papers (low relevance examples):\n{neg_lines}"
     else:
         neg_section = "Recently dismissed papers: (none yet)"
 
     # --- Candidate paper ---
     authors_display = candidate.authors[:_AUTHORS_MAX]
-    authors_str = ", ".join(authors_display)
+    authors_str = escape_llm_text(", ".join(authors_display))
 
     abstract = candidate.abstract or ""
     if len(abstract) > _ABSTRACT_MAX_CHARS:
         abstract = abstract[:_ABSTRACT_MAX_CHARS] + "..."
+    abstract = escape_llm_text(abstract)
+
+    safe_title = escape_llm_text(candidate.title)
 
     user_content = f"""\
 {topics_section}
@@ -93,7 +98,7 @@ def build_scoring_prompt(
 {neg_section}
 
 Candidate paper to score:
-Title: {candidate.title}
+Title: {safe_title}
 Authors: {authors_str}
 Abstract: {abstract}
 

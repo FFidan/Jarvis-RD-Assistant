@@ -13,6 +13,14 @@ import asyncpg
 import httpx
 from fastapi import HTTPException
 from jarvis_common import fmt_safe, get_smart_model
+from jarvis_common.llm_client import (
+    LITELLM_FALLBACK_ENV_NAMES,
+    LLM_TIMEOUT_LONG,
+    ChatCompletionOptions,
+    get_litellm_config,
+    request_chat_completion_content,
+)
+from jarvis_common.prompt_safety import wrap_delimited
 
 from app.converters import (
     deduplicate_by_paper_id,
@@ -20,13 +28,6 @@ from app.converters import (
     row_to_summary_response,
 )
 from app.embedder import Embedder
-from jarvis_common.llm_client import (
-    ChatCompletionOptions,
-    LLM_TIMEOUT_LONG,
-    LITELLM_FALLBACK_ENV_NAMES,
-    get_litellm_config,
-    request_chat_completion_content,
-)
 from app.models import (
     Confidence,
     CrossReference,
@@ -53,9 +54,7 @@ CRITICAL RULES:
 Paper title: {title}
 Authors: {authors}
 
---- Paper Text ---
 {text}
---- End Paper Text ---
 
 Respond in this exact JSON format:
 {{
@@ -70,6 +69,8 @@ Respond in this exact JSON format:
     "limitations": "limitations or null"
 }}
 """
+
+
 async def _find_cross_references(
     conn: ConnLike,
     paper_id: int,
@@ -212,13 +213,11 @@ async def generate_paper_summary(
     prompt = SUMMARIZE_PROMPT_TEMPLATE.format(
         title=fmt_safe(paper_row["title"]),
         authors=fmt_safe(", ".join(paper_row["authors"])),
-        text=fmt_safe(full_text[:50000]),
+        text=wrap_delimited("paper_text", full_text, max_chars=50000),
     )
 
     # --- Phase 2: call LiteLLM (no connection held) ---
-    litellm_config = get_litellm_config(
-        fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
-    )
+    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
     try:
         raw_content = await request_chat_completion_content(
             http_client,
@@ -251,7 +250,9 @@ async def generate_paper_summary(
     raw_findings = parsed.get("key_findings", [])
     if raw_findings is None:
         raw_findings = []
-    if not isinstance(raw_findings, list) or any(not isinstance(item, dict) for item in raw_findings):
+    if not isinstance(raw_findings, list) or any(
+        not isinstance(item, dict) for item in raw_findings
+    ):
         raise HTTPException(status_code=502, detail="Malformed LLM response")
     llm_model = llm_model_name
 
