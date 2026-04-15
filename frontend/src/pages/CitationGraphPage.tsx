@@ -9,6 +9,7 @@ import { FetchCitationsButton } from '@/components/citation/FetchCitationsButton
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { GitFork } from 'lucide-react';
 import type { PaperBrief } from '@/types';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
@@ -87,8 +88,9 @@ export function CitationGraphPage() {
 
           <div className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label className="mb-1 flex items-center gap-1 text-sm font-medium">
                 Depth: {depth}
+                <InfoTooltip content="How many citation hops to follow. 1 = direct citations only. 2 = also includes papers cited by those papers. Higher values fetch more nodes but take longer." />
               </label>
               <input
                 type="range"

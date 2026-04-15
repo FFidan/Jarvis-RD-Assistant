@@ -19,7 +19,7 @@ import { formatDate } from '@/lib/utils';
 import type { Nudge, ConfigEntry, PulseStats } from '@/types';
 
 const nudgeLabels: Record<string, string> = {
-  research_pulse: 'Automated Paper Search',
+  research_pulse: 'Background Paper Search',
   review_reminder: 'Flashcard Review Reminder',
   deadline_warning: 'Project Deadline Alert',
   daily_summary: 'Daily Briefing',
@@ -114,6 +114,8 @@ function PulseSubsection() {
 
   const enabled = getConfigValue<boolean>(configs, 'pulse.enabled', false);
   const cron = getConfigValue<string>(configs, 'pulse.cron', '0 4 * * *');
+  const deckSize = getConfigValue<number>(configs, 'pulse.deck_size', 10);
+  const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 50);
   const [localCron, setLocalCron] = useState(cron);
 
   useEffect(() => {
@@ -165,23 +167,79 @@ function PulseSubsection() {
         </div>
 
         <div className="space-y-1">
-          <Label htmlFor="pulse-cron" className="flex items-center gap-1">
+          <Label htmlFor="pulse-cron-time" className="flex items-center gap-1">
             Cron schedule
             <InfoTooltip content={CRON_TOOLTIP} />
           </Label>
-          <Input
-            id="pulse-cron"
-            type="text"
-            value={localCron}
-            onChange={(e) => handleCronChange(e.target.value)}
-            placeholder="0 4 * * *"
-            className={`font-mono text-sm${!isValidCron(localCron) && localCron.trim() !== '' ? ' border-destructive' : ''}`}
+          <input
+            id="pulse-cron-time"
+            type="time"
+            value={cronToTime(localCron)}
+            onChange={(e) => handleCronChange(timeToCron(e.target.value, localCron))}
+            className="h-9 rounded-md border bg-background px-3 text-sm"
           />
-          {!isValidCron(localCron) && localCron.trim() !== '' ? (
-            <p className="text-xs text-destructive">Invalid cron expression</p>
-          ) : (
-            <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
-          )}
+          <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
+          <details className="mt-1">
+            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
+              Advanced (cron expression)
+            </summary>
+            <Input
+              type="text"
+              value={localCron}
+              onChange={(e) => handleCronChange(e.target.value)}
+              className={`mt-1 font-mono text-sm${!isValidCron(localCron) && localCron.trim() !== '' ? ' border-destructive' : ''}`}
+              placeholder="0 4 * * *"
+            />
+            {!isValidCron(localCron) && localCron.trim() !== '' && (
+              <p className="text-xs text-destructive">Invalid cron expression</p>
+            )}
+          </details>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="pulse-deck-size" className="flex items-center justify-between">
+            <span>Deck size</span>
+            <span className="text-muted-foreground text-sm font-normal">{deckSize}</span>
+          </Label>
+          <input
+            id="pulse-deck-size"
+            type="range"
+            min={5}
+            max={30}
+            step={5}
+            value={deckSize}
+            onChange={(e) =>
+              setMut.mutate({ key: 'pulse.deck_size', value: parseInt(e.target.value, 10) })
+            }
+            disabled={setMut.isPending}
+            className="w-full accent-primary"
+          />
+          <p className="text-xs text-muted-foreground">
+            Papers in your daily Pulse deck. Larger decks = more variety but longer review.
+          </p>
+        </div>
+
+        <div className="space-y-1">
+          <Label htmlFor="pulse-stage2-top-k" className="flex items-center justify-between">
+            <span>Ranking candidates</span>
+            <span className="text-muted-foreground text-sm font-normal">{stage2TopK}</span>
+          </Label>
+          <input
+            id="pulse-stage2-top-k"
+            type="range"
+            min={20}
+            max={100}
+            step={10}
+            value={stage2TopK}
+            onChange={(e) =>
+              setMut.mutate({ key: 'pulse.stage2_top_k', value: parseInt(e.target.value, 10) })
+            }
+            disabled={setMut.isPending}
+            className="w-full accent-primary"
+          />
+          <p className="text-xs text-muted-foreground">
+            Candidates the LLM reranker evaluates. Higher = better ranking quality but slower.
+          </p>
         </div>
 
         <div className="rounded-md border bg-muted/30 p-3 text-sm">

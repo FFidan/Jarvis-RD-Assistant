@@ -3,8 +3,8 @@ import { Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
 const pageTitles: Record<string, string> = {
-  '/': 'Dashboard',
-  '/feed': 'Paper Feed',
+  '/': 'Home',
+  '/feed': 'Research Feed',
   '/analytics': 'Analytics',
   '/projects': 'Projects',
   '/cards': 'Learning Cards',

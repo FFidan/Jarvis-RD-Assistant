@@ -14,7 +14,7 @@ interface GraphControlsProps {
 }
 
 const LAYOUTS: { value: LayoutType; label: string }[] = [
-  { value: 'cose', label: 'Force-directed (CoSE)' },
+  { value: 'cose', label: 'Force-directed' },
   { value: 'breadthfirst', label: 'Breadth-first' },
   { value: 'circle', label: 'Circle' },
   { value: 'concentric', label: 'Concentric' },

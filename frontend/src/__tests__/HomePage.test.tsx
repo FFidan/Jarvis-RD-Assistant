@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HomePage } from '@/pages/HomePage';
@@ -21,7 +22,8 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchDashboardMetrics } = await import('@/lib/api');
+const { fetchDashboardMetrics, batchProcessPapers, batchSummarizePapers, batchExtractEntities } =
+  await import('@/lib/api');
 
 function renderHomePage() {
   const queryClient = new QueryClient({
@@ -71,42 +73,24 @@ describe('HomePage', () => {
     renderHomePage();
     // Wait for data to render
     expect(await screen.findByText('42')).toBeInTheDocument();
-    expect(screen.getByText('Total Papers')).toBeInTheDocument();
-    expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('Unread Papers')).toBeInTheDocument();
+    expect(screen.getByText('Library')).toBeInTheDocument();
+    expect(screen.getByText('7 unread · 3 unsummarized')).toBeInTheDocument();
   });
 
-  it('renders quick navigation links', () => {
+  it('does not render Quick Navigation section', () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();
-    expect(screen.getByText('Quick Navigation')).toBeInTheDocument();
-    expect(screen.getByText('Research Feed')).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.queryByText('Quick Navigation')).not.toBeInTheDocument();
   });
 
-  it('renders all seven metric tiles when data loads', async () => {
+  it('renders all five metric tiles when data loads', async () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();
-    expect(await screen.findByText('Total Papers')).toBeInTheDocument();
-    expect(screen.getByText('Unread Papers')).toBeInTheDocument();
-    expect(screen.getByText('Unsummarized')).toBeInTheDocument();
+    expect(await screen.findByText('Library')).toBeInTheDocument();
     expect(screen.getByText('Due Cards')).toBeInTheDocument();
     expect(screen.getByText('Active Projects')).toBeInTheDocument();
     expect(screen.getByText('Topics')).toBeInTheDocument();
-    expect(screen.getByText('Nudges')).toBeInTheDocument();
-  });
-
-  it('renders all quick navigation links', async () => {
-    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
-    renderHomePage();
-    expect(screen.getByText('Research Feed')).toBeInTheDocument();
-    expect(screen.getByText('Analytics')).toBeInTheDocument();
-    expect(screen.getByText('Projects')).toBeInTheDocument();
-    expect(screen.getByText('Learning Cards')).toBeInTheDocument();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
-    expect(screen.getByText('Citation Graph')).toBeInTheDocument();
-    expect(screen.getByText('Knowledge Graph')).toBeInTheDocument();
-    expect(screen.getByText('Extraction Table')).toBeInTheDocument();
+    expect(screen.getByText('Scheduled Jobs')).toBeInTheDocument();
   });
 
   it('renders zero values when metrics are all zeros', async () => {
@@ -121,9 +105,59 @@ describe('HomePage', () => {
     };
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(zeroMetrics);
     renderHomePage();
-    expect(await screen.findByText('Total Papers')).toBeInTheDocument();
-    // All seven tiles should show 0
+    expect(await screen.findByText('Library')).toBeInTheDocument();
+    // All five tiles should show 0
     const zeros = screen.getAllByText('0');
-    expect(zeros.length).toBe(7);
+    expect(zeros.length).toBe(5);
+    // Library subtitle shows "All caught up" when unread is 0
+    expect(screen.getByText('All caught up')).toBeInTheDocument();
+  });
+
+  describe('BatchButton confirmation dialogs', () => {
+    beforeEach(() => {
+      vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+    });
+
+    it('does not call batchProcessPapers when user cancels confirmation', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Process PDFs/i });
+      await userEvent.click(button);
+      expect(window.confirm).toHaveBeenCalledWith(
+        'This will process PDFs for all papers in your library. This may take several minutes. Continue?',
+      );
+      expect(batchProcessPapers).not.toHaveBeenCalled();
+    });
+
+    it('does not call batchSummarizePapers when user cancels confirmation', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Summarize/i });
+      await userEvent.click(button);
+      expect(window.confirm).toHaveBeenCalledWith(
+        'This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?',
+      );
+      expect(batchSummarizePapers).not.toHaveBeenCalled();
+    });
+
+    it('does not call batchExtractEntities when user cancels confirmation', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(false);
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Extract Entities/i });
+      await userEvent.click(button);
+      expect(window.confirm).toHaveBeenCalledWith(
+        'This will extract entities from all papers. This costs LLM tokens. Continue?',
+      );
+      expect(batchExtractEntities).not.toHaveBeenCalled();
+    });
+
+    it('calls batchProcessPapers when user confirms', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5 });
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Process PDFs/i });
+      await userEvent.click(button);
+      await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
+    });
   });
 });

@@ -1,8 +1,6 @@
 import { Link } from 'react-router-dom';
 import {
   BookOpen,
-  Eye,
-  Clock,
   GraduationCap,
   FolderKanban,
   Tag,
@@ -18,15 +16,7 @@ interface MetricTileGridProps {
   isLoading: boolean;
 }
 
-const tiles = [
-  { key: 'total_papers' as const, title: 'Total Papers', icon: BookOpen, href: '/feed' },
-  { key: 'unread_papers' as const, title: 'Unread Papers', icon: Eye, href: '/feed' },
-  { key: 'pending_papers' as const, title: 'Unsummarized', icon: Clock, href: '/feed' },
-  { key: 'due_cards' as const, title: 'Due Cards', icon: GraduationCap, href: '/cards' },
-  { key: 'active_projects' as const, title: 'Active Projects', icon: FolderKanban, href: '/projects' },
-  { key: 'topic_count' as const, title: 'Topics', icon: Tag, href: '/settings' },
-  { key: 'nudge_count' as const, title: 'Nudges', icon: Bell, href: '/settings' },
-] as const;
+const SKELETON_COUNT = 5;
 
 function SkeletonTile() {
   return (
@@ -43,11 +33,40 @@ function SkeletonTile() {
 }
 
 export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
+  const unread = metrics?.unread_papers ?? 0;
+  const pending = metrics?.pending_papers ?? 0;
+  const librarySubtitle =
+    unread > 0 ? `${unread} unread · ${pending} unsummarized` : 'All caught up';
+
+  const tiles = [
+    {
+      key: 'total_papers' as const,
+      title: 'Library',
+      subtitle: librarySubtitle,
+      icon: BookOpen,
+      href: '/feed',
+    },
+    { key: 'due_cards' as const, title: 'Due Cards', icon: GraduationCap, href: '/cards' },
+    {
+      key: 'active_projects' as const,
+      title: 'Active Projects',
+      icon: FolderKanban,
+      href: '/projects',
+    },
+    { key: 'topic_count' as const, title: 'Topics', icon: Tag, href: '/settings' },
+    {
+      key: 'nudge_count' as const,
+      title: 'Scheduled Jobs',
+      icon: Bell,
+      href: '/settings',
+    },
+  ];
+
   if (isLoading) {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-        {tiles.map((t) => (
-          <SkeletonTile key={t.key} />
+        {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
+          <SkeletonTile key={i} />
         ))}
       </div>
     );
@@ -61,6 +80,7 @@ export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
             title={t.title}
             value={metrics?.[t.key] ?? 0}
             icon={t.icon}
+            subtitle={t.subtitle}
           />
         </Link>
       ))}

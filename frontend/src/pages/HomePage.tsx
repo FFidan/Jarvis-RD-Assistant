@@ -1,8 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
-  Newspaper, BarChart3, FolderKanban, GraduationCap,
-  Settings, GitFork, Network, TableProperties,
   CheckCircle2, Circle, ArrowRight, X,
   Cog, FileText, Sparkles, Loader2,
 } from 'lucide-react';
@@ -13,27 +11,18 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { SetupBanner } from '@/components/setup/SetupBanner';
 
-const quickLinks = [
-  { label: 'Research Feed', icon: Newspaper, href: '/feed' },
-  { label: 'Analytics', icon: BarChart3, href: '/analytics' },
-  { label: 'Projects', icon: FolderKanban, href: '/projects' },
-  { label: 'Learning Cards', icon: GraduationCap, href: '/cards' },
-  { label: 'Settings', icon: Settings, href: '/settings' },
-  { label: 'Citation Graph', icon: GitFork, href: '/citations' },
-  { label: 'Knowledge Graph', icon: Network, href: '/knowledge' },
-  { label: 'Extraction Table', icon: TableProperties, href: '/extractions' },
-];
-
 function BatchButton({
   label,
   icon: Icon,
   mutationFn,
   formatResult,
+  confirmMessage,
 }: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
   mutationFn: () => Promise<any>;
   formatResult: (data: any) => string;
+  confirmMessage?: string;
 }) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
@@ -48,7 +37,10 @@ function BatchButton({
       <Button
         variant="outline"
         size="sm"
-        onClick={() => mutation.mutate()}
+        onClick={() => {
+          if (confirmMessage && !window.confirm(confirmMessage)) return;
+          mutation.mutate();
+        }}
         disabled={mutation.isPending}
       >
         {mutation.isPending ? (
@@ -177,39 +169,26 @@ export function HomePage() {
               icon={Cog}
               mutationFn={batchProcessPapers}
               formatResult={(d: any) => `Queued ${d.queued} papers`}
+              confirmMessage="This will process PDFs for all papers in your library. This may take several minutes. Continue?"
             />
             <BatchButton
               label="Summarize"
               icon={FileText}
               mutationFn={batchSummarizePapers}
               formatResult={(d: any) => `Summarized ${d.summarized} papers`}
+              confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
             />
             <BatchButton
               label="Extract Entities"
               icon={Sparkles}
               mutationFn={batchExtractEntities}
               formatResult={(d: any) => `Extracted ${d.extracted} papers`}
+              confirmMessage="This will extract entities from all papers. This costs LLM tokens. Continue?"
             />
           </div>
         </CardContent>
       </Card>
 
-      <div>
-        <h2 className="mb-4 text-lg font-semibold">Quick Navigation</h2>
-        <div className="flex flex-wrap gap-2">
-          {quickLinks.map((link) => {
-            const Icon = link.icon;
-            return (
-              <Button key={link.href} variant="outline" size="sm" asChild>
-                <Link to={link.href}>
-                  <Icon className="mr-2 h-4 w-4" />
-                  {link.label}
-                </Link>
-              </Button>
-            );
-          })}
-        </div>
-      </div>
     </div>
   );
 }

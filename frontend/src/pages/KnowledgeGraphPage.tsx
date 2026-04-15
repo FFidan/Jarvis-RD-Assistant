@@ -9,6 +9,7 @@ import { KGQueryInput } from '@/components/knowledge/KGQueryInput';
 import { EntityBreakdown } from '@/components/knowledge/EntityBreakdown';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { Network, Sparkles, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
@@ -91,8 +92,9 @@ export function KnowledgeGraphPage() {
             <EntityTypeFilter value={entityType} onChange={setEntityType} />
 
             <div>
-              <label className="mb-1 block text-sm font-medium">
+              <label className="mb-1 flex items-center gap-1 text-sm font-medium">
                 Min Paper Count: {minPaperCount}
+                <InfoTooltip content="Show only entities that appear in at least this many papers. Increase to filter out rarely-mentioned terms and reduce noise." />
               </label>
               <input
                 type="range"

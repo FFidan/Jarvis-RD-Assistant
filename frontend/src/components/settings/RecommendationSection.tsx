@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
@@ -124,6 +125,14 @@ export function RecommendationSection() {
   const pulseWeightSum = PULSE_WEIGHT_KEYS.reduce((acc, k) => acc + localPulseWeights[k], 0);
   const pulseWeightSumOutOfRange = pulseWeightSum < 0.8 || pulseWeightSum > 1.2;
 
+  const handleNormalize = () => {
+    const scale = 1 / pulseWeightSum;
+    PULSE_WEIGHT_KEYS.forEach((k) => {
+      const newVal = Math.round(localPulseWeights[k] * scale * 100) / 100;
+      setMut.mutate({ key: `pulse.weights.${k}`, value: newVal });
+    });
+  };
+
   const handleRefresh = async () => {
     setIsRefreshing(true);
     setRefreshMessage(null);
@@ -206,6 +215,13 @@ export function RecommendationSection() {
             <h3 className="text-sm font-semibold">Pulse scoring weights</h3>
             <InfoTooltip content="Weights applied to each signal when ranking Pulse candidate papers. Individual weights blend into a final score; values should roughly sum to 1.0." />
           </div>
+          <p className="text-xs text-muted-foreground">
+            These weights control the Pulse paper-ranking pipeline. Enable Pulse in the{' '}
+            <Link to="/settings?tab=automation" className="underline">
+              Automation tab
+            </Link>
+            .
+          </p>
           {PULSE_WEIGHT_KEYS.map((key) => (
             <div key={key} className="space-y-1">
               <Label className="flex items-center justify-between text-xs">
@@ -226,14 +242,26 @@ export function RecommendationSection() {
               />
             </div>
           ))}
-          <p
-            className={`text-xs ${
-              pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
-            }`}
-          >
-            Sum: {pulseWeightSum.toFixed(2)}
-            {pulseWeightSumOutOfRange && ' (target ~1.0)'}
-          </p>
+          <div className="flex items-center">
+            <p
+              className={`text-xs ${
+                pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
+              }`}
+            >
+              Sum: {pulseWeightSum.toFixed(2)}
+              {pulseWeightSumOutOfRange && ' (target ~1.0)'}
+            </p>
+            {pulseWeightSumOutOfRange && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleNormalize}
+                className="ml-2 h-6 px-2 text-xs"
+              >
+                Normalize to 1.0
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-2">

@@ -44,6 +44,7 @@ export function StatsHeader() {
         value={`${stats.average_retention.toFixed(1)}%`}
         icon={Target}
         subtitle="Last 30 days"
+        tooltip="Probability of correctly recalling a flashcard at review time, averaged across your deck. 0.9 = you recall 90% of cards when they come due."
       />
       <MetricTile
         title="Streak"

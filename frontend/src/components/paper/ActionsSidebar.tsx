@@ -14,9 +14,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 interface ActionsSidebarProps {
   paperId: number;
+  /** Whether the paper's PDF has been downloaded */
+  pdfDownloaded?: boolean;
+  /** Whether the paper has been processed (chunks exist) */
+  hasChunks?: boolean;
+  /** Whether the paper has a summary */
+  hasSummary?: boolean;
 }
 
 type AnalyzeStep = null | 'downloading' | 'processing' | 'summarizing';
@@ -29,7 +36,7 @@ const ANALYZE_STEPS = [
 
 type StepStatus = 'pending' | 'active' | 'completed' | 'failed';
 
-export function ActionsSidebar({ paperId }: ActionsSidebarProps) {
+export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = false, hasSummary = false }: ActionsSidebarProps) {
   const queryClient = useQueryClient();
   const [deckId, setDeckId] = useState<string>('');
   const [maxCards, setMaxCards] = useState('5');
@@ -169,13 +176,12 @@ export function ActionsSidebar({ paperId }: ActionsSidebarProps) {
     }
   })();
 
-  const hasStepTracker = isAnalyzing || Object.values(stepStatuses).some((s) => s === 'failed');
-
   return (
     <div className="space-y-4">
       <h3 className="text-lg font-semibold">Actions</h3>
 
       <Button
+        variant="default"
         className="w-full justify-start"
         onClick={() => { setActionResult(null); runAnalyze(); }}
         disabled={anyPending}
@@ -184,10 +190,17 @@ export function ActionsSidebar({ paperId }: ActionsSidebarProps) {
         {analyzeLabel}
       </Button>
 
-      {hasStepTracker && (
-        <div className="space-y-2 rounded-md border p-3">
+      {/* Step tracker: always visible so users can see pipeline completion state */}
+      <div className="space-y-2 rounded-md border p-3">
           {ANALYZE_STEPS.map((step) => {
-            const status = stepStatuses[step.key] || 'pending';
+            // During an active analyze run, use live stepStatuses.
+            // Otherwise derive state from paper props.
+            let status: StepStatus = stepStatuses[step.key] || 'pending';
+            if (!isAnalyzing && !Object.values(stepStatuses).some((s) => s !== 'pending')) {
+              if (step.key === 'downloading') status = pdfDownloaded ? 'completed' : 'pending';
+              else if (step.key === 'processing') status = hasChunks ? 'completed' : 'pending';
+              else if (step.key === 'summarizing') status = hasSummary ? 'completed' : 'pending';
+            }
             const isFailed = status === 'failed';
             const isDone = status === 'completed';
             const isCurrent = status === 'active';
@@ -208,40 +221,47 @@ export function ActionsSidebar({ paperId }: ActionsSidebarProps) {
               </div>
             );
           })}
+      </div>
+
+      <details className="mt-2">
+        <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
+          Manual steps ▾
+        </summary>
+        <div className="mt-2 flex flex-col gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => { setActionResult(null); downloadMut.mutate(); }}
+            disabled={anyPending}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => { setActionResult(null); processMut.mutate(); }}
+            disabled={anyPending}
+          >
+            <Cog className="mr-2 h-4 w-4" />
+            {processMut.isPending ? 'Processing...' : 'Process PDF'}
+          </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+            onClick={() => { setActionResult(null); summarizeMut.mutate(); }}
+            disabled={anyPending}
+          >
+            <FileText className="mr-2 h-4 w-4" />
+            {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
+          </Button>
         </div>
-      )}
-
-      <Separator />
-
-      <Button
-        variant="outline"
-        className="w-full justify-start"
-        onClick={() => { setActionResult(null); downloadMut.mutate(); }}
-        disabled={anyPending}
-      >
-        <Download className="mr-2 h-4 w-4" />
-        {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
-      </Button>
-
-      <Button
-        variant="outline"
-        className="w-full justify-start"
-        onClick={() => { setActionResult(null); processMut.mutate(); }}
-        disabled={anyPending}
-      >
-        <Cog className="mr-2 h-4 w-4" />
-        {processMut.isPending ? 'Processing...' : 'Process PDF'}
-      </Button>
-
-      <Button
-        variant="outline"
-        className="w-full justify-start"
-        onClick={() => { setActionResult(null); summarizeMut.mutate(); }}
-        disabled={anyPending}
-      >
-        <FileText className="mr-2 h-4 w-4" />
-        {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
-      </Button>
+      </details>
 
       {actionResult && (
         <p className={`text-sm ${actionResult.type === 'error' ? 'text-destructive' : 'text-green-600'}`}>
@@ -271,7 +291,10 @@ export function ActionsSidebar({ paperId }: ActionsSidebarProps) {
             </Select>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="action-max-cards">Max cards</Label>
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor="action-max-cards">Max cards</Label>
+              <InfoTooltip content="Maximum flashcards to generate from this paper. 5 is a sensible default — more cards cost more LLM tokens and take longer." />
+            </div>
             <Input
               id="action-max-cards"
               type="number"

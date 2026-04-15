@@ -15,11 +15,11 @@ export function SettingsPage() {
       <h1 className="text-3xl font-bold">Settings</h1>
 
       <Tabs defaultValue="topics">
-        <TabsList className="flex-wrap">
+        <TabsList className="overflow-x-auto scrollbar-thin flex-nowrap">
           <TabsTrigger value="topics">Topics</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>
           <TabsTrigger value="authors">Authors</TabsTrigger>
-          <TabsTrigger value="ingestion">Ingestion</TabsTrigger>
+          <TabsTrigger value="ingestion">Models & Notifications</TabsTrigger>
           <TabsTrigger value="automation">Automation</TabsTrigger>
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
           <TabsTrigger value="recommendation">Recommendations</TabsTrigger>

@@ -84,7 +84,12 @@ export function PaperDetailPage() {
 
   const sidebarContent = (
     <div className="space-y-2">
-      <ActionsSidebar paperId={paperId} />
+      <ActionsSidebar
+        paperId={paperId}
+        pdfDownloaded={paper.pdf_downloaded}
+        hasChunks={chunks.length > 0}
+        hasSummary={summary !== null}
+      />
       <UserStateForm paperId={paperId} userState={user_state} />
     </div>
   );

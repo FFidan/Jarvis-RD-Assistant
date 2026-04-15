@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
 import { Pencil, Check, X, Settings2 } from 'lucide-react';
 import { ModelSelector } from '@/components/shared/ModelSelector';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ConfigEntry } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -60,16 +61,35 @@ function parseNotificationValue(
 // Config metadata for human-readable labels and grouping
 // ---------------------------------------------------------------------------
 
-const CONFIG_METADATA: Record<string, { label: string; description: string; group: string }> = {
+/** Keys that belong to other tabs (Pulse, Setup, Telegram) and should not
+ *  appear in the "Models & Notifications" ingestion section. */
+const HIDE_FROM_UI = new Set([
+  'setup.completed',
+  'telegram.owner_chat_id',
+  'pulse.cron',
+  'pulse.enabled',
+  'pulse.deck_size',
+  'pulse.stage2_top_k',
+  'pulse.weights',
+]);
+
+const CONFIG_METADATA: Record<
+  string,
+  { label: string; description: string; group: string; tooltip?: string }
+> = {
   'fsrs.desired_retention': {
     label: 'Target Retention',
     description: 'Desired probability of recalling a card correctly (0.0\u20131.0)',
     group: 'Spaced Repetition',
+    tooltip:
+      'Desired probability of recalling a card correctly at review time. 0.9 = 90% recall. Higher values = more frequent review sessions.',
   },
   'fsrs.learning_steps': {
     label: 'Learning Steps',
     description: 'Steps before a card graduates, as [min, max] minutes',
     group: 'Spaced Repetition',
+    tooltip:
+      "Minutes between a new card's first review attempts before it enters the FSRS long-term schedule. [1, 10] = reviewed after 1 min, then 10 min.",
   },
   'llm.embed_model': {
     label: 'Embedding Model',
@@ -86,6 +106,17 @@ const CONFIG_METADATA: Record<string, { label: string; description: string; grou
     description: 'High-capability model for summarization, extraction, and RAG',
     group: 'LLM Models',
   },
+  'paper.max_daily': {
+    group: 'Paper Workflow',
+    label: 'Max papers fetched per day',
+    description: 'How many new papers to import in a single discovery run.',
+  },
+  'paper.auto_generate_cards': {
+    group: 'Paper Workflow',
+    label: 'Auto-generate flashcards after summarization',
+    description:
+      'Automatically generate spaced-repetition flashcards when a paper is summarized.',
+  },
 };
 
 /** Format a config value for display. */
@@ -94,7 +125,7 @@ function formatConfigValue(value: unknown): string {
 }
 
 /** Preferred order for groups (unlisted groups sort alphabetically after these). */
-const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Other'];
+const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Other'];
 
 // ---------------------------------------------------------------------------
 // NotificationRow — inline time picker + enabled toggle
@@ -233,9 +264,11 @@ export function IngestionSection() {
     );
   }
 
-  // Separate notification entries from regular config
+  // Separate notification entries from regular config; hide keys owned by other tabs
   const notificationEntries = configs.filter((e) => e.key.startsWith('notifications.'));
-  const regularEntries = configs.filter((e) => !e.key.startsWith('notifications.'));
+  const regularEntries = configs
+    .filter((e) => !e.key.startsWith('notifications.'))
+    .filter((e) => !HIDE_FROM_UI.has(e.key));
 
   // Group regular configs by metadata group
   const grouped = regularEntries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
@@ -318,8 +351,9 @@ export function IngestionSection() {
           ) : (
             <>
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm">
+                <div className="flex items-center gap-1 font-medium text-sm">
                   {meta?.label ?? entry.key}
+                  {meta?.tooltip && <InfoTooltip content={meta.tooltip} />}
                 </div>
                 {meta?.description && (
                   <p className="text-xs text-muted-foreground mt-0.5">

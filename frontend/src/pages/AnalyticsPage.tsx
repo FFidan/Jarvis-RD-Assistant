@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { DateRangeFilter } from '@/components/analytics/DateRangeFilter';
 import { ActivityChart } from '@/components/analytics/ActivityChart';
 import { RetentionChart } from '@/components/analytics/RetentionChart';
@@ -102,7 +103,10 @@ export function AnalyticsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Retention Trend</CardTitle>
+            <CardTitle className="flex items-center gap-1 text-lg">
+              Retention Trend
+              <InfoTooltip content="Probability of correctly recalling a flashcard at review time, averaged across your deck. 0.9 = you recall 90% of cards when they come due." />
+            </CardTitle>
           </CardHeader>
           <CardContent>
             {retentionQuery.isLoading ? (

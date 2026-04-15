@@ -201,8 +201,8 @@ export function ExtractionTablePage() {
             />
           ) : (
             <EmptyState
-              title="No extraction templates yet"
-              description="Create one to get started."
+              title="No papers selected"
+              description="Pick papers above and click Extract Selected to fill this table."
               icon={TableProperties}
             />
           )}
