@@ -32,6 +32,39 @@ die() {
   exit 1
 }
 
+# wait_healthy <svc> [budget_seconds]
+# Poll Docker healthcheck for <svc> until healthy or timeout.
+# Returns 0 on healthy, 1 on unhealthy or timeout.
+wait_healthy() {
+  local svc="$1"
+  local budget="${2:-60}"
+  local interval=3
+  local elapsed=0
+  local cid status
+
+  while [ "$elapsed" -lt "$budget" ]; do
+    cid="$(docker compose ps -q "$svc" 2>/dev/null | head -n 1 || true)"
+    if [ -z "$cid" ]; then
+      sleep "$interval"
+      elapsed=$((elapsed + interval))
+      continue
+    fi
+    # `.State.Health.Status` is empty when the image has no HEALTHCHECK.
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$cid" 2>/dev/null || true)"
+    case "$status" in
+      "")        info "$svc: no healthcheck defined — skipping wait."; return 0 ;;
+      healthy)   ok "$svc: healthy"; return 0 ;;
+      starting)  ;;  # still coming up
+      unhealthy) err "$svc: unhealthy"; return 1 ;;
+      *)         ;;  # unknown states — keep polling
+    esac
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+  done
+  err "$svc: did not become healthy within ${budget}s."
+  return 1
+}
+
 # -----------------------------------------------------------------------------
 # 1. Banner
 # -----------------------------------------------------------------------------
@@ -387,6 +420,42 @@ if ! docker compose "${PROFILE_ARGS[@]}" up -d; then
       "Inspect logs: docker compose logs --tail=200"
 fi
 
+# -----------------------------------------------------------------------------
+# 11. Wait for mandatory services to become healthy
+# -----------------------------------------------------------------------------
+# Optional services (n8n, telegram_bot) are profile-gated and intentionally
+# excluded from this list.
+MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboard)
+
+printf '\n'
+info "Waiting for services to become healthy..."
+
+SETUP_FAILED=()
+for svc in "${MANDATORY_SVCS[@]}"; do
+  case "$svc" in
+    ollama) _budget=180 ;;  # first-run model pull can be slow
+    *)      _budget=60  ;;
+  esac
+  if ! wait_healthy "$svc" "$_budget"; then
+    SETUP_FAILED+=("$svc")
+    warn "Dumping last 50 log lines for $svc:"
+    docker compose logs --tail 50 "$svc" >&2 || true
+  fi
+done
+
+if [ "${#SETUP_FAILED[@]}" -gt 0 ]; then
+  printf '\n'
+  err "The following service(s) did not become healthy: ${SETUP_FAILED[*]}"
+  cat >&2 <<EOF
+
+Recovery steps:
+  1. Check full logs:   docker compose logs --tail=200 ${SETUP_FAILED[*]}
+  2. Verify .env has correct values and re-run: ./setup.sh
+  3. For Ollama model pull issues, run manually: docker compose exec ollama ollama pull <model>
+EOF
+  exit 1
+fi
+
 # LAN reachability probe (non-fatal — just informational).
 if [ "$ACCESS_MODE_LABEL" = "lan" ] && [ -n "$LAN_IP" ]; then
   info "Probing LAN reachability at https://${LAN_IP}:3001/health ..."
@@ -399,7 +468,7 @@ if [ "$ACCESS_MODE_LABEL" = "lan" ] && [ -n "$LAN_IP" ]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 11. Summary
+# 12. Summary (only reached when all mandatory services are healthy)
 # -----------------------------------------------------------------------------
 DASHBOARD_URL="https://localhost:3001"
 case "$ACCESS_MODE_LABEL" in
@@ -420,14 +489,13 @@ case "$ACCESS_MODE_LABEL" in
 esac
 
 printf '\n%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-printf '%s   Setup complete.%s\n' "$C_GREEN" "$C_RESET"
+printf '%s   ✅ Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
 printf '  API key:      %s%s%s\n' "$C_BOLD" "$JARVIS_API_KEY" "$C_RESET"
 printf '  %s%s Save this key — you will need it to log in.%s\n' \
   "$C_YELLOW" "WARNING:" "$C_RESET"
 printf '\n'
-printf '  Services are starting. Check status:  docker compose ps\n'
-printf '  First-run downloads can take 5–10 minutes (Ollama models).\n'
-printf '  Tail logs:                            docker compose logs -f\n'
+printf '  All mandatory services healthy. You can now open the dashboard.\n'
+printf '  Tail logs:  docker compose logs -f\n'
 printf '\n'

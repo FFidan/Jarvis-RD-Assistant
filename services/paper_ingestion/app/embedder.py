@@ -20,14 +20,14 @@ if TYPE_CHECKING:
 
 import httpx
 import tiktoken
-from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
-
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     build_litellm_headers,
     get_litellm_config,
 )
+from qdrant_client import AsyncQdrantClient
+from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
+
 from app.models import ChunkForEmbedding
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,7 @@ class Embedder:
             return len(page_boundaries)  # last page
 
         # Split into sections by headings, preserving the heading with each section
-        sections = re.split(r'(?=\n##\s)', text)
+        sections = re.split(r"(?=\n##\s)", text)
 
         chunks: list[ChunkForEmbedding] = []
         chunk_index = 0
@@ -163,13 +163,15 @@ class Embedder:
                     # Flush current chunk, start new
                     if current_text.strip():
                         mid = current_start + len(current_text) // 2
-                        chunks.append(ChunkForEmbedding(
-                            chunk_index=chunk_index,
-                            content=current_text.strip(),
-                            page_number=find_page(mid),
-                            start_char=current_start,
-                            end_char=current_start + len(current_text),
-                        ))
+                        chunks.append(
+                            ChunkForEmbedding(
+                                chunk_index=chunk_index,
+                                content=current_text.strip(),
+                                page_number=find_page(mid),
+                                start_char=current_start,
+                                end_char=current_start + len(current_text),
+                            )
+                        )
                         chunk_index += 1
                     current_text = section
                     current_start = text_offset
@@ -177,18 +179,20 @@ class Embedder:
                 # Section too large -- flush current, then sub-split
                 if current_text.strip():
                     mid = current_start + len(current_text) // 2
-                    chunks.append(ChunkForEmbedding(
-                        chunk_index=chunk_index,
-                        content=current_text.strip(),
-                        page_number=find_page(mid),
-                        start_char=current_start,
-                        end_char=current_start + len(current_text),
-                    ))
+                    chunks.append(
+                        ChunkForEmbedding(
+                            chunk_index=chunk_index,
+                            content=current_text.strip(),
+                            page_number=find_page(mid),
+                            start_char=current_start,
+                            end_char=current_start + len(current_text),
+                        )
+                    )
                     chunk_index += 1
                     current_text = ""
 
                 # Sub-split on paragraphs (double newline, but not inside $$...$$)
-                paragraphs = re.split(r'\n\n(?!\$\$)', section)
+                paragraphs = re.split(r"\n\n(?!\$\$)", section)
                 para_offset = text_offset
 
                 for para in paragraphs:
@@ -203,29 +207,35 @@ class Embedder:
                     else:
                         if current_text.strip():
                             mid = current_start + len(current_text) // 2
-                            chunks.append(ChunkForEmbedding(
-                                chunk_index=chunk_index,
-                                content=current_text.strip(),
-                                page_number=find_page(mid),
-                                start_char=current_start,
-                                end_char=current_start + len(current_text),
-                            ))
+                            chunks.append(
+                                ChunkForEmbedding(
+                                    chunk_index=chunk_index,
+                                    content=current_text.strip(),
+                                    page_number=find_page(mid),
+                                    start_char=current_start,
+                                    end_char=current_start + len(current_text),
+                                )
+                            )
                             chunk_index += 1
                         # Force-split oversized paragraphs by token windows
                         if token_count(para) > CHUNK_TOKEN_LIMIT:
                             tokens = enc.encode(para)
-                            for j in range(0, len(tokens), CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS):
+                            for j in range(
+                                0, len(tokens), CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS
+                            ):
                                 window = tokens[j : j + CHUNK_TOKEN_LIMIT]
                                 sub_text = enc.decode(window)
                                 sub_start = para_offset + (j * len(para) // max(len(tokens), 1))
                                 mid = sub_start + len(sub_text) // 2
-                                chunks.append(ChunkForEmbedding(
-                                    chunk_index=chunk_index,
-                                    content=sub_text.strip(),
-                                    page_number=find_page(mid),
-                                    start_char=sub_start,
-                                    end_char=sub_start + len(sub_text),
-                                ))
+                                chunks.append(
+                                    ChunkForEmbedding(
+                                        chunk_index=chunk_index,
+                                        content=sub_text.strip(),
+                                        page_number=find_page(mid),
+                                        start_char=sub_start,
+                                        end_char=sub_start + len(sub_text),
+                                    )
+                                )
                                 chunk_index += 1
                             current_text = ""
                         else:
@@ -238,13 +248,15 @@ class Embedder:
         # Flush remaining
         if current_text.strip():
             mid = current_start + len(current_text) // 2
-            chunks.append(ChunkForEmbedding(
-                chunk_index=chunk_index,
-                content=current_text.strip(),
-                page_number=find_page(mid),
-                start_char=current_start,
-                end_char=current_start + len(current_text),
-            ))
+            chunks.append(
+                ChunkForEmbedding(
+                    chunk_index=chunk_index,
+                    content=current_text.strip(),
+                    page_number=find_page(mid),
+                    start_char=current_start,
+                    end_char=current_start + len(current_text),
+                )
+            )
 
         return chunks
 
@@ -270,9 +282,7 @@ class Embedder:
         if not texts:
             return []
 
-        litellm_config = get_litellm_config(
-            fallback_env_names=LITELLM_FALLBACK_ENV_NAMES
-        )
+        litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
         try:
             response = await self.http_client.post(
                 f"{litellm_config.base_url}/v1/embeddings",
@@ -289,12 +299,8 @@ class Embedder:
             raise RuntimeError("Embedding service unavailable") from e
         except httpx.HTTPStatusError as e:
             body_preview = (e.response.text or "")[:200]
-            logger.error(
-                "Embedding service HTTP %d: %s", e.response.status_code, body_preview
-            )
-            raise RuntimeError(
-                f"Embedding service error (HTTP {e.response.status_code})"
-            ) from e
+            logger.error("Embedding service HTTP %d: %s", e.response.status_code, body_preview)
+            raise RuntimeError(f"Embedding service error (HTTP {e.response.status_code})") from e
         data = response.json()
 
         # Sort by index to maintain order
@@ -668,6 +674,7 @@ class Embedder:
         query: str,
         db_pool: asyncpg.Pool,
         limit: int = 10,
+        offset: int = 0,
         k: int = 60,
     ) -> list[dict]:
         """Hybrid search combining BM25 keyword + semantic vector search via RRF.
@@ -683,6 +690,13 @@ class Embedder:
             Database connection pool for PostgreSQL BM25 search.
         limit : int
             Maximum number of results to return.
+        offset : int
+            Number of results to skip (for pagination).  The offset is applied
+            *after* RRF fusion so that relative rankings are computed over the
+            full candidate pool (``limit + offset`` items) before slicing.
+            This preserves RRF correctness: both BM25 and semantic legs see
+            the full candidate set, and the merged ranking is sliced at the
+            end rather than before fusion.
         k : int
             RRF constant (higher = more weight to lower-ranked results).
             Standard value is 60.
@@ -755,9 +769,11 @@ class Embedder:
                 rrf_score += 1.0 / (k + semantic_rank_map[pid])
             scored.append((pid, rrf_score))
 
-        # Sort by RRF score descending, then by paper_id for stable ordering
+        # Sort by RRF score descending, then by paper_id for stable ordering.
+        # Slice to limit+offset candidates first, then apply offset pagination
+        # after RRF so that the full merged ranking is preserved.
         scored.sort(key=lambda x: (-x[1], x[0]))
-        top_ids = [pid for pid, _ in scored[:limit]]
+        top_ids = [pid for pid, _ in scored[offset : offset + limit]]
 
         # ------------------------------------------------------------------
         # Fetch metadata for papers found only in semantic leg
@@ -901,11 +917,7 @@ class Embedder:
                 ),
             ),
             query_filter=Filter(
-                must_not=[
-                    FieldCondition(
-                        key="paper_id", match=MatchAny(any=seed_paper_ids)
-                    )
-                ]
+                must_not=[FieldCondition(key="paper_id", match=MatchAny(any=seed_paper_ids))]
             ),
             limit=raw_limit,
             score_threshold=score_threshold,

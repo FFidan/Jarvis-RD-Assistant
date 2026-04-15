@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from app.project_manager import ProjectManager
 
 
@@ -52,10 +51,12 @@ async def test_complete_task_updates_daily_log_when_task_changes():
     """complete_task marks the task done and increments today's daily log."""
     conn = AsyncMock()
     conn.fetchrow.return_value = _row(id=4, status="done")
-    conn.transaction = MagicMock(return_value=MagicMock(
-        __aenter__=AsyncMock(return_value=None),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
     manager = ProjectManager(_make_pool_with_conn(conn))
 
     result = await manager.complete_task(4)
@@ -78,19 +79,25 @@ async def test_update_daily_log_rejects_disallowed_fields():
 @pytest.mark.asyncio
 async def test_update_daily_log_applies_only_non_zero_increments():
     """update_daily_log skips zero increments and returns the updated row."""
-    db_pool = AsyncMock()
-    db_pool.fetchrow.return_value = _row(
+    conn = AsyncMock()
+    conn.fetchrow.return_value = _row(
         log_date=datetime.now(UTC).date(),
         tasks_completed=2,
         cards_reviewed=0,
         papers_read=1,
     )
-    manager = ProjectManager(db_pool)
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    manager = ProjectManager(_make_pool_with_conn(conn))
 
     result = await manager.update_daily_log(tasks_completed=2, cards_reviewed=0)
 
     assert result["tasks_completed"] == 2
-    executed_sql = [call.args[0] for call in db_pool.execute.await_args_list]
+    executed_sql = [call.args[0] for call in conn.execute.await_args_list]
     assert any("INSERT INTO daily_log" in sql for sql in executed_sql)
     assert sum("UPDATE daily_log SET" in sql for sql in executed_sql) == 1
 

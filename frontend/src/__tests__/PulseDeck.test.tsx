@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
 import type { PulseDeck as PulseDeckType } from '@/types';
 
@@ -68,8 +68,11 @@ function renderDeck() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <PulseDeck />
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route path="/" element={<PulseDeck />} />
+          <Route path="/paper/:paperId" element={<div data-testid="paper-detail">Paper Detail</div>} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
@@ -142,5 +145,19 @@ describe('PulseDeck', () => {
     renderDeck();
     expect(await screen.findByText(/failed to load pulse/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
+  });
+
+  it('navigates to /paper/:paperId (singular) when a card is clicked', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    renderDeck();
+    await screen.findByText('Paper One');
+    // Click on the first card (click on the paper title)
+    const paperOneLink = screen.getByText('Paper One');
+    await user.click(paperOneLink);
+    // Verify navigation to /paper/101
+    await waitFor(() => {
+      expect(screen.getByTestId('paper-detail')).toBeInTheDocument();
+    });
   });
 });

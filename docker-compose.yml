@@ -113,6 +113,29 @@ services:
     networks:
       - jarvis
 
+  ollama-bootstrap:
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.17.7}
+    container_name: jarvis_ollama_bootstrap
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-mistral-nemo,qwen3:4b,nomic-embed-text}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -e
+        for model in $$(echo "$$OLLAMA_MODELS" | tr "," " "); do
+          echo "Pulling $$model..."
+          ollama pull "$$model" || { echo "FAILED: $$model"; exit 1; }
+        done
+        echo "All models ready."
+    restart: "no"
+    networks:
+      - jarvis
+    pull_policy: missing
+
   qdrant:
     image: ${QDRANT_IMAGE:-qdrant/qdrant:v1.13.2}
     restart: unless-stopped
@@ -178,7 +201,7 @@ services:
       - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
       - ./db/migrations:/app/db/migrations:ro
       - marker_models:/tmp/appuser  # Persist Marker/Surya model cache across restarts
-      - ./litellm:/app/litellm_config  # shared config for model updates
+      - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)
     mem_limit: 6g
     deploy:
       resources:
@@ -200,6 +223,8 @@ services:
         condition: service_healthy
       litellm:
         condition: service_healthy
+      ollama-bootstrap:
+        condition: service_completed_successfully
     networks:
       - jarvis
 
@@ -254,6 +279,11 @@ services:
         condition: service_healthy
       paper_ingestion:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - jarvis
 

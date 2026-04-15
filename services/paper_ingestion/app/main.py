@@ -121,7 +121,6 @@ async def _refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient
     (<24h old), or if the API call fails. Never raises: the lifespan hook
     must stay resilient to network/token errors.
     """
-    import json as _json
     from datetime import datetime, timedelta
 
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -179,7 +178,9 @@ async def _refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient
         logger.warning("Telegram getMe result missing username")
         return
 
-    cache_value = _json.dumps({"username": username, "set_at": now.isoformat()})
+    # Pass the dict directly — asyncpg's JSONB codec handles serialisation.
+    # json.dumps() here would double-encode the value. (WEB-C01)
+    cache_value = {"username": username, "set_at": now.isoformat()}
     try:
         async with db_pool.acquire() as conn:
             await conn.execute(

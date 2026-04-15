@@ -8,9 +8,7 @@ of telegram and apscheduler, which are only available inside Docker.
 
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # 1. Path setup
@@ -40,6 +38,15 @@ _tg = sys.modules["telegram"]
 _tg.Update = MagicMock
 _tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
 _tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
+_tg.BotCommand = lambda cmd, desc: (cmd, desc)
+
+
+# Message must be a real class so isinstance(query.message, Message) works in handlers.
+class _StubMessage:
+    """Minimal stub for telegram.Message used across handler tests."""
+
+
+_tg.Message = _StubMessage
 
 _tg_ext = sys.modules["telegram.ext"]
 _tg_ext.Application = MagicMock

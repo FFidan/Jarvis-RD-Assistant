@@ -11,7 +11,7 @@ from slowapi.errors import RateLimitExceeded
 # Trusted proxy CIDRs loaded once at import time.
 # Override / extend via TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs).
 # Defaults include Docker bridge / RFC-1918 ranges so Docker-internal hops are
-# always skipped when walking X-Forwarded-For left-to-right.
+# always skipped when walking X-Forwarded-For right-to-left.
 _DEFAULT_PROXY_CIDRS = [
     "127.0.0.0/8",
     "10.0.0.0/8",
@@ -26,27 +26,48 @@ _TRUSTED_PROXIES: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
 ]
 
 
+def _is_trusted(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return True if *addr* falls within any trusted proxy CIDR."""
+    return any(addr in net for net in _TRUSTED_PROXIES)
+
+
 def _real_ip(request: Request) -> str:
-    """Return actual client IP via CF-Connecting-IP or XFF walk-left past trusted proxies."""
-    # 1. Cloudflare tunnel: CF-Connecting-IP is not forgeable when the tunnel
-    #    is the only ingress path — prefer it unconditionally.
-    cf = request.headers.get("cf-connecting-ip")
-    if cf:
-        return cf.strip()
-    # 2. Walk XFF left-to-right, return first non-trusted entry.
-    xff = request.headers.get("x-forwarded-for", "")
+    """Return the real client IP using Werkzeug-style right-to-left XFF walk.
+
+    Algorithm:
+    1. If JARVIS_TRUST_CF_CONNECTING_IP=true and CF-Connecting-IP header is set, use it.
+       (SEC-006: header is only trusted when the operator has explicitly opted in,
+        preventing LAN attackers from forging it when Cloudflare is not in the path.)
+    2. Else walk X-Forwarded-For right-to-left, skipping contiguous trusted proxies
+       at the tail.  Return the first non-trusted entry (the real client).
+       (SEC-001: left-to-right walk allowed a LAN attacker to prepend a fake IP and
+        bypass rate limiting; right-to-left is immune to that spoofing.)
+    3. If all entries in XFF are trusted (pathological), return request.client.host.
+    4. If no XFF header, return request.client.host.
+    """
+    # SEC-006: CF-Connecting-IP only trusted when operator explicitly enables it.
+    if os.environ.get("JARVIS_TRUST_CF_CONNECTING_IP", "").lower() == "true":
+        cf_ip = request.headers.get("CF-Connecting-IP")
+        if cf_ip:
+            return cf_ip.strip()
+
+    xff = request.headers.get("X-Forwarded-For")
     if not xff:
         return request.client.host if request.client else "unknown"
-    ips = [ip.strip() for ip in xff.split(",") if ip.strip()]
-    for ip in ips:
+
+    # Parse and walk right-to-left (SEC-001 fix).
+    hops = [h.strip() for h in xff.split(",") if h.strip()]
+    for hop in reversed(hops):
         try:
-            addr = ipaddress.ip_address(ip)
+            ip = ipaddress.ip_address(hop)
         except ValueError:
-            continue  # skip malformed entries
-        if not any(addr in net for net in _TRUSTED_PROXIES):
-            return ip
-    # All entries were trusted proxies (e.g. single-hop behind Docker bridge).
-    return ips[-1] if ips else (request.client.host if request.client else "unknown")
+            # Malformed hop — treat as untrusted, return it as the client.
+            return hop
+        if not _is_trusted(ip):
+            return hop
+
+    # All hops were trusted proxies — fall back to socket peer.
+    return request.client.host if request.client else "unknown"
 
 
 def create_limiter() -> Limiter:

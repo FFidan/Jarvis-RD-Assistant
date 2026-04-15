@@ -231,16 +231,20 @@ function FirstTopicStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
 function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   const queryClient = useQueryClient();
   const [time, setTime] = useState('04:00');
+  const [pulseEnabled, setPulseEnabled] = useState(true);
   const [saved, setSaved] = useState(false);
 
   const saveMut = useMutation({
-    mutationFn: (value: string) => setConfig('pulse.cron', value),
+    mutationFn: async (value: string) => {
+      await setConfig('pulse.cron', value);
+      await setConfig('pulse.enabled', pulseEnabled);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['config'] });
       setSaved(true);
     },
     onError: (err: Error) => {
-      console.error('Failed to save pulse.cron', err);
+      console.error('Failed to save pulse config', err);
     },
   });
 
@@ -267,6 +271,16 @@ function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
       }
     >
       <div className="space-y-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={pulseEnabled}
+            onChange={(e) => setPulseEnabled(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300"
+            aria-label="Enable Pulse"
+          />
+          <span className="text-sm font-medium">Enable Pulse (overnight paper discovery)</span>
+        </label>
         <div>
           <Label htmlFor="setup-pulse-time">Daily run time</Label>
           <Input
@@ -274,6 +288,7 @@ function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
             type="time"
             value={time}
             onChange={(e) => setTime(e.target.value)}
+            disabled={!pulseEnabled}
           />
           <p className="mt-1 text-xs text-muted-foreground">
             Equivalent cron: <span className="font-mono">{timeToCron(time)}</span>

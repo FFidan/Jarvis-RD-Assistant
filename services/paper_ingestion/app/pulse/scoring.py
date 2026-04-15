@@ -6,6 +6,7 @@ Stage 3 — combine:          Weighted sum → final ranking.
 """
 
 import asyncio
+import json
 import logging
 import math
 from dataclasses import dataclass
@@ -242,10 +243,7 @@ async def stage2_llm_rerank(
                     messages=messages,
                     options=options,
                 )
-                # Parse JSON response
-                import json as _json
-
-                parsed = _json.loads(raw)
+                parsed = json.loads(raw)
                 relevance = int(parsed["relevance"])
                 novelty = int(parsed["novelty"])
                 reasoning = str(parsed.get("reasoning", ""))
@@ -266,7 +264,7 @@ async def stage2_llm_rerank(
                     reasoning=reasoning,
                     final_score=sc.final_score,
                 )
-            except Exception:
+            except (json.JSONDecodeError, ValueError, RuntimeError, httpx.HTTPError):
                 logger.warning("stage2: LLM scoring failed for %r", sc.paper.title, exc_info=True)
                 return ScoredCandidate(
                     paper=sc.paper,

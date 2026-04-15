@@ -10,6 +10,7 @@ import sys
 
 import httpx
 from jarvis_common.logging_config import configure_logging
+from telegram import BotCommand
 from telegram.ext import Application
 
 from app.config import BotConfig, create_db_pool
@@ -50,6 +51,25 @@ async def post_init(application: Application) -> None:
     )
     await scheduler.load_and_start()
     application.bot_data["scheduler"] = scheduler
+
+    # Register bot commands for the Telegram "/" autocomplete menu
+    await application.bot.set_my_commands(
+        [
+            BotCommand("start", "Start the bot"),
+            BotCommand("help", "Show help"),
+            BotCommand("papers", "List recent papers"),
+            BotCommand("briefing", "Daily briefing"),
+            BotCommand("next", "Next paper recommendation"),
+            BotCommand("pulse_now", "Run Pulse discovery now"),
+            BotCommand("review", "Start flashcard review"),
+            BotCommand("stats", "Learning statistics"),
+            BotCommand("projects", "List active projects"),
+            BotCommand("newproject", "Create a new project"),
+            BotCommand("tasks", "List in-progress tasks"),
+            BotCommand("done", "Mark task complete"),
+            BotCommand("focus", "Start a focus session"),
+        ]
+    )
 
     logger.info("Bot initialized: db_pool, http_client, and scheduler ready")
 

@@ -1,6 +1,6 @@
 # Technical Requirements
 
-> Operational note (2026-03-10):
+> Operational note (2026-04-14):
 > this document should be read as conservative runtime truth rather than product
 > aspiration. The current local Docker setup is not a perfect match for every
 > claim elsewhere in the docs. In particular:
@@ -14,8 +14,7 @@
 > - some documented env vars, including `SEMANTIC_SCHOLAR_API_KEY`,
 >   `USER_TIMEZONE`, and `OLLAMA_MODELS`, should not be assumed to be wired
 >   end-to-end without code verification
-> - health endpoints may return HTTP 200 with a JSON body whose `status` is
->   `"degraded"`, so status code alone is not a sufficient health signal
+> - health endpoints return **503** when any dependency is unavailable (fixed in v1.2.2); status code is now a reliable health signal
 
 ## Runtime Environment
 
@@ -103,6 +102,7 @@ respx>=0.21.0                # Mock httpx for async tests
 | PostgreSQL | `postgres:16.8` | Main database (all application state) |
 | n8n | `docker.n8n.io/n8nio/n8n:1.77.0` | Optional workflow automation (`--profile n8n`) |
 | Ollama | `ollama/ollama:0.17.7` | Local LLM inference (GPU recommended) |
+| Ollama Bootstrap | Custom init container | One-shot model pull for Ollama (runs before ollama service starts) |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper chunk embeddings |
 | LiteLLM | `ghcr.io/berriai/litellm:main-latest` | Unified LLM gateway (pull_policy: never) |
 | React dashboard | `nginx:alpine` (built from `frontend/`) | Web dashboard (container port 3000; current Compose host binding 3001) |
@@ -211,11 +211,11 @@ Note:
 
 ## Database Migrations
 
-18 migrations currently applied in `db/migrations/` (001-018). Fresh installs get all tables via `db/init.sql`.
+22 migrations currently applied in `db/migrations/` (001-022). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/app/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
-**Migration 018 is applied** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem. It added:
+**Migration 018** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem added:
 
 - Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), `pulse_ratings` (user feedback 👍/👎/💾/open/dismiss — collected silently from Phase 1 for the Phase 2 classifier).
 - One helper table: `pdf_resolutions` (caches results of the PDF resolution chain to dedupe resolver calls).
@@ -224,6 +224,12 @@ Existing installs get migrations applied automatically on startup by the auto-mi
 - New `user_config` entries seeding Pulse settings: `pulse.enabled` (default `false`), `pulse.cron` (default `"0 4 * * *"`), `pulse.deck_size` (default `10`), `pulse.stage2_top_k` (default `50`), `pulse.weights` (JSON of scoring signal weights).
 
 Migration 018 does not modify any existing column on any existing table — it is purely additive. See `docs/PRD.md` §3.1.1 and §8.5 for the full architectural context.
+
+**Migrations 019-022** (2026-04-11 to 2026-04-15) are post-Phase-1 hardening fixes:
+- **019**: `pdf_resolutions` UNIQUE NULLS NOT DISTINCT (dedupe resolver results correctly)
+- **020**: `telegram_user_pairings` table for pairing flow (Telegram bot onboarding without requiring pre-configured TELEGRAM_CHAT_ID)
+- **021**: `tracked_authors` UNIQUE NULLS NOT DISTINCT (author deduplication)
+- **022**: Fix `pulse_decks.cron` JSONB double-encoding regression (Round-7 audit finding CRIT-001)
 
 ## Phase 1 Discovery & Pulse dependencies (shipped)
 

@@ -115,10 +115,10 @@ async def list_papers(
         embedder: Embedder | None = getattr(request.app.state, "embedder", None)
         if embedder is not None and embedder.qdrant is not None:
             try:
-                hybrid_results = await embedder.hybrid_search(q, db_pool, limit=limit + offset)
-                # Apply offset for pagination
-                page = hybrid_results[offset : offset + limit]
-                return [await hybrid_dict_to_paper_response(r, db_pool) for r in page]
+                hybrid_results = await embedder.hybrid_search(
+                    q, db_pool, limit=limit, offset=offset
+                )
+                return [await hybrid_dict_to_paper_response(r, db_pool) for r in hybrid_results]
             except Exception:
                 logger.warning(
                     "Hybrid search failed, falling back to BM25-only",
@@ -229,9 +229,7 @@ async def get_paper_detail(
         else None
     )
 
-    return PaperDetailResponse(
-        paper=paper, summary=summary, chunks=chunks, user_state=user_state
-    )
+    return PaperDetailResponse(paper=paper, summary=summary, chunks=chunks, user_state=user_state)
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +289,9 @@ async def batch_save_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PaperResponse]:
     """Upsert a list of papers to the database (by external_id)."""
-    MAX_BATCH = 100
-    if len(papers) > MAX_BATCH:
-        raise HTTPException(400, f"Batch size cannot exceed {MAX_BATCH}")
+    max_batch = 100
+    if len(papers) > max_batch:
+        raise HTTPException(400, f"Batch size cannot exceed {max_batch}")
     if not papers:
         return []
     results: list[PaperResponse] = []

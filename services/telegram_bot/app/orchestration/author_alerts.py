@@ -40,21 +40,22 @@ async def run_author_alerts(
         logger.info("Skipping author alerts: no telegram owner paired")
         return
 
-    authors = await db_pool.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
-    if not authors:
-        logger.info("No enabled tracked authors")
-        return
+    async with db_pool.acquire() as conn:
+        authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
+        if not authors:
+            logger.info("No enabled tracked authors")
+            return
 
-    # Fetch papers from the last 24 hours
-    recent_papers = await db_pool.fetch(
-        """SELECT id, title, authors, abstract, url, source_type,
-                  published_date, metadata
-        FROM papers
-        WHERE created_at >= NOW() - INTERVAL '24 hours'"""
-    )
-    if not recent_papers:
-        logger.info("No recent papers to check against tracked authors")
-        return
+        # Fetch papers from the last 24 hours
+        recent_papers = await conn.fetch(
+            """SELECT id, title, authors, abstract, url, source_type,
+                      published_date, metadata
+            FROM papers
+            WHERE created_at >= NOW() - INTERVAL '24 hours'"""
+        )
+        if not recent_papers:
+            logger.info("No recent papers to check against tracked authors")
+            return
 
     for author_row in authors:
         try:
@@ -63,8 +64,9 @@ async def run_author_alerts(
             s2_id = author_row["s2_author_id"]
             matched_papers: list[dict] = []
 
+            # Determine which papers match this author (pure Python, no DB)
+            candidate_papers: list[asyncpg.Record] = []
             for paper in recent_papers:
-                paper_id = paper["id"]
                 paper_authors = paper["authors"] or []
                 paper_metadata = paper["metadata"] or {}
 
@@ -88,8 +90,14 @@ async def run_author_alerts(
                             break
 
                 if matched:
-                    # Deduplicate via author_alert_log
-                    row = await db_pool.fetchrow(
+                    candidate_papers.append(paper)
+
+            # All DB writes for this author share one connection
+            async with db_pool.acquire() as conn:
+                for paper in candidate_papers:
+                    paper_id = paper["id"]
+                    # Deduplicate via author_alert_log — INSERT ... ON CONFLICT is atomic
+                    row = await conn.fetchrow(
                         """INSERT INTO author_alert_log (tracked_author_id, paper_id)
                         VALUES ($1, $2)
                         ON CONFLICT (tracked_author_id, paper_id) DO NOTHING
@@ -99,6 +107,13 @@ async def run_author_alerts(
                     )
                     if row:
                         matched_papers.append(dict(paper))
+
+                # Update last_checked_at
+                await conn.execute(
+                    "UPDATE tracked_authors SET last_checked_at = $1 WHERE id = $2",
+                    datetime.now(UTC),
+                    author_id,
+                )
 
             # Send notification if there are new papers
             if matched_papers:
@@ -116,13 +131,6 @@ async def run_author_alerts(
                     )
                 except Exception:
                     logger.exception("Failed to send author alert for %s", tracked_name)
-
-            # Update last_checked_at
-            await db_pool.execute(
-                "UPDATE tracked_authors SET last_checked_at = $1 WHERE id = $2",
-                datetime.now(UTC),
-                author_id,
-            )
         except Exception:
             logger.exception("Error processing author %s", author_row.get("author_name", "unknown"))
             continue

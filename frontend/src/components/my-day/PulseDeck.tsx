@@ -62,7 +62,7 @@ export function PulseDeck() {
   };
 
   const handleOpen = (paperId: number) => {
-    navigate(`/papers/${paperId}`);
+    navigate(`/paper/${paperId}`);
   };
 
   if (isLoading) {

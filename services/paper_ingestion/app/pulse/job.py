@@ -179,10 +179,10 @@ async def run_pulse(
         deck = []
     logger.info("pulse.assembled", extra={"cards": len(deck)})
 
-    # --- 7. persist (upsert papers + persist deck) ----------------------
+    # --- 7. persist (upsert papers + persist deck in one transaction) ---
     try:
-        if deck:
-            async with db_pool.acquire() as conn:
+        async with db_pool.acquire() as conn:
+            async with conn.transaction():
                 for card in deck:
                     try:
                         await upsert_paper(conn, card.paper)
@@ -193,12 +193,13 @@ async def run_pulse(
                             exc,
                         )
                         stats["last_error"] = f"upsert_paper: {exc}"
-        deck_id = await persist_deck(
-            db_pool,
-            deck_date=now.date(),
-            cards=deck,
-            stats=stats,
-        )
+                deck_id = await persist_deck(
+                    db_pool,
+                    deck_date=now.date(),
+                    cards=deck,
+                    stats=stats,
+                    conn=conn,
+                )
         logger.info("pulse.persisted", extra={"deck_id": deck_id, "cards": len(deck)})
     except Exception as exc:
         stats["last_error"] = f"persist: {exc}"

@@ -56,7 +56,18 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
     -------
     UserProfile
         Fully populated profile snapshot.
+
+    Notes
+    -----
+    The function intentionally uses two separate connection acquisitions with
+    the HTTP call to embed_texts() running in between (no connection held), so
+    that a potentially slow embedding round-trip does not block a pool slot
+    (BE-001 / PI-006).
     """
+    # ------------------------------------------------------------------
+    # Phase 1 — fetch centroid-feed data (topics, authors, engaged papers)
+    # Release the connection before the HTTP call to the embedder.
+    # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
         # 1. Topics
         topic_rows = await conn.fetch(
@@ -86,7 +97,7 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
             if name:
                 tracked_author_names.add(str(name).lower())
 
-        # 3. Library centroid: embed abstracts of "engaged" papers
+        # 3. Collect abstracts of "engaged" papers for centroid computation
         engaged_rows = await conn.fetch(
             """
             SELECT p.id, p.abstract
@@ -97,23 +108,32 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
               AND p.abstract != ''
             """
         )
-        library_centroid: list[float] | None = None
-        if engaged_rows:
-            abstracts = [r["abstract"] for r in engaged_rows]
-            try:
-                embeddings = await embedder.embed_texts(abstracts)
-                if embeddings:
-                    dim = len(embeddings[0])
-                    centroid = [0.0] * dim
-                    for vec in embeddings:
-                        for i, v in enumerate(vec):
-                            centroid[i] += v
-                    n = len(embeddings)
-                    library_centroid = [v / n for v in centroid]
-            except Exception:
-                logger.warning("load_profile: failed to compute library centroid", exc_info=True)
-                library_centroid = None
+        abstracts = [r["abstract"] for r in engaged_rows]
+    # Connection released — Phase 1 complete.
 
+    # ------------------------------------------------------------------
+    # Phase 2 — HTTP call to embedder (no DB connection held, see PI-006)
+    # ------------------------------------------------------------------
+    library_centroid: list[float] | None = None
+    if abstracts:
+        try:
+            embeddings = await embedder.embed_texts(abstracts)
+            if embeddings:
+                dim = len(embeddings[0])
+                centroid = [0.0] * dim
+                for vec in embeddings:
+                    for i, v in enumerate(vec):
+                        centroid[i] += v
+                n = len(embeddings)
+                library_centroid = [v / n for v in centroid]
+        except Exception:
+            logger.warning("load_profile: failed to compute library centroid", exc_info=True)
+            library_centroid = None
+
+    # ------------------------------------------------------------------
+    # Phase 3 — fetch config + rating history, assemble UserProfile
+    # ------------------------------------------------------------------
+    async with db_pool.acquire() as conn:
         # 4. Config: weights, deck_size, stage2_top_k
         config_rows = await conn.fetch(
             """

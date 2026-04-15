@@ -17,9 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Stub heavy native modules unavailable outside Docker.
 for _mod_name in (
-    "telegram", "telegram.ext",
-    "apscheduler", "apscheduler.schedulers", "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers", "apscheduler.triggers.cron",
+    "telegram",
+    "telegram.ext",
+    "apscheduler",
+    "apscheduler.schedulers",
+    "apscheduler.schedulers.asyncio",
+    "apscheduler.triggers",
+    "apscheduler.triggers.cron",
 ):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
@@ -28,6 +32,19 @@ _tg = sys.modules["telegram"]
 _tg.Update = MagicMock
 _tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
 _tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
+
+# Ensure Message and BotCommand stubs are set (conftest may already set them, but guard here too).
+if not isinstance(getattr(_tg, "Message", None), type):
+
+    class _FakeMessage:
+        """Minimal stub for telegram.Message."""
+
+    _tg.Message = _FakeMessage
+
+if not callable(getattr(_tg, "BotCommand", None)):
+    _tg.BotCommand = lambda cmd, desc: (cmd, desc)
+
+_FakeMessage = _tg.Message  # local alias for use in helpers below
 
 _tg_ext = sys.modules["telegram.ext"]
 _tg_ext.Application = MagicMock
@@ -74,8 +91,10 @@ def _make_callback_update_and_context(callback_data: str, chat_id=_TEST_CHAT_ID)
     query = MagicMock()
     query.data = callback_data
     query.answer = AsyncMock()
-    query.message = MagicMock()
-    query.message.reply_text = AsyncMock()
+    # Use _FakeMessage so isinstance(query.message, Message) passes in handlers.
+    fake_msg = _FakeMessage()
+    fake_msg.reply_text = AsyncMock()  # type: ignore[attr-defined]
+    query.message = fake_msg
     query.edit_message_text = AsyncMock()
     update.callback_query = query
 
@@ -106,8 +125,12 @@ async def test_paper_detail_success():
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = {
-        "paper": {"title": "Great Paper", "authors": ["Author A"],
-                  "published_date": "2025-01-01", "url": "http://example.com"},
+        "paper": {
+            "title": "Great Paper",
+            "authors": ["Author A"],
+            "published_date": "2025-01-01",
+            "url": "http://example.com",
+        },
         "summary": None,
     }
     mock_http.get.return_value = mock_resp
@@ -162,8 +185,11 @@ async def test_project_detail_success():
     """project_detail callback shows project status."""
     update, context, mock_db, _ = _make_callback_update_and_context("project_detail_3")
     mock_db.fetchrow.return_value = {
-        "id": 3, "name": "My Project", "status": "active",
-        "description": "A project", "deadline": None,
+        "id": 3,
+        "name": "My Project",
+        "status": "active",
+        "description": "A project",
+        "deadline": None,
     }
     mock_db.fetch.side_effect = [
         [{"id": 1, "title": "Task A", "status": "in_progress"}],  # tasks
@@ -235,12 +261,18 @@ async def test_task_done_not_found():
 
 
 @pytest.mark.asyncio
-async def test_start_review_callback():
-    """start_review callback prompts user to use /review command."""
+async def test_start_review_callback_delegates_to_review_start():
+    """start_review callback delegates to review_start rather than printing a stub message."""
     update, context, _, _ = _make_callback_update_and_context("start_review")
 
-    await start_review_callback(update, context)
+    with patch(
+        "app.handlers.callback_handler.review_start", new_callable=AsyncMock
+    ) as mock_review_start:
+        await start_review_callback(update, context)
 
     update.callback_query.answer.assert_awaited_once()
-    text = update.callback_query.message.reply_text.call_args[0][0]
-    assert "/review" in text
+    mock_review_start.assert_awaited_once()
+    # Confirm review_start was called with the same update and context
+    called_update, called_context = mock_review_start.call_args[0]
+    assert called_update is update
+    assert called_context is context

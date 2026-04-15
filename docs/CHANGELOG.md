@@ -4,6 +4,123 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-04-15
+
+### Round-7 Audit Remediation
+
+22 verified findings from the Round-7 deep audit (`docs/plans/2026-04-15-deep-audit-round7-report.md`) closed across backend, frontend, telegram, setup, and security domains.
+
+#### CRITICAL
+
+- **WEB-C01** — `pulse.cron` was double-JSON-encoded in `user_config`, bricking the Pulse schedule editor in the dashboard. Removed the stray `json.dumps()` in `routers/settings.py` (and a parallel instance in `main.py` for the Telegram bot username cache); added migration 022 that idempotently fixes already-double-encoded rows for `pulse.cron`, `telegram.owner_chat_id`, `pulse.weights`, `llm.smart_model`.
+
+#### HIGH security (LAN / Tunnel mode)
+
+- **SEC-001** — `_real_ip` in `jarvis_common.ratelimit` now walks `X-Forwarded-For` **right-to-left** (Werkzeug semantics), correctly skipping only contiguous trusted proxies at the tail. Closes the rate-limit bypass under multi-hop LAN setups.
+- **SEC-002** — The `./litellm` mount in `paper_ingestion` is now read-only. `update_litellm_model` validates model names against a strict regex and re-raises `RuntimeError` on IO failure so the router returns HTTP 400 instead of a confusing stack trace.
+- **SEC-006** — `CF-Connecting-IP` trust is now gated on a new env var `JARVIS_TRUST_CF_CONNECTING_IP=true` (default off). Only Tunnel-mode setups should enable it — LAN-mode users can no longer forge the header.
+
+#### HIGH backend / reliability
+
+- **BE-001** — `pulse.profile.load_profile` no longer holds a DB pool connection across the `embed_texts()` HTTP call (3-phase refactor: acquire → release → http → acquire).
+- **BE-002** — Pulse stage-2 LLM rerank narrows exception handling to `(json.JSONDecodeError, ValueError, RuntimeError, httpx.HTTPError)` and removes the inline `import json as _json` closure.
+- **BE-003** — Hybrid-search pagination now pushes `offset` into `hybrid_search` server-side; the RRF-merged ranking is sliced after fusion so relative rankings are preserved.
+- **BE-004** — Deleted `services/paper_ingestion/app/pulse/resolver.py` (~230 LOC dead module) and its test file. `pdf_resolutions` table drop deferred.
+- **BE-005** — Wrapped the read-then-write paths in `author_alerts`, `daily_briefing`, `project_manager.update_daily_log`, and analytics in explicit `acquire()` blocks (with `transaction()` where TOCTOU matters); single-query functions intentionally left alone.
+- **BE-010** — `pulse.run_pulse` step 7 now wraps `upsert_paper` + `persist_deck` in a single transaction — no orphaned papers on mid-crash.
+
+#### HIGH frontend / Telegram
+
+- **FE-001** — `PulseDeck` navigates to `/paper/:id` (singular) matching the router. Clicking a Pulse card on My Day no longer 404s.
+- **FE-002** — `apiFetchRaw` now translates abort errors to a friendly `ApiError` in both Anki and CSV export flows via a shared `_handleFetchError` helper. `setup.ts` gains an `AbortSignal.any` polyfill for jsdom.
+- **TG-001 + TG-002 + TG-003** — `/help` lists all 14 commands (grouped by Papers / Learning / Projects & Tasks / General); `set_my_commands` runs on `post_init` so the Telegram `/` autocomplete menu works; "Start Review" inline button actually starts a review instead of printing "Use /review to start".
+- **TG-011** — `telegram_bot` container now has a 10 MB × 3 log cap.
+
+#### HIGH UX / setup
+
+- **UX-001** — New `ollama-bootstrap` init container pulls every model in `OLLAMA_MODELS` before `paper_ingestion` starts. First RAG query on a fresh install no longer fails with "model not found".
+- **UX-002** — Setup wizard Automation step co-writes `pulse.enabled=true` alongside `pulse.cron` with an explicit opt-out checkbox; first-login users get a Pulse deck overnight instead of a silent disabled scheduler.
+- **UX-004** — `setup.sh` calls `wait_healthy()` (lifted from `update.sh`) before printing "Setup complete" — the banner is no longer a lie.
+- **UX-005** — `.env.example` Telegram section relabeled OPTIONAL with blank values and a comment about the `--profile telegram` opt-in.
+
+#### MED
+
+- **BE-010** (atomic pulse persist) — see above, bundled with HIGH backend block.
+
+### Database Migrations
+
+- **022** — `022_fix_pulse_cron_double_encode.sql`: idempotent fix for WEB-C01 affecting 4 known `user_config` keys.
+
+### Falsified (no fix needed)
+
+- **BE-009** — Both `paper_ingestion` and `learning_engine` `health_check` already wrap `conn.fetchval` in `asyncio.wait_for(..., timeout=5.0)`. Report-authored claim was incorrect.
+- **SEC-003 (partial)** — `setup.sh` tunnel mode does prompt for a tunnel hostname, but lacks an explicit Zero Trust Access acknowledgment gate. Handled via expanded `docs/personal/SETUP_SECOND_MACHINE.md` §7b.3 deployment-mode warning instead of a code-level gate.
+
+## [1.2.3] - 2026-04-14
+
+### Security Review Remediation
+
+External code + security review delivered 10 findings. 6 were falsified on verification; 4 real items were fixed. Full report: `docs/CODE_SECURITY_REVIEW_2026-04-14.md`.
+
+#### Prompt injection mitigation (S-2.4 MEDIUM)
+
+- **New `jarvis_common.prompt_safety`** — `escape_llm_text()` replaces `<`/`>` with HTML entities; `wrap_delimited(tag, text)` escapes + wraps in `<tag>…</tag>` delimiters. Exported from `jarvis_common.__init__`.
+- Applied to all four remaining LLM call sites that lacked input escaping: `entity_extractor.build_entity_prompt`, `services/summarization.generate_paper_summary`, `decomposition.decompose_query`, `pulse/prompts.build_scoring_prompt`.
+- Replaced 4 inline `.replace('<', '&lt;')` chains in `streaming.py` with `escape_llm_text()`.
+- **AGENTS.md rule #11**: all untrusted text inserted into LLM prompts must use `escape_llm_text()` or `wrap_delimited()`.
+- New tests: `libs/jarvis_common/tests/test_prompt_safety.py` (16 tests), `services/paper_ingestion/tests/test_prompt_injection_mitigation.py` (10 tests).
+
+#### SSRF test coverage (CQ-5.1 MEDIUM)
+
+- New `services/paper_ingestion/tests/test_pdf_processor.py` — 35 adversarial unit tests for `_validate_pdf_url` and the size/page caps. Covers: 5 allowed-host pass, private/loopback/link-local/reserved/IPv6-private IP rejection, 169.254.254.254 AWS metadata endpoint, userinfo-in-URL, IDN, scheme rejection, malformed URL, DNS failure, DNS rebinding (public+private multi-result). Also `MAX_PDF_SIZE` (100 MB) and `MAX_PDF_PAGES` (500) caps.
+
+#### Recommender scoring coverage (CQ-5.2 MEDIUM)
+
+- Extracted `_compute_score(liked, project, liked_weight, project_weight) -> float` from `refresh_recommendations` in `recommender.py`.
+- New `services/paper_ingestion/tests/test_recommender.py` — 28 tests in 4 classes covering weight formula (liked×0.6 + project×0.4), filter/dedup logic, and integration happy path.
+
+#### `command_handler.py` domain split (CQ-6.1 LOW)
+
+- Split 694-line monolith into `services/telegram_bot/app/handlers/commands/` package: `paper_commands.py`, `project_commands.py`, `task_commands.py`, `system_commands.py`, `_auth.py`, `registry.py`, `__init__.py`.
+- `command_handler.py` reduced to DEPRECATED re-export stub for backward compatibility.
+
+#### Falsified findings (no fix)
+
+S-2.3 (PDF SSRF allowlist), S-7.4 (n8n basic auth), CQ-4.1 (Pydantic bounds), CQ-10.1 (SSE backpressure), CQ-7.1 (HomePage any callbacks), CQ-6.2 (RAG prompt duplication). Justifications in `docs/CODE_SECURITY_REVIEW_2026-04-14.md`.
+
+## [1.2.2] - 2026-04-14
+
+### Round-6 Deep Audit + Security Hardening
+
+27-commit audit sprint addressing 1 CRITICAL, 2 CRITICAL ship-blockers, ~20 HIGH, and ~26 MEDIUM findings. Full report: `docs/plans/2026-04-13-deep-audit-round6-report.md`. Pyright error count: 90 → 0.
+
+#### CRITICAL fixes
+
+- **C1 — KG anti-hallucination**: `entity_extractor.extract_entities_for_paper` now routes every edge through `QuoteVerifier` strict-skip path; edges without a verified verbatim quote are dropped rather than saved. Previously, KG edges could be hallucinated.
+- **C2/C3 — Pairing ship-blockers**: `BotConfig.telegram_chat_id` is now Optional; `resolve_owner_chat_id()` reads from DB if env var unset, wiring the deep-link pairing flow end-to-end. Removed duplicate port 3001 bind that prevented LAN deployments from starting.
+
+#### HIGH security fixes
+
+- **Pairing security (H3/H4)**: `create_pairing` wrapped in transaction; expire-only sweep prevents table wipe; rate limit 10/min; existing-owner check; pairing code hashed (SHA256) before logging.
+- **XFF + rate-limit trust (H7)**: Rate limiter now walks `X-Forwarded-For` left-to-right for correct rightmost-trusted-hop extraction. `CF-Connecting-IP` preferred when present. New `TRUSTED_PROXY_CIDRS` env var.
+- **API key storage (H8)**: Moved from `localStorage` to `sessionStorage` (tab-scoped). Closing the tab clears the key. Logout also clears `jarvis-ui` store.
+- **SSE 401 triggers logout (H9/H10)**: Frontend `apiFetch` now combines caller `AbortSignal` with internal timeout signal; SSE 401 response triggers auth-store logout.
+- **Health endpoints return 503 (H14/H15/H17)**: Both `paper_ingestion` and `learning_engine` `/health` endpoints now return 503 (not 200) when any dependency is unavailable. Docker `depends_on: service_healthy` cascades correctly.
+- **DB connection leak (H12/H13)**: `pdf_processor.download_pdf()` no longer holds the asyncpg connection across the HTTP download. Per-file connection in the PDF scan loop.
+- **Advisory lock bounded (H16)**: `pg_advisory_xact_lock(42)` in the migration runner now has a 60-second timeout. Previously unbounded.
+- **Backup AWS guard (H18)**: `scripts/backup.sh` checks for `aws` in `$PATH` before S3 upload; fails with a clear warning instead of silently skipping.
+- **Rate limits extended (H11/M5/M3)**: Added to recommendations, setup-status, and all Telegram bot commands.
+
+#### Other fixes
+
+- **nginx CSP (M32/M33)**: Security headers extracted to nginx snippet; Content-Security-Policy additions.
+- **Setup/HTTPS hardening**: LAN port dedup via `DASHBOARD_BIND_HOST`, SAN cert propagation, tunnel CORS hostname propagation.
+- **Pulse MEDIUM (W4.7)**: Real LLM call counter, PubMed sort order, deck batch fetch, migration 021 (`tracked_authors` NULLS NOT DISTINCT + tombstone in `resolver.py`).
+- **Cards async (M19)**: `batch_generate_cards` returns 202 + background task instead of blocking.
+- **Pyright 90 → 0**: 71 Optional-access errors in telegram_bot handlers resolved; learning_engine type-safety pass; Wave 2 test file diagnostics resolved.
+- **Migration 020**: `telegram_pairing` table for dashboard-initiated deep-link pairing.
+- **Migration 021**: `tracked_authors` NULLS NOT DISTINCT uniqueness constraint.
+
 ## [1.2.1] - 2026-04-11
 
 ### Post-Audit Hotfix — Round 5 findings (F1 + F2)

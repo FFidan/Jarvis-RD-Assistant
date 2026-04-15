@@ -1,7 +1,6 @@
 """Settings, nudges, and source management endpoints."""
 
 import asyncio
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -160,19 +159,25 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
             validator(body.value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-    value_json = json.dumps(body.value)
+    # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
+    # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
+    # storing e.g. '"0 4 * * *"' instead of '"0 4 * * *"' in JSONB. (WEB-C01)
     async with request.app.state.db_pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
             ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
             key,
-            value_json,
+            body.value,
         )
     if key in ROLE_TO_ALIAS:
         from app.services.litellm_config import _config_lock
 
-        async with _config_lock:
-            updated = await asyncio.to_thread(update_litellm_model, key, body.value)
+        try:
+            async with _config_lock:
+                updated = await asyncio.to_thread(update_litellm_model, key, body.value)
+        except (ValueError, RuntimeError) as exc:
+            # SEC-002: model name validation failure or read-only config mount
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if updated:
             await reload_litellm()
     if key == "pulse.cron":

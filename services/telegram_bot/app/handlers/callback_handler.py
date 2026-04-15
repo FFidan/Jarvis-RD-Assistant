@@ -15,6 +15,7 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 from app.formatters import format_paper_detail, format_project_status
 from app.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
 from app.handlers.rate_limit import rate_limit
+from app.handlers.review_handler import review_start
 from app.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -180,8 +181,10 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``start_review`` — sent by the review reminder inline button.
 
-    Replies with a prompt to use the /review command, since the review
-    flow is managed by a ConversationHandler that must be triggered via command.
+    Bootstraps the review flow by fetching the first due card directly, since
+    ConversationHandler entry cannot be triggered from a callback query.  The
+    user is then prompted to type /review for subsequent cards (or to continue
+    the session).
     """
     query = update.callback_query
     if query is None:
@@ -195,10 +198,11 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not await _auth_check(update, config, db_pool):
         return
 
-    await query.message.reply_text(
-        "📚 Use /review to start your flashcard review session.",
-        parse_mode="HTML",
-    )
+    # Delegate to review_start by patching the update so it carries a message.
+    # review_start only uses update.message.reply_text and update.effective_chat
+    # for auth — both are accessible via the callback query's message.
+    update.message = query.message  # type: ignore[assignment]
+    await review_start(update, context)
 
 
 @rate_limit(max_calls=10, window_seconds=60)

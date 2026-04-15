@@ -17,9 +17,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 # Stub heavy native modules unavailable outside Docker.
 for _mod_name in (
-    "telegram", "telegram.ext",
-    "apscheduler", "apscheduler.schedulers", "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers", "apscheduler.triggers.cron",
+    "telegram",
+    "telegram.ext",
+    "apscheduler",
+    "apscheduler.schedulers",
+    "apscheduler.schedulers.asyncio",
+    "apscheduler.triggers",
+    "apscheduler.triggers.cron",
 ):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = MagicMock()
@@ -136,9 +140,16 @@ async def test_papers_no_args_lists_recent():
     """/papers with no query lists recent papers from DB."""
     update, context, mock_db, _ = _make_update_and_context(args=[])
     mock_db.fetch.return_value = [
-        {"id": 1, "title": "Paper A", "authors": ["Author"], "published_date": None,
-         "source_type": "arxiv", "url": "http://example.com", "summary_brief": None,
-         "tldr": None},
+        {
+            "id": 1,
+            "title": "Paper A",
+            "authors": ["Author"],
+            "published_date": None,
+            "source_type": "arxiv",
+            "url": "http://example.com",
+            "summary_brief": None,
+            "tldr": None,
+        },
     ]
     await papers_command(update, context)
     update.message.reply_text.assert_awaited()
@@ -154,9 +165,16 @@ async def test_papers_with_query_searches_api():
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = [
-        {"id": 1, "title": "Transformers Paper", "authors": ["Author"],
-         "published_date": None, "source_type": "arxiv", "url": "http://example.com",
-         "tldr": None, "summary_brief": None},
+        {
+            "id": 1,
+            "title": "Transformers Paper",
+            "authors": ["Author"],
+            "published_date": None,
+            "source_type": "arxiv",
+            "url": "http://example.com",
+            "tldr": None,
+            "summary_brief": None,
+        },
     ]
     mock_http.post.return_value = mock_resp
     await papers_command(update, context)
@@ -198,8 +216,11 @@ async def test_stats_success():
     mock_resp = MagicMock()
     mock_resp.raise_for_status = MagicMock()
     mock_resp.json.return_value = {
-        "total_cards": 100, "due_now": 10, "reviewed_today": 5,
-        "average_retention": 85.0, "streak_days": 7,
+        "total_cards": 100,
+        "due_now": 10,
+        "reviewed_today": 5,
+        "average_retention": 85.0,
+        "streak_days": 7,
     }
     mock_http.get.return_value = mock_resp
     await stats_command(update, context)
@@ -269,8 +290,13 @@ async def test_projects_with_data():
     """/projects with active projects lists them."""
     update, context, mock_db, _ = _make_update_and_context()
     mock_db.fetch.return_value = [
-        {"id": 1, "name": "Project Alpha", "status": "active",
-         "description": "A research project", "deadline": None},
+        {
+            "id": 1,
+            "name": "Project Alpha",
+            "status": "active",
+            "description": "A research project",
+            "deadline": None,
+        },
     ]
     await projects_command(update, context)
     update.message.reply_text.assert_awaited()
@@ -338,7 +364,7 @@ async def test_done_nonexistent_error():
     """/done with nonexistent task_id sends error."""
     update, context, mock_db, _ = _make_update_and_context(args=["999"])
 
-    with patch("app.handlers.command_handler.ProjectManager") as mock_pm:
+    with patch("app.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {}
         mock_pm.return_value = pm_instance
@@ -354,7 +380,7 @@ async def test_done_success():
     """/done <task_id> marks a task as done."""
     update, context, mock_db, _ = _make_update_and_context(args=["5"])
 
-    with patch("app.handlers.command_handler.ProjectManager") as mock_pm:
+    with patch("app.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {"id": 5, "status": "done"}
         mock_pm.return_value = pm_instance
@@ -389,3 +415,74 @@ async def test_newproject_success():
     text = update.message.reply_text.call_args[0][0]
     assert "My Project" in text
     assert "42" in text
+
+
+# ---------------------------------------------------------------------------
+# Tests: TG-001 — format_help completeness
+# ---------------------------------------------------------------------------
+
+
+def test_format_help_contains_all_commands():
+    """format_help() must include all 13 bot commands."""
+    from app.formatters import format_help
+
+    text = format_help()
+    expected_commands = [
+        "/start",
+        "/help",
+        "/papers",
+        "/briefing",
+        "/next",
+        "/pulse_now",
+        "/review",
+        "/stats",
+        "/projects",
+        "/newproject",
+        "/tasks",
+        "/done",
+        "/focus",
+        "/cancel",
+    ]
+    for cmd in expected_commands:
+        assert cmd in text, f"format_help() is missing {cmd!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: TG-002 — set_my_commands called in post_init
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_post_init_calls_set_my_commands():
+    """post_init must register at least 12 commands via set_my_commands."""
+    # Ensure BotCommand is set in the stub (conftest may already do this).
+    sys.modules["telegram"].BotCommand = lambda cmd, desc: (cmd, desc)
+
+    from app.main import post_init  # noqa: PLC0415
+
+    bot_mock = MagicMock()
+    bot_mock.set_my_commands = AsyncMock()
+
+    db_pool_mock = AsyncMock()
+    db_pool_mock.close = AsyncMock()
+
+    application = MagicMock()
+    application.bot = bot_mock
+    application.bot_data = {
+        "config": _make_config(),
+    }
+
+    # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.
+    with (
+        patch("app.main.create_db_pool", return_value=db_pool_mock),
+        patch("app.main.JarvisScheduler") as mock_sched_cls,
+    ):
+        sched_instance = AsyncMock()
+        sched_instance.load_and_start = AsyncMock()
+        mock_sched_cls.return_value = sched_instance
+
+        await post_init(application)
+
+    bot_mock.set_my_commands.assert_awaited_once()
+    commands = bot_mock.set_my_commands.call_args[0][0]
+    assert len(commands) >= 12, f"Expected ≥12 commands, got {len(commands)}"

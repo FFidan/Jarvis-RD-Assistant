@@ -526,3 +526,86 @@ async def test_set_telegram_owner_chat_id_rejects_string(_app):
         )
 
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# WEB-C01: no double-encoding of user_config JSONB values
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_settings_round_trip_string_no_double_encode(_app):
+    """PUT /api/config/pulse.cron must pass raw value to asyncpg, not json.dumps(value).
+
+    Before the WEB-C01 fix, set_config called json.dumps(body.value) before passing
+    to asyncpg, which itself has the JSONB codec registered.  This caused the cron
+    expression to be stored as '\"0 4 * * *\"' (double-encoded) instead of
+    '"0 4 * * *"', breaking croniter parsing in the dashboard Settings editor.
+
+    This test verifies:
+    1. The PUT response echoes the original string (not a double-encoded form).
+    2. The value passed to conn.execute is the raw Python string, not a JSON string.
+    3. A GET round-trip returns the string unchanged.
+    4. croniter can parse the returned cron expression without error.
+    """
+    cron_expr = "0 4 * * *"
+    app, conn, _ = _app
+
+    # --- PUT ---
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        put_resp = await client.put(
+            "/api/config/pulse.cron",
+            json={"key": "pulse.cron", "value": cron_expr},
+        )
+
+    assert put_resp.status_code == 200
+    put_body = put_resp.json()
+    assert put_body["value"] == cron_expr, (
+        f"PUT response value {put_body['value']!r} != expected {cron_expr!r} — "
+        "double-encode bug may still be present"
+    )
+
+    # Verify the value forwarded to asyncpg execute is the raw Python string,
+    # NOT json.dumps("0 4 * * *") == '"0 4 * * *"'.
+    assert conn.execute.called, "conn.execute was not called"
+    _call_args = conn.execute.call_args
+    positional_args = _call_args.args if _call_args.args else _call_args[0]
+    # positional_args: (sql, key, value)
+    stored_value = positional_args[2]
+    assert stored_value == cron_expr, (
+        f"asyncpg received {stored_value!r} instead of raw {cron_expr!r} — "
+        "json.dumps double-encode bug is still present in set_config"
+    )
+    assert not stored_value.startswith('"'), (
+        f"asyncpg received a JSON-encoded string {stored_value!r}; "
+        "the JSONB codec should handle encoding, not the router"
+    )
+
+    # --- GET round-trip (mocked fetchrow returns the raw value as asyncpg would) ---
+    conn.fetchrow.return_value = FakeRecord(key="pulse.cron", value=cron_expr)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        get_resp = await client.get("/api/config/pulse.cron")
+
+    assert get_resp.status_code == 200
+    get_body = get_resp.json()
+    assert get_body["value"] == cron_expr, (
+        f"GET returned {get_body['value']!r}; expected {cron_expr!r}"
+    )
+
+    # --- croniter must parse the returned expression without error ---
+    try:
+        from datetime import datetime as _datetime
+
+        from croniter import croniter
+
+        parsed = croniter(get_body["value"], _datetime.now())
+        next_run = parsed.get_next(_datetime)
+        assert next_run is not None, "croniter could not compute next run from returned cron value"
+    except ModuleNotFoundError:
+        # croniter is not installed on the host; this assertion runs in Docker.
+        pass

@@ -264,3 +264,83 @@ def test_user_profile_centroid_none_allowed():
         recent_negative_titles=[],
     )
     assert profile.library_centroid is None
+
+
+# ---------------------------------------------------------------------------
+# BE-001: connection released before embed_texts is called (PI-006)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_conn_released_before_embed():
+    """embed_texts must be called AFTER the first connection is released.
+
+    This verifies the BE-001 / PI-006 refactor: the HTTP call to the embedder
+    must not hold a database connection (Phase 1 conn released → Phase 2 embed
+    → Phase 3 conn re-acquired).
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    events: list[str] = []
+
+    # Build an acquire context manager that records enter/exit per call.
+    def _make_acquire_ctx(label: str) -> MagicMock:
+        ctx = MagicMock()
+
+        async def _aenter(*_a, **_kw):
+            events.append(f"acquire:{label}")
+            return conn
+
+        async def _aexit(*_a, **_kw):
+            events.append(f"release:{label}")
+            return False
+
+        ctx.__aenter__ = _aenter
+        ctx.__aexit__ = _aexit
+        return ctx
+
+    # Pool hands out a *new* ctx object for each acquire() call.
+    pool = MagicMock()
+    pool.acquire.side_effect = [_make_acquire_ctx("c1"), _make_acquire_ctx("c2")]
+
+    # Single conn reused for both phases (fetch side_effect spans all 6 calls).
+    conn = AsyncMock()
+    conn.fetch.side_effect = [
+        _make_topic_rows(),  # Phase 1: topics
+        _make_author_rows(),  # Phase 1: tracked_authors
+        _make_paper_rows(2),  # Phase 1: engaged papers
+        _make_config_rows(),  # Phase 3: user_config
+        [],  # Phase 3: positive ratings
+        [],  # Phase 3: negative ratings
+    ]
+
+    vec = fake_embedding_vector(4)
+
+    # embed_texts records its position in the event list when called.
+    async def _embed(texts):
+        events.append("embed_texts")
+        return [vec] * len(texts)
+
+    mock_embedder = AsyncMock()
+    mock_embedder.embed_texts.side_effect = _embed
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    # Basic sanity: profile is correct
+    assert isinstance(profile, UserProfile)
+    assert profile.library_centroid is not None
+
+    # Ordering assertion: "release:c1" must appear before "embed_texts"
+    assert "embed_texts" in events, "embed_texts was never called"
+    release_idx = events.index("release:c1")
+    embed_idx = events.index("embed_texts")
+    assert release_idx < embed_idx, (
+        f"embed_texts called at position {embed_idx} but first connection was only "
+        f"released at position {release_idx}; events={events}"
+    )
+
+    # And the second connection must be acquired AFTER embed_texts
+    acquire2_idx = events.index("acquire:c2")
+    assert embed_idx < acquire2_idx, (
+        f"Second connection acquired at {acquire2_idx} before embed at {embed_idx}; events={events}"
+    )

@@ -4,18 +4,38 @@ When a user selects a different Ollama model for a role (smart/fast/embed)
 in the Settings UI, this module updates the litellm config.yaml to route
 the alias to the new model. LiteLLM picks up the change on next request
 (config is re-read from the mounted volume).
+
+Note: the litellm config mount is read-only in production (SEC-002).
+``update_litellm_model`` validates the model name via an allowlist and raises
+``RuntimeError`` on any OS-level write failure so the router can return a
+clear 400 instead of a confusing IO error.
 """
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 import httpx
 import yaml
-
-from jarvis_common.llm_client import get_litellm_config, LITELLM_FALLBACK_ENV_NAMES
+from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_model_name(ollama_model_name: str) -> None:
+    """Reject model names that contain path traversal or shell metacharacters.
+
+    The model name is interpolated into a YAML string; a value like
+    ``../../etc/passwd`` or ``; rm -rf /`` must never reach the config file.
+    Permit only ``[a-zA-Z0-9._:-]`` characters (covers all real Ollama IDs).
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9._:\-]+", ollama_model_name):
+        raise ValueError(
+            f"Model name {ollama_model_name!r} contains disallowed characters. "
+            "Only alphanumerics and . _ : - are permitted."
+        )
+
 
 # Mounted in docker-compose.yml as a shared volume
 LITELLM_CONFIG_PATH = Path("/app/litellm_config/config.yaml")
@@ -44,7 +64,17 @@ def update_litellm_model(config_key: str, ollama_model_name: str) -> bool:
     -------
     bool
         True if the config was updated, False if the key is not a model role.
+
+    Raises
+    ------
+    ValueError
+        If ``ollama_model_name`` contains disallowed characters (SEC-002).
+    RuntimeError
+        If the config file is read-only (SEC-002 mount is ``:ro`` in production).
     """
+    # SEC-002: validate model name before any file I/O
+    _validate_model_name(ollama_model_name)
+
     alias = ROLE_TO_ALIAS.get(config_key)
     if not alias:
         return False
@@ -74,14 +104,25 @@ def update_litellm_model(config_key: str, ollama_model_name: str) -> bool:
                 updated = True
                 logger.info(
                     "Updated LiteLLM alias %r: %s -> %s",
-                    alias, existing_model, new_model,
+                    alias,
+                    existing_model,
+                    new_model,
                 )
             break
 
     if updated:
-        LITELLM_CONFIG_PATH.write_text(
-            yaml.dump(config, default_flow_style=False, sort_keys=False)
-        )
+        try:
+            LITELLM_CONFIG_PATH.write_text(
+                yaml.dump(config, default_flow_style=False, sort_keys=False)
+            )
+        except OSError as exc:
+            # SEC-002: mount is :ro in production — surface a clear error so
+            # the router can return HTTP 400 instead of a confusing 500.
+            raise RuntimeError(
+                "LiteLLM config is read-only; model alias updates are disabled "
+                "in this deployment. Restart LiteLLM with an updated config file "
+                "to change model assignments."
+            ) from exc
 
     return updated
 

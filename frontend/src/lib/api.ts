@@ -45,6 +45,28 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Unified abort/error handler shared by apiFetch and apiFetchRaw.
+ *
+ * If the error is an AbortError and the timeout controller fired (not the
+ * caller's own signal), we translate it into a friendly ApiError(0, …).
+ * Caller-initiated aborts are re-thrown as-is so the caller can distinguish
+ * them from timeouts.
+ */
+function _handleFetchError(
+  err: unknown,
+  timeoutController: AbortController,
+  callerSignal?: AbortSignal,
+): never {
+  if (err instanceof DOMException && err.name === 'AbortError') {
+    if (timeoutController.signal.aborted && !callerSignal?.aborted) {
+      throw new ApiError(0, 'Request timed out — please try again');
+    }
+    throw err; // re-throw caller-initiated cancellations
+  }
+  throw err;
+}
+
 export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000); // 5 min
@@ -70,13 +92,7 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     }
     return res.json();
   } catch (err) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      if (controller.signal.aborted) {
-        throw new ApiError(0, 'Request timed out — please try again');
-      }
-      throw err; // re-throw caller-initiated cancellations
-    }
-    throw err;
+    _handleFetchError(err, controller, init?.signal);
   } finally {
     clearTimeout(timeoutId);
   }
@@ -103,6 +119,8 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
       throw new ApiError(res.status, await res.text());
     }
     return res;
+  } catch (err) {
+    _handleFetchError(err, controller, init?.signal);
   } finally {
     clearTimeout(timeout);
   }

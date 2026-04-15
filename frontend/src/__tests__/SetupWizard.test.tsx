@@ -110,6 +110,39 @@ describe('SetupWizard', () => {
     expect(screen.getByLabelText('Daily run time')).toBeInTheDocument();
   });
 
+  it('AutomationStep writes pulse.enabled=true on submit (default checked)', async () => {
+    const user = userEvent.setup();
+    renderWizard('/setup?step=4');
+
+    // Checkbox should be checked by default
+    const checkbox = screen.getByRole('checkbox', { name: /enable pulse/i });
+    expect(checkbox).toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: /save schedule/i }));
+
+    await waitFor(() => {
+      expect(api.setConfig).toHaveBeenCalledWith('pulse.cron', expect.any(String));
+      expect(api.setConfig).toHaveBeenCalledWith('pulse.enabled', true);
+    });
+  });
+
+  it('AutomationStep writes pulse.enabled=false when checkbox unchecked', async () => {
+    const user = userEvent.setup();
+    renderWizard('/setup?step=4');
+
+    const checkbox = screen.getByRole('checkbox', { name: /enable pulse/i });
+    // Uncheck the checkbox
+    await user.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    await user.click(screen.getByRole('button', { name: /save schedule/i }));
+
+    await waitFor(() => {
+      expect(api.setConfig).toHaveBeenCalledWith('pulse.cron', expect.any(String));
+      expect(api.setConfig).toHaveBeenCalledWith('pulse.enabled', false);
+    });
+  });
+
   it('renders step 5 telegram pairing', () => {
     renderWizard('/setup?step=5');
     expect(screen.getByText(/pair telegram/i)).toBeInTheDocument();

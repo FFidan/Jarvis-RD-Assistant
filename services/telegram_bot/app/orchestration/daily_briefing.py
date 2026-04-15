@@ -38,11 +38,31 @@ async def run_daily_briefing(
         logger.info("Skipping daily briefing: no telegram owner paired")
         return
 
-    # New papers in last 24h
-    row = await db_pool.fetchrow(
-        "SELECT COUNT(*) as count FROM papers WHERE created_at >= NOW() - INTERVAL '24 hours'"
-    )
-    new_papers_count = row["count"] if row else 0
+    # New papers in last 24h + in-progress tasks + upcoming milestones — one connection
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT COUNT(*) as count FROM papers WHERE created_at >= NOW() - INTERVAL '24 hours'"
+        )
+        new_papers_count = row["count"] if row else 0
+
+        # In-progress tasks
+        tasks = await conn.fetch(
+            """SELECT t.title, p.name as project_name
+            FROM tasks t
+            LEFT JOIN projects p ON t.project_id = p.id
+            WHERE t.status = 'in_progress'
+            ORDER BY t.priority
+            LIMIT 10"""
+        )
+
+        # Upcoming milestones (next 7 days)
+        milestones = await conn.fetch(
+            """SELECT m.name, m.deadline, p.name as project_name
+            FROM milestones m
+            LEFT JOIN projects p ON m.project_id = p.id
+            WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'
+            ORDER BY m.deadline"""
+        )
 
     # Due cards from learning engine
     due_cards = 0
@@ -53,25 +73,6 @@ async def run_daily_briefing(
         due_cards = stats.get("due_now", 0)
     except (httpx.HTTPError, KeyError, ValueError):
         logger.warning("Could not fetch learning engine stats")
-
-    # In-progress tasks
-    tasks = await db_pool.fetch(
-        """SELECT t.title, p.name as project_name
-        FROM tasks t
-        LEFT JOIN projects p ON t.project_id = p.id
-        WHERE t.status = 'in_progress'
-        ORDER BY t.priority
-        LIMIT 10"""
-    )
-
-    # Upcoming milestones (next 7 days)
-    milestones = await db_pool.fetch(
-        """SELECT m.name, m.deadline, p.name as project_name
-        FROM milestones m
-        LEFT JOIN projects p ON m.project_id = p.id
-        WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'
-        ORDER BY m.deadline"""
-    )
 
     message = format_morning_briefing(
         new_papers_count,

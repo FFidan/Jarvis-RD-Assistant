@@ -370,26 +370,30 @@ class ProjectManager:
         """
         today = datetime.now(UTC).date()
 
-        # Ensure row exists
-        await self.db_pool.execute(
-            "INSERT INTO daily_log (log_date) VALUES ($1) ON CONFLICT (log_date) DO NOTHING",
-            today,
-        )
-
-        # Apply increments (field names are from a hardcoded allowlist, never user input)
+        # Validate fields before acquiring the connection
         _allowed_log_fields = frozenset({"tasks_completed", "cards_reviewed", "papers_read"})
-        for field, value in increments.items():
+        for field in increments:
             if field not in _allowed_log_fields:
                 raise ValueError(f"Disallowed field: {field!r}")
-            if value:
-                qf = quote_ident(field)
-                await self.db_pool.execute(
-                    f"UPDATE daily_log SET {qf} = {qf} + $1 WHERE log_date = $2",  # nosec B608 - field is selected from an allowlist and values stay parameterized
-                    value,
+
+        async with self.db_pool.acquire() as conn:
+            async with conn.transaction():
+                # Ensure row exists
+                await conn.execute(
+                    "INSERT INTO daily_log (log_date) VALUES ($1)"
+                    " ON CONFLICT (log_date) DO NOTHING",
                     today,
                 )
 
-        row = await self.db_pool.fetchrow(
-            "SELECT * FROM daily_log WHERE log_date = $1", today
-        )
+                # Apply increments (field names are from a hardcoded allowlist, never user input)
+                for field, value in increments.items():
+                    if value:
+                        qf = quote_ident(field)
+                        await conn.execute(
+                            f"UPDATE daily_log SET {qf} = {qf} + $1 WHERE log_date = $2",  # nosec B608 - field is selected from an allowlist and values stay parameterized
+                            value,
+                            today,
+                        )
+
+                row = await conn.fetchrow("SELECT * FROM daily_log WHERE log_date = $1", today)
         return dict(row) if row else {}

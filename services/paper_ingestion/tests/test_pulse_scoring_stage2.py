@@ -6,7 +6,7 @@ Uses respx to mock the httpx client.
 
 import asyncio
 from datetime import date
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -258,3 +258,38 @@ async def test_stage2_partial_failure_others_succeed():
     assert len(scored) == 2
     assert len(failed) == 1
     assert failed[0].reasoning == "LLM scoring failed"
+
+
+@pytest.mark.asyncio
+async def test_stage2_falls_back_on_llm_error():
+    """When request_chat_completion_content raises RuntimeError, fallback returns stage1 signals."""
+    paper = _make_paper(0)
+    stage1_signals = {"embedding": 0.6, "topic": 0.3, "recency": 0.8, "author_bonus": 0.0}
+    sc = ScoredCandidate(
+        paper=paper,
+        signals=stage1_signals,
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=0.7,
+    )
+    profile = _make_profile()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "app.pulse.scoring.request_chat_completion_content",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("LiteLLM unavailable"),
+    ):
+        result = await stage2_llm_rerank([sc], profile, http_client)
+
+    assert len(result) == 1
+    out = result[0]
+    # llm scores are absent — graceful fallback
+    assert out.llm_relevance is None
+    assert out.llm_novelty is None
+    assert out.reasoning == "LLM scoring failed"
+    # stage1 signals are preserved unchanged
+    assert out.signals == stage1_signals
+    # final_score is preserved from stage1
+    assert out.final_score == 0.7

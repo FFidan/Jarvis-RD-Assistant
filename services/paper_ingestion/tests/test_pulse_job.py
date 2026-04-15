@@ -230,3 +230,72 @@ async def test_stats_includes_last_error_on_partial_failure(patch_pipeline):
     patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
     assert stats["last_error"] is not None
     assert "stage2 exploded" in stats["last_error"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_persist_atomic_on_failure(patch_pipeline):
+    """upsert_paper and persist_deck run inside a single conn.transaction().
+
+    Code-path verification: the job acquires exactly one connection, opens
+    exactly one transaction on it, and passes that *same* connection to both
+    upsert_paper and persist_deck.  If persist_deck raises, the transaction
+    context manager's __aexit__ is invoked (rollback path) and the error is
+    recorded in stats — no orphaned papers are left uncommitted.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.pulse.job import run_pulse
+
+    # Build a pool whose acquire() yields a controlled connection so we can
+    # assert exactly which connection is handed to each collaborator.
+    conn = AsyncMock()
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+    # Simulate rollback: __aexit__ returns False (exception propagates)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+    acquire_cm = MagicMock()
+    acquire_cm.__aenter__ = AsyncMock(return_value=conn)
+    acquire_cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = acquire_cm
+
+    # Capture which connection upsert_paper and persist_deck are called with
+    upsert_conns: list = []
+    persist_conns: list = []
+
+    async def recording_upsert(c, paper, **_kw):
+        upsert_conns.append(c)
+        return {"id": 1, "is_insert": True}
+
+    async def boom_persist(db_pool, deck_date, cards, stats, conn=None, **_kw):
+        persist_conns.append(conn)
+        raise RuntimeError("persist_deck exploded")
+
+    patch_pipeline["mocks"]["upsert_paper"].side_effect = recording_upsert
+    patch_pipeline["mocks"]["persist_deck"].side_effect = boom_persist
+
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # 1. A single connection was acquired for the entire persist step
+    pool.acquire.assert_called_once()
+
+    # 2. A single transaction was opened on that connection
+    conn.transaction.assert_called_once()
+
+    # 3. The transaction context manager was entered and exited (rollback path)
+    txn_cm.__aenter__.assert_awaited_once()
+    txn_cm.__aexit__.assert_awaited_once()
+
+    # 4. upsert_paper was called with the shared connection
+    deck_size = len(patch_pipeline["deck"])
+    assert len(upsert_conns) == deck_size
+    assert all(c is conn for c in upsert_conns), "upsert_paper must use the shared conn"
+
+    # 5. persist_deck was called with conn= keyword (shared connection path)
+    assert len(persist_conns) == 1
+    assert persist_conns[0] is conn, "persist_deck must receive the shared conn"
+
+    # 6. The failure is captured in stats (pipeline does not raise)
+    assert stats["last_error"] is not None
+    assert "persist_deck exploded" in stats["last_error"]

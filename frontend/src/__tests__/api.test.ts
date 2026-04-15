@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { apiFetch, ApiError, searchPreview } from '@/lib/api';
+import { apiFetch, apiFetchRaw, ApiError, searchPreview } from '@/lib/api';
 
 describe('apiFetch', () => {
   beforeEach(() => {
@@ -48,6 +48,49 @@ describe('apiFetch', () => {
     await expect(apiFetch('/api/test')).rejects.toThrow('Failed to fetch');
   });
 
+  it('translates timeout AbortError into ApiError(0, timed out)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+          });
+        }
+      });
+    });
+
+    const promise = apiFetch('/api/test');
+    vi.advanceTimersByTime(300_001); // fire the 5-min timeout
+    await expect(promise).rejects.toBeInstanceOf(ApiError);
+    const err = await promise.catch((e: ApiError) => e);
+    expect(err.status).toBe(0);
+    expect(err.message).toMatch(/timed out/i);
+    vi.useRealTimers();
+  });
+
+  it('re-throws caller-initiated AbortError unchanged (not wrapped as ApiError)', async () => {
+    const callerController = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+          });
+        }
+      });
+    });
+
+    const promise = apiFetch('/api/test', { signal: callerController.signal });
+    callerController.abort();
+    const err = await promise.catch((e: unknown) => e);
+    // Should NOT be an ApiError — it is a raw DOMException
+    expect(err).toBeInstanceOf(DOMException);
+    expect(err).not.toBeInstanceOf(ApiError);
+  });
+
   it('searchPreview posts to the preview endpoint without side effects', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify([]), {
@@ -69,5 +112,79 @@ describe('apiFetch', () => {
         }),
       }),
     );
+  });
+});
+
+describe('apiFetchRaw', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns raw Response on success', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('binary', { status: 200 }),
+    );
+
+    const res = await apiFetchRaw('/api/export/anki/1');
+    expect(res).toBeInstanceOf(Response);
+    expect(res.status).toBe(200);
+  });
+
+  it('throws ApiError on non-ok response', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('Not found', { status: 404 }),
+    );
+
+    let caught: unknown;
+    try {
+      await apiFetchRaw('/api/export/anki/999');
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).status).toBe(404);
+  });
+
+  it('translates timeout AbortError into ApiError(0, timed out)', async () => {
+    vi.useFakeTimers();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+          });
+        }
+      });
+    });
+
+    const promise = apiFetchRaw('/api/export/anki/1');
+    vi.advanceTimersByTime(300_001); // fire the 5-min timeout
+    await expect(promise).rejects.toBeInstanceOf(ApiError);
+    const err = await promise.catch((e: ApiError) => e);
+    expect(err.status).toBe(0);
+    expect(err.message).toMatch(/timed out/i);
+    vi.useRealTimers();
+  });
+
+  it('re-throws caller-initiated AbortError unchanged (not wrapped as ApiError)', async () => {
+    const callerController = new AbortController();
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        if (signal) {
+          signal.addEventListener('abort', () => {
+            reject(new DOMException('The user aborted a request.', 'AbortError'));
+          });
+        }
+      });
+    });
+
+    const promise = apiFetchRaw('/api/export/anki/1', { signal: callerController.signal });
+    callerController.abort();
+    const err = await promise.catch((e: unknown) => e);
+    // Should NOT be an ApiError — it is a raw DOMException
+    expect(err).toBeInstanceOf(DOMException);
+    expect(err).not.toBeInstanceOf(ApiError);
   });
 });

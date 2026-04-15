@@ -77,7 +77,7 @@ cd Jarvis-RD-Assistant
 - **Upgrading:** `git pull && ./update.sh`
 - **Global access:** Re-run `./setup.sh` and pick option 3 (Cloudflare Tunnel — free, no inbound ports).
 
-First boot pulls ~10 GB of Ollama models (`mistral-nemo`, `qwen3:4b`, `nomic-embed-text`); watch progress with `docker compose logs -f ollama`. The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
+First boot pulls ~10 GB of Ollama models (`mistral-nemo`, `qwen3:4b`, `nomic-embed-text`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
 
 ### GPU Acceleration (optional)
 
@@ -267,7 +267,7 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-019)
+│   └── migrations/             # Versioned schema changes (001-022)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
