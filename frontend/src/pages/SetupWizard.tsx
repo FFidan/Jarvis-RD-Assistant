@@ -5,6 +5,7 @@ import { AlertTriangle, ArrowRight, CheckCircle2, Loader2, RefreshCw, Sparkles }
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { TimeSelect } from '@/components/ui/time-select';
 import { Textarea } from '@/components/ui/textarea';
 import { createTopic, markSetupCompleted, setConfig } from '@/lib/api';
 import { SetupStep } from '@/components/setup/SetupStep';
@@ -283,13 +284,7 @@ function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
         </label>
         <div>
           <Label htmlFor="setup-pulse-time">Daily run time</Label>
-          <Input
-            id="setup-pulse-time"
-            type="time"
-            value={time}
-            onChange={(e) => setTime(e.target.value)}
-            disabled={!pulseEnabled}
-          />
+          <TimeSelect value={time} onChange={setTime} disabled={!pulseEnabled} />
           <p className="mt-1 text-xs text-muted-foreground">
             Equivalent cron: <span className="font-mono">{timeToCron(time)}</span>
           </p>

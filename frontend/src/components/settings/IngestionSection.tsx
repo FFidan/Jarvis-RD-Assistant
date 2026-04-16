@@ -4,6 +4,7 @@ import { fetchConfig, setConfig } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { TimeSelect } from '@/components/ui/time-select';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
@@ -184,14 +185,7 @@ function NotificationRow({
             <Label htmlFor={`time-${entry.key}`} className="text-sm">
               Time
             </Label>
-            <Input
-              id={`time-${entry.key}`}
-              type="time"
-              value={timeValue}
-              onChange={(e) => handleTimeChange(e.target.value)}
-              disabled={isPending}
-              className="w-32"
-            />
+            <TimeSelect value={timeValue} onChange={handleTimeChange} disabled={isPending} />
           </div>
           <div className="flex items-center gap-2">
             <Label htmlFor={`toggle-${entry.key}`} className="text-sm">

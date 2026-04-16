@@ -11,14 +11,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { TimeSelect } from '@/components/ui/time-select';
 import { EmptyState } from '@/components/EmptyState';
 import { Bell } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
@@ -45,7 +39,7 @@ const nudgeDescriptions: Record<string, string> = {
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const CRON_TOOLTIP =
-  'Cron expression controlling when Pulse runs. Examples: "0 4 * * *" = 4 AM daily, "0 6 * * 1-5" = 6 AM weekdays.';
+  'The time of day when Pulse discovery runs automatically. Papers are scored and ranked so your deck is ready when you start your day.';
 
 function cronToHumanReadable(cron: string): string {
   const parts = cron.split(/\s+/);
@@ -91,31 +85,6 @@ function timeToCron(time: string, originalCron: string): string {
 function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
   const entry = entries.find((c) => c.key === key);
   return entry !== undefined ? (entry.value as T) : fallback;
-}
-
-function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const parts = value ? value.split(':') : ['00', '00'];
-  const h = parts[0] ?? '00';
-  const m = parts[1] ?? '00';
-  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
-  const minutes = ['00', '15', '30', '45'];
-  return (
-    <div className="flex items-center gap-1">
-      <Select value={h} onValueChange={(v) => onChange(`${v}:${m}`)}>
-        <SelectTrigger className="w-[70px]"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {hours.map((hr) => <SelectItem key={hr} value={hr}>{hr}</SelectItem>)}
-        </SelectContent>
-      </Select>
-      <span>:</span>
-      <Select value={m} onValueChange={(v) => onChange(`${h}:${v}`)}>
-        <SelectTrigger className="w-[70px]"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          {minutes.map((mn) => <SelectItem key={mn} value={mn}>{mn}</SelectItem>)}
-        </SelectContent>
-      </Select>
-    </div>
-  );
 }
 
 function PulseSubsection() {
@@ -199,7 +168,7 @@ function PulseSubsection() {
 
         <div className="space-y-1">
           <Label htmlFor="pulse-cron-time" className="flex items-center gap-1">
-            Cron schedule
+            Daily run time
             <InfoTooltip content={CRON_TOOLTIP} />
           </Label>
           <TimeSelect
