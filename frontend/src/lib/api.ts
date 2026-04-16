@@ -78,7 +78,7 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
       ...init,
       signal: combinedSignal,
       headers: {
-        'Content-Type': 'application/json',
+        ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...authHeaders(),
         ...init?.headers,
       },
@@ -488,6 +488,17 @@ export const discoverPapers = (paperIds: number[], limit?: number) =>
 
 export const scanLocalPdfs = () =>
   apiFetch<{ imported: number; skipped: number; scanned: number }>('/api/scan-local-pdfs', { method: 'POST' });
+
+export async function uploadPdf(file: File, title: string): Promise<{ id: number; title: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('title', title);
+  return apiFetch('/api/upload-pdf', { method: 'POST', body: form });
+}
+
+export async function processPdf(paperId: number): Promise<{ chunk_count: number; status: string }> {
+  return apiFetch(`/api/process-pdf/${paperId}`, { method: 'POST' });
+}
 
 export const batchProcessPapers = (limit?: number) =>
   apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number }>('/api/papers/batch-process', {

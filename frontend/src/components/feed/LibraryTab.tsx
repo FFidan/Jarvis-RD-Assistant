@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import {
   fetchFeedPapers,
   fetchTopics,
-  scanLocalPdfs,
   batchProcessPapers,
   discoverPapers,
 } from '@/lib/api';
@@ -14,11 +13,12 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { PriorityBadge } from '@/components/paper/PriorityBadge';
 import { LibraryFilters } from '@/components/feed/LibraryFilters';
 import { PaginationControls } from '@/components/feed/PaginationControls';
 import { DiscoveryResults } from '@/components/feed/DiscoveryResults';
+import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
 import { EmptyState } from '@/components/EmptyState';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import {
@@ -66,7 +66,7 @@ export function LibraryTab() {
   const topicNames = topics.map((t) => t.name);
 
   // Fetch library papers
-  const { data, isLoading, isError, error } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: [
       'feed',
       'library',
@@ -99,14 +99,6 @@ export function LibraryTab() {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
   // Mutations
-  const scanMutation = useMutation({
-    mutationFn: scanLocalPdfs,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['feed'] });
-      setPage(0);
-    },
-  });
-
   const batchMutation = useMutation({
     mutationFn: () => batchProcessPapers(batchLimit),
     onSuccess: () => {
@@ -158,25 +150,7 @@ export function LibraryTab() {
         </Button>
         {importExpanded && (
           <CardContent className="space-y-4 border-t pt-4">
-            <p className="text-sm text-muted-foreground">
-              Place PDF files in /data/local_pdfs, then scan to import.
-            </p>
-            <Button
-              onClick={() => scanMutation.mutate()}
-              disabled={scanMutation.isPending}
-            >
-              {scanMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Scan for new PDFs
-            </Button>
-            {scanMutation.isSuccess && scanMutation.data && (
-              <p className="text-sm text-green-600">
-                Scan complete &mdash; {scanMutation.data.imported} imported,{' '}
-                {scanMutation.data.skipped} skipped ({scanMutation.data.scanned} total scanned).
-              </p>
-            )}
-            {scanMutation.isError && (
-              <p className="text-sm text-destructive">{scanMutation.error?.message || 'Scan failed'}</p>
-            )}
+            <PdfUploadZone onComplete={() => { void refetch(); }} />
 
             <Separator />
 
