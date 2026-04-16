@@ -129,7 +129,7 @@ describe('ExtractionTemplateSection', () => {
 
     await user.type(screen.getByLabelText('Template Name'), 'New Template');
     await user.type(
-      screen.getByLabelText(/Fields/),
+      screen.getByRole('textbox', { name: /fields/i }),
       'accuracy|Accuracy|Model accuracy metric|text',
     );
 

@@ -180,7 +180,7 @@ export function LibraryTab() {
 
             <Separator />
 
-            <h4 className="font-medium">Batch Processing</h4>
+            <h4 className="font-medium">Index Papers</h4>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <label htmlFor="batch-limit" className="text-sm">Papers per batch:</label>
@@ -197,10 +197,11 @@ export function LibraryTab() {
               <Button
                 onClick={() => batchMutation.mutate()}
                 disabled={batchMutation.isPending}
+                title="Analyzes and indexes recently added papers so they appear in search and chat."
               >
                 {batchMutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 <Cog className="mr-2 h-4 w-4" />
-                Process Unembedded
+                Index New Papers
               </Button>
             </div>
             {batchMutation.isSuccess && batchMutation.data && (

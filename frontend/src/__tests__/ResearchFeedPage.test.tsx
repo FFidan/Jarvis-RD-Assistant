@@ -133,28 +133,37 @@ describe('ResearchFeedPage', () => {
     renderPage();
     expect(screen.getByRole('tab', { name: 'New' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Library' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Discover' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
   });
 
-  it('defaults to New tab active', () => {
+  it('defaults to Library tab active', () => {
     renderPage();
-    const newTab = screen.getByRole('tab', { name: 'New' });
-    expect(newTab).toHaveAttribute('data-state', 'active');
+    const libraryTab = screen.getByRole('tab', { name: 'Library' });
+    expect(libraryTab).toHaveAttribute('data-state', 'active');
   });
 
-  it('renders the cross-paper chat expander', () => {
+  it('renders the cross-paper chat expander', async () => {
+    const user = userEvent.setup();
     renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Ask' }));
     expect(screen.getByText('Ask across all papers')).toBeInTheDocument();
   });
 
-  it('renders the search input', () => {
+  it('renders the search input', async () => {
+    const user = userEvent.setup();
     renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
     expect(
       screen.getByPlaceholderText('Search arXiv or Semantic Scholar...'),
     ).toBeInTheDocument();
   });
 
-  it('renders search button', () => {
+  it('renders search button', async () => {
+    const user = userEvent.setup();
     renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
   });
 
@@ -178,6 +187,8 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
     const searchInput = screen.getByPlaceholderText('Search arXiv or Semantic Scholar...');
     await user.type(searchInput, 'graph neural networks');
 
@@ -200,6 +211,8 @@ describe('ResearchFeedPage', () => {
 
     renderPage();
 
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
     const searchInput = screen.getByPlaceholderText('Search arXiv or Semantic Scholar...');
     await user.type(searchInput, 'graph neural networks');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -215,6 +228,8 @@ describe('ResearchFeedPage', () => {
   it('expands cross-paper chat when clicked', async () => {
     const user = userEvent.setup();
     renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Ask' }));
 
     const expandBtn = screen.getByText('Ask across all papers');
     await user.click(expandBtn);

@@ -9,7 +9,7 @@ import {
 import type { PulseDeck as PulseDeckType, SearchPreviewResult } from '@/types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
-import { CrossPaperChat } from '@/components/feed/CrossPaperChat';
+import { StreamingChat } from '@/components/chat/StreamingChat';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
 import { NewTab } from '@/components/feed/NewTab';
@@ -152,8 +152,14 @@ export function ResearchFeedPage() {
           </div>
         </TabsContent>
 
-        <TabsContent value="ask">
-          <CrossPaperChat />
+        <TabsContent value="ask" className="flex-1 flex flex-col mt-0">
+          <div className="mb-3">
+            <h2 className="text-sm font-medium">Ask Questions</h2>
+            <p className="text-xs text-muted-foreground">Get answers synthesised from your entire library.</p>
+          </div>
+          <div className="flex-1 min-h-[400px]">
+            <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />
+          </div>
         </TabsContent>
 
         <TabsContent value="pulse">
