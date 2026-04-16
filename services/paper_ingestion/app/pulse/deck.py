@@ -4,7 +4,6 @@ Provides assemble_deck, persist_deck, load_today, load_history.
 All DB operations use asyncpg pool patterns consistent with the rest of the service.
 """
 
-import json
 import logging
 from datetime import date, datetime
 from typing import Any
@@ -44,7 +43,7 @@ async def _persist_deck_inner(
     conn: Any,
     deck_date: date,
     cards: list[ScoredCandidate],
-    stats_json: str,
+    stats: dict,
 ) -> int:
     """Execute the deck-persistence SQL on an existing connection.
 
@@ -64,7 +63,7 @@ async def _persist_deck_inner(
         RETURNING id
         """,
         deck_date,
-        stats_json,
+        stats,
     )
 
     # Delete old cards for this deck (idempotent replace)
@@ -91,7 +90,7 @@ async def _persist_deck_inner(
             sc.llm_relevance,
             sc.llm_novelty,
             sc.reasoning,
-            json.dumps(sc.signals),
+            sc.signals,
         )
         if inserted_id is not None:
             successes += 1
@@ -146,14 +145,12 @@ async def persist_deck(
     int
         The pulse_decks.id of the upserted deck.
     """
-    stats_json = json.dumps(stats)
-
     if conn is not None:
-        return await _persist_deck_inner(conn, deck_date, cards, stats_json)
+        return await _persist_deck_inner(conn, deck_date, cards, stats)
 
     async with db_pool.acquire() as acquired_conn:
         async with acquired_conn.transaction():
-            return await _persist_deck_inner(acquired_conn, deck_date, cards, stats_json)
+            return await _persist_deck_inner(acquired_conn, deck_date, cards, stats)
 
 
 def _build_deck_response(
