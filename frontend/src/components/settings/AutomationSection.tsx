@@ -10,8 +10,14 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { EmptyState } from '@/components/EmptyState';
 import { Bell } from 'lucide-react';
@@ -85,6 +91,31 @@ function timeToCron(time: string, originalCron: string): string {
 function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
   const entry = entries.find((c) => c.key === key);
   return entry !== undefined ? (entry.value as T) : fallback;
+}
+
+function TimeSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const parts = value ? value.split(':') : ['00', '00'];
+  const h = parts[0] ?? '00';
+  const m = parts[1] ?? '00';
+  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+  const minutes = ['00', '15', '30', '45'];
+  return (
+    <div className="flex items-center gap-1">
+      <Select value={h} onValueChange={(v) => onChange(`${v}:${m}`)}>
+        <SelectTrigger className="w-[70px]"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {hours.map((hr) => <SelectItem key={hr} value={hr}>{hr}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <span>:</span>
+      <Select value={m} onValueChange={(v) => onChange(`${h}:${v}`)}>
+        <SelectTrigger className="w-[70px]"><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {minutes.map((mn) => <SelectItem key={mn} value={mn}>{mn}</SelectItem>)}
+        </SelectContent>
+      </Select>
+    </div>
+  );
 }
 
 function PulseSubsection() {
@@ -171,29 +202,11 @@ function PulseSubsection() {
             Cron schedule
             <InfoTooltip content={CRON_TOOLTIP} />
           </Label>
-          <input
-            id="pulse-cron-time"
-            type="time"
+          <TimeSelect
             value={cronToTime(localCron)}
-            onChange={(e) => handleCronChange(timeToCron(e.target.value, localCron))}
-            className="h-9 rounded-md border bg-background px-3 text-sm"
+            onChange={(v) => handleCronChange(timeToCron(v, localCron))}
           />
           <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
-          <details className="mt-1">
-            <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
-              Advanced (cron expression)
-            </summary>
-            <Input
-              type="text"
-              value={localCron}
-              onChange={(e) => handleCronChange(e.target.value)}
-              className={`mt-1 font-mono text-sm${!isValidCron(localCron) && localCron.trim() !== '' ? ' border-destructive' : ''}`}
-              placeholder="0 4 * * *"
-            />
-            {!isValidCron(localCron) && localCron.trim() !== '' && (
-              <p className="text-xs text-destructive">Invalid cron expression</p>
-            )}
-          </details>
         </div>
 
         <div className="space-y-1">
@@ -325,11 +338,9 @@ export function AutomationSection() {
                   )}
                   <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
                     <span>{cronToHumanReadable(nudge.cron_expression)}</span>
-                    <input
-                      type="time"
+                    <TimeSelect
                       value={cronToTime(nudge.cron_expression)}
-                      onChange={(e) => {
-                        const val = e.target.value;
+                      onChange={(val) => {
                         if (timeoutRef.current) clearTimeout(timeoutRef.current);
                         timeoutRef.current = setTimeout(() => {
                           updateMut.mutate({
@@ -338,8 +349,6 @@ export function AutomationSection() {
                           });
                         }, 300);
                       }}
-                      disabled={updateMut.isPending}
-                      className="h-7 rounded border bg-background px-2 text-xs"
                     />
                     {nudge.last_fired_at && (
                       <span>Last run: {formatDate(nudge.last_fired_at)}</span>

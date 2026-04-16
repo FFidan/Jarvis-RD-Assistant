@@ -18,6 +18,7 @@ import { EmptyState } from '@/components/EmptyState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Trash2, Plus, UserSearch, RefreshCw, Users } from 'lucide-react';
 import type { TrackedAuthor } from '@/types';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 const sourceBadges: Record<string, string> = {
   manual: 'Manual',
@@ -99,16 +100,22 @@ export function AuthorSection() {
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-muted-foreground mb-4">
+        Tracked authors receive a score bonus in the Pulse discovery pipeline — papers co-authored by anyone on this list rank higher in your daily Pulse deck.
+      </p>
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => autoDetectMut.mutate()}
-          disabled={autoDetectMut.isPending}
-        >
-          <UserSearch className="mr-2 h-4 w-4" />
-          {autoDetectMut.isPending ? 'Detecting...' : 'Auto-detect from starred/rated'}
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => autoDetectMut.mutate()}
+            disabled={autoDetectMut.isPending}
+          >
+            <UserSearch className="mr-2 h-4 w-4" />
+            {autoDetectMut.isPending ? 'Detecting...' : 'Auto-detect from starred/rated'}
+          </Button>
+          <InfoTooltip content="Scans the authors of papers you've starred or rated, and suggests frequently-appearing names for tracking." />
+        </div>
         <Button
           variant="outline"
           size="sm"
@@ -144,6 +151,9 @@ export function AuthorSection() {
                     <Badge variant="secondary">
                       {sourceBadges[author.source] ?? author.source}
                     </Badge>
+                    {author.source === 'manual' && (
+                      <InfoTooltip content="You added this author manually. Authors detected automatically show an 'Auto' badge." />
+                    )}
                     <Badge variant={author.enabled ? 'default' : 'outline'}>
                       {author.enabled ? 'Enabled' : 'Disabled'}
                     </Badge>

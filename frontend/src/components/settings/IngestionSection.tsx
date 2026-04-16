@@ -4,6 +4,7 @@ import { fetchConfig, setConfig } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
 import { Pencil, Check, X, Settings2 } from 'lucide-react';
@@ -75,7 +76,16 @@ const HIDE_FROM_UI = new Set([
 
 const CONFIG_METADATA: Record<
   string,
-  { label: string; description: string; group: string; tooltip?: string }
+  {
+    label: string;
+    description: string;
+    group: string;
+    tooltip?: string;
+    type?: 'boolean' | 'number' | 'string';
+    min?: number;
+    max?: number;
+    step?: number;
+  }
 > = {
   'fsrs.desired_retention': {
     label: 'Target Retention',
@@ -83,6 +93,10 @@ const CONFIG_METADATA: Record<
     group: 'Spaced Repetition',
     tooltip:
       'Desired probability of recalling a card correctly at review time. 0.9 = 90% recall. Higher values = more frequent review sessions.',
+    type: 'number',
+    min: 0.7,
+    max: 1.0,
+    step: 0.01,
   },
   'fsrs.learning_steps': {
     label: 'Learning Steps',
@@ -110,12 +124,17 @@ const CONFIG_METADATA: Record<
     group: 'Paper Workflow',
     label: 'Max papers fetched per day',
     description: 'How many new papers to import in a single discovery run.',
+    type: 'number',
+    min: 5,
+    max: 500,
+    step: 5,
   },
   'paper.auto_generate_cards': {
     group: 'Paper Workflow',
     label: 'Auto-generate flashcards after summarization',
     description:
       'Automatically generate spaced-repetition flashcards when a paper is summarized.',
+    type: 'boolean',
   },
 };
 
@@ -290,6 +309,27 @@ export function IngestionSection() {
     const meta = CONFIG_METADATA[entry.key];
     const isLlm = entry.key.startsWith('llm.');
 
+    // Boolean entries get a Switch toggle (no edit-mode needed)
+    if (meta?.type === 'boolean') {
+      return (
+        <Card key={entry.key}>
+          <CardContent className="flex items-center justify-between p-4">
+            <div>
+              <Label className="text-sm font-medium">{meta.label}</Label>
+              {meta.description && (
+                <p className="text-xs text-muted-foreground">{meta.description}</p>
+              )}
+            </div>
+            <Switch
+              checked={entry.value === 'true' || entry.value === true}
+              onCheckedChange={(checked) => setMut.mutate({ key: entry.key, value: String(checked) })}
+              disabled={setMut.isPending}
+            />
+          </CardContent>
+        </Card>
+      );
+    }
+
     // LLM model entries get a ModelSelector dropdown instead of a text input
     if (isLlm) {
       const rawValue = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
@@ -328,6 +368,10 @@ export function IngestionSection() {
                   {meta?.label ?? entry.key}
                 </span>
                 <Input
+                  type={meta?.type === 'number' ? 'number' : 'text'}
+                  min={meta?.type === 'number' ? meta.min : undefined}
+                  max={meta?.type === 'number' ? meta.max : undefined}
+                  step={meta?.type === 'number' ? meta.step : undefined}
                   value={editValue}
                   onChange={(e) => setEditValue(e.target.value)}
                   className="flex-1"
@@ -344,6 +388,11 @@ export function IngestionSection() {
                   <X className="h-4 w-4" />
                 </Button>
               </div>
+              {entry.key === 'fsrs.learning_steps' && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Enter as [min, max], e.g. [1, 10] means review after 1 min then 10 min.
+                </p>
+              )}
               {saveError && (
                 <p className="text-sm text-destructive mt-1">{saveError}</p>
               )}
