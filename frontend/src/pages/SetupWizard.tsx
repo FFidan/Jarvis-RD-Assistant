@@ -11,9 +11,10 @@ import { createTopic, markSetupCompleted, setConfig } from '@/lib/api';
 import { SetupStep } from '@/components/setup/SetupStep';
 import { SystemCheck } from '@/components/setup/SystemCheck';
 import { PairTelegram } from '@/components/setup/PairTelegram';
+import { SourceApiKeysStep } from '@/components/setup/SourceApiKeysStep';
 import type { Topic } from '@/types';
 
-const TOTAL_STEPS = 6;
+const TOTAL_STEPS = 7;
 
 function clampStep(raw: string | null): number {
   const n = raw ? parseInt(raw, 10) : 1;
@@ -70,9 +71,12 @@ export function SetupWizard() {
         <AutomationStep onBack={() => goToStep(3)} onNext={() => goToStep(5)} />
       )}
       {step === 5 && (
-        <TelegramStep onBack={() => goToStep(4)} onNext={() => goToStep(6)} />
+        <SourceApiKeysStep onBack={() => goToStep(4)} onNext={() => goToStep(6)} />
       )}
-      {step === 6 && <DoneStep />}
+      {step === 6 && (
+        <TelegramStep onBack={() => goToStep(5)} onNext={() => goToStep(7)} />
+      )}
+      {step === 7 && <DoneStep />}
     </div>
   );
 }
@@ -85,7 +89,7 @@ function WelcomeStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => voi
       stepNumber={1}
       totalSteps={TOTAL_STEPS}
       title="Welcome to JARVIS"
-      description="Let's set up JARVIS in 6 steps. You can skip optional steps at any time."
+      description="Let's set up JARVIS in 7 steps. You can skip optional steps at any time."
       footer={
         <>
           <Button variant="ghost" onClick={onSkip}>
@@ -305,12 +309,12 @@ function AutomationStep({ onBack, onNext }: { onBack: () => void; onNext: () => 
   );
 }
 
-// --- Step 5: Telegram ---
+// --- Step 6: Telegram ---
 
 function TelegramStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
   return (
     <SetupStep
-      stepNumber={5}
+      stepNumber={6}
       totalSteps={TOTAL_STEPS}
       title="Pair Telegram (optional)"
       description="Receive daily briefings and interact with JARVIS from your phone."
@@ -331,7 +335,7 @@ function TelegramStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
   );
 }
 
-// --- Step 6: Done ---
+// --- Step 7: Done ---
 
 function DoneStep() {
   const navigate = useNavigate();
@@ -394,7 +398,7 @@ function DoneStep() {
 
   return (
     <SetupStep
-      stepNumber={6}
+      stepNumber={7}
       totalSteps={TOTAL_STEPS}
       title="You're all set"
       description="JARVIS is ready to help with your research."
