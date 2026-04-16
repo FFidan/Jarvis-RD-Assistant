@@ -20,7 +20,7 @@ import { BookOpen } from 'lucide-react';
 export function ResearchFeedPage() {
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [activeTab, setActiveTab] = useState('new');
+  const [activeTab, setActiveTab] = useState('library');
   const [bothSearching, setBothSearching] = useState(false);
 
   const searchMutation = useMutation({
@@ -111,64 +111,59 @@ export function ResearchFeedPage() {
       </h1>
       <p className="text-muted-foreground text-sm">Discover and manage research papers from your configured sources</p>
 
-      {/* Cross-paper RAG chat */}
-      <CrossPaperChat />
-
-      {/* Search bar */}
-      <div>
-        <h2 className="text-sm font-medium">Discover New Papers</h2>
-        <p className="text-xs text-muted-foreground mb-2">Search ArXiv, Semantic Scholar and other sources — results can be added to your library.</p>
-      </div>
-      <SearchBar
-        onSearch={handleSearch}
-        isLoading={bothSearching || searchMutation.isPending}
-      />
-
-      {/* Search error */}
-      {searchErrorMessage && <p className="text-sm text-destructive">{searchErrorMessage}</p>}
-
-      {/* Save feedback */}
-      {saveMessage && (
-        <p
-          className={`text-sm ${saveMessage.type === 'success' ? 'text-green-600' : 'text-destructive'}`}
-        >
-          {saveMessage.text}
-        </p>
-      )}
-
-      {/* Preview results */}
-      {previewResults.length > 0 && (
-        <PreviewResults
-          papers={previewResults}
-          onSave={handleSave}
-          onClear={handleClearPreview}
-          isSaving={saveMutation.isPending}
-        />
-      )}
-
-      {/* Tabs: New / Library / Today's Pulse / Pulse History */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
-          <TabsTrigger value="new">New</TabsTrigger>
           <TabsTrigger value="library">Library</TabsTrigger>
-          <TabsTrigger value="pulse-today">Today&apos;s Pulse</TabsTrigger>
-          <TabsTrigger value="pulse-history">Pulse History</TabsTrigger>
+          <TabsTrigger value="new">New</TabsTrigger>
+          <TabsTrigger value="discover">Discover</TabsTrigger>
+          <TabsTrigger value="ask">Ask</TabsTrigger>
+          <TabsTrigger value="pulse">Pulse</TabsTrigger>
         </TabsList>
-
-        <TabsContent value="new">
-          <NewTab />
-        </TabsContent>
 
         <TabsContent value="library">
           <LibraryTab />
         </TabsContent>
 
-        <TabsContent value="pulse-today">
-          <PulseDeck />
+        <TabsContent value="new">
+          <NewTab />
         </TabsContent>
 
-        <TabsContent value="pulse-history">
-          <PulseHistoryTab />
+        <TabsContent value="discover">
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-sm font-medium">Discover New Papers</h2>
+              <p className="text-xs text-muted-foreground mb-2">Search ArXiv, Semantic Scholar and other sources — results can be added to your library.</p>
+            </div>
+            <SearchBar onSearch={handleSearch} isLoading={bothSearching || searchMutation.isPending} />
+            {searchErrorMessage && <p className="text-sm text-destructive">{searchErrorMessage}</p>}
+            {saveMessage && (
+              <p className={`text-sm ${saveMessage.type === 'success' ? 'text-green-600' : 'text-destructive'}`}>
+                {saveMessage.text}
+              </p>
+            )}
+            {previewResults.length > 0 && (
+              <PreviewResults
+                papers={previewResults}
+                onSave={handleSave}
+                onClear={handleClearPreview}
+                isSaving={saveMutation.isPending}
+              />
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="ask">
+          <CrossPaperChat />
+        </TabsContent>
+
+        <TabsContent value="pulse">
+          <div className="space-y-6">
+            <PulseDeck />
+            <div className="border-t pt-4">
+              <h3 className="text-sm font-medium mb-3">Pulse History</h3>
+              <PulseHistoryTab />
+            </div>
+          </div>
         </TabsContent>
       </Tabs>
     </div>

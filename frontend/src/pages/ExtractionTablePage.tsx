@@ -15,6 +15,7 @@ import {
 } from '@/lib/api';
 // ExtractionField type used via template.fields from ExtractionTemplate
 import { Download, Loader2, TableProperties } from 'lucide-react';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 export function ExtractionTablePage() {
   const queryClient = useQueryClient();
@@ -77,6 +78,10 @@ export function ExtractionTablePage() {
       </div>
       <p className="text-muted-foreground text-sm">Structured data extracted from papers using templates</p>
 
+      <div className="rounded-md border bg-muted/30 px-4 py-3 text-sm text-muted-foreground">
+        <strong>How to use:</strong> 1. Choose a template → 2. Search and select papers → 3. Click Extract Selected → 4. Compare results in the table below
+      </div>
+
       {(templatesQuery.isError || tableQuery.isError) && (
         <div className="py-8 text-center">
           <p className="text-sm text-destructive">
@@ -92,7 +97,10 @@ export function ExtractionTablePage() {
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Configuration</CardTitle>
+            <CardTitle className="flex items-center gap-1 text-lg">
+              Extraction Template
+              <InfoTooltip content="Templates define which facts to extract. Create or edit templates in Settings > Extraction Templates." />
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
             {templatesQuery.isLoading ? (
@@ -122,7 +130,10 @@ export function ExtractionTablePage() {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">Paper Selection</CardTitle>
+            <CardTitle className="flex items-center gap-1 text-lg">
+              Paper Selection
+              <InfoTooltip content="Search your library and add papers to compare. You can add up to 20 papers per extraction run." />
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <PaperSearchSelect
@@ -136,23 +147,26 @@ export function ExtractionTablePage() {
 
       {/* Actions */}
       <div className="flex items-center gap-3">
-        <Button
-          onClick={() => extractMutation.mutate()}
-          disabled={
-            !selectedTemplateId ||
-            selectedPaperIds.length === 0 ||
-            extractMutation.isPending
-          }
-        >
-          {extractMutation.isPending ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Extracting...
-            </>
-          ) : (
-            'Extract Selected'
-          )}
-        </Button>
+        <div>
+          <Button
+            onClick={() => extractMutation.mutate()}
+            disabled={
+              !selectedTemplateId ||
+              selectedPaperIds.length === 0 ||
+              extractMutation.isPending
+            }
+          >
+            {extractMutation.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Extracting...
+              </>
+            ) : (
+              'Extract Selected'
+            )}
+          </Button>
+          <p className="text-xs text-muted-foreground mt-1">Sends selected papers to the LLM to fill in each template field. May take 30–60 seconds per paper.</p>
+        </div>
 
         {tableQuery.data && tableQuery.data.length > 0 && (
           <Button variant="outline" onClick={handleExport}>
