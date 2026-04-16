@@ -153,7 +153,7 @@ describe('HomePage', () => {
 
     it('calls batchProcessPapers when user confirms', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
-      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5 });
+      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 0, skipped_missing_pdf: 0 });
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);

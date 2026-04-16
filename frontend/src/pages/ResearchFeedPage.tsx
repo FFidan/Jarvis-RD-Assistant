@@ -115,6 +115,10 @@ export function ResearchFeedPage() {
       <CrossPaperChat />
 
       {/* Search bar */}
+      <div>
+        <h2 className="text-sm font-medium">Discover New Papers</h2>
+        <p className="text-xs text-muted-foreground mb-2">Search ArXiv, Semantic Scholar and other sources — results can be added to your library.</p>
+      </div>
       <SearchBar
         onSearch={handleSearch}
         isLoading={bothSearching || searchMutation.isPending}

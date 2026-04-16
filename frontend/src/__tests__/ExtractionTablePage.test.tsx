@@ -73,7 +73,7 @@ describe('ExtractionTablePage', () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByText('Create one to get started.'),
+        screen.getByText('Pick papers above and click Extract Selected to fill this table.'),
       ).toBeInTheDocument();
     });
   });

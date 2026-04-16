@@ -97,10 +97,11 @@ describe('streamSSE', () => {
   it('calls logout and throws on 401 response', async () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logoutMock = vi.fn();
+    // Partial AuthState mock — only the fields used by this code path.
     vi.mocked(useAuthStore.getState).mockReturnValue({
       getApiKey: vi.fn(() => null),
       logout: logoutMock,
-    });
+    } as unknown as ReturnType<typeof useAuthStore.getState>);
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('Unauthorized', { status: 401 }),
@@ -114,10 +115,11 @@ describe('streamSSE', () => {
   it('calls logout and throws on 403 response', async () => {
     const { useAuthStore } = await import('@/stores/auth-store');
     const logoutMock = vi.fn();
+    // Partial AuthState mock — only the fields used by this code path.
     vi.mocked(useAuthStore.getState).mockReturnValue({
       getApiKey: vi.fn(() => null),
       logout: logoutMock,
-    });
+    } as unknown as ReturnType<typeof useAuthStore.getState>);
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response('Forbidden', { status: 403 }),

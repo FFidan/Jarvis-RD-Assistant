@@ -42,6 +42,21 @@ const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
   recency: 'Recency',
 };
 
+const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
+  embedding:
+    "Semantic similarity between this paper and papers you've previously starred or rated. High weight = surface papers similar to what you already read.",
+  topic:
+    "Match between the paper's content and your configured research Topics. High weight = stay close to your declared research interests.",
+  llm_relevance:
+    'An LLM judges how relevant this paper is to your research focus. Slower but more accurate than keyword matching. High weight = quality over speed.',
+  llm_novelty:
+    "An LLM judges how novel or surprising this paper is given your reading history. High weight = prioritise papers you're unlikely to have already seen.",
+  author_bonus:
+    'Additive bonus for papers co-authored by anyone in your tracked Authors list. High weight = always surface papers by your followed researchers.',
+  recency:
+    'Prefer papers published more recently. High weight = always surface the newest work, even if it scores lower on relevance.',
+};
+
 function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
   const out = { ...DEFAULT_PULSE_WEIGHTS };
   if (raw && typeof raw === 'object') {
@@ -225,7 +240,10 @@ export function RecommendationSection() {
           {PULSE_WEIGHT_KEYS.map((key) => (
             <div key={key} className="space-y-1">
               <Label className="flex items-center justify-between text-xs">
-                <span>{PULSE_WEIGHT_LABELS[key]}</span>
+                <span className="flex items-center gap-1">
+                  {PULSE_WEIGHT_LABELS[key]}
+                  <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
+                </span>
                 <span className="font-mono text-muted-foreground">
                   {localPulseWeights[key].toFixed(2)}
                 </span>

@@ -148,11 +148,11 @@ export function LibraryFilters({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="discovered_at">Recent</SelectItem>
-            <SelectItem value="priority">Priority</SelectItem>
-            <SelectItem value="published_date">Published Date</SelectItem>
+            <SelectItem value="discovered_at">Recent (newest first)</SelectItem>
+            <SelectItem value="priority">Priority (highest first)</SelectItem>
+            <SelectItem value="published_date">Published (newest first)</SelectItem>
             <SelectItem value="title">Title (A-Z)</SelectItem>
-            <SelectItem value="citation_count">Most Cited</SelectItem>
+            <SelectItem value="citation_count">Most Cited (highest first)</SelectItem>
             <SelectItem value="recommendation">Recommended for you</SelectItem>
           </SelectContent>
         </Select>

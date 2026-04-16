@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { updateTask } from '@/lib/api';
+import { updateTask, deleteTask } from '@/lib/api';
 import type { MyDayTask } from '@/types';
 
 interface TaskListProps {
@@ -25,6 +25,16 @@ export function TaskList({ tasks }: TaskListProps) {
       queryClient.invalidateQueries({ queryKey: ['my-day'] });
     },
     onError: (_err: Error, taskId: number) => setErrorTaskId(taskId),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (taskId: number) => deleteTask(taskId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+  });
+
+  const reopenMutation = useMutation({
+    mutationFn: (taskId: number) => updateTask(taskId, { status: 'todo' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
   });
 
   const pendingTasks = tasks.filter((t) => t.status !== 'done');
@@ -70,7 +80,7 @@ export function TaskList({ tasks }: TaskListProps) {
 
           {/* Project badge */}
           {task.project_name && (
-            <Link to="/projects" className="flex-shrink-0">
+            <Link to="/projects" state={{ projectId: task.project_id }} className="flex-shrink-0">
               <Badge
                 variant="outline"
                 className="text-xs hover:bg-muted/50 transition-colors cursor-pointer"
@@ -93,6 +103,16 @@ export function TaskList({ tasks }: TaskListProps) {
           >
             ▶ Focus
           </Button>
+
+          {/* Delete button */}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="opacity-0 group-hover:opacity-100 transition-opacity h-7 px-2 text-xs text-destructive"
+            onClick={() => deleteMutation.mutate(task.id)}
+          >
+            Delete
+          </Button>
         </div>
       ))}
 
@@ -107,18 +127,52 @@ export function TaskList({ tasks }: TaskListProps) {
           </button>
           {showCompleted &&
             completedTasks.map((task) => (
-              <div key={task.id} className="flex items-center gap-3 py-1.5 px-1">
+              <div key={task.id} className="flex items-center gap-3 py-1.5 px-1 rounded-md hover:bg-muted/50 group">
                 <div className="w-5 h-5 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
                   <span className="text-xs text-primary">✓</span>
                 </div>
                 <span className="flex-1 text-sm text-muted-foreground line-through truncate">
                   {task.title}
                 </span>
+
+                {/* Project badge */}
+                {task.project_name && (
+                  <Link to="/projects" state={{ projectId: task.project_id }} className="flex-shrink-0">
+                    <Badge
+                      variant="outline"
+                      className="text-xs hover:bg-muted/50 transition-colors cursor-pointer"
+                      style={task.project_color ? { borderColor: task.project_color, color: task.project_color } : undefined}
+                    >
+                      {task.project_name}
+                    </Badge>
+                  </Link>
+                )}
+
                 {task.completed_at && (
                   <span className="text-xs text-muted-foreground flex-shrink-0">
                     {formatRelativeTime(task.completed_at)}
                   </span>
                 )}
+
+                {/* Reopen button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity h-7 px-2 text-xs"
+                  onClick={() => reopenMutation.mutate(task.id)}
+                >
+                  Reopen
+                </Button>
+
+                {/* Delete button */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity h-7 px-2 text-xs text-destructive"
+                  onClick={() => deleteMutation.mutate(task.id)}
+                >
+                  Delete
+                </Button>
               </div>
             ))}
         </div>

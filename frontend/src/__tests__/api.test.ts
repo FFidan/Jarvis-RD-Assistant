@@ -64,7 +64,7 @@ describe('apiFetch', () => {
     const promise = apiFetch('/api/test');
     vi.advanceTimersByTime(300_001); // fire the 5-min timeout
     await expect(promise).rejects.toBeInstanceOf(ApiError);
-    const err = await promise.catch((e: ApiError) => e);
+    const err = (await promise.catch((e: unknown) => e)) as ApiError;
     expect(err.status).toBe(0);
     expect(err.message).toMatch(/timed out/i);
     vi.useRealTimers();
@@ -161,7 +161,7 @@ describe('apiFetchRaw', () => {
     const promise = apiFetchRaw('/api/export/anki/1');
     vi.advanceTimersByTime(300_001); // fire the 5-min timeout
     await expect(promise).rejects.toBeInstanceOf(ApiError);
-    const err = await promise.catch((e: ApiError) => e);
+    const err = (await promise.catch((e: unknown) => e)) as ApiError;
     expect(err.status).toBe(0);
     expect(err.message).toMatch(/timed out/i);
     vi.useRealTimers();

@@ -6,9 +6,8 @@ our JSONB database storage and the fsrs library's Card objects.
 
 import logging
 from datetime import datetime
-from typing import cast
 
-from fsrs import Card, CardDict, Rating, Scheduler
+from fsrs import Card, Rating, Scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +45,7 @@ class FSRSManager:
             (new_fsrs_state, review_log_dict, next_due_at).
         """
         try:
-            card = Card.from_dict(cast(CardDict, fsrs_state))
+            card = Card.from_dict(fsrs_state)
         except (KeyError, TypeError, ValueError):
             logger.warning("Invalid fsrs_state, treating as new card: %s", fsrs_state)
             card = Card()

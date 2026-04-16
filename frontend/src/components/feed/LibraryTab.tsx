@@ -138,6 +138,7 @@ export function LibraryTab() {
 
   return (
     <div className="space-y-4 pt-4">
+      <h2 className="text-sm font-medium text-muted-foreground mb-2">Your Library{data?.total != null ? ` · ${data.total} papers` : ''}</h2>
       {/* Import Local PDFs Expander */}
       <Card>
         <Button

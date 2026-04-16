@@ -3,6 +3,6 @@ uvicorn[standard]>=0.30.0
 httpx>=0.27.0
 pydantic>=2.0
 asyncpg>=0.30.0
-fsrs>=4.0.0
+fsrs>=4.0.0,<6.0.0
 slowapi>=0.1.9
 genanki>=0.13.0

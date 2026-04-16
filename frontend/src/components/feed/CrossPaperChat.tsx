@@ -24,6 +24,9 @@ export function CrossPaperChat() {
           <ChevronDown className="h-4 w-4" />
         )}
       </Button>
+      {!expanded && (
+        <p className="text-xs text-muted-foreground mt-1 px-4 pb-3">Get answers synthesised from your entire library</p>
+      )}
       {expanded && (
         <CardContent className="h-[400px] border-t p-0">
           <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />

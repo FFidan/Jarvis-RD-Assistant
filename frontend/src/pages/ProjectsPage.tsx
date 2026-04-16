@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useLocation } from 'react-router-dom';
 import { FolderKanban } from 'lucide-react';
 import { fetchProjects } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -8,11 +9,19 @@ import { ProjectDetail } from '@/components/projects/ProjectDetail';
 
 export function ProjectsPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const location = useLocation();
 
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['projects'],
     queryFn: () => fetchProjects(),
   });
+
+  useEffect(() => {
+    const pid = (location.state as { projectId?: number } | null)?.projectId;
+    if (pid != null && projects?.some((p: { id: number }) => p.id === pid)) {
+      setSelectedId(pid);
+    }
+  }, [location.state, projects]);
 
   const selectedProject = selectedId
     ? projects.find((p) => p.id === selectedId) ?? null

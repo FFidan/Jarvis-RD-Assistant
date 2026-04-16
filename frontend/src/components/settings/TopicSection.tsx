@@ -17,6 +17,12 @@ import type { Topic } from '@/types';
 const DESCRIPTION_TOOLTIP =
   'Free-text context that the Pulse scoring LLM uses when ranking candidate papers.';
 
+const TOPIC_FIELD_TOOLTIPS = {
+  name: "A short name for this research area, e.g. 'Transformers' or 'Climate ML'.",
+  queryTerms: "Comma-separated keywords used to search paper databases. Broader terms surface more papers; narrower terms are more precise.",
+  category: "Optional grouping label shown in the Topics list. Useful if you have many topics across different fields.",
+} as const;
+
 export function TopicSection() {
   const queryClient = useQueryClient();
   const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
@@ -118,25 +124,43 @@ export function TopicSection() {
               <CardContent className="flex items-center gap-4 p-4">
                 {editingId === topic.id ? (
                   <div className="flex flex-1 flex-col gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Input
-                        value={editForm.name}
-                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                        placeholder="Name"
-                        className="w-40"
-                      />
-                      <Input
-                        value={editForm.query_terms}
-                        onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
-                        placeholder="Query terms (comma-separated)"
-                        className="w-60"
-                      />
-                      <Input
-                        value={editForm.category}
-                        onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
-                        placeholder="Category"
-                        className="w-32"
-                      />
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                          Name
+                          <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.name} />
+                        </label>
+                        <Input
+                          value={editForm.name}
+                          onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                          placeholder="Name"
+                          className="w-40"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                          Query Terms
+                          <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.queryTerms} />
+                        </label>
+                        <Input
+                          value={editForm.query_terms}
+                          onChange={(e) => setEditForm({ ...editForm, query_terms: e.target.value })}
+                          placeholder="Query terms (comma-separated)"
+                          className="w-60"
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs text-muted-foreground flex items-center gap-1">
+                          Category
+                          <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.category} />
+                        </label>
+                        <Input
+                          value={editForm.category}
+                          onChange={(e) => setEditForm({ ...editForm, category: e.target.value })}
+                          placeholder="Category"
+                          className="w-32"
+                        />
+                      </div>
                       <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending}>
                         <Check className="h-4 w-4" />
                       </Button>
@@ -205,7 +229,10 @@ export function TopicSection() {
           <CardContent className="space-y-3 p-4">
             <div className="grid gap-2 sm:grid-cols-3">
               <div>
-                <Label htmlFor="topic-name">Name</Label>
+                <Label htmlFor="topic-name" className="flex items-center gap-1">
+                  Name
+                  <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.name} />
+                </Label>
                 <Input
                   id="topic-name"
                   value={addForm.name}
@@ -214,7 +241,10 @@ export function TopicSection() {
                 />
               </div>
               <div>
-                <Label htmlFor="topic-terms">Query Terms</Label>
+                <Label htmlFor="topic-terms" className="flex items-center gap-1">
+                  Query Terms
+                  <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.queryTerms} />
+                </Label>
                 <Input
                   id="topic-terms"
                   value={addForm.query_terms}
@@ -223,7 +253,10 @@ export function TopicSection() {
                 />
               </div>
               <div>
-                <Label htmlFor="topic-category">Category</Label>
+                <Label htmlFor="topic-category" className="flex items-center gap-1">
+                  Category
+                  <InfoTooltip content={TOPIC_FIELD_TOOLTIPS.category} />
+                </Label>
                 <Input
                   id="topic-category"
                   value={addForm.category}

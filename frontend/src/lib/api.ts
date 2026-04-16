@@ -56,7 +56,7 @@ export class ApiError extends Error {
 function _handleFetchError(
   err: unknown,
   timeoutController: AbortController,
-  callerSignal?: AbortSignal,
+  callerSignal?: AbortSignal | null,
 ): never {
   if (err instanceof DOMException && err.name === 'AbortError') {
     if (timeoutController.signal.aborted && !callerSignal?.aborted) {
