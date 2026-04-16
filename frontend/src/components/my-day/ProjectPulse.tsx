@@ -15,7 +15,8 @@ export function ProjectPulse({ projects }: ProjectPulseProps) {
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-lg">Project Pulse</CardTitle>
+        <CardTitle className="text-lg">Project Progress</CardTitle>
+        <p className="text-xs text-muted-foreground">Task completion across your active projects.</p>
       </CardHeader>
       <CardContent className="space-y-4">
         {projects.map((project) => {
@@ -28,6 +29,7 @@ export function ProjectPulse({ projects }: ProjectPulseProps) {
               <div className="flex items-center justify-between">
                 <Link
                   to="/projects"
+                  state={{ projectId: project.id }}
                   className="text-sm font-medium hover:underline"
                 >
                   {project.name}

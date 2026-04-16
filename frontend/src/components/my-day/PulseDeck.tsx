@@ -121,6 +121,9 @@ export function PulseDeck() {
               Generation failed. Please retry.
             </p>
           )}
+          <p className="text-xs text-muted-foreground">
+            Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+          </p>
         </CardContent>
       </Card>
     );
@@ -134,6 +137,9 @@ export function PulseDeck() {
           Your Pulse — {deck.card_count} papers
         </h2>
       </div>
+      <p className="text-sm text-muted-foreground -mt-1">
+        Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+      </p>
       <div className="space-y-3">
         {deck.cards.map((card) => (
           <PulseCard

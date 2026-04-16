@@ -67,10 +67,8 @@ export function SourceSection() {
       {sources.map((source) => {
         const config = source.config as Record<string, unknown> | null | undefined;
         const keyEnv = getConfigString(config, 'key_env');
-        const docsUrl = getConfigString(config, 'docs');
         const requiresKey = getConfigBool(config, 'requires_key');
-        const showKeyEnvBlock = !!keyEnv && source.source_type !== 'semantic_scholar';
-        const isComplex = source.source_type === 'semantic_scholar' || showKeyEnvBlock;
+        const isComplex = !!keyEnv;
         return (
         <Card key={source.id}>
           <CardContent className={isComplex ? 'flex flex-col gap-3 p-4' : 'flex items-center gap-4 p-4'}>
@@ -102,39 +100,7 @@ export function SourceSection() {
                 {source.enabled ? 'Disable' : 'Enable'}
               </Button>
             </div>
-            {showKeyEnvBlock && (
-              <div className="flex items-start gap-2 rounded-md bg-muted/30 p-2 text-xs">
-                <Key className="mt-0.5 h-3.5 w-3.5 text-muted-foreground" />
-                <div className="flex-1">
-                  <div className="flex items-center gap-1">
-                    <span className="font-medium">Set env var:</span>
-                    <code className="rounded bg-background px-1 py-0.5 font-mono">{keyEnv}</code>
-                    {docsUrl && (
-                      <InfoTooltip
-                        content={
-                          <span>
-                            See provider docs:{' '}
-                            <a
-                              href={docsUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="underline"
-                            >
-                              {docsUrl}
-                            </a>
-                          </span>
-                        }
-                      />
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-muted-foreground">
-                    API key values are never transmitted to the frontend — set this environment
-                    variable on the server to enable authenticated requests.
-                  </p>
-                </div>
-              </div>
-            )}
-            {source.source_type === 'semantic_scholar' && (
+            {keyEnv && (
               <div>
                 {editingId !== source.id ? (
                   <div className="flex items-center gap-2">
@@ -159,7 +125,7 @@ export function SourceSection() {
                   <div className="flex items-center gap-2">
                     <Input
                       type="password"
-                      placeholder="Enter S2 API key"
+                      placeholder={`Enter ${keyEnv}`}
                       value={apiKey}
                       onChange={(e) => setApiKey(e.target.value)}
                       className="h-8 text-sm"
@@ -197,6 +163,7 @@ export function SourceSection() {
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">API key enables higher rate limits</p>
+                <p className="text-xs text-muted-foreground mt-1">Changes effective after service restart.</p>
               </div>
             )}
           </CardContent>
