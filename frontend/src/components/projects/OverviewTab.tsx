@@ -1,10 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CalendarDays, CheckCircle2, ListTodo, Target } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ListTodo, Pencil, Target } from 'lucide-react';
 import type { Project } from '@/types';
 import { fetchTasks, updateProject } from '@/lib/api';
 import { MetricTile } from '@/components/MetricTile';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { cn } from '@/lib/utils';
 import {
   Select,
   SelectContent,
@@ -43,18 +47,60 @@ export function OverviewTab({ project }: OverviewTabProps) {
     ? Math.ceil((new Date(project.deadline).getTime() - Date.now()) / (1000 * 60 * 60 * 24))
     : null;
 
+  const deadlineColor = deadlineDays === null ? 'text-muted-foreground'
+    : deadlineDays < 0 ? 'text-destructive'
+    : deadlineDays <= 7 ? 'text-amber-500'
+    : '';
+
+  const deadlineLabel = deadlineDays === null ? 'No deadline'
+    : deadlineDays < 0 ? `${-deadlineDays}d overdue`
+    : deadlineDays === 0 ? 'Due today'
+    : `${deadlineDays}d left`;
+
+  function updateDeadline(deadline: string | null) {
+    updateProject(project.id, { deadline });
+    queryClient.invalidateQueries({ queryKey: ['projects'] });
+    queryClient.invalidateQueries({ queryKey: ['project', project.id] });
+  }
+
   return (
     <div className="space-y-6">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricTile title="Total Tasks" value={totalTasks} icon={ListTodo} />
         <MetricTile title="Done" value={doneTasks} icon={CheckCircle2} />
         <MetricTile title="Progress" value={`${progress}%`} icon={Target} />
-        <MetricTile
-          title="Deadline"
-          value={deadlineDays !== null ? (deadlineDays >= 0 ? `${deadlineDays}d left` : `${-deadlineDays}d overdue`) : 'None'}
-          icon={CalendarDays}
-          subtitle={project.deadline ?? undefined}
-        />
+        <Card className={deadlineDays !== null && deadlineDays < 0 ? 'border-destructive/30' : ''}>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Deadline</CardTitle>
+            <div className="flex items-center gap-1">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-6 w-6">
+                    <Pencil className="h-3 w-3" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-3 space-y-2">
+                  <input
+                    type="date"
+                    className="block w-full text-sm border rounded px-2 py-1"
+                    value={project.deadline ?? ''}
+                    onChange={(e) => updateDeadline(e.target.value || null)}
+                  />
+                  {project.deadline && (
+                    <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => updateDeadline(null)}>
+                      Clear deadline
+                    </Button>
+                  )}
+                </PopoverContent>
+              </Popover>
+              <CalendarDays className={cn('h-4 w-4', deadlineColor)} />
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className={cn('text-2xl font-bold', deadlineColor)}>{deadlineLabel}</div>
+            {project.deadline && <p className="text-xs text-muted-foreground">{project.deadline}</p>}
+          </CardContent>
+        </Card>
       </div>
 
       <div>

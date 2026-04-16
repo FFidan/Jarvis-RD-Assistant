@@ -59,6 +59,11 @@ export function SourceSection() {
 
   return (
     <div className="space-y-2">
+      <p className="text-sm text-muted-foreground mb-4">
+        Sources are the databases JARVIS queries to discover new papers. Enabled sources are polled
+        during each discovery run. Priority controls fetch order when sources compete for rate-limit
+        budget — lower number = higher priority.
+      </p>
       {sources.map((source) => {
         const config = source.config as Record<string, unknown> | null | undefined;
         const keyEnv = getConfigString(config, 'key_env');
@@ -76,7 +81,10 @@ export function SourceSection() {
                   <Badge variant={source.enabled ? 'default' : 'outline'}>
                     {source.enabled ? 'Enabled' : 'Disabled'}
                   </Badge>
-                  <Badge variant="secondary">Priority: {source.priority}</Badge>
+                  <Badge variant="secondary" className="flex items-center gap-1">
+                    Priority: {source.priority}
+                    <InfoTooltip content="Fetch priority order. Sources with lower numbers are polled first when the rate-limit budget is tight. Sources with the same priority run concurrently." />
+                  </Badge>
                   {requiresKey && (
                     <Badge variant="outline" className="gap-1 text-amber-600">
                       <AlertTriangle className="h-3 w-3" />
@@ -131,9 +139,13 @@ export function SourceSection() {
                 {editingId !== source.id ? (
                   <div className="flex items-center gap-2">
                     <Key className="h-4 w-4 text-muted-foreground" />
-                    <span className="text-sm text-muted-foreground">
-                      {source.config?.api_key ? 'API key: ••••' : 'No API key'}
-                    </span>
+                    {source.config?.api_key ? (
+                      <span className="text-xs text-green-600">API key: configured</span>
+                    ) : source.enabled ? (
+                      <span className="text-xs text-amber-500">API key: not set</span>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">API key: not set</span>
+                    )}
                     <Button
                       size="icon"
                       variant="ghost"

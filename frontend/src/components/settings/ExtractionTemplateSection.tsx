@@ -16,6 +16,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { EmptyState } from '@/components/EmptyState';
 import { useConfirm } from '@/hooks/use-confirm';
 import { Trash2, Plus, Pencil, TableProperties } from 'lucide-react';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ExtractionTemplate } from '@/types';
 
 export function ExtractionTemplateSection() {
@@ -140,6 +141,9 @@ export function ExtractionTemplateSection() {
 
   return (
     <div className="space-y-4">
+      <p className="text-sm text-muted-foreground mb-4">
+        Extraction templates define the structured fields JARVIS pulls from papers. Each field extracts a specific fact (e.g. sample size, main finding). Once you create a template, use it in the Extraction Table to compare papers side-by-side.
+      </p>
       {templates.length === 0 && !showAdd ? (
         <EmptyState
           title="No extraction templates"
@@ -208,9 +212,15 @@ export function ExtractionTemplateSection() {
               </div>
             </div>
             <div>
-              <Label htmlFor="tmpl-fields">
-                Fields (one per line: name|label|description|type)
+              <Label htmlFor="tmpl-fields" className="flex items-center gap-1">
+                Fields
+                <InfoTooltip content="Each line defines one column in the Extraction Table. Use text for prose answers, number for quantities, boolean for yes/no, list for multiple items." />
               </Label>
+              <div className="text-xs text-muted-foreground space-y-1 mb-1">
+                <p>One field per line, format: <code className="bg-muted px-1 rounded">field_name | Display Label | Description | type</code></p>
+                <p>Types: <code className="bg-muted px-1 rounded">text</code> · <code className="bg-muted px-1 rounded">number</code> · <code className="bg-muted px-1 rounded">boolean</code> · <code className="bg-muted px-1 rounded">list</code></p>
+                <p>Example: <code className="bg-muted px-1 rounded">sample_size | Sample Size | Number of participants | number</code></p>
+              </div>
               <Textarea
                 id="tmpl-fields"
                 value={addForm.fields}
@@ -263,9 +273,15 @@ export function ExtractionTemplateSection() {
               </div>
             </div>
             <div>
-              <Label htmlFor="edit-tmpl-fields">
-                Fields (one per line: name|label|description|type)
+              <Label htmlFor="edit-tmpl-fields" className="flex items-center gap-1">
+                Fields
+                <InfoTooltip content="Each line defines one column in the Extraction Table. Use text for prose answers, number for quantities, boolean for yes/no, list for multiple items." />
               </Label>
+              <div className="text-xs text-muted-foreground space-y-1 mb-1">
+                <p>One field per line, format: <code className="bg-muted px-1 rounded">field_name | Display Label | Description | type</code></p>
+                <p>Types: <code className="bg-muted px-1 rounded">text</code> · <code className="bg-muted px-1 rounded">number</code> · <code className="bg-muted px-1 rounded">boolean</code> · <code className="bg-muted px-1 rounded">list</code></p>
+                <p>Example: <code className="bg-muted px-1 rounded">sample_size | Sample Size | Number of participants | number</code></p>
+              </div>
               <Textarea
                 id="edit-tmpl-fields"
                 value={editFields}
