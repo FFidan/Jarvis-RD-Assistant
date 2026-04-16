@@ -108,7 +108,14 @@ async def search_papers_preview(
     """Search papers without saving to DB -- for preview & select flow."""
     source = await get_source_for_type(body.source, db_pool, http_client, request=request)
     try:
-        return await source.search(body.query, body.max_results)
+        return await source.search(
+            body.query,
+            body.max_results,
+            year_from=body.year_from,
+            year_to=body.year_to,
+            sort_by=body.sort_by,
+            author=body.author,
+        )
     except httpx.HTTPStatusError as e:
         _raise_source_search_error(
             source.source_type,

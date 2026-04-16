@@ -239,7 +239,11 @@ class SearchRequest(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=500)
     source: SourceType = SourceType.ARXIV
-    max_results: int = Field(default=10, ge=1, le=100)
+    max_results: int = Field(default=10, ge=1, le=200)
+    year_from: int | None = Field(default=None, ge=1900, le=2100)
+    year_to: int | None = Field(default=None, ge=1900, le=2100)
+    sort_by: Literal["relevance", "date"] = "relevance"
+    author: str | None = Field(default=None, max_length=200)
 
 
 # --- Internal Models ---

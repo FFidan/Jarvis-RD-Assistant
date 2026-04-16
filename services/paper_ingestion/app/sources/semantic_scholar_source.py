@@ -176,7 +176,15 @@ class SemanticScholarSource(PaperSource):
             metadata=metadata,
         )
 
-    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        sort_by: str = "relevance",
+        author: str | None = None,
+    ) -> list[PaperCreate]:
         """Search Semantic Scholar for papers matching the query.
 
         Parameters
@@ -185,17 +193,42 @@ class SemanticScholarSource(PaperSource):
             Free-text search query.
         max_results : int
             Maximum results to return.
+        year_from : int | None
+            Filter to papers published from this year (if year_to also set,
+            uses ``year={year_from}-{year_to}`` S2 range syntax).
+        year_to : int | None
+            Filter to papers published up to this year (used with year_from).
+        sort_by : str
+            Sort order: ``"relevance"`` (default) or ``"date"``.
+            Note: S2 API does not support sort-by-date natively; this param
+            is accepted but has no effect on S2 results.
+        author : str | None
+            Author name filter. Note: S2 API does not support author-name
+            search natively; this param is accepted but has no effect.
 
         Returns
         -------
         list[PaperCreate]
             Papers parsed from S2 API response.
         """
-        params = {
+        params: dict = {
             "query": query,
             "limit": min(max_results, 100),  # S2 API max is 100
             "fields": S2_FIELDS,
         }
+
+        if year_from and year_to:
+            params["year"] = f"{year_from}-{year_to}"
+        elif year_from:
+            params["year"] = f"{year_from}-"
+        elif year_to:
+            params["year"] = f"-{year_to}"
+
+        if author:
+            logger.debug("S2 search: author filter '%s' not supported by S2 API", author)
+        if sort_by == "date":
+            logger.debug("S2 search: sort_by='date' not natively supported by S2 API")
+
         response_data = await self._fetch_json("/paper/search", params=params)
 
         papers = []

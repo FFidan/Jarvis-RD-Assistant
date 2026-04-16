@@ -6,6 +6,7 @@ import {
   batchSavePapers,
   fetchPulseHistory,
 } from '@/lib/api';
+import type { SearchFilters } from '@/lib/api';
 import type { PulseDeck as PulseDeckType, SearchPreviewResult } from '@/types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -28,11 +29,13 @@ export function ResearchFeedPage() {
       query,
       source,
       maxResults,
+      filters,
     }: {
       query: string;
       source: string;
       maxResults: number;
-    }) => searchPreview(query, source, maxResults),
+      filters: SearchFilters;
+    }) => searchPreview(query, source, maxResults, filters),
     onSuccess: (data) => {
       setPreviewResults(data);
       setSaveMessage(null);
@@ -55,14 +58,19 @@ export function ResearchFeedPage() {
     },
   });
 
-  const handleSearch = useCallback(async (query: string, source: string, maxResults: number) => {
+  const handleSearch = useCallback(async (
+    query: string,
+    source: string,
+    maxResults: number,
+    filters: SearchFilters,
+  ) => {
     if (source === 'both') {
       setBothSearching(true);
       setSaveMessage(null);
       try {
         const [arxivResult, s2Result] = await Promise.allSettled([
-          searchPreview(query, 'arxiv', maxResults),
-          searchPreview(query, 'semantic_scholar', maxResults),
+          searchPreview(query, 'arxiv', maxResults, filters),
+          searchPreview(query, 'semantic_scholar', maxResults, filters),
         ]);
         const arxivPapers = arxivResult.status === 'fulfilled' ? arxivResult.value : [];
         const s2Papers = s2Result.status === 'fulfilled' ? s2Result.value : [];
@@ -81,7 +89,7 @@ export function ResearchFeedPage() {
         setBothSearching(false);
       }
     } else {
-      searchMutation.mutate({ query, source, maxResults });
+      searchMutation.mutate({ query, source, maxResults, filters });
     }
   }, [searchMutation]);
 

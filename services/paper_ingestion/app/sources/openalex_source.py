@@ -222,7 +222,15 @@ class OpenAlexSource(PaperSource):
             metadata=metadata,
         )
 
-    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        sort_by: str = "relevance",
+        author: str | None = None,
+    ) -> list[PaperCreate]:
         """Search OpenAlex for papers matching the query.
 
         Parameters
@@ -231,6 +239,14 @@ class OpenAlexSource(PaperSource):
             Free-text search query forwarded to the OpenAlex ``search`` param.
         max_results : int
             Maximum number of results to return (capped at 200 per API call).
+        year_from : int | None
+            Filter to papers published from this year (inclusive).
+        year_to : int | None
+            Filter to papers published up to this year (inclusive).
+        sort_by : str
+            Sort order: ``"relevance"`` (default) or ``"date"``.
+        author : str | None
+            Filter results by author name.
 
         Returns
         -------
@@ -243,7 +259,24 @@ class OpenAlexSource(PaperSource):
             return []
 
         await self._rate_limit()
-        params = self._build_params({"search": query, "per-page": min(max_results, 200)})
+
+        extra: dict = {"search": query, "per-page": min(max_results, 200)}
+
+        # Build filter string
+        filters: list[str] = []
+        if year_from:
+            filters.append(f"from_publication_date:{year_from}-01-01")
+        if year_to:
+            filters.append(f"to_publication_date:{year_to}-12-31")
+        if author:
+            filters.append(f"author.display_name.search:{author}")
+        if filters:
+            extra["filter"] = ",".join(filters)
+
+        if sort_by == "date":
+            extra["sort"] = "publication_date:desc"
+
+        params = self._build_params(extra)
         headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
             response = await self.http_client.get(

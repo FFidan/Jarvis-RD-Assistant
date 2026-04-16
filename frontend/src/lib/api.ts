@@ -445,10 +445,30 @@ export const triggerRecommendationRefresh = () =>
 export const dismissRecommendation = (paperId: number) =>
   apiFetch<{ dismissed: boolean }>(`/api/recommendations/${paperId}/dismiss`, { method: 'POST' });
 
-export const searchPreview = (query: string, source?: string, maxResults?: number) =>
+export interface SearchFilters {
+  yearFrom?: number;
+  yearTo?: number;
+  sortBy?: 'relevance' | 'date';
+  author?: string;
+}
+
+export const searchPreview = (
+  query: string,
+  source?: string,
+  maxResults?: number,
+  filters?: SearchFilters,
+) =>
   apiFetch<SearchPreviewResult[]>('/api/search-preview', {
     method: 'POST',
-    body: JSON.stringify({ query, source: source || 'arxiv', max_results: maxResults || 10 }),
+    body: JSON.stringify({
+      query,
+      source: source || 'arxiv',
+      max_results: maxResults || 10,
+      year_from: filters?.yearFrom ?? null,
+      year_to: filters?.yearTo ?? null,
+      sort_by: filters?.sortBy ?? 'relevance',
+      author: filters?.author ?? null,
+    }),
   });
 
 export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]) =>

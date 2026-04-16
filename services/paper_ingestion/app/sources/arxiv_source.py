@@ -156,7 +156,15 @@ class ArxivSource(PaperSource):
         # Search title OR abstract with the full phrase — much more relevant than all:
         return f'(ti:"{safe}" OR abs:"{safe}")'
 
-    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        sort_by: str = "relevance",
+        author: str | None = None,
+    ) -> list[PaperCreate]:
         """Search arXiv for papers matching the query.
 
         Parameters
@@ -166,6 +174,14 @@ class ArxivSource(PaperSource):
             ``"cat:cs.AI AND ti:transformer"``).
         max_results : int
             Maximum results to return.
+        year_from : int | None
+            Filter to papers submitted from this year (inclusive).
+        year_to : int | None
+            Filter to papers submitted up to this year (inclusive).
+        sort_by : str
+            Sort order: ``"relevance"`` (default) or ``"date"``.
+        author : str | None
+            Filter results by author name.
 
         Returns
         -------
@@ -173,12 +189,28 @@ class ArxivSource(PaperSource):
             Papers parsed from arXiv API response.
         """
         search_query = self._build_search_query(query)
+
+        if author:
+            search_query = f"au:{author} AND {search_query}"
+
+        if year_from or year_to:
+            date_from = f"{year_from or 1900}0101"
+            date_to = f"{year_to or 2100}1231"
+            search_query = f"{search_query} AND submittedDate:[{date_from} TO {date_to}]"
+
+        if sort_by == "date":
+            sort_param = "submittedDate"
+            sort_order = "descending"
+        else:
+            sort_param = "relevance"
+            sort_order = "descending"
+
         params = {
             "search_query": search_query,
             "start": 0,
             "max_results": max_results,
-            "sortBy": "relevance",
-            "sortOrder": "descending",
+            "sortBy": sort_param,
+            "sortOrder": sort_order,
         }
         root = await self._fetch_xml(params)
         entries = root.findall(f"{{{ATOM_NS}}}entry")

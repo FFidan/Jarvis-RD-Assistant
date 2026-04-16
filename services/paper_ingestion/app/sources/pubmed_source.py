@@ -330,7 +330,15 @@ class PubMedSource(PaperSource):
                 logger.exception("PubMed: failed to parse PMID %s", pmid)
         return papers
 
-    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        sort_by: str = "relevance",
+        author: str | None = None,
+    ) -> list[PaperCreate]:
         """Search PubMed for papers matching the query.
 
         Uses esearch → efetch pipeline: first obtains PMIDs, then retrieves
@@ -342,13 +350,33 @@ class PubMedSource(PaperSource):
             PubMed query string (supports MeSH terms, field tags, etc.).
         max_results : int
             Maximum number of results to return.
+        year_from : int | None
+            Filter to papers published from this year (inclusive).
+        year_to : int | None
+            Filter to papers published up to this year (inclusive).
+        sort_by : str
+            Sort order: ``"relevance"`` (default) or ``"date"``.
+        author : str | None
+            Filter results by author name.
 
         Returns
         -------
         list[PaperCreate]
             Papers parsed from PubMed XML.  Returns ``[]`` on HTTP errors.
         """
-        pmids = await self._esearch(query, retmax=max_results)
+        term = query
+        if author:
+            term = f"{term} AND {author}[Author]"
+
+        extra: dict = {}
+        if year_from or year_to:
+            extra["datetype"] = "pdat"
+            extra["mindate"] = str(year_from or 1800)
+            extra["maxdate"] = str(year_to or 2100)
+        if sort_by == "date":
+            extra["sort"] = "pub+date"
+
+        pmids = await self._esearch(term, retmax=max_results, extra=extra or None)
         if not pmids:
             return []
         return await self._efetch(pmids)

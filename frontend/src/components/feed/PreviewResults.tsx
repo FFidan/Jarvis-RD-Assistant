@@ -80,6 +80,8 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
         </p>
       </div>
 
+      <p className="text-sm text-muted-foreground mb-2">{papers.length} results</p>
+
       <div className="space-y-2">
         {sortedPapers.map((paper, i) => (
           <div
@@ -99,7 +101,7 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
                 {formatAuthors(paper.authors)} &middot; {formatDate(paper.published_date)}
               </p>
               {paper.abstract && (
-                <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                   {paper.abstract}
                 </p>
               )}

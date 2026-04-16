@@ -109,6 +109,10 @@ describe('apiFetch', () => {
           query: 'Neural ODE',
           source: 'semantic_scholar',
           max_results: 10,
+          year_from: null,
+          year_to: null,
+          sort_by: 'relevance',
+          author: null,
         }),
       }),
     );

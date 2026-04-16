@@ -35,7 +35,15 @@ class PaperSource(ABC):
         self.http_client = http_client
 
     @abstractmethod
-    async def search(self, query: str, max_results: int = 10) -> list[PaperCreate]:
+    async def search(
+        self,
+        query: str,
+        max_results: int = 10,
+        year_from: int | None = None,
+        year_to: int | None = None,
+        sort_by: str = "relevance",
+        author: str | None = None,
+    ) -> list[PaperCreate]:
         """Search for papers matching the query.
 
         Parameters
@@ -44,6 +52,14 @@ class PaperSource(ABC):
             Free-text search query.
         max_results : int
             Maximum number of results to return.
+        year_from : int | None
+            Filter results to papers published from this year (inclusive).
+        year_to : int | None
+            Filter results to papers published up to this year (inclusive).
+        sort_by : str
+            Sort order: ``"relevance"`` (default) or ``"date"``.
+        author : str | None
+            Filter results by author name.
 
         Returns
         -------
