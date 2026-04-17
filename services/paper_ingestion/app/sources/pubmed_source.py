@@ -275,7 +275,7 @@ class PubMedSource(PaperSource):
         """
         await self._rate_limit()
         params = self._base_params()
-        params.update({"term": term, "retmax": retmax, "sort": "pub_date"})
+        params.update({"term": term, "retmax": retmax})
         if extra:
             params.update(extra)
         try:
@@ -374,7 +374,7 @@ class PubMedSource(PaperSource):
             extra["mindate"] = str(year_from or 1800)
             extra["maxdate"] = str(year_to or 2100)
         if sort_by == "date":
-            extra["sort"] = "pub+date"
+            extra["sort"] = "pub_date"
 
         pmids = await self._esearch(term, retmax=max_results, extra=extra or None)
         if not pmids:

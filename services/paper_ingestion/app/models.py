@@ -8,7 +8,7 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # --- Enums ---
 
@@ -235,15 +235,47 @@ class VerificationReport(BaseModel):
 
 
 class SearchRequest(BaseModel):
-    """Request body for POST /api/search."""
+    """Request body for POST /api/search and POST /api/search-preview.
+
+    Supports both legacy single-source format and new multi-source format:
+    - Legacy: ``{"source": "arxiv", ...}``
+    - Legacy alias: ``{"source": "both", ...}`` → expands to arxiv + semantic_scholar
+    - New: ``{"source_types": ["arxiv", "pubmed"], ...}``
+    """
 
     query: str = Field(..., min_length=1, max_length=500)
-    source: SourceType = SourceType.ARXIV
+    # Legacy field kept for backward compat; migrated to source_types by validator.
+    source: SourceType | None = None
+    source_types: list[SourceType] = Field(default_factory=lambda: [SourceType.ARXIV])
     max_results: int = Field(default=10, ge=1, le=200)
     year_from: int | None = Field(default=None, ge=1900, le=2100)
     year_to: int | None = Field(default=None, ge=1900, le=2100)
     sort_by: Literal["relevance", "date"] = "relevance"
     author: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_source(cls, data: Any) -> Any:
+        """Migrate legacy ``source`` field to ``source_types``.
+
+        Handles:
+        - ``{"source": "both"}`` → ``{"source_types": ["arxiv", "semantic_scholar"]}``
+        - ``{"source": "arxiv"}`` → ``{"source_types": ["arxiv"]}``
+        - ``{"source_types": [...]}`` → pass through unchanged
+        """
+        if not isinstance(data, dict):
+            return data
+        if "source_types" not in data and "source" in data:
+            source_val = data.get("source")
+            if source_val == "both":
+                data = dict(data)
+                data["source_types"] = ["arxiv", "semantic_scholar"]
+                data.pop("source", None)
+            elif source_val is not None:
+                data = dict(data)
+                data["source_types"] = [source_val]
+                # Keep source for backward compat (callers may still read it)
+        return data
 
 
 # --- Internal Models ---

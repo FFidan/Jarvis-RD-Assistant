@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import quote as _url_quote
 
 import httpx
+from jarvis_common.text_utils import author_matches
 
 from app.models import PaperCreate, PaperSourceConfig, SourceType
 from app.sources.base import PaperSource
@@ -224,8 +225,6 @@ class SemanticScholarSource(PaperSource):
         elif year_to:
             params["year"] = f"-{year_to}"
 
-        if author:
-            logger.debug("S2 search: author filter '%s' not supported by S2 API", author)
         if sort_by == "date":
             logger.debug("S2 search: sort_by='date' not natively supported by S2 API")
 
@@ -239,6 +238,18 @@ class SemanticScholarSource(PaperSource):
                 item_id = item.get("paperId", "unknown")
                 logger.exception("Failed to parse S2 paper: %s", item_id)
                 continue
+
+        # Client-side author filter: S2 API does not support author-name search natively.
+        # Keep papers where the filter term matches any author in the result.
+        if author:
+            filtered = [p for p in papers if any(author_matches(author, a) for a in p.authors)]
+            logger.debug(
+                "S2 author filter '%s': %d/%d papers kept",
+                author,
+                len(filtered),
+                len(papers),
+            )
+            papers = filtered
 
         return papers
 

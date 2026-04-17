@@ -1,12 +1,15 @@
 """Search, feed, discovery, and relevance scoring endpoints."""
 
+import asyncio
 import logging
+import re
 from datetime import date
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 
 from app.converters import (
     deduplicate_by_paper_id,
@@ -39,6 +42,71 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["search"])
 
 
+# ---------------------------------------------------------------------------
+# Response models for multi-source search
+# ---------------------------------------------------------------------------
+
+
+class MultiSourceSearchResponse(BaseModel):
+    """Response for multi-source search endpoints."""
+
+    results: list[PaperCreate]
+    total: int
+    per_source_counts: dict[str, int]
+    degraded_sources: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Dedup helpers
+# ---------------------------------------------------------------------------
+
+
+def _normalize_title(title: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace for dedup comparison."""
+    normalized = title.lower()
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _dedup_papers(papers: list[PaperCreate]) -> list[PaperCreate]:
+    """Deduplicate papers by (doi or arxiv_id or (normalized_title, year)).
+
+    First occurrence wins (preserves per-source relevance order).
+    """
+    seen: set[Any] = set()
+    result: list[PaperCreate] = []
+    for paper in papers:
+        doi = paper.metadata.get("doi")
+        arxiv_id = paper.metadata.get("arxiv_id")
+        if doi:
+            key: Any = ("doi", doi.lower())
+        elif arxiv_id:
+            key = ("arxiv", arxiv_id.lower())
+        else:
+            year = paper.published_date.year if paper.published_date else None
+            key = ("title", _normalize_title(paper.title), year)
+        if key not in seen:
+            seen.add(key)
+            result.append(paper)
+    return result
+
+
+def _round_robin_merge(per_source: dict[str, list[PaperCreate]]) -> list[PaperCreate]:
+    """Round-robin interleave results across sources to preserve per-source order."""
+    iters = [iter(papers) for papers in per_source.values() if papers]
+    merged: list[PaperCreate] = []
+    while iters:
+        exhausted = []
+        for it in iters:
+            try:
+                merged.append(next(it))
+            except StopIteration:
+                exhausted.append(it)
+        for it in exhausted:
+            iters.remove(it)
+    return merged
+
+
 def _raise_source_search_error(
     source_type: str, exc: httpx.HTTPStatusError, *, api_key_configured: bool
 ) -> NoReturn:
@@ -57,71 +125,195 @@ def _raise_source_search_error(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/search", response_model=list[PaperResponse])
+@router.post("/api/search", response_model=MultiSourceSearchResponse)
 @limiter.limit("30/minute")
 async def search_papers(
     request: Request,
     body: SearchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
-) -> list[PaperResponse]:
-    """Search for papers and upsert results into the database.
+) -> MultiSourceSearchResponse:
+    """Search for papers across one or more sources and upsert results into the database.
 
     Parameters
     ----------
     body : SearchRequest
-        Query string, source type, and max_results.
+        Query string, source_types list, and max_results.
 
     Returns
     -------
-    list[PaperResponse]
-        Papers found (metadata from source API, never LLM-generated).
+    MultiSourceSearchResponse
+        Papers found, per-source counts, and any degraded sources.
+        Papers are deduplicated across sources.
     """
-    source = await get_source_for_type(body.source, db_pool, http_client, request=request)
+    source_types = body.source_types
+    n = len(source_types)
+    base_per_source = max(1, body.max_results // n)
+    budgets = [base_per_source] * n
+    remainder = body.max_results - base_per_source * n
+    for i in range(remainder):
+        budgets[i] += 1
 
-    try:
-        papers = await source.search(body.query, body.max_results)
-    except httpx.HTTPStatusError as e:
-        _raise_source_search_error(
-            source.source_type,
-            e,
-            api_key_configured=bool(source.config.config.get("api_key")),
+    # Resolve source instances (skip disabled/unknown without failing the whole request)
+    plugins = []
+    degraded_sources: list[str] = []
+    for st, budget in zip(source_types, budgets):
+        try:
+            plugin = await get_source_for_type(st, db_pool, http_client, request=request)
+            plugins.append((st.value, plugin, budget))
+        except HTTPException as e:
+            logger.warning("Source %s unavailable for search: %s", st.value, e.detail)
+            degraded_sources.append(st.value)
+
+    # Fan-out search across all available sources concurrently
+    async def _search_one(
+        source_name: str, plugin: Any, budget: int
+    ) -> tuple[str, list[PaperCreate]]:
+        try:
+            papers = await plugin.search(
+                body.query,
+                budget,
+                year_from=body.year_from,
+                year_to=body.year_to,
+                sort_by=body.sort_by,
+                author=body.author,
+            )
+            return source_name, papers
+        except Exception as exc:
+            logger.warning("Source %s search failed: %s", source_name, exc)
+            return source_name, []
+
+    raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
+
+    # Collect per-source results, track errors
+    per_source: dict[str, list[PaperCreate]] = {}
+    for source_name, papers in raw_results:
+        if not papers and source_name not in degraded_sources:
+            # Empty but not an exception — still record counts
+            per_source[source_name] = []
+        else:
+            per_source[source_name] = papers
+
+    # Mark sources that errored (returned empty due to exception)
+    for source_name, papers in raw_results:
+        if not papers and source_name not in per_source:
+            degraded_sources.append(source_name)
+
+    # Merge: date sort → sort merged list; else round-robin interleave
+    if body.sort_by == "date":
+        all_papers: list[PaperCreate] = []
+        for papers in per_source.values():
+            all_papers.extend(papers)
+        deduped = _dedup_papers(all_papers)
+        deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
+    else:
+        interleaved = _round_robin_merge(per_source)
+        deduped = _dedup_papers(interleaved)
+
+    # Upsert into DB (per original /api/search behavior)
+    saved_results: list[PaperResponse] = []
+    async with db_pool.acquire() as conn:
+        for paper in deduped:
+            row = await upsert_paper(conn, paper)
+            saved_results.append(row_to_paper_response(row))
+
+    # Build per_source_counts from deduped results
+    per_source_counts: dict[str, int] = {}
+    for source_name in per_source:
+        per_source_counts[source_name] = sum(
+            1 for p in deduped if p.source_type.value == source_name
         )
 
-    results: list[PaperResponse] = []
-    async with db_pool.acquire() as conn:
-        for paper in papers:
-            row = await upsert_paper(conn, paper)
-            results.append(row_to_paper_response(row))
+    return MultiSourceSearchResponse(
+        results=deduped,
+        total=len(deduped),
+        per_source_counts=per_source_counts,
+        degraded_sources=degraded_sources,
+    )
 
-    return results
 
-
-@router.post("/api/search-preview", response_model=list[PaperCreate])
+@router.post("/api/search-preview", response_model=MultiSourceSearchResponse)
 @limiter.limit("30/minute")
 async def search_papers_preview(
     request: Request,
     body: SearchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
-) -> list[PaperCreate]:
-    """Search papers without saving to DB -- for preview & select flow."""
-    source = await get_source_for_type(body.source, db_pool, http_client, request=request)
-    try:
-        return await source.search(
-            body.query,
-            body.max_results,
-            year_from=body.year_from,
-            year_to=body.year_to,
-            sort_by=body.sort_by,
-            author=body.author,
+) -> MultiSourceSearchResponse:
+    """Search papers without saving to DB -- for preview & select flow.
+
+    Supports multi-source fan-out; returns deduplicated results with
+    per_source_counts and degraded_sources metadata.
+    """
+    source_types = body.source_types
+    n = len(source_types)
+    base_per_source = max(1, body.max_results // n)
+    budgets = [base_per_source] * n
+    remainder = body.max_results - base_per_source * n
+    for i in range(remainder):
+        budgets[i] += 1
+
+    # Resolve source instances
+    plugins = []
+    degraded_sources: list[str] = []
+    for st, budget in zip(source_types, budgets):
+        try:
+            plugin = await get_source_for_type(st, db_pool, http_client, request=request)
+            plugins.append((st.value, plugin, budget))
+        except HTTPException as e:
+            logger.warning("Source %s unavailable for preview search: %s", st.value, e.detail)
+            degraded_sources.append(st.value)
+
+    if not plugins:
+        # All sources failed to load — raise using first source's type for compat
+        raise HTTPException(status_code=400, detail="No sources available for search")
+
+    # Fan-out search concurrently
+    async def _search_one(
+        source_name: str, plugin: Any, budget: int
+    ) -> tuple[str, list[PaperCreate]]:
+        try:
+            papers = await plugin.search(
+                body.query,
+                budget,
+                year_from=body.year_from,
+                year_to=body.year_to,
+                sort_by=body.sort_by,
+                author=body.author,
+            )
+            return source_name, papers
+        except Exception as exc:
+            logger.warning("Source %s preview search failed: %s", source_name, exc)
+            degraded_sources.append(source_name)
+            return source_name, []
+
+    raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
+
+    per_source: dict[str, list[PaperCreate]] = {name: papers for name, papers in raw_results}
+
+    # Merge and dedup
+    if body.sort_by == "date":
+        all_papers: list[PaperCreate] = []
+        for papers in per_source.values():
+            all_papers.extend(papers)
+        deduped = _dedup_papers(all_papers)
+        deduped.sort(key=lambda p: p.published_date or date.min, reverse=True)
+    else:
+        interleaved = _round_robin_merge(per_source)
+        deduped = _dedup_papers(interleaved)
+
+    per_source_counts: dict[str, int] = {}
+    for source_name in per_source:
+        per_source_counts[source_name] = sum(
+            1 for p in deduped if p.source_type.value == source_name
         )
-    except httpx.HTTPStatusError as e:
-        _raise_source_search_error(
-            source.source_type,
-            e,
-            api_key_configured=bool(source.config.config.get("api_key")),
-        )
+
+    return MultiSourceSearchResponse(
+        results=deduped,
+        total=len(deduped),
+        per_source_counts=per_source_counts,
+        degraded_sources=degraded_sources,
+    )
 
 
 # ---------------------------------------------------------------------------

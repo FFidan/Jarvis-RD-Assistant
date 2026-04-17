@@ -418,3 +418,73 @@ async def test_missing_article_date_falls_back_to_pubdate():
     assert paper.published_date.year == 2025
     assert paper.published_date.month == 1
     assert paper.published_date.day == 1
+
+
+# ---------------------------------------------------------------------------
+# sort_by parameter: pub_date vs relevance
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_search_sort_by_date_sends_pub_date_param():
+    """sort_by='date' must send sort=pub_date (underscore) to NCBI, never pub+date."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    await source.search("neural networks", max_results=5, sort_by="date")
+
+    called_params = dict(route.calls[0].request.url.params)
+    assert called_params.get("sort") == "pub_date", (
+        f"Expected sort=pub_date, got sort={called_params.get('sort')!r}"
+    )
+    assert "pub+date" not in str(route.calls[0].request.url), (
+        "sort param must use underscore form 'pub_date', not 'pub+date'"
+    )
+
+
+@respx.mock
+async def test_search_sort_by_relevance_omits_sort_param():
+    """sort_by='relevance' must NOT include a sort param — NCBI defaults to relevance."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    await source.search("neural networks", max_results=5, sort_by="relevance")
+
+    called_params = dict(route.calls[0].request.url.params)
+    assert "sort" not in called_params, (
+        f"sort param should be absent for relevance sort, got: {called_params.get('sort')!r}"
+    )
+
+
+@respx.mock
+async def test_search_default_sort_omits_sort_param():
+    """Default search() call (no sort_by) must NOT include a sort param."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    await source.search("neural networks", max_results=5)
+
+    called_params = dict(route.calls[0].request.url.params)
+    assert "sort" not in called_params, (
+        f"Default search should not include sort param, got: {called_params.get('sort')!r}"
+    )
+
+
+@respx.mock
+async def test_pub_plus_date_never_appears_in_request():
+    """Confirm 'pub+date' (the incorrect form) never appears in any request URL."""
+    route = respx.get(ESEARCH_URL).mock(return_value=httpx.Response(200, content=ESEARCH_XML))
+    respx.get(EFETCH_URL).mock(return_value=httpx.Response(200, content=EFETCH_XML))
+
+    source = _make_source()
+    # Test both sort modes
+    for sort_by in ("relevance", "date"):
+        await source.search("test", max_results=5, sort_by=sort_by)
+
+    for call in route.calls:
+        url_str = str(call.request.url)
+        assert "pub+date" not in url_str, f"'pub+date' found in URL: {url_str}"
+        assert "pub%2Bdate" not in url_str, f"encoded 'pub+date' found in URL: {url_str}"

@@ -24,10 +24,9 @@ sys.modules.setdefault(
     ),
 )
 
-from fastapi import HTTPException
-
-from app.models import PaperCreate, SearchRequest, SourceType
-from app.routers import search
+from app.models import PaperCreate, SearchRequest, SourceType  # noqa: E402
+from app.routers import search  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 
 
 def _make_source(*, api_key: str | None = None, side_effect=None):
@@ -68,8 +67,8 @@ async def test_search_preview_returns_results_without_db_writes(monkeypatch):
         http_client=http_client,
     )
 
-    assert len(result) == 1
-    assert result[0].title == "Neural ODE"
+    assert len(result.results) == 1
+    assert result.results[0].title == "Neural ODE"
     db_pool.acquire.assert_not_called()
 
 
@@ -86,7 +85,9 @@ async def test_search_preview_maps_semantic_scholar_rate_limit_without_api_key(m
     with pytest.raises(HTTPException) as exc_info:
         await search.search_papers_preview.__wrapped__(
             MagicMock(),
-            body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
+            body=SearchRequest(
+                query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10
+            ),
             db_pool=MagicMock(),
             http_client=MagicMock(),
         )
@@ -110,7 +111,9 @@ async def test_search_preview_maps_semantic_scholar_rate_limit_with_api_key(monk
     with pytest.raises(HTTPException) as exc_info:
         await search.search_papers_preview.__wrapped__(
             MagicMock(),
-            body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
+            body=SearchRequest(
+                query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10
+            ),
             db_pool=MagicMock(),
             http_client=MagicMock(),
         )
