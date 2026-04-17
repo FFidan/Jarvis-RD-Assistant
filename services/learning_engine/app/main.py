@@ -95,8 +95,35 @@ async def lifespan(app: FastAPI):
             "API authentication is not configured and DEV_MODE is disabled -- service will reject requests"  # noqa: E501
         )
 
+    # Start the jobs worker — handles all job kinds owned by this service.
+    from jarvis_common import jobs as jobs_lib
+
+    _kinds_learning_engine: set[str] = {
+        "card.generate",
+        "card.generate_batch",
+        "noop.test",
+    }
+    _jobs_stop = asyncio.Event()
+    app.state.jobs_worker_stop = _jobs_stop
+    app.state.jobs_worker_task = asyncio.create_task(
+        jobs_lib.worker_loop(
+            app.state.db_pool,
+            app.state.http_client,
+            kinds=_kinds_learning_engine,
+            stop_event=_jobs_stop,
+        )
+    )
+
     logger.info("Learning Engine Service started (retention=%.2f)", desired_retention)
     yield
+
+    # Stop the jobs worker gracefully.
+    app.state.jobs_worker_stop.set()
+    try:
+        await asyncio.wait_for(app.state.jobs_worker_task, timeout=5.0)
+    except (TimeoutError, asyncio.CancelledError):
+        logger.warning("jobs worker did not stop in time — cancelling task")
+        app.state.jobs_worker_task.cancel()
 
     await app.state.http_client.aclose()
     await app.state.db_pool.close()
@@ -144,6 +171,7 @@ from app.routers import (  # noqa: E402
     executive,
     export,
     generation,
+    jobs,
     milestones,
     project_papers,
     projects,
@@ -162,6 +190,7 @@ app.include_router(review.router)
 app.include_router(generation.router)
 app.include_router(export.router)
 app.include_router(executive.router)
+app.include_router(jobs.router)
 
 
 # ---------------------------------------------------------------------------

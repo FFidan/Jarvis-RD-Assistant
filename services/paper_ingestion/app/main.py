@@ -298,8 +298,45 @@ async def lifespan(app: FastAPI):
 
     app.state.scheduler = await start_scheduler(app, interval_hours=_interval)
 
+    # Start the jobs worker — handles all job kinds owned by this service.
+    from jarvis_common import jobs as jobs_lib
+
+    _kinds_paper_ingestion: set[str] = {
+        "pulse.generate",
+        "paper.download",
+        "paper.process",
+        "paper.analyze",
+        "paper.summarize",
+        "papers.batch_summarize",
+        "papers.batch_process",
+        "papers.scan_local",
+        "extraction.single",
+        "extraction.batch",
+        "citations.batch_fetch",
+        "digest.weekly",
+        "noop.test",
+    }
+    _jobs_stop = asyncio.Event()
+    app.state.jobs_worker_stop = _jobs_stop
+    app.state.jobs_worker_task = asyncio.create_task(
+        jobs_lib.worker_loop(
+            app.state.db_pool,
+            app.state.http_client,
+            kinds=_kinds_paper_ingestion,
+            stop_event=_jobs_stop,
+        )
+    )
+
     logger.info("Paper Ingestion Service started")
     yield
+
+    # Stop the jobs worker gracefully.
+    app.state.jobs_worker_stop.set()
+    try:
+        await asyncio.wait_for(app.state.jobs_worker_task, timeout=5.0)
+    except (TimeoutError, asyncio.CancelledError):
+        logger.warning("jobs worker did not stop in time — cancelling task")
+        app.state.jobs_worker_task.cancel()
 
     if hasattr(app.state, "scheduler"):
         app.state.scheduler.shutdown(wait=False)
@@ -350,6 +387,7 @@ from app.routers import (  # noqa: E402
     citations,
     dashboard_api,
     extractions,
+    jobs,
     knowledge_graph,
     notes,
     papers,
@@ -385,6 +423,7 @@ app.include_router(rag.router)
 app.include_router(pulse_router.router)
 app.include_router(telegram.router)
 app.include_router(system.router)
+app.include_router(jobs.router)
 
 
 # ---------------------------------------------------------------------------
