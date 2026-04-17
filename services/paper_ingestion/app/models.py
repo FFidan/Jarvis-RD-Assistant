@@ -1016,6 +1016,13 @@ class PulseDeckResponse(BaseModel):
     stats: dict
 
 
+class PulseGenerateResponse(BaseModel):
+    """Response for POST /api/pulse/generate — returns job_id immediately."""
+
+    job_id: str
+    status: str
+
+
 class PulseStatsResponse(BaseModel):
     """Aggregate Pulse pipeline stats over a sliding window of past runs."""
 
@@ -1026,6 +1033,7 @@ class PulseStatsResponse(BaseModel):
     avg_duration_s: float | None
     last_run_at: datetime | None
     last_error: str | None
+    degraded_reason: str | None = None
 
 
 class PulseRateRequest(BaseModel):

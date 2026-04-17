@@ -298,8 +298,15 @@ async def lifespan(app: FastAPI):
 
     app.state.scheduler = await start_scheduler(app, interval_hours=_interval)
 
-    # Start the jobs worker — handles all job kinds owned by this service.
-    from jarvis_common import jobs as jobs_lib
+    # Register job handlers before the worker starts (decorator side-effects).
+    # importlib avoids the shadowing conflict between parameter `app: FastAPI` and
+    # the `app` package namespace that a bare `import app.*` would create.
+    import importlib  # noqa: PLC0415
+
+    from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
+    importlib.import_module("app.paper_jobs")
+    importlib.import_module("app.pulse.job")
 
     _kinds_paper_ingestion: set[str] = {
         "pulse.generate",

@@ -68,20 +68,20 @@ def client():
     app.dependency_overrides.clear()
 
 
-def test_generate_calls_run_pulse(client):
+def test_generate_returns_job_id(client):
+    """POST /generate now enqueues a job and returns {job_id, status}."""
     tc, pool, conn = client
-    deck = _make_deck_response()
 
-    with (
-        patch("app.routers.pulse.run_pulse", AsyncMock(return_value={"candidate_count": 5})) as mp,
-        patch("app.routers.pulse.load_today", AsyncMock(return_value=deck)),
-    ):
+    with patch(
+        "app.routers.pulse.jobs_lib.enqueue",
+        AsyncMock(return_value="test-job-uuid-1234"),
+    ) as mp:
         resp = tc.post("/api/pulse/generate")
 
     assert resp.status_code == 200
     body = resp.json()
-    assert body["deck_id"] == 1
-    assert body["card_count"] == 2
+    assert body["job_id"] == "test-job-uuid-1234"
+    assert body["status"] == "queued"
     mp.assert_awaited_once()
 
 
@@ -177,6 +177,7 @@ def test_stats_null_safe_empty_window(client):
             "avg_duration_s": None,
             "last_run_at": None,
             "last_error": None,
+            "degraded_reason": None,
         }
     )
 
@@ -187,8 +188,131 @@ def test_stats_null_safe_empty_window(client):
     assert body["avg_candidates"] is None
     assert body["last_run_at"] is None
     assert body["window_days"] == 30
+    assert body["degraded_reason"] is None
 
 
 @pytest.mark.skip(reason="slowapi rate limit state is hard to test deterministically")
 def test_generate_rate_limited():
     pass
+
+
+# ---------------------------------------------------------------------------
+# GET /api/pulse/debug
+# ---------------------------------------------------------------------------
+
+
+def test_debug_returns_expected_shape_when_deck_exists(client):
+    """GET /debug returns 200 with source_counts, topic_embeddings, top_cards."""
+    tc, pool, conn = client
+    from datetime import date, datetime
+
+    from tests.conftest import FakeRecord
+
+    deck_row = FakeRecord(
+        {
+            "id": 5,
+            "deck_date": date(2026, 4, 10),
+            "card_count": 2,
+            "generated_at": datetime(2026, 4, 10, 4, 0, tzinfo=None),
+            "stats": {"candidate_count": 80, "source_counts": {"arxiv": 50, "pubmed": 30}},
+            "degraded_reason": None,
+        }
+    )
+    card_rows = [
+        FakeRecord(
+            {
+                "card_id": 1,
+                "paper_id": 101,
+                "paper_title": "Paper Alpha",
+                "rank": 1,
+                "final_score": 0.92,
+                "llm_relevance": 9,
+                "llm_novelty": 7,
+                "signals": {"embedding": 0.88, "topic": 0.75},
+            }
+        ),
+        FakeRecord(
+            {
+                "card_id": 2,
+                "paper_id": 102,
+                "paper_title": "Paper Beta",
+                "rank": 2,
+                "final_score": 0.85,
+                "llm_relevance": 8,
+                "llm_novelty": 6,
+                "signals": {"embedding": 0.80, "topic": 0.70},
+            }
+        ),
+    ]
+    embed_rows = [
+        FakeRecord({"key": "topic.1.embedding", "value": [0.1] * 768}),
+    ]
+
+    # conn.fetchrow returns deck_row on first call; conn.fetch returns cards then embeds
+    fetch_calls = [card_rows, embed_rows]
+    fetch_iter = iter(fetch_calls)
+
+    conn.fetchrow.return_value = deck_row
+    conn.fetch.side_effect = lambda *_a, **_k: fetch_iter.__next__()
+
+    resp = tc.get("/api/pulse/debug")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Top-level keys
+    assert "deck_date" in body
+    assert "card_count" in body
+    assert "source_counts" in body
+    assert "topic_embeddings" in body
+    assert "top_cards" in body
+
+    assert body["card_count"] == 2
+    assert body["source_counts"] == {"arxiv": 50, "pubmed": 30}
+
+    # Topic embedding sanity
+    assert len(body["topic_embeddings"]) == 1
+    emb = body["topic_embeddings"][0]
+    assert emb["dim"] == 768
+    assert emb["ok"] is True
+    assert emb["non_null"] is True
+
+    # Cards
+    assert len(body["top_cards"]) == 2
+    card = body["top_cards"][0]
+    assert card["paper_id"] == 101
+    assert card["title"] == "Paper Alpha"
+    assert "signals" in card
+    assert card["final_score"] == pytest.approx(0.92)
+
+
+def test_debug_404_when_no_deck(client):
+    """GET /debug returns 404 when no deck exists."""
+    tc, pool, conn = client
+    conn.fetchrow.return_value = None
+    resp = tc.get("/api/pulse/debug")
+    assert resp.status_code == 404
+
+
+def test_stats_includes_degraded_reason(client):
+    """GET /stats returns degraded_reason from the typed DB column."""
+    tc, pool, conn = client
+    from datetime import datetime
+
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "decks_generated": 1,
+            "avg_candidates": 80.0,
+            "avg_llm_calls": 0.0,
+            "avg_duration_s": 120.0,
+            "last_run_at": datetime(2026, 4, 10, 4, 0),
+            "last_error": None,
+            "degraded_reason": "LLM scoring timed out at 600s; deck used embedding-only fallback.",
+        }
+    )
+
+    resp = tc.get("/api/pulse/stats?days=30")
+    assert resp.status_code == 200
+    body = resp.json()
+    expected_dr = "LLM scoring timed out at 600s; deck used embedding-only fallback."
+    assert body["degraded_reason"] == expected_dr
+    assert body["last_error"] is None

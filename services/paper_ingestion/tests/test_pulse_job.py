@@ -3,6 +3,7 @@
 TDD: tests written before implementation.
 """
 
+import asyncio
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -179,8 +180,10 @@ async def test_llm_timeout_falls_back_to_stage1(patch_pipeline):
         assert c.llm_relevance is None
         assert c.llm_novelty is None
         assert c.reasoning is None
-    assert stats["last_error"] is not None
-    assert "timeout" in str(stats["last_error"]).lower()
+    # B4: LLM timeout is degraded (not fatal) — last_error stays None
+    assert stats["last_error"] is None
+    assert stats.get("degraded_reason") is not None
+    assert "timed out" in str(stats["degraded_reason"]).lower()
 
 
 async def _echo(x):
@@ -228,8 +231,10 @@ async def test_stats_includes_last_error_on_partial_failure(patch_pipeline):
 
     # Deck should still be produced (from stage1 fallback)
     patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
-    assert stats["last_error"] is not None
-    assert "stage2 exploded" in stats["last_error"]
+    # B4: stage2 exception with fallback is degraded, not fatal
+    assert stats["last_error"] is None
+    assert stats.get("degraded_reason") is not None
+    assert "stage2 exploded" in stats["degraded_reason"]
 
 
 @pytest.mark.asyncio
@@ -299,3 +304,152 @@ async def test_upsert_persist_atomic_on_failure(patch_pipeline):
     # 6. The failure is captured in stats (pipeline does not raise)
     assert stats["last_error"] is not None
     assert "persist_deck exploded" in stats["last_error"]
+
+
+# ---------------------------------------------------------------------------
+# B4 — degraded_reason vs last_error distinction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage2_timeout_sets_degraded_reason_not_last_error(patch_pipeline):
+    """LLM timeout → degraded_reason populated, last_error stays None, deck produced."""
+    from app.pulse.job import run_pulse
+
+    async def raise_timeout(*_a, **_kw):
+        raise TimeoutError()
+
+    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = raise_timeout
+
+    async def stage3_impl(stage2_out, weights):
+        for sc in stage2_out:
+            sc.final_score = 0.5
+        return stage2_out
+
+    patch_pipeline["mocks"]["stage3_combine"].side_effect = stage3_impl
+
+    async def assemble_impl(scored, size):
+        return scored[:size]
+
+    patch_pipeline["mocks"]["assemble_deck"].side_effect = assemble_impl
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # B4: timeout is degraded, NOT fatal — deck was still produced
+    assert stats["last_error"] is None, "last_error must be None for a degraded (timeout) run"
+    assert stats.get("degraded_reason") is not None
+    assert "LLM scoring timed out" in stats["degraded_reason"]
+    assert "embedding-only fallback" in stats["degraded_reason"]
+    # Deck was produced
+    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
+    persist_call = patch_pipeline["mocks"]["persist_deck"].await_args
+    # degraded_reason forwarded to persist_deck
+    dr = persist_call.kwargs.get("degraded_reason")
+    assert dr is not None
+    assert "LLM scoring timed out" in dr
+
+
+@pytest.mark.asyncio
+async def test_stage2_exception_sets_degraded_reason_not_last_error(patch_pipeline):
+    """Stage2 exception with fallback → degraded_reason set, last_error is None."""
+    from app.pulse.job import run_pulse
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("model overloaded")
+
+    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = boom
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # B4: stage2 exception with fallback is degraded, not fatal
+    assert stats["last_error"] is None
+    assert stats.get("degraded_reason") is not None
+    assert "stage2 error" in stats["degraded_reason"]
+    assert "model overloaded" in stats["degraded_reason"]
+    # Deck was still produced
+    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_stage1_exception_sets_last_error_not_degraded(patch_pipeline):
+    """Stage1 failure with empty output → last_error set, degraded_reason stays None."""
+    from app.pulse.job import run_pulse
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("embedding service down")
+
+    patch_pipeline["mocks"]["stage1_embedding_filter"].side_effect = boom
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # Stage1 failure: deck proceeds with empty stage1_out, so it IS recorded as last_error
+    # (the overall pipeline degrades but no dedicated degraded_reason is set here)
+    assert stats["last_error"] is not None
+    assert "stage1" in stats["last_error"]
+    assert stats.get("degraded_reason") is None
+
+
+@pytest.mark.asyncio
+async def test_happy_path_both_null(patch_pipeline):
+    """A clean run has last_error=None and no degraded_reason."""
+    from app.pulse.job import run_pulse
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    assert stats["last_error"] is None
+    assert stats.get("degraded_reason") is None
+
+
+# ---------------------------------------------------------------------------
+# B1 — ctx progress reporting
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ctx_progress_reported_in_happy_path(patch_pipeline):
+    """When a JobContext is supplied, progress checkpoints are reported."""
+    from unittest.mock import AsyncMock
+
+    from app.pulse.job import run_pulse
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(return_value=False)
+
+    pool, _conn = _make_pool_and_conn()
+    await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC), ctx=ctx)
+
+    # At minimum: 0.05, 0.20, 0.30, 0.85, 0.90, 0.93, 1.00
+    progress_values = [call.args[0] for call in ctx.update_progress.await_args_list]
+    assert 0.05 in progress_values
+    assert 1.0 in progress_values
+    assert len(progress_values) >= 7
+
+
+@pytest.mark.asyncio
+async def test_ctx_cancellation_is_respected(patch_pipeline):
+    """When is_cancelled() returns True, CancelledError is raised."""
+    from unittest.mock import AsyncMock
+
+    from app.pulse.job import run_pulse
+
+    # Cancel after profile loaded (is_cancelled called at 0.20 boundary)
+    call_count = 0
+
+    async def _is_cancelled():
+        nonlocal call_count
+        call_count += 1
+        # First call (at 0.05 boundary) returns False, second call returns True
+        return call_count > 1
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = _is_cancelled
+
+    pool, _conn = _make_pool_and_conn()
+    with pytest.raises(asyncio.CancelledError):
+        await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC), ctx=ctx)

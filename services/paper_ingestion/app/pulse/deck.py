@@ -44,6 +44,7 @@ async def _persist_deck_inner(
     deck_date: date,
     cards: list[ScoredCandidate],
     stats: dict,
+    degraded_reason: str | None = None,
 ) -> int:
     """Execute the deck-persistence SQL on an existing connection.
 
@@ -54,16 +55,18 @@ async def _persist_deck_inner(
     # Upsert pulse_decks row with card_count=0 initially — returns the deck id
     deck_id = await conn.fetchval(
         """
-        INSERT INTO pulse_decks (deck_date, card_count, generated_at, stats)
-        VALUES ($1, 0, NOW(), $2::jsonb)
+        INSERT INTO pulse_decks (deck_date, card_count, generated_at, stats, degraded_reason)
+        VALUES ($1, 0, NOW(), $2::jsonb, $3)
         ON CONFLICT (deck_date) DO UPDATE
-            SET card_count    = 0,
-                generated_at  = EXCLUDED.generated_at,
-                stats         = EXCLUDED.stats
+            SET card_count       = 0,
+                generated_at     = EXCLUDED.generated_at,
+                stats            = EXCLUDED.stats,
+                degraded_reason  = EXCLUDED.degraded_reason
         RETURNING id
         """,
         deck_date,
         stats,
+        degraded_reason,
     )
 
     # Delete old cards for this deck (idempotent replace)
@@ -116,6 +119,7 @@ async def persist_deck(
     cards: list[ScoredCandidate],
     stats: dict,
     conn: Any | None = None,
+    degraded_reason: str | None = None,
 ) -> int:
     """Persist a pulse deck to the database in a single transaction.
 
@@ -139,6 +143,10 @@ async def persist_deck(
         new transaction (the caller is responsible for the surrounding
         transaction).  When ``None`` (default) a new connection is acquired
         from ``db_pool`` and wrapped in its own transaction.
+    degraded_reason:
+        Optional human-readable string explaining why the deck was produced
+        with reduced quality (e.g. LLM timeout or stage2 fallback).  Stored
+        in the ``pulse_decks.degraded_reason`` column added by migration 023.
 
     Returns
     -------
@@ -146,11 +154,13 @@ async def persist_deck(
         The pulse_decks.id of the upserted deck.
     """
     if conn is not None:
-        return await _persist_deck_inner(conn, deck_date, cards, stats)
+        return await _persist_deck_inner(conn, deck_date, cards, stats, degraded_reason)
 
     async with db_pool.acquire() as acquired_conn:
         async with acquired_conn.transaction():
-            return await _persist_deck_inner(acquired_conn, deck_date, cards, stats)
+            return await _persist_deck_inner(
+                acquired_conn, deck_date, cards, stats, degraded_reason
+            )
 
 
 def _build_deck_response(

@@ -11,7 +11,9 @@ Stats dict keys
 * ``stage2_scored`` — count returned by ``stage2_llm_rerank`` (or stage1 on fallback)
 * ``llm_calls`` — number of LLM calls issued during stage 2
 * ``duration_s`` — wall-clock time of the full pipeline
-* ``last_error`` — string describing the last recoverable failure, or ``None``
+* ``last_error`` — string describing a *fatal* partial failure, or ``None``
+* ``deck_date`` — ISO date string of the deck produced (set before return)
+* ``card_count`` — number of cards in the produced deck (set before return)
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
+from jarvis_common.jobs import JobContext, job_handler
 
 from app.pulse.deck import assemble_deck, persist_deck
 from app.pulse.discovery import discover_candidates
@@ -64,6 +67,7 @@ async def run_pulse(
     *,
     now: datetime | None = None,
     source_cache: dict | None = None,
+    ctx: JobContext | None = None,
 ) -> dict:
     """Run the full overnight Pulse pipeline.
 
@@ -77,9 +81,16 @@ async def run_pulse(
         Optional dict of pre-initialized source singletons (e.g.
         ``app.state.sources``).  Passed to ``discover_candidates`` so that
         rate-limiter state is preserved across Pulse runs.
+    ctx:
+        Optional :class:`~jarvis_common.jobs.JobContext` for progress reporting
+        and cancellation support when the pipeline runs as a background job.
+        When ``None`` (scheduler / direct call) progress is not reported.
     """
     now = now or datetime.now(UTC)
     start = time.monotonic()
+
+    # B4: track degraded vs fatal separately
+    degraded_reason: str | None = None
 
     stats: dict[str, Any] = {
         "candidate_count": 0,
@@ -91,6 +102,10 @@ async def run_pulse(
     }
 
     # --- 1. profile ------------------------------------------------------
+    if ctx:
+        await ctx.update_progress(0.05, "Loading profile")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     try:
         profile = await load_profile(db_pool, embedder=embedder)
     except Exception as exc:
@@ -108,6 +123,10 @@ async def run_pulse(
     )
 
     # --- 2. discovery ----------------------------------------------------
+    if ctx:
+        await ctx.update_progress(0.20, "Discovering candidates")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     try:
         candidates = await discover_candidates(
             db_pool,
@@ -124,6 +143,10 @@ async def run_pulse(
     logger.info("pulse.stage0", extra={"candidates": len(candidates)})
 
     # --- 3. stage 1 (embedding filter) -----------------------------------
+    if ctx:
+        await ctx.update_progress(0.30, "Stage 1 ranking")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     try:
         stage1_out = await stage1_embedding_filter(
             candidates, profile, embedder, top_k=profile.stage2_top_k, now=now.date()
@@ -139,6 +162,10 @@ async def run_pulse(
     )
 
     # --- 4. stage 2 (LLM rerank) with timeout fallback -------------------
+    if ctx:
+        await ctx.update_progress(0.85, "Stage 2 LLM scoring")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     stage2_out: list[ScoredCandidate]
     if not stage1_out:
         stage2_out = []
@@ -151,17 +178,26 @@ async def run_pulse(
             # Count actual LLM calls: candidates where llm_relevance was set
             stats["llm_calls"] = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
         except TimeoutError:
-            stats["last_error"] = f"llm_timeout after {_STAGE2_TIMEOUT_SECONDS}s"
+            # B4: LLM timeout is degraded (deck still produced), not fatal
+            degraded_reason = (
+                f"LLM scoring timed out at {_STAGE2_TIMEOUT_SECONDS}s; "
+                "deck used embedding-only fallback."
+            )
             logger.warning("pulse.stage2 timed out — falling back to stage1")
             stage2_out = _fallback_stage2(stage1_out)
         except Exception as exc:
-            stats["last_error"] = f"stage2: {exc}"
+            # B4: stage2 exception with fallback is degraded (deck still produced)
+            degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
             logger.exception("pulse.stage2 failed — falling back to stage1")
             stage2_out = _fallback_stage2(stage1_out)
     stats["stage2_scored"] = len(stage2_out)
     logger.info("pulse.stage2", extra={"scored": len(stage2_out)})
 
     # --- 5. stage 3 (weighted combine) -----------------------------------
+    if ctx:
+        await ctx.update_progress(0.90, "Stage 3 diversification")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     try:
         stage3_out = await stage3_combine(stage2_out, profile.weights)
     except Exception as exc:
@@ -171,6 +207,10 @@ async def run_pulse(
     logger.info("pulse.stage3", extra={"scored": len(stage3_out)})
 
     # --- 6. assemble deck ------------------------------------------------
+    if ctx:
+        await ctx.update_progress(0.93, "Assembling deck")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
     try:
         deck = await assemble_deck(stage3_out, size=profile.deck_size)
     except Exception as exc:
@@ -198,6 +238,7 @@ async def run_pulse(
                     deck_date=now.date(),
                     cards=deck,
                     stats=stats,
+                    degraded_reason=degraded_reason,
                     conn=conn,
                 )
         logger.info("pulse.persisted", extra={"deck_id": deck_id, "cards": len(deck)})
@@ -206,5 +247,49 @@ async def run_pulse(
         logger.exception("pulse.persist failed")
 
     stats["duration_s"] = round(time.monotonic() - start, 3)
+    stats["deck_date"] = now.date().isoformat()
+    stats["card_count"] = len(deck)
+    if degraded_reason:
+        stats["degraded_reason"] = degraded_reason
+    if ctx:
+        await ctx.update_progress(1.0, "Done")
     logger.info("pulse.complete", extra=stats)
     return stats
+
+
+@job_handler("pulse.generate")
+async def _pulse_generate_job(
+    pool: Any,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Jobs backbone handler for on-demand Pulse deck generation.
+
+    Registered as handler for kind ``"pulse.generate"``.  Accepts an optional
+    ``now`` ISO string in ``payload`` for deterministic testing; all other
+    pipeline parameters come from app state.
+
+    Note: ``embedder`` and ``source_cache`` are not serialisable as job payload —
+    the handler retrieves them from the worker context by importing app state.
+    Since the worker runs inside the same process, ``app.state`` is available
+    via the FastAPI application singleton.
+    """
+    from app.main import app as _app  # lazy import to avoid circular at module load
+
+    now_str = payload.get("now")
+    now = datetime.fromisoformat(now_str) if now_str else None
+
+    stats = await run_pulse(
+        db_pool=pool,
+        http_client=http_client,
+        embedder=_app.state.embedder,
+        now=now,
+        source_cache=getattr(_app.state, "sources", None),
+        ctx=ctx,
+    )
+    return {
+        "deck_date": stats.get("deck_date"),
+        "card_count": stats.get("card_count", 0),
+        "stats": stats,
+    }

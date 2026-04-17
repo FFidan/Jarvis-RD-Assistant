@@ -1,4 +1,4 @@
-"""Pulse REST endpoints — generate, today, history, rate, explain, stats.
+"""Pulse REST endpoints — generate, today, history, rate, explain, stats, debug.
 
 All endpoints require API key auth via ``verify_api_key`` and are rate-limited
 by the shared slowapi ``limiter`` from ``app.deps``.
@@ -13,16 +13,17 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import jobs as jobs_lib
 from jarvis_common import verify_api_key
 
 from app.deps import limiter
 from app.models import (
     PulseDeckResponse,
+    PulseGenerateResponse,
     PulseRateRequest,
     PulseStatsResponse,
 )
 from app.pulse.deck import load_history, load_today
-from app.pulse.job import run_pulse
 
 logger = logging.getLogger(__name__)
 
@@ -38,28 +39,18 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/generate", response_model=PulseDeckResponse)
+@router.post("/generate", response_model=PulseGenerateResponse)
 @limiter.limit("3/hour")
-async def generate_pulse(request: Request) -> PulseDeckResponse:
-    """Trigger an on-demand Pulse deck generation.
+async def generate_pulse(request: Request) -> PulseGenerateResponse:
+    """Enqueue an on-demand Pulse deck generation job.
 
-    Returns the freshly-persisted deck.  Rate-limited to 3/hour to prevent
-    runaway LLM usage from accidental mass clicks.
+    Returns immediately with a ``job_id`` so the caller can poll
+    ``GET /api/jobs/{job_id}`` for progress.  Rate-limited to 3/hour to
+    prevent runaway LLM usage from accidental mass clicks.
     """
-    app = request.app
-    logger.info("pulse.generate: manual trigger")
-    stats = await run_pulse(
-        db_pool=app.state.db_pool,
-        http_client=app.state.http_client,
-        embedder=app.state.embedder,
-        source_cache=getattr(app.state, "sources", None),
-    )
-    if stats.get("last_error"):
-        logger.warning("pulse.generate: degraded run, last_error=%s", stats["last_error"])
-    deck = await load_today(app.state.db_pool)
-    if deck is None:
-        raise HTTPException(status_code=500, detail="Pulse ran but no deck was persisted")
-    return deck
+    logger.info("pulse.generate: enqueueing job")
+    job_id = await jobs_lib.enqueue(request.app.state.db_pool, "pulse.generate", payload={})
+    return PulseGenerateResponse(job_id=job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +168,15 @@ async def get_stats(
                       AND generated_at >= NOW() - make_interval(days => $1)
                     ORDER BY generated_at DESC
                     LIMIT 1
-                ) AS last_error
+                ) AS last_error,
+                (
+                    SELECT degraded_reason
+                    FROM pulse_decks
+                    WHERE degraded_reason IS NOT NULL
+                      AND generated_at >= NOW() - make_interval(days => $1)
+                    ORDER BY generated_at DESC
+                    LIMIT 1
+                ) AS degraded_reason
             FROM pulse_decks
             WHERE generated_at >= NOW() - make_interval(days => $1)
             """,
@@ -192,6 +191,7 @@ async def get_stats(
             avg_duration_s=None,
             last_run_at=None,
             last_error=None,
+            degraded_reason=None,
         )
     return PulseStatsResponse(
         window_days=days,
@@ -201,4 +201,121 @@ async def get_stats(
         avg_duration_s=row["avg_duration_s"],
         last_run_at=row["last_run_at"],
         last_error=row["last_error"],
+        degraded_reason=row["degraded_reason"],
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/pulse/debug
+# ---------------------------------------------------------------------------
+
+
+@router.get("/debug")
+@limiter.limit("30/minute")
+async def debug_pulse(request: Request) -> dict:
+    """Return diagnostics for the latest Pulse deck.
+
+    Includes:
+    * Per-source candidate counts from the latest deck's ``stats`` JSONB.
+    * Topic-embedding sanity check (non-null, correct dimension).
+    * Top-10 card signal breakdown (paper_id, title, signals, final_score).
+    """
+    pool = request.app.state.db_pool
+
+    async with pool.acquire() as conn:
+        # Fetch the most recent deck row
+        deck_row = await conn.fetchrow(
+            """
+            SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
+            FROM pulse_decks
+            ORDER BY generated_at DESC
+            LIMIT 1
+            """
+        )
+        if deck_row is None:
+            raise HTTPException(status_code=404, detail="No Pulse deck found")
+
+        deck_stats: dict = deck_row["stats"] or {}
+
+        # Fetch top 10 cards with paper metadata
+        card_rows = await conn.fetch(
+            """
+            SELECT
+                pc.id        AS card_id,
+                pc.paper_id,
+                p.title      AS paper_title,
+                pc.rank,
+                pc.score     AS final_score,
+                pc.llm_relevance,
+                pc.llm_novelty,
+                pc.signals
+            FROM pulse_cards pc
+            JOIN papers p ON p.id = pc.paper_id
+            WHERE pc.deck_id = $1
+            ORDER BY pc.rank ASC
+            LIMIT 10
+            """,
+            deck_row["id"],
+        )
+
+        # Topic-embedding sanity check
+        embed_rows = await conn.fetch(
+            """
+            SELECT key, value
+            FROM user_config
+            WHERE key LIKE 'topic.%.embedding'
+            """
+        )
+
+    # Per-source candidate breakdown (from stats JSONB)
+    source_counts: dict = deck_stats.get("source_counts", {})
+
+    # Topic embedding sanity
+    embed_dim_expected = 768
+    topic_embeddings: list[dict] = []
+    for er in embed_rows:
+        val = er["value"]
+        if isinstance(val, list):
+            dim = len(val)
+            topic_embeddings.append(
+                {
+                    "key": er["key"],
+                    "dim": dim,
+                    "ok": dim == embed_dim_expected,
+                    "non_null": True,
+                }
+            )
+        else:
+            topic_embeddings.append(
+                {
+                    "key": er["key"],
+                    "dim": None,
+                    "ok": False,
+                    "non_null": val is not None,
+                }
+            )
+
+    # Top-N card breakdown
+    top_cards = [
+        {
+            "card_id": r["card_id"],
+            "paper_id": r["paper_id"],
+            "title": r["paper_title"],
+            "signals": r["signals"] or {},
+            "final_score": float(r["final_score"]),
+            "llm_relevance": r["llm_relevance"],
+            "llm_novelty": r["llm_novelty"],
+        }
+        for r in card_rows
+    ]
+
+    return {
+        "deck_date": deck_row["deck_date"].isoformat()
+        if hasattr(deck_row["deck_date"], "isoformat")
+        else deck_row["deck_date"],
+        "card_count": deck_row["card_count"],
+        "degraded_reason": deck_row["degraded_reason"],
+        "source_counts": source_counts,
+        "topic_embeddings": topic_embeddings,
+        "top_cards": top_cards,
+    }
