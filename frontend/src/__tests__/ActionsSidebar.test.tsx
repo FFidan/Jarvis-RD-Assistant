@@ -30,7 +30,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     downloadPdf: vi.fn().mockResolvedValue({}),
     processPdf: vi.fn().mockResolvedValue({ chunk_count: 5 }),
     summarizePaper: vi.fn().mockResolvedValue({}),
-    generateCards: vi.fn().mockResolvedValue({ cards_created: 3, confidence: 'HIGH' }),
+    generateCardsJob: vi.fn().mockResolvedValue({ job_id: 'test-job-001', status: 'queued' }),
+    getJob: vi.fn().mockResolvedValue({
+      id: 'test-job-001', kind: 'card.generate', status: 'succeeded',
+      progress: 1.0, progress_message: 'Done',
+      result: { cards_created: 3, confidence: 'HIGH' }, error: null,
+      created_at: '2026-01-01T00:00:00Z', started_at: null, finished_at: null,
+    }),
     fetchDecks: vi.fn().mockResolvedValue([
       { id: 1, name: 'ML Fundamentals', description: null, card_count: 10, due_count: 0, topic_id: null, created_at: '2026-01-01T00:00:00Z' },
     ]),

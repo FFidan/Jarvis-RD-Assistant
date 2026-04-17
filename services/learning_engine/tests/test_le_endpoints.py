@@ -574,51 +574,27 @@ async def test_get_stats_success(_app):
 
 
 @pytest.mark.asyncio
-async def test_generate_paper_not_found(_app):
-    """POST /api/generate returns 404 when paper does not exist."""
+async def test_generate_enqueues_job_and_returns_202(_app):
+    """POST /api/generate now enqueues a DB job and returns 202 with job_id."""
+    from app.routers import generation
+
     app, conn, _, mock_fsrs, mock_generator, _ = _app
-    # deck exists, paper does not
-    conn.fetchval.side_effect = [1, None]
-    conn.fetchrow.return_value = None
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/generate",
-            json={
-                "paper_id": 999,
-                "deck_id": 1,
-            },
-        )
+    fake_job_id = "cccccccc-dddd-eeee-ffff-000000000001"
 
-    assert resp.status_code == 404
+    with patch.object(generation.jobs_lib, "enqueue", AsyncMock(return_value=fake_job_id)):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/generate",
+                json={"paper_id": 1, "deck_id": 1},
+            )
 
-
-@pytest.mark.asyncio
-async def test_generate_no_chunks_returns_400(_app):
-    """POST /api/generate returns 400 when paper has no chunks."""
-    app, conn, _, mock_fsrs, mock_generator, _ = _app
-    # deck exists, paper exists, but no chunks
-    conn.fetchval.side_effect = [1, None]  # deck lookup, smart_model lookup
-    conn.fetchrow.return_value = FakeRecord(
-        id=1, title="Paper", authors=["Author"], abstract="Abstract"
-    )
-    conn.fetch.return_value = []  # no chunks
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/generate",
-            json={
-                "paper_id": 1,
-                "deck_id": 1,
-            },
-        )
-
-    assert resp.status_code == 400
-    assert "chunks" in resp.json()["detail"].lower()
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["job_id"] == fake_job_id
+    assert body["status"] == "queued"
 
 
 # ---------------------------------------------------------------------------
@@ -631,7 +607,7 @@ async def test_batch_generate_deck_not_found(_app):
     """batch_generate_cards returns 404 when the target deck does not exist."""
     from app.models import BatchGenerateRequest
     from app.routers import generation
-    from fastapi import BackgroundTasks, HTTPException
+    from fastapi import HTTPException
 
     _, conn, _, mock_fsrs, mock_generator, _ = _app
     conn.fetchval.return_value = None
@@ -641,7 +617,6 @@ async def test_batch_generate_deck_not_found(_app):
         await handler(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=999),
-            background_tasks=BackgroundTasks(),
             db_pool=MagicMock(
                 acquire=MagicMock(
                     return_value=MagicMock(
@@ -650,8 +625,6 @@ async def test_batch_generate_deck_not_found(_app):
                     )
                 )
             ),
-            fsrs_manager=mock_fsrs,
-            card_generator=mock_generator,
         )
 
     assert exc_info.value.status_code == 404
@@ -659,11 +632,9 @@ async def test_batch_generate_deck_not_found(_app):
 
 @pytest.mark.asyncio
 async def test_batch_generate_success_returns_202_accepted(_app):
-    """batch_generate_cards immediately returns 202 with a job_id."""
-    from app.jobs import get_job
+    """batch_generate_cards enqueues a DB job and returns 202 with job_id."""
     from app.models import BatchGenerateRequest
     from app.routers import generation
-    from fastapi import BackgroundTasks
 
     _, conn, _, mock_fsrs, mock_generator, _ = _app
     pool, _ = _make_pool_and_conn()
@@ -671,83 +642,31 @@ async def test_batch_generate_success_returns_202_accepted(_app):
     pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
     conn.fetchval.return_value = 1  # deck exists
+    fake_job_id = "dddddddd-eeee-ffff-0000-111111111111"
     handler = generation.batch_generate_cards.__wrapped__
 
-    resp = await handler(
-        MagicMock(),
-        body=BatchGenerateRequest(deck_id=1),
-        background_tasks=BackgroundTasks(),
-        db_pool=pool,
-        fsrs_manager=mock_fsrs,
-        card_generator=mock_generator,
-    )
-
-    assert resp.status == "pending"
-    assert resp.job_id
-    job = get_job(resp.job_id)
-    assert job is not None
-    assert job["status"] == "pending"
-
-
-@pytest.mark.asyncio
-async def test_batch_generate_job_completes_with_created_cards(_app):
-    """_run_batch_job processes papers and reports created cards in the job record."""
-    from app.jobs import create_job, get_job
-    from app.models import BatchGenerateRequest
-    from app.routers import generation
-
-    _, conn, _, mock_fsrs, mock_generator, _ = _app
-    pool, _ = _make_pool_and_conn()
-    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-    mock_fsrs.create_new_card.return_value = ({"state": "new"}, _now())
-    mock_generator.generate_cards.return_value = {
-        "cards": [
-            {
-                "card_type": "concept",
-                "front": "What changed?",
-                "back": "The method improved retrieval.",
-                "evidence": {"quote": "Improved retrieval", "page_number": 2},
-            }
-        ]
-    }
-
-    conn.fetch.side_effect = [
-        [FakeRecord(id=101)],
-        [FakeRecord(id=1, content="chunk text", page_number=2)],
-    ]
-    conn.fetchrow.side_effect = [
-        FakeRecord(id=101, title="Paper 101", authors=["Ada"], abstract="A"),
-        _make_card_row(id=501, deck_id=1, paper_id=101),
-    ]
-
-    with patch.object(
-        generation, "_insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
-    ):
-        job_id = "test-batch-success"
-        create_job(job_id)
-        await generation._run_batch_job(
-            job_id=job_id,
+    with patch.object(generation.jobs_lib, "enqueue", AsyncMock(return_value=fake_job_id)):
+        resp = await handler(
+            MagicMock(),
             body=BatchGenerateRequest(deck_id=1),
             db_pool=pool,
-            fsrs_manager=mock_fsrs,
-            card_generator=mock_generator,
         )
 
-    job = get_job(job_id)
-    assert job["status"] == "done"
-    assert job["result"]["papers_processed"] == 1
-    assert job["result"]["cards_created"] == 1
-    assert job["result"]["errors"] == []
+    assert resp.status == "queued"
+    assert resp.job_id == fake_job_id
 
 
 def test_batch_generate_declares_accepted_response_type():
     """batch_generate_cards is typed as returning BatchAcceptedResponse (202)."""
-    from app.models import BatchAcceptedResponse
+    import typing
+
     from app.routers import generation
 
     handler = generation.batch_generate_cards.__wrapped__
-    assert inspect.signature(handler).return_annotation is BatchAcceptedResponse
+    hints = typing.get_type_hints(handler)
+    from app.models import BatchAcceptedResponse
+
+    assert hints.get("return") is BatchAcceptedResponse
 
 
 # ---------------------------------------------------------------------------

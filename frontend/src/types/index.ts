@@ -519,6 +519,38 @@ export interface GenerateCardsResponse {
   confidence: string;
 }
 
+/** Structured error from a job that failed with a JobError. */
+export interface JobActionLink {
+  label: string;
+  href: string;
+}
+
+export interface JobErrorPayload {
+  message: string;
+  action_link?: JobActionLink;
+}
+
+/** A job row returned from GET /api/jobs/{id}. */
+export interface JobRow {
+  id: string;
+  kind: string;
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  progress: number | null;
+  progress_message: string | null;
+  payload: Record<string, unknown>;
+  result: Record<string, unknown> | null;
+  error: JobErrorPayload | string | null;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** Response from POST /api/generate (now queues a job). */
+export interface GenerateJobAccepted {
+  job_id: string;
+  status: 'queued';
+}
+
 export interface ProjectPaper {
   id: number;
   title: string;

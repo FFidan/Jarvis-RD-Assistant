@@ -1,7 +1,9 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
-import { downloadPdf, processPdf, summarizePaper, generateCards, fetchDecks } from '@/lib/api';
+import { downloadPdf, processPdf, summarizePaper, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
+import type { Job } from '@/stores/job-store';
 import { streamAnalyze } from '@/lib/sse';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -24,6 +26,8 @@ interface ActionsSidebarProps {
   hasChunks?: boolean;
   /** Whether the paper has a summary */
   hasSummary?: boolean;
+  /** Briefly pulse the Process PDF button (triggered by ?action=process query param) */
+  pulseProcessButton?: boolean;
 }
 
 type AnalyzeStep = null | 'downloading' | 'processing' | 'summarizing';
@@ -36,21 +40,29 @@ const ANALYZE_STEPS = [
 
 type StepStatus = 'pending' | 'active' | 'completed' | 'failed';
 
-export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = false, hasSummary = false }: ActionsSidebarProps) {
+const TERMINAL_STATUSES: Job['status'][] = ['succeeded', 'failed', 'cancelled'];
+
+export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = false, hasSummary = false, pulseProcessButton = false }: ActionsSidebarProps) {
   const queryClient = useQueryClient();
   const [deckId, setDeckId] = useState<string>('');
   const [maxCards, setMaxCards] = useState('5');
-  const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string; action_link?: { label: string; href: string } } | null>(null);
   const [analyzeStep, setAnalyzeStep] = useState<AnalyzeStep>(null);
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
   const [chunkCount, setChunkCount] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [genJob, setGenJob] = useState<Job | null>(null);
 
   useEffect(() => () => {
     if (abortRef.current) {
       abortRef.current.abort();
       abortRef.current = null;
+    }
+    if (genPollRef.current !== null) {
+      clearInterval(genPollRef.current);
+      genPollRef.current = null;
     }
   }, []);
 
@@ -150,22 +162,60 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
     },
   });
 
+  const stopGenPoll = () => {
+    if (genPollRef.current !== null) {
+      clearInterval(genPollRef.current);
+      genPollRef.current = null;
+    }
+  };
+
+  const startGenPoll = (id: string) => {
+    stopGenPoll();
+    genPollRef.current = setInterval(async () => {
+      try {
+        const row = await getJob(id);
+        setGenJob(row);
+        if (TERMINAL_STATUSES.includes(row.status)) {
+          stopGenPoll();
+          if (row.status === 'succeeded' && row.result) {
+            const res = row.result as { cards_created?: number; confidence?: string };
+            setActionResult({
+              type: 'success',
+              message: `Generated ${res.cards_created ?? '?'} cards (confidence: ${res.confidence ?? '?'})`,
+            });
+            queryClient.invalidateQueries({ queryKey: ['cards'] });
+            queryClient.invalidateQueries({ queryKey: ['decks'] });
+          } else if (row.status === 'failed') {
+            const errPayload = row.error;
+            const msg = errPayload?.message ?? 'Generation failed';
+            setActionResult({
+              type: 'error',
+              message: msg,
+              action_link: errPayload?.action_link,
+            });
+          }
+          setGenJob(null);
+        }
+      } catch (err) {
+        console.error('[ActionsSidebar] gen poll error', err);
+      }
+    }, 1000);
+  };
+
   const generateMut = useMutation({
-    mutationFn: () => generateCards(paperId, Number(deckId), Number(maxCards)),
+    mutationFn: () => generateCardsJob(paperId, Number(deckId), Number(maxCards)),
     onSuccess: (data) => {
-      setActionResult({
-        type: 'success',
-        message: `Generated ${data.cards_created} cards (confidence: ${data.confidence})`,
-      });
-      queryClient.invalidateQueries({ queryKey: ['cards'] });
-      queryClient.invalidateQueries({ queryKey: ['decks'] });
+      setActionResult(null);
+      setGenJob({ status: 'queued' } as unknown as Job);
+      startGenPoll(data.job_id);
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Generation failed' });
     },
   });
 
-  const anyPending = downloadMut.isPending || processMut.isPending || summarizeMut.isPending || generateMut.isPending || isAnalyzing;
+  const isGenPending = generateMut.isPending || (genJob !== null && !TERMINAL_STATUSES.includes(genJob.status));
+  const anyPending = downloadMut.isPending || processMut.isPending || summarizeMut.isPending || isGenPending || isAnalyzing;
 
   const analyzeLabel = (() => {
     switch (analyzeStep) {
@@ -240,9 +290,10 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           </Button>
 
           <Button
+            id="paper-action-process"
             variant="outline"
             size="sm"
-            className="w-full justify-start"
+            className={`w-full justify-start${pulseProcessButton ? ' animate-pulse' : ''}`}
             onClick={() => { setActionResult(null); processMut.mutate(); }}
             disabled={anyPending}
           >
@@ -264,9 +315,17 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
       </details>
 
       {actionResult && (
-        <p className={`text-sm ${actionResult.type === 'error' ? 'text-destructive' : 'text-green-600'}`}>
-          {actionResult.message}
-        </p>
+        <div className={`text-sm ${actionResult.type === 'error' ? 'text-destructive' : 'text-green-600'}`}>
+          <p>{actionResult.message}</p>
+          {actionResult.action_link && (
+            <Link
+              to={actionResult.action_link.href}
+              className="underline hover:opacity-80"
+            >
+              {actionResult.action_link.label}
+            </Link>
+          )}
+        </div>
       )}
 
       <Separator />
@@ -304,13 +363,28 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
               onChange={(e) => setMaxCards(e.target.value)}
             />
           </div>
+          {genJob && !TERMINAL_STATUSES.includes(genJob.status) && (
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground">
+                {genJob.progress_message ?? (genJob.status === 'queued' ? 'Queued…' : 'Generating…')}
+              </p>
+              {genJob.progress != null && (
+                <div className="h-1 w-full rounded-full bg-muted">
+                  <div
+                    className="h-1 rounded-full bg-primary transition-all"
+                    style={{ width: `${Math.round(genJob.progress * 100)}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
           <Button
             className="w-full"
             onClick={() => { setActionResult(null); generateMut.mutate(); }}
             disabled={!deckId || anyPending}
           >
             <Sparkles className="mr-2 h-4 w-4" />
-            {generateMut.isPending ? 'Generating...' : 'Generate Cards'}
+            {isGenPending ? 'Generating…' : 'Generate Cards'}
           </Button>
         </div>
       ) : (

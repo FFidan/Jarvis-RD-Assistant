@@ -1,97 +1,151 @@
-"""Card generation endpoints (single-paper and batch)."""
+"""Card generation endpoints (single-paper and batch).
+
+Both POST /api/generate and POST /api/generate/batch now enqueue DB-backed
+jobs handled by the jobs worker wired in main.py lifespan.  The old
+in-memory ``app.jobs`` module is no longer used by this router.
+"""
+
+from __future__ import annotations
 
 import logging
-import uuid
+from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
+from jarvis_common import jobs as jobs_lib
+from jarvis_common.jobs import JobContext, JobError, job_handler
 
 from app.card_generator import CardGenerator
 from app.card_store import insert_card as _insert_card
 from app.converters import row_to_card_response
-from app.deps import get_card_generator, get_db_pool, get_fsrs_manager, limiter
+from app.deps import get_db_pool, limiter
 from app.fsrs_manager import FSRSManager
-from app.jobs import create_job, get_job, update_job
 from app.models import (
     BatchAcceptedResponse,
     BatchGenerateRequest,
     BatchGenerateResponse,
-    BatchJobStatusResponse,
     CardResponse,
     GenerateCardsRequest,
-    GenerateCardsResponse,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["generation"])
 
 
-@router.post("/api/generate", response_model=GenerateCardsResponse)
-@limiter.limit("5/minute")
-async def generate_cards(
-    request: Request,
-    body: GenerateCardsRequest,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    fsrs_manager: FSRSManager = Depends(get_fsrs_manager),
-    card_generator: CardGenerator = Depends(get_card_generator),
-) -> GenerateCardsResponse:
-    """Generate flashcards from a paper using LLM with quote verification."""
-    async with db_pool.acquire() as conn:
-        # Validate deck exists
-        deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", body.deck_id)
+# ---------------------------------------------------------------------------
+# Core generation helper (used by both job handlers and direct endpoint)
+# ---------------------------------------------------------------------------
+
+
+async def generate_cards_core(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    paper_id: int,
+    deck_id: int,
+    max_cards: int,
+    fsrs_manager: FSRSManager | None = None,
+    card_generator: CardGenerator | None = None,
+    ctx: JobContext | None = None,
+) -> dict[str, Any]:
+    """Fetch chunks, call LLM, verify and insert cards.
+
+    Parameters
+    ----------
+    pool:           asyncpg connection pool
+    http_client:    shared httpx client (passed to CardGenerator if needed)
+    paper_id:       paper to generate cards for
+    deck_id:        target deck
+    max_cards:      upper bound on generated cards
+    fsrs_manager:   injected via FastAPI dep or created fresh inside job
+    card_generator: injected via FastAPI dep or created fresh inside job
+    ctx:            optional JobContext for progress reporting
+
+    Returns
+    -------
+    dict with keys: cards_created (int), cards (list), confidence (str)
+    """
+    from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
+
+    # Lazily create dependencies when running inside a job handler
+    if fsrs_manager is None:
+        fsrs_manager = FSRSManager()
+    if card_generator is None:
+        litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+        card_generator = CardGenerator(
+            http_client=http_client,
+            litellm_config=litellm_config,
+        )
+
+    if ctx:
+        await ctx.update_progress(0.1, "Validating deck and paper")
+
+    async with pool.acquire() as conn:
+        deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", deck_id)
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
 
-        # Fetch paper metadata
-        paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", body.paper_id)
+        paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not paper:
             raise HTTPException(status_code=404, detail="Paper not found")
 
-        # Fetch chunks
+        if ctx:
+            await ctx.update_progress(0.2, "Fetching chunks")
+
         chunk_rows = await conn.fetch(
             "SELECT id, content, page_number FROM paper_chunks"
             " WHERE paper_id = $1 ORDER BY chunk_index",
-            body.paper_id,
+            paper_id,
         )
-        if not chunk_rows:
-            raise HTTPException(
-                status_code=400,
-                detail="Paper has no processed chunks. Run process-pdf first.",
-            )
 
-        # Read configured model from user_config (falls back to "smart")
-        smart_model = get_smart_model()
+    if not chunk_rows:
+        raise JobError(
+            "Paper has no processed chunks",
+            action_link={
+                "label": "Process PDF now",
+                "href": f"/paper/{paper_id}?action=process",
+            },
+        )
+
+    if ctx:
+        await ctx.update_progress(0.3, "Building prompt")
 
     chunks = [dict(row) for row in chunk_rows]
+    smart_model = get_smart_model()
+
+    if ctx:
+        await ctx.update_progress(0.4, "Streaming generation")
 
     try:
         result = await card_generator.generate_cards(
             title=paper["title"],
             authors=paper["authors"],
             chunks=chunks,
-            paper_id=body.paper_id,
+            paper_id=paper_id,
             abstract=paper.get("abstract"),
-            max_cards=body.max_cards,
+            max_cards=max_cards,
             model=smart_model,
         )
     except Exception as exc:
-        logger.exception("Card generation failed")
-        raise HTTPException(status_code=502, detail="Card generation failed") from exc
+        logger.exception("Card generation failed for paper %s", paper_id)
+        raise RuntimeError("Card generation failed") from exc
+
+    if ctx:
+        await ctx.update_progress(0.85, "Verifying")
 
     verified_cards = result["cards"]
-
-    # Insert verified cards into DB
     created: list[CardResponse] = []
-    async with db_pool.acquire() as conn:
+
+    async with pool.acquire() as conn:
         async with conn.transaction():
             for card_data in verified_cards:
                 fsrs_state, due_at = fsrs_manager.create_new_card()
                 try:
                     row = await _insert_card(
                         conn,
-                        body.deck_id,
-                        body.paper_id,
+                        deck_id,
+                        paper_id,
                         card_data["card_type"],
                         card_data["front"],
                         card_data["back"],
@@ -103,117 +157,124 @@ async def generate_cards(
                     raise HTTPException(status_code=404, detail="Deck or paper not found") from exc
                 created.append(row_to_card_response(row))
 
-    return GenerateCardsResponse(
-        cards_created=len(created),
-        cards=created,
-        confidence=result.get("confidence", "LOW"),
+    if ctx:
+        await ctx.update_progress(1.0, "Done")
+
+    return {
+        "cards_created": len(created),
+        "cards": [c.model_dump() for c in created],
+        "confidence": result.get("confidence", "LOW"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Job handlers
+# ---------------------------------------------------------------------------
+
+
+@job_handler("card.generate")
+async def _card_generate_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Job handler for single-paper card generation."""
+    return await generate_cards_core(
+        pool=pool,
+        http_client=http_client,
+        paper_id=payload["paper_id"],
+        deck_id=payload["deck_id"],
+        max_cards=payload.get("max_cards", 5),
+        ctx=ctx,
     )
 
 
-async def _run_batch_job(
-    job_id: str,
-    body: BatchGenerateRequest,
-    db_pool: asyncpg.Pool,
-    fsrs_manager: FSRSManager,
-    card_generator: CardGenerator,
-) -> None:
-    """Background worker: generate cards for all unprocessed papers in a deck."""
-    update_job(job_id, status="running")
+@job_handler("card.generate_batch")
+async def _card_generate_batch_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Job handler for batch card generation across all unprocessed papers in a deck."""
+    deck_id: int = payload["deck_id"]
+    max_per_paper: int = payload.get("max_per_paper", 5)
 
+    async with pool.acquire() as conn:
+        paper_rows = await conn.fetch(
+            """
+            SELECT p.id FROM papers p
+            WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
+              AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
+            LIMIT 50
+            """,
+            deck_id,
+        )
+
+    total = len(paper_rows)
     papers_processed = 0
     cards_created = 0
     errors: list[str] = []
 
-    try:
-        async with db_pool.acquire() as conn:
-            smart_model = get_smart_model()
-            paper_rows = await conn.fetch(
-                """
-                SELECT p.id FROM papers p
-                WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-                  AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
-                LIMIT 50
-                """,
-                body.deck_id,
+    for i, paper_row in enumerate(paper_rows):
+        paper_id = paper_row["id"]
+        if await ctx.is_cancelled():
+            break
+
+        await ctx.update_progress(i / max(total, 1), f"Paper {i + 1}/{total}")
+
+        try:
+            result = await generate_cards_core(
+                pool=pool,
+                http_client=http_client,
+                paper_id=paper_id,
+                deck_id=deck_id,
+                max_cards=max_per_paper,
             )
+            papers_processed += 1
+            cards_created += result["cards_created"]
+        except JobError as exc:
+            # Paper has no chunks — record but continue batch
+            errors.append(f"Paper {paper_id}: {exc}")
+        except HTTPException as exc:
+            errors.append(f"Paper {paper_id}: {exc.detail}")
+        except Exception as exc:
+            logger.exception("Batch generate failed for paper %s", paper_id)
+            errors.append(f"Paper {paper_id}: {exc}")
 
-        for paper_row in paper_rows:
-            paper_id = paper_row["id"]
-            try:
-                async with db_pool.acquire() as conn:
-                    paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
-                    chunk_rows = await conn.fetch(
-                        "SELECT id, content, page_number FROM paper_chunks"
-                        " WHERE paper_id = $1 ORDER BY chunk_index",
-                        paper_id,
-                    )
+    await ctx.update_progress(1.0, "Batch complete")
 
-                if not paper or not chunk_rows:
-                    errors.append(f"Paper {paper_id}: missing metadata or chunks")
-                    continue
+    return BatchGenerateResponse(
+        papers_processed=papers_processed,
+        cards_created=cards_created,
+        errors=errors,
+    ).model_dump()
 
-                chunks = [dict(row) for row in chunk_rows]
 
-                result = await card_generator.generate_cards(
-                    title=paper["title"],
-                    authors=paper["authors"],
-                    chunks=chunks,
-                    paper_id=paper_id,
-                    abstract=paper.get("abstract"),
-                    max_cards=body.max_per_paper,
-                    model=smart_model,
-                )
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
-                verified_cards = result["cards"]
-                paper_cards_created = 0
-                async with db_pool.acquire() as conn:
-                    async with conn.transaction():
-                        for card_data in verified_cards:
-                            fsrs_state, due_at = fsrs_manager.create_new_card()
-                            try:
-                                row = await _insert_card(
-                                    conn,
-                                    body.deck_id,
-                                    paper_id,
-                                    card_data["card_type"],
-                                    card_data["front"],
-                                    card_data["back"],
-                                    card_data["evidence"],
-                                    fsrs_state,
-                                    due_at,
-                                )
-                                if row:
-                                    paper_cards_created += 1
-                            except asyncpg.ForeignKeyViolationError:
-                                errors.append(f"Paper {paper_id}: FK violation on card insert")
-                                raise  # abort this paper's transaction
 
-                papers_processed += 1
-                cards_created += paper_cards_created
-
-            except asyncpg.ForeignKeyViolationError:
-                continue  # already recorded in errors list by inner handler
-            except Exception as exc:
-                logger.exception("Batch generate failed for paper %d", paper_id)
-                errors.append(f"Paper {paper_id}: {exc}")
-            except BaseException:
-                logger.exception("Batch generate aborted (BaseException) for paper %d", paper_id)
-                raise
-
-        update_job(
-            job_id,
-            status="done",
-            result=BatchGenerateResponse(
-                papers_processed=papers_processed,
-                cards_created=cards_created,
-                errors=errors,
-            ).model_dump(),
-        )
-
-    except BaseException as exc:
-        logger.exception("Batch job %s failed at top level", job_id)
-        update_job(job_id, status="failed", error=str(exc))
-        raise
+@router.post("/api/generate", status_code=202)
+@limiter.limit("5/minute")
+async def generate_cards(
+    request: Request,
+    body: GenerateCardsRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, Any]:
+    """Enqueue card generation for a single paper; returns 202 with *job_id*."""
+    job_id = await jobs_lib.enqueue(
+        db_pool,
+        "card.generate",
+        payload={
+            "paper_id": body.paper_id,
+            "deck_id": body.deck_id,
+            "max_cards": body.max_cards,
+        },
+    )
+    return {"job_id": job_id, "status": "queued"}
 
 
 @router.post("/api/generate/batch", status_code=202, response_model=BatchAcceptedResponse)
@@ -221,10 +282,7 @@ async def _run_batch_job(
 async def batch_generate_cards(
     request: Request,
     body: BatchGenerateRequest,
-    background_tasks: BackgroundTasks,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    fsrs_manager: FSRSManager = Depends(get_fsrs_manager),
-    card_generator: CardGenerator = Depends(get_card_generator),
 ) -> BatchAcceptedResponse:
     """Enqueue batch card generation; returns 202 immediately with a *job_id* to poll."""
     async with db_pool.acquire() as conn:
@@ -232,29 +290,31 @@ async def batch_generate_cards(
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
 
-    job_id = str(uuid.uuid4())
-    create_job(job_id)
-    background_tasks.add_task(
-        _run_batch_job,
-        job_id,
-        body,
+    job_id = await jobs_lib.enqueue(
         db_pool,
-        fsrs_manager,
-        card_generator,
+        "card.generate_batch",
+        payload={
+            "deck_id": body.deck_id,
+            "max_per_paper": body.max_per_paper,
+        },
     )
-    return BatchAcceptedResponse(job_id=job_id, status="pending")
+    return BatchAcceptedResponse(job_id=job_id, status="queued")
 
 
-@router.get("/api/generate/batch/{job_id}", response_model=BatchJobStatusResponse)
-async def get_batch_status(job_id: str) -> BatchJobStatusResponse:
+@router.get("/api/generate/batch/{job_id}")
+async def get_batch_status(
+    job_id: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, Any]:
     """Poll the status of a batch generation job started by POST /api/generate/batch."""
-    job = get_job(job_id)
-    if not job:
+    row = await jobs_lib.get(db_pool, job_id)
+    if row is None:
         raise HTTPException(status_code=404, detail="Job not found")
-    return BatchJobStatusResponse(
-        job_id=job_id,
-        status=job["status"],
-        created_at=job["created_at"],
-        result=job.get("result"),
-        error=job.get("error"),
-    )
+    # Normalise datetime fields for JSON serialisation
+    out: dict[str, Any] = {}
+    for k, v in row.items():
+        if hasattr(v, "isoformat"):
+            out[k] = v.isoformat()
+        else:
+            out[k] = v
+    return out

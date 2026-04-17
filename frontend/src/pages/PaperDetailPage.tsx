@@ -1,7 +1,7 @@
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { FileText, ArrowLeft, Menu } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { fetchPaperDetail } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -28,7 +28,27 @@ export function PaperDetailPage() {
   const { paperId: paramId } = useParams<{ paperId: string }>();
   const paperId = Number(paramId);
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [processPulse, setProcessPulse] = useState(false);
+
+  // If ?action=process, expand Manual steps and scroll the Process PDF button
+  // into view with a brief animate-pulse. Delayed 400ms to allow data render.
+  useEffect(() => {
+    if (searchParams.get('action') !== 'process') return;
+    const attempt = () => {
+      const el = document.getElementById('paper-action-process');
+      if (el) {
+        const details = el.closest('details');
+        if (details && !details.open) details.open = true;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        setProcessPulse(true);
+        setTimeout(() => setProcessPulse(false), 1500);
+      }
+    };
+    const t = setTimeout(attempt, 400);
+    return () => clearTimeout(t);
+  }, [searchParams]);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['paper-detail', paperId],
@@ -89,6 +109,7 @@ export function PaperDetailPage() {
         pdfDownloaded={paper.pdf_downloaded}
         hasChunks={chunks.length > 0}
         hasSummary={summary !== null}
+        pulseProcessButton={processPulse}
       />
       <UserStateForm paperId={paperId} userState={user_state} />
     </div>

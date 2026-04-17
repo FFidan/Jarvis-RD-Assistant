@@ -1,4 +1,4 @@
-"""Direct tests for the card generation router."""
+"""Direct tests for the card generation router (jobs-backed implementation)."""
 
 from __future__ import annotations
 
@@ -8,15 +8,14 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
 
-from app.jobs import get_job  # noqa: E402
 from app.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
 from app.routers import generation  # noqa: E402
 from jarvis_common.db_helpers import get_smart_model  # noqa: E402
+from jarvis_common.jobs import JobContext, JobError  # noqa: E402
 
 
 class FakeRecord(dict):
@@ -71,6 +70,15 @@ def _make_card_row(id=1, deck_id=1, paper_id=1):
     )
 
 
+def _make_ctx(job_id="test-job-001"):
+    """Return a minimal JobContext stub."""
+    ctx = MagicMock(spec=JobContext)
+    ctx.job_id = job_id
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(return_value=False)
+    return ctx
+
+
 def test_get_smart_model_returns_alias():
     """get_smart_model always returns the 'smart' LiteLLM alias."""
     assert get_smart_model() == "smart"
@@ -81,12 +89,20 @@ def test_get_smart_model_no_conn_param():
     assert get_smart_model() == "smart"
 
 
+# ---------------------------------------------------------------------------
+# generate_cards_core
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_generate_cards_success_creates_cards_and_uses_validated_model():
-    """generate_cards inserts verified cards and returns the response model."""
+async def test_generate_cards_core_success():
+    """generate_cards_core fetches chunks, calls LLM, inserts cards, returns dict."""
     pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+
     fsrs_manager = MagicMock()
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
+
     card_generator = AsyncMock()
     card_generator.generate_cards.return_value = {
         "cards": [
@@ -100,145 +116,191 @@ async def test_generate_cards_success_creates_cards_and_uses_validated_model():
         "confidence": "HIGH",
     }
 
-    conn.fetchval.return_value = 1  # deck exists check
+    # fetchval (deck) → fetchrow (paper) → fetch (chunks) in the same acquire()
+    conn.fetchval.return_value = 1  # deck exists
     conn.fetchrow.return_value = FakeRecord(
-        id=101,
-        title="Paper 101",
-        authors=["Ada"],
-        abstract="A paper",
+        id=101, title="Paper 101", authors=["Ada"], abstract="A paper"
     )
     conn.fetch.return_value = [FakeRecord(id=1, content="chunk", page_number=2)]
 
     with (
-        patch.object(
-            generation, "get_smart_model", MagicMock(return_value="resolved-model")
-        ) as mock_get_model,
+        patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
         patch.object(
             generation, "_insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
         ),
     ):
+        result = await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=101,
+            deck_id=1,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+        )
+
+    assert result["cards_created"] == 1
+    assert result["confidence"] == "HIGH"
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_no_chunks_raises_job_error():
+    """generate_cards_core raises JobError with action_link when paper has no chunks."""
+    pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+
+    conn.fetchval.return_value = 1  # deck exists
+    conn.fetchrow.return_value = FakeRecord(
+        id=42, title="Empty Paper", authors=["Bob"], abstract=None
+    )
+    conn.fetch.return_value = []  # no chunks
+
+    card_generator = AsyncMock()
+    fsrs_manager = MagicMock()
+
+    with pytest.raises(JobError) as exc_info:
+        await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=42,
+            deck_id=1,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+        )
+
+    exc = exc_info.value
+    assert "no processed chunks" in str(exc).lower()
+    assert exc.action_link is not None
+    assert exc.action_link["href"] == "/paper/42?action=process"
+    assert "Process PDF" in exc.action_link["label"]
+    card_generator.generate_cards.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_propagates_progress():
+    """generate_cards_core calls ctx.update_progress at each stage."""
+    pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+    ctx = _make_ctx()
+
+    fsrs_manager = MagicMock()
+    fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
+
+    card_generator = AsyncMock()
+    card_generator.generate_cards.return_value = {"cards": [], "confidence": "LOW"}
+
+    conn.fetchval.return_value = 1
+    conn.fetchrow.return_value = FakeRecord(id=7, title="T", authors=[], abstract=None)
+    conn.fetch.return_value = [FakeRecord(id=1, content="chunk", page_number=1)]
+
+    with (
+        patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
+        patch.object(generation, "_insert_card", AsyncMock(return_value=_make_card_row())),
+    ):
+        await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=7,
+            deck_id=1,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+            ctx=ctx,
+        )
+
+    # Should have been called at least at 0.2, 0.3, 0.4, 0.85, 1.0
+    assert ctx.update_progress.await_count >= 5
+    progress_values = [call.args[0] for call in ctx.update_progress.await_args_list]
+    assert 1.0 in progress_values
+
+
+# ---------------------------------------------------------------------------
+# generate_cards endpoint (now enqueues a job)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_endpoint_returns_job_id():
+    """POST /api/generate enqueues a DB job and returns {job_id, status}."""
+    pool, conn = _make_pool_and_conn()
+
+    fake_job_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    with patch("jarvis_common.jobs.enqueue", AsyncMock(return_value=fake_job_id)) as mock_enqueue:
         response = await generation.generate_cards.__wrapped__(
             MagicMock(),
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
             db_pool=pool,
-            fsrs_manager=fsrs_manager,
-            card_generator=card_generator,
         )
 
-    assert response.cards_created == 1
-    assert response.confidence == "HIGH"
-    assert response.cards[0].paper_id == 101
-    mock_get_model.assert_called_once()
-    card_generator.generate_cards.assert_awaited_once()
-    assert card_generator.generate_cards.await_args.kwargs["model"] == "resolved-model"
+    assert response["job_id"] == fake_job_id
+    assert response["status"] == "queued"
+    mock_enqueue.assert_awaited_once()
+    call_kwargs = mock_enqueue.await_args
+    assert call_kwargs.args[1] == "card.generate"
+    assert call_kwargs.kwargs["payload"]["paper_id"] == 101
+    assert call_kwargs.kwargs["payload"]["deck_id"] == 1
 
 
-@pytest.mark.asyncio
-async def test_generate_cards_deck_not_found():
-    """generate_cards returns 404 before touching the generator when the deck is missing."""
-    pool, conn = _make_pool_and_conn()
-
-    conn.fetchval.return_value = None
-
-    with pytest.raises(HTTPException, match="Deck not found") as exc_info:
-        await generation.generate_cards.__wrapped__(
-            MagicMock(),
-            body=GenerateCardsRequest(paper_id=101, deck_id=999),
-            db_pool=pool,
-            fsrs_manager=MagicMock(),
-            card_generator=AsyncMock(),
-        )
-
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_generate_cards_maps_generator_failure_to_502():
-    """generate_cards hides internal generator failures behind a stable 502."""
-    pool, conn = _make_pool_and_conn()
-    fsrs_manager = MagicMock()
-    card_generator = AsyncMock()
-    card_generator.generate_cards.side_effect = RuntimeError("boom")
-
-    conn.fetchval.return_value = 1  # deck exists check
-    conn.fetchrow.return_value = FakeRecord(
-        id=101,
-        title="Paper 101",
-        authors=["Ada"],
-        abstract="A paper",
-    )
-    conn.fetch.return_value = [FakeRecord(id=1, content="chunk", page_number=2)]
-
-    with (
-        patch.object(generation, "get_smart_model", AsyncMock(return_value="smart")),
-        pytest.raises(HTTPException, match="Card generation failed") as exc_info,
-    ):
-        await generation.generate_cards.__wrapped__(
-            MagicMock(),
-            body=GenerateCardsRequest(paper_id=101, deck_id=1),
-            db_pool=pool,
-            fsrs_manager=fsrs_manager,
-            card_generator=card_generator,
-        )
-
-    assert exc_info.value.status_code == 502
+# ---------------------------------------------------------------------------
+# batch_generate_cards endpoint
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_batch_generate_cards_returns_202_with_job_id():
-    """batch_generate_cards returns 202 immediately with a job_id and pending status."""
-    from fastapi import BackgroundTasks
-
+    """POST /api/generate/batch enqueues a DB job and returns 202 with job_id."""
     pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = 1  # deck exists
 
-    bt = BackgroundTasks()
-    response = await generation.batch_generate_cards.__wrapped__(
-        MagicMock(),
-        body=BatchGenerateRequest(deck_id=1),
-        background_tasks=bt,
-        db_pool=pool,
-        fsrs_manager=MagicMock(),
-        card_generator=AsyncMock(),
-    )
+    fake_job_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 
-    assert response.status == "pending"
-    assert response.job_id  # non-empty UUID string
-    job = get_job(response.job_id)
-    assert job is not None
-    assert job["status"] == "pending"
+    with patch("jarvis_common.jobs.enqueue", AsyncMock(return_value=fake_job_id)):
+        response = await generation.batch_generate_cards.__wrapped__(
+            MagicMock(),
+            body=BatchGenerateRequest(deck_id=1),
+            db_pool=pool,
+        )
+
+    assert response.status == "queued"
+    assert response.job_id == fake_job_id
+
+
+# ---------------------------------------------------------------------------
+# _card_generate_batch_job — records errors per paper, continues loop
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_batch_generate_records_missing_metadata_errors():
-    """_run_batch_job leaves a readable error when a paper row vanishes mid-loop."""
+async def test_batch_job_handler_records_missing_chunks_error():
+    """_card_generate_batch_job records a JobError per paper and continues."""
     pool, conn = _make_pool_and_conn()
-    fsrs_manager = MagicMock()
-    card_generator = AsyncMock()
+    http_client = AsyncMock()
+    ctx = _make_ctx()
 
-    # First fetch: paper list; second fetch: chunks for paper 101
-    conn.fetch.side_effect = [
-        [FakeRecord(id=101)],
-        [FakeRecord(id=1, content="chunk", page_number=2)],
-    ]
-    conn.fetchrow.return_value = None  # paper metadata missing
+    # Paper list query returns one paper
+    conn.fetch.return_value = [FakeRecord(id=99)]
 
-    job_id = "test-missing-metadata"
-    from app.jobs import create_job
+    # generate_cards_core will raise JobError (no chunks)
+    with patch.object(
+        generation,
+        "generate_cards_core",
+        AsyncMock(
+            side_effect=JobError(
+                "Paper has no processed chunks",
+                action_link={"label": "Process PDF now", "href": "/paper/99?action=process"},
+            )
+        ),
+    ):
+        result = await generation._card_generate_batch_job(
+            pool=pool,
+            http_client=http_client,
+            payload={"deck_id": 1, "max_per_paper": 5},
+            ctx=ctx,
+        )
 
-    create_job(job_id)
-
-    await generation._run_batch_job(
-        job_id=job_id,
-        body=BatchGenerateRequest(deck_id=1),
-        db_pool=pool,
-        fsrs_manager=fsrs_manager,
-        card_generator=card_generator,
-    )
-
-    job = get_job(job_id)
-    assert job["status"] == "done"
-    assert job["result"]["papers_processed"] == 0
-    assert job["result"]["cards_created"] == 0
-    assert job["result"]["errors"] == ["Paper 101: missing metadata or chunks"]
-    card_generator.generate_cards.assert_not_called()
+    assert result["papers_processed"] == 0
+    assert result["cards_created"] == 0
+    assert len(result["errors"]) == 1
+    assert "99" in result["errors"][0]

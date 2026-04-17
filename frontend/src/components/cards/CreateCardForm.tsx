@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
-import { createCard, generateCards, fetchDecks } from '@/lib/api';
+import { createCard, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
+import type { Job } from '@/stores/job-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -142,6 +144,8 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
 
 // --- Generate Cards Dialog ---
 
+const TERMINAL_STATUSES: Job['status'][] = ['succeeded', 'failed', 'cancelled'];
+
 interface GenerateCardsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -153,23 +157,64 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   const [paperId, setPaperId] = useState('');
   const [deckId, setDeckId] = useState<string>(defaultDeckId ? String(defaultDeckId) : '');
   const [maxCards, setMaxCards] = useState('5');
-  const [result, setResult] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [job, setJob] = useState<Job | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: decks = [] } = useQuery({
     queryKey: ['decks'],
     queryFn: fetchDecks,
   });
 
+  /** Stop polling interval if running. */
+  const stopPolling = () => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  /** Start polling GET /api/jobs/{id} every 1s. */
+  const startPolling = (id: string) => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const row = await getJob(id);
+        setJob(row);
+        if (TERMINAL_STATUSES.includes(row.status)) {
+          stopPolling();
+          if (row.status === 'succeeded') {
+            queryClient.invalidateQueries({ queryKey: ['cards'] });
+            queryClient.invalidateQueries({ queryKey: ['decks'] });
+            queryClient.invalidateQueries({ queryKey: ['card-stats'] });
+            console.info('[GenerateCardsDialog] generation succeeded', row.result);
+          }
+        }
+      } catch (err) {
+        console.error('[GenerateCardsDialog] poll error', err);
+      }
+    }, 1000);
+  };
+
+  /** Clean up interval on unmount or dialog close. */
+  useEffect(() => () => stopPolling(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const reset = () => {
+    stopPolling();
+    setJobId(null);
+    setJob(null);
+  };
+
   const genMut = useMutation({
-    mutationFn: () => generateCards(Number(paperId), Number(deckId), Number(maxCards)),
+    mutationFn: () => generateCardsJob(Number(paperId), Number(deckId), Number(maxCards)),
     onSuccess: (data) => {
-      queryClient.invalidateQueries({ queryKey: ['cards'] });
-      queryClient.invalidateQueries({ queryKey: ['decks'] });
-      queryClient.invalidateQueries({ queryKey: ['card-stats'] });
-      setResult(`Generated ${data.cards_created} cards (confidence: ${data.confidence})`);
+      setJobId(data.job_id);
+      setJob(null);
+      startPolling(data.job_id);
     },
     onError: (err) => {
-      setResult(`Error: ${err instanceof Error ? err.message : 'Generation failed'}`);
+      const msg = err instanceof Error ? err.message : 'Generation failed';
+      setJob({ status: 'failed', error: { message: msg } } as unknown as Job);
     },
   });
 
@@ -180,8 +225,31 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
     }
   }, [defaultDeckId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const isGenerating = genMut.isPending || (!!jobId && !!job && !TERMINAL_STATUSES.includes(job.status));
+  const isQueued = !!jobId && (!job || job.status === 'queued');
+  const isRunning = !!job && job.status === 'running';
+  const isDone = !!job && TERMINAL_STATUSES.includes(job.status);
+
+  const progressLabel = isQueued
+    ? 'Queued…'
+    : isRunning
+    ? (job?.progress_message ?? 'Generating…')
+    : null;
+
+  const progressPct = isRunning && job?.progress != null
+    ? Math.round(job.progress * 100)
+    : null;
+
+  const successMsg = isDone && job?.status === 'succeeded' && job.result
+    ? `Generated ${(job.result as { cards_created?: number }).cards_created ?? '?'} cards (confidence: ${(job.result as { confidence?: string }).confidence ?? '?'})`
+    : null;
+
+  const errorPayload = isDone && job?.status === 'failed'
+    ? (job.error ?? { message: 'Unknown error' })
+    : null;
+
   return (
-    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) setResult(null); }}>
+    <Dialog open={open} onOpenChange={(v) => { onOpenChange(v); if (!v) reset(); }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -223,22 +291,53 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
               onChange={(e) => setMaxCards(e.target.value)}
             />
           </div>
-          {result && (
-            <p className={`text-sm ${result.startsWith('Error') ? 'text-destructive' : 'text-green-600'}`}>
-              {result}
-            </p>
+
+          {/* Progress feedback */}
+          {progressLabel && (
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">{progressLabel}</p>
+              {progressPct !== null && (
+                <div className="h-1.5 w-full rounded-full bg-muted">
+                  <div
+                    className="h-1.5 rounded-full bg-primary transition-all"
+                    style={{ width: `${progressPct}%` }}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Success */}
+          {successMsg && (
+            <p className="text-sm text-green-600">{successMsg}</p>
+          )}
+
+          {/* Error with optional action_link */}
+          {errorPayload && (
+            <div className="text-sm text-destructive space-y-1">
+              <p>{errorPayload.message}</p>
+              {errorPayload.action_link && (
+                <Link
+                  to={errorPayload.action_link.href}
+                  className="underline hover:opacity-80"
+                  onClick={() => onOpenChange(false)}
+                >
+                  {errorPayload.action_link.label}
+                </Link>
+              )}
+            </div>
           )}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => { onOpenChange(false); setResult(null); }}>
-            {result ? 'Close' : 'Cancel'}
+          <Button variant="outline" onClick={() => { onOpenChange(false); reset(); }}>
+            {isDone ? 'Close' : 'Cancel'}
           </Button>
-          {!result && (
+          {!isDone && (
             <Button
-              onClick={() => genMut.mutate()}
-              disabled={!paperId || !deckId || genMut.isPending}
+              onClick={() => { reset(); genMut.mutate(); }}
+              disabled={!paperId || !deckId || isGenerating}
             >
-              {genMut.isPending ? 'Generating...' : 'Generate'}
+              {isGenerating ? 'Generating…' : 'Generate'}
             </Button>
           )}
         </DialogFooter>

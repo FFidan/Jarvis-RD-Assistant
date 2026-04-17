@@ -184,6 +184,7 @@ import type {
   SetupStatus,
   TelegramPairing,
   TelegramPairingStatus,
+  GenerateJobAccepted,
 } from '@/types';
 
 // --- Dashboard ---
@@ -380,11 +381,20 @@ export const submitReview = (cardId: number, rating: number, durationMs?: number
 export const getStats = () => apiFetch<RetentionStats>('/api/stats');
 
 // --- Generate & Export ---
-export const generateCards = (paperId: number, deckId: number, maxCards = 5) =>
-  apiFetch<GenerateCardsResponse>('/api/generate', {
+
+/** Enqueue card generation for a single paper. Returns a job_id to poll. */
+export const generateCardsJob = (paperId: number, deckId: number, maxCards = 5) =>
+  apiFetch<GenerateJobAccepted>('/api/generate', {
     method: 'POST',
     body: JSON.stringify({ paper_id: paperId, deck_id: deckId, max_cards: maxCards }),
   });
+
+/** Kept as a deprecated alias so callers that haven't migrated yet still compile. */
+export const generateCards = generateCardsJob as unknown as (
+  paperId: number,
+  deckId: number,
+  maxCards?: number,
+) => Promise<GenerateCardsResponse>;
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -650,3 +660,86 @@ export const generatePulseNow = () =>
 
 export const fetchPulseStats = (days = 30) =>
   apiFetch<PulseStats>(`/api/pulse/stats?days=${days}`);
+
+// --- Jobs ---
+
+import type { Job } from '@/stores/job-store';
+
+export const createJob = (kind: string, payload: unknown): Promise<{ job_id: string; status: string }> =>
+  apiFetch('/api/jobs', {
+    method: 'POST',
+    body: JSON.stringify({ kind, payload }),
+  });
+
+export const getJob = (jobId: string): Promise<Job> =>
+  apiFetch<Job>(`/api/jobs/${jobId}`);
+
+export const listJobs = (params?: { status?: string; kind?: string; limit?: number }): Promise<Job[]> => {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set('status', params.status);
+  if (params?.kind) qs.set('kind', params.kind);
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  const query = qs.toString();
+  return apiFetch<Job[]>(`/api/jobs${query ? `?${query}` : ''}`);
+};
+
+export const cancelJob = (jobId: string): Promise<void> =>
+  apiFetch<void>(`/api/jobs/${jobId}/cancel`, { method: 'POST' });
+
+/**
+ * Stream a job's SSE events via GET.
+ *
+ * Calls `onEvent` for each progress update until the job reaches a terminal
+ * status or the signal is aborted.
+ */
+export async function streamJob(
+  jobId: string,
+  onEvent: (ev: {
+    progress?: number;
+    status?: string;
+    progress_message?: string | null;
+    result?: Record<string, unknown> | null;
+    error?: { message: string; action_link?: { label: string; href: string } } | null;
+  }) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const apiKey = useAuthStore.getState().getApiKey();
+  const res = await fetch(`/api/jobs/${jobId}/stream`, {
+    method: 'GET',
+    headers: apiKey ? { 'X-API-Key': apiKey } : {},
+    signal,
+  });
+
+  if (!res.ok) {
+    handleAuthFailure(res.status);
+    throw new ApiError(res.status, await res.text());
+  }
+
+  if (!res.body) return;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw = line.slice(6).trim();
+        if (raw === '[DONE]') return;
+        try {
+          onEvent(JSON.parse(raw));
+        } catch {
+          /* skip malformed frames */
+        }
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+}
