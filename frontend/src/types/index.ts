@@ -584,6 +584,13 @@ export interface SearchPreviewResult {
   citation_count: number;
   metadata: Record<string, unknown>;
 }
+
+export interface SearchPreviewResponse {
+  results: SearchPreviewResult[];
+  total: number;
+  per_source_counts: Record<string, number>;
+  degraded_sources: string[];
+}
 // --- User State ---
 
 export interface UserState {

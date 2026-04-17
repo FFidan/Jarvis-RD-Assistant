@@ -4,6 +4,34 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Unified Async Job System** (migration 023): `jobs` table, `jarvis_common/jobs.py` module, REST endpoints (`POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` SSE, `POST /api/jobs/{id}/cancel`), frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toast notifications. Pulse generate, Paper process, Paper analyze, Generate cards (single + batch) migrated.
+- **Global Pomodoro timer** in the TopBar — visible on every page when a session is active, hidden when idle. Click to navigate back to My Day.
+- **Source reorder via drag-and-drop**: `paper_sources.display_order` column + `PATCH /api/sources/reorder` endpoint + `@dnd-kit/sortable` grip handle UI.
+- **Discover multi-source search**: checkbox multi-select over ArXiv, Semantic Scholar, OpenAlex, PubMed with backend fan-out, dedupe, per-source error isolation.
+- **Pulse Diagnostics** endpoint (`GET /api/pulse/debug`) + expandable Diagnostics section in Pulse settings tab.
+- Info-bubble tooltips on source cards, notification rows, and Paper Detail action buttons.
+
+### Changed
+- **My Day redesigned** as a triage dashboard: DayHeader with counters, Pulse preview card (3 papers + link to full deck), Pomodoro + Tasks, ActionItems, Learning summary. Full Pulse deck lives at `/feed?tab=pulse`.
+- **Settings** "Recommendations" tab replaced by dedicated "Pulse" tab consolidating enable/schedule/weights/generate/diagnostics. Automation tab no longer carries Pulse controls.
+- Sidebar "Feed" → "Research Feed".
+- `notifications.timezone` renders as "Timezone" instead of raw dotted key.
+- Source cards use uniform tall layout regardless of API-key requirement.
+
+### Fixed
+- Pulse `llm_timeout` after 600s appeared as fatal error even after successful degraded runs. Now distinguishes `last_error` (fatal) vs `degraded_reason` (soft, deck produced with fallback scoring).
+- "Analyze Paper" on locally-uploaded PDFs no longer errors with "no PDF URL" — local papers skip the download step.
+- Generate Cards "no processed chunks" error is now a clickable link to Process PDF.
+- PubMed search relevance sort no longer silently ignored (was hardcoded to `pub_date`).
+- Semantic Scholar author filter now actually filters client-side (was only logging a warning).
+- My Day TopBar title shows "My Day" instead of falling back to "JARVIS".
+
+### Removed
+- `learning_engine/app/jobs.py` (in-memory job state; replaced by shared jobs table).
+- Legacy client-side multi-source fan-out in Discover tab (backend handles it).
+- `frontend/src/components/settings/RecommendationSection.tsx` (absorbed into PulseSection).
+
 ## [1.2.4] - 2026-04-15
 
 ### Round-7 Audit Remediation

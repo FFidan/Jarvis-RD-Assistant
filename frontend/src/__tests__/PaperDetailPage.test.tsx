@@ -5,6 +5,26 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
 
+// Track dismiss calls for banner tests
+let mockPaperDetailNoteDismissed = false;
+const mockSetPaperDetailNoteDismissed = vi.fn((value: boolean) => {
+  mockPaperDetailNoteDismissed = value;
+});
+
+vi.mock('@/stores/ui-store', () => ({
+  useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
+    selector({
+      paperDetailNoteDismissed: mockPaperDetailNoteDismissed,
+      setPaperDetailNoteDismissed: mockSetPaperDetailNoteDismissed,
+      sidebarCollapsed: false,
+      selectedPaperId: null,
+      checklistDismissed: false,
+      toggleSidebar: vi.fn(),
+      setSelectedPaperId: vi.fn(),
+      dismissChecklist: vi.fn(),
+    }),
+}));
+
 // Mock the API module
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -154,6 +174,7 @@ function renderPage(paperId = '42') {
 describe('PaperDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPaperDetailNoteDismissed = false;
     mockFetchDecks.mockResolvedValue([]);
     mockFetchNotes.mockResolvedValue(MOCK_NOTES);
   });
@@ -318,5 +339,63 @@ describe('PaperDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('No summary available')).toBeInTheDocument();
     });
+  });
+
+  it('shows workspace note banner when paperDetailNoteDismissed is false', async () => {
+    mockPaperDetailNoteDismissed = false;
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: null,
+      chunks: [],
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Paper Detail is the workspace/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+  });
+
+  it('hides workspace note banner when × is clicked', async () => {
+    const user = userEvent.setup();
+    mockPaperDetailNoteDismissed = false;
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: null,
+      chunks: [],
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Dismiss' })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+
+    expect(mockSetPaperDetailNoteDismissed).toHaveBeenCalledWith(true);
+  });
+
+  it('does not show workspace note banner when paperDetailNoteDismissed is true', async () => {
+    mockPaperDetailNoteDismissed = true;
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: null,
+      chunks: [],
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Paper Detail is the workspace/)).not.toBeInTheDocument();
   });
 });

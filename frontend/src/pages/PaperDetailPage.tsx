@@ -2,6 +2,7 @@ import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query';
 import { FileText, ArrowLeft, Menu } from 'lucide-react';
 import { useState, useEffect } from 'react';
+import { useUIStore } from '@/stores/ui-store';
 import { fetchPaperDetail } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
@@ -31,6 +32,8 @@ export function PaperDetailPage() {
   const [searchParams] = useSearchParams();
   const [sheetOpen, setSheetOpen] = useState(false);
   const [processPulse, setProcessPulse] = useState(false);
+  const paperDetailNoteDismissed = useUIStore((s) => s.paperDetailNoteDismissed);
+  const setPaperDetailNoteDismissed = useUIStore((s) => s.setPaperDetailNoteDismissed);
 
   // If ?action=process, expand Manual steps and scroll the Process PDF button
   // into view with a brief animate-pulse. Delayed 400ms to allow data render.
@@ -147,6 +150,12 @@ export function PaperDetailPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_300px]">
         {/* Main content */}
         <div className="min-w-0 space-y-6">
+          {!paperDetailNoteDismissed && (
+            <div className="border border-border/60 bg-muted/30 rounded p-4 flex justify-between gap-4 text-sm">
+              <p>Paper Detail is the workspace for a single paper. Run Analyze to download+process+summarize, then explore via Summary / Evidence / Chunks / Cross-References tabs, ask questions via the Ask tab (Research Feed), or turn it into flashcards.</p>
+              <button onClick={() => setPaperDetailNoteDismissed(true)} aria-label="Dismiss" className="text-muted-foreground hover:text-foreground">×</button>
+            </div>
+          )}
           <PaperHeader paper={paper} />
 
           <Tabs defaultValue="summary">

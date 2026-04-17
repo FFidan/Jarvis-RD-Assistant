@@ -5,9 +5,11 @@ interface UIState {
   sidebarCollapsed: boolean;
   selectedPaperId: number | null;
   checklistDismissed: boolean;
+  paperDetailNoteDismissed: boolean;
   toggleSidebar: () => void;
   setSelectedPaperId: (id: number | null) => void;
   dismissChecklist: () => void;
+  setPaperDetailNoteDismissed: (value: boolean) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -16,6 +18,7 @@ export const useUIStore = create<UIState>()(
       sidebarCollapsed: false,
       selectedPaperId: null,
       checklistDismissed: false,
+      paperDetailNoteDismissed: false,
 
       toggleSidebar() {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -26,11 +29,15 @@ export const useUIStore = create<UIState>()(
       dismissChecklist() {
         set({ checklistDismissed: true });
       },
+      setPaperDetailNoteDismissed(value: boolean) {
+        set({ paperDetailNoteDismissed: value });
+      },
     }),
     {
       name: 'jarvis-ui',
       partialize: (state) => ({
         checklistDismissed: state.checklistDismissed,
+        paperDetailNoteDismissed: state.paperDetailNoteDismissed,
       }),
     },
   ),

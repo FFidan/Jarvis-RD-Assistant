@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import type { SearchPreviewResult } from '@/types';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
   Select,
@@ -11,6 +12,14 @@ import {
 } from '@/components/ui/select';
 import { formatAuthors, formatDate } from '@/lib/utils';
 import { Save, X, Loader2 } from 'lucide-react';
+
+const SOURCE_LABELS: Record<string, string> = {
+  arxiv: 'arXiv',
+  semantic_scholar: 'S2',
+  openalex: 'OA',
+  pubmed: 'PubMed',
+  local: 'Local',
+};
 
 interface PreviewResultsProps {
   papers: SearchPreviewResult[];
@@ -96,7 +105,14 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
               aria-label={`Select ${paper.title || 'paper'}`}
             />
             <div className="min-w-0 flex-1">
-              <p className="font-medium leading-tight">{paper.title || 'Untitled'}</p>
+              <div className="flex items-start gap-2 flex-wrap">
+                <p className="font-medium leading-tight flex-1">{paper.title || 'Untitled'}</p>
+                {paper.source_type && (
+                  <Badge variant="outline" className="shrink-0 text-xs">
+                    {SOURCE_LABELS[paper.source_type] ?? paper.source_type}
+                  </Badge>
+                )}
+              </div>
               <p className="text-sm text-muted-foreground">
                 {formatAuthors(paper.authors)} &middot; {formatDate(paper.published_date)}
               </p>

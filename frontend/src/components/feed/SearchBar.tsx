@@ -12,9 +12,13 @@ import { Search, Loader2, ChevronDown, ChevronUp, SlidersHorizontal } from 'luci
 import type { SearchFilters } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 
+// Note: Select is retained for the filters panel (Sort By, Max Results)
+
 interface SearchBarProps {
-  onSearch: (query: string, source: string, maxResults: number, filters: SearchFilters) => void;
+  onSearch: (query: string, sourceTypes: string[], maxResults: number, filters: SearchFilters) => void;
   isLoading: boolean;
+  /** Currently selected source types (controlled externally). */
+  sourceTypes: string[];
 }
 
 const DEFAULT_FILTERS: SearchFilters = {
@@ -33,9 +37,8 @@ function countActiveFilters(filters: SearchFilters): number {
   return count;
 }
 
-export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
+export function SearchBar({ onSearch, isLoading, sourceTypes }: SearchBarProps) {
   const [query, setQuery] = useState('');
-  const [source, setSource] = useState('arxiv');
   const [maxResults, setMaxResults] = useState(10);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
@@ -43,7 +46,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
   function handleSubmit() {
     const trimmed = query.trim();
     if (!trimmed) return;
-    onSearch(trimmed, source, maxResults, filters);
+    onSearch(trimmed, sourceTypes, maxResults, filters);
   }
 
   function handleClearFilters() {
@@ -60,7 +63,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <Input
-          placeholder="Search arXiv or Semantic Scholar..."
+          placeholder="Search your selected sources…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => {
@@ -69,18 +72,6 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
           className="flex-1"
         />
         <div className="flex gap-2">
-          <Select value={source} onValueChange={setSource}>
-            <SelectTrigger className="w-[160px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="arxiv">arXiv</SelectItem>
-              <SelectItem value="semantic_scholar">Semantic Scholar</SelectItem>
-              <SelectItem value="openalex">OpenAlex</SelectItem>
-              <SelectItem value="pubmed">PubMed</SelectItem>
-              <SelectItem value="both">Both (arXiv + S2)</SelectItem>
-            </SelectContent>
-          </Select>
           <Button
             variant="outline"
             size="sm"

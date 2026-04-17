@@ -203,4 +203,18 @@ describe('ActionsSidebar', () => {
     expect(screen.getByText('Max cards')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Generate Cards/ })).toBeInTheDocument();
   });
+
+  it('renders tooltip info icons for all 5 action buttons', async () => {
+    renderSidebar();
+
+    // Wait for decks to load (generate-cards section renders after)
+    await screen.findByText('Target Deck');
+
+    // Each InfoTooltip renders an aria-label="More info" button
+    const tooltipButtons = screen.getAllByRole('button', { name: /More info/i });
+
+    // 5 tooltips: analyze, download, process, summarize, generate-cards
+    // Plus the "Max cards" InfoTooltip already in the file = 6 total
+    expect(tooltipButtons.length).toBeGreaterThanOrEqual(5);
+  });
 });

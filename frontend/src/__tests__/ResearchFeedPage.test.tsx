@@ -64,17 +64,25 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ],
     total: 2,
   }),
-    searchPreview: vi.fn().mockResolvedValue([
-    {
-      title: 'Search Result Paper',
-      authors: ['Search Author'],
-      abstract: 'A search result abstract.',
-      published_date: '2025-03-01',
-      url: 'https://arxiv.org/abs/2303.00001',
-      external_id: 'arxiv:2303.00001',
-      source_type: 'arxiv',
-    },
-  ]),
+    searchPreview: vi.fn().mockResolvedValue({
+      results: [
+        {
+          title: 'Search Result Paper',
+          authors: ['Search Author'],
+          abstract: 'A search result abstract.',
+          published_date: '2025-03-01',
+          url: 'https://arxiv.org/abs/2303.00001',
+          external_id: 'arxiv:2303.00001',
+          source_type: 'arxiv',
+          pdf_url: null,
+          citation_count: 0,
+          metadata: {},
+        },
+      ],
+      total: 1,
+      per_source_counts: { arxiv: 1 },
+      degraded_sources: [],
+    }),
     batchSavePapers: vi.fn().mockResolvedValue([{ id: 1, title: 'Saved Paper' }]),
     markPaperRead: vi.fn().mockResolvedValue({ status: 'ok' }),
     discoverPapers: vi.fn().mockResolvedValue([]),
@@ -87,13 +95,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchTopics: vi.fn().mockResolvedValue([
       {
         id: 1,
-      name: 'Machine Learning',
-      query_terms: ['ML'],
-      category: null,
-      enabled: true,
-      created_at: '2025-01-01T00:00:00Z',
-    },
+        name: 'Machine Learning',
+        query_terms: ['ML'],
+        category: null,
+        enabled: true,
+        created_at: '2025-01-01T00:00:00Z',
+      },
     ]),
+    fetchSources: vi.fn().mockResolvedValue([
+      { id: 1, source_type: 'arxiv', enabled: true, config: {}, priority: 1, display_order: 1, created_at: '2025-01-01T00:00:00Z' },
+      { id: 2, source_type: 'semantic_scholar', enabled: true, config: {}, priority: 2, display_order: 2, created_at: '2025-01-01T00:00:00Z' },
+      { id: 3, source_type: 'openalex', enabled: true, config: {}, priority: 3, display_order: 3, created_at: '2025-01-01T00:00:00Z' },
+      { id: 4, source_type: 'pubmed', enabled: true, config: {}, priority: 4, display_order: 4, created_at: '2025-01-01T00:00:00Z' },
+      { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
+    ]),
+    fetchPulseHistory: vi.fn().mockResolvedValue([]),
   };
 });
 
@@ -152,12 +168,12 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByText(/Get answers synthesised from your entire library/i)).toBeInTheDocument();
   });
 
-  it('renders the search input', async () => {
+  it('renders the search input with updated placeholder', async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Discover' }));
     expect(
-      screen.getByPlaceholderText('Search arXiv or Semantic Scholar...'),
+      screen.getByPlaceholderText('Search your selected sources…'),
     ).toBeInTheDocument();
   });
 
@@ -166,6 +182,98 @@ describe('ResearchFeedPage', () => {
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Discover' }));
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
+  });
+
+  it('renders source checkboxes in Discover tab for enabled non-local sources', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
+    // Wait for sources to load
+    await waitFor(() => {
+      expect(screen.getByLabelText('arXiv')).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
+    expect(screen.getByLabelText('OpenAlex')).toBeInTheDocument();
+    expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
+    // Local source should not appear in the Discover tab checkboxes
+    expect(screen.queryByLabelText('Local')).not.toBeInTheDocument();
+  });
+
+  it('search with only arxiv + pubmed checked passes correct source_types to API', async () => {
+    const user = userEvent.setup();
+    const { searchPreview } = await import('@/lib/api');
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
+    // Wait for checkboxes
+    await waitFor(() => {
+      expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
+    });
+
+    // Uncheck Semantic Scholar and OpenAlex, leave arxiv + pubmed
+    await user.click(screen.getByLabelText('Semantic Scholar'));
+    await user.click(screen.getByLabelText('OpenAlex'));
+
+    const searchInput = screen.getByPlaceholderText('Search your selected sources…');
+    await user.type(searchInput, 'neural networks');
+    await user.click(screen.getByRole('button', { name: /search/i }));
+
+    await waitFor(() => {
+      expect(vi.mocked(searchPreview)).toHaveBeenCalledWith(
+        'neural networks',
+        expect.arrayContaining(['arxiv', 'pubmed']),
+        expect.any(Number),
+        expect.any(Object),
+      );
+    });
+    const callArgs = vi.mocked(searchPreview).mock.calls[0];
+    const sourceTypes = callArgs[1] as string[];
+    expect(sourceTypes).not.toContain('semantic_scholar');
+    expect(sourceTypes).not.toContain('openalex');
+  });
+
+  it('shows degraded sources warning when backend reports errors', async () => {
+    const user = userEvent.setup();
+    const { searchPreview } = await import('@/lib/api');
+    vi.mocked(searchPreview).mockResolvedValueOnce({
+      results: [
+        {
+          title: 'ArXiv Only Paper',
+          authors: ['Author X'],
+          abstract: null,
+          published_date: '2025-01-01',
+          url: 'https://arxiv.org/abs/2301.99999',
+          external_id: 'arxiv:2301.99999',
+          source_type: 'arxiv',
+          pdf_url: null,
+          citation_count: 0,
+          metadata: {},
+        },
+      ],
+      total: 1,
+      per_source_counts: { arxiv: 1 },
+      degraded_sources: ['pubmed'],
+    });
+
+    renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search your selected sources…')).toBeInTheDocument();
+    });
+
+    const searchInput = screen.getByPlaceholderText('Search your selected sources…');
+    await user.type(searchInput, 'cardiac imaging');
+    await user.click(screen.getByRole('button', { name: /search/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Some sources had errors/i)).toBeInTheDocument();
+    });
+    // The warning banner should reference the degraded source by name
+    const warningEl = screen.getByText(/Some sources had errors/i).closest('div');
+    expect(warningEl?.textContent).toMatch(/PubMed/i);
   });
 
   it('switches to Library tab on click', async () => {
@@ -190,7 +298,7 @@ describe('ResearchFeedPage', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Discover' }));
 
-    const searchInput = screen.getByPlaceholderText('Search arXiv or Semantic Scholar...');
+    const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
 
     const searchBtn = screen.getByRole('button', { name: /search/i });
@@ -214,7 +322,7 @@ describe('ResearchFeedPage', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Discover' }));
 
-    const searchInput = screen.getByPlaceholderText('Search arXiv or Semantic Scholar...');
+    const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
     await user.click(screen.getByRole('button', { name: /search/i }));
 

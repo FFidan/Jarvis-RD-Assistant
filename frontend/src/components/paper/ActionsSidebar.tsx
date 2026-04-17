@@ -18,6 +18,19 @@ import {
 } from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 
+const ACTION_TOOLTIPS: Record<string, string> = {
+  analyze:
+    'Run the full pipeline: download the PDF, process it into chunks, and generate a summary. One click for everything.',
+  download:
+    'Download the PDF from its source URL to local storage. Required before processing.',
+  process:
+    'Parse the PDF text, split into chunks, and embed for semantic search. Required before chat, summary, or flashcards.',
+  summarize:
+    'Generate an LLM summary with verbatim evidence quotes and page numbers. Saved to the Summary tab.',
+  'generate-cards':
+    'Turn this paper into spaced-repetition flashcards. Requires the paper to be processed first.',
+};
+
 interface ActionsSidebarProps {
   paperId: number;
   /** Whether the paper's PDF has been downloaded */
@@ -238,6 +251,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
       >
         <Wand2 className="mr-2 h-4 w-4" />
         {analyzeLabel}
+        <InfoTooltip content={ACTION_TOOLTIPS['analyze']} side="left" className="ml-auto" />
       </Button>
 
       {/* Step tracker: always visible so users can see pipeline completion state */}
@@ -287,6 +301,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           >
             <Download className="mr-2 h-4 w-4" />
             {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
+            <InfoTooltip content={ACTION_TOOLTIPS['download']} side="left" className="ml-auto" />
           </Button>
 
           <Button
@@ -299,6 +314,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           >
             <Cog className="mr-2 h-4 w-4" />
             {processMut.isPending ? 'Processing...' : 'Process PDF'}
+            <InfoTooltip content={ACTION_TOOLTIPS['process']} side="left" className="ml-auto" />
           </Button>
 
           <Button
@@ -310,6 +326,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           >
             <FileText className="mr-2 h-4 w-4" />
             {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
+            <InfoTooltip content={ACTION_TOOLTIPS['summarize']} side="left" className="ml-auto" />
           </Button>
         </div>
       </details>
@@ -385,6 +402,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           >
             <Sparkles className="mr-2 h-4 w-4" />
             {isGenPending ? 'Generating…' : 'Generate Cards'}
+            <InfoTooltip content={ACTION_TOOLTIPS['generate-cards']} side="left" className="ml-auto" />
           </Button>
         </div>
       ) : (

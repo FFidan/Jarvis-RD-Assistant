@@ -148,6 +148,7 @@ import type {
   ActivityRow,
   RetentionRow,
   ReviewRow,
+  SearchPreviewResponse,
   LlmCostRow,
   SourceCountRow,
   StatusCountRow,
@@ -471,15 +472,19 @@ export interface SearchFilters {
 
 export const searchPreview = (
   query: string,
-  source?: string,
+  sourceTypes?: string | string[],
   maxResults?: number,
   filters?: SearchFilters,
-) =>
-  apiFetch<SearchPreviewResult[]>('/api/search-preview', {
+) => {
+  // Accept either a single source string (legacy) or an array of source types
+  const source_types = Array.isArray(sourceTypes)
+    ? sourceTypes
+    : [sourceTypes || 'arxiv'];
+  return apiFetch<SearchPreviewResponse>('/api/search-preview', {
     method: 'POST',
     body: JSON.stringify({
       query,
-      source: source || 'arxiv',
+      source_types,
       max_results: maxResults || 10,
       year_from: filters?.yearFrom ?? null,
       year_to: filters?.yearTo ?? null,
@@ -487,6 +492,7 @@ export const searchPreview = (
       author: filters?.author ?? null,
     }),
   });
+};
 
 export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]) =>
   apiFetch<Paper[]>('/api/papers/batch-save', {

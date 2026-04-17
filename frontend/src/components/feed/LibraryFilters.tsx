@@ -26,7 +26,7 @@ interface LibraryFiltersProps {
 }
 
 const STATUS_OPTIONS = ['new', 'reading', 'read', 'archived', 'starred'];
-const SOURCE_OPTIONS = ['arxiv', 'semantic_scholar', 'local'];
+const SOURCE_OPTIONS = ['arxiv', 'semantic_scholar', 'local', 'openalex', 'pubmed'] as const;
 
 /**
  * Multi-select implemented as a simple toggle list inside a Select.

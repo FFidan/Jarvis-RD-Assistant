@@ -6,9 +6,10 @@ import {
   searchPreview,
   batchSavePapers,
   fetchPulseHistory,
+  fetchSources,
 } from '@/lib/api';
 import type { SearchFilters } from '@/lib/api';
-import type { PulseDeck as PulseDeckType, SearchPreviewResult } from '@/types';
+import type { PulseDeck as PulseDeckType, SearchPreviewResult, SourceConfig } from '@/types';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StreamingChat } from '@/components/chat/StreamingChat';
@@ -17,7 +18,14 @@ import { PreviewResults } from '@/components/feed/PreviewResults';
 import { NewTab } from '@/components/feed/NewTab';
 import { LibraryTab } from '@/components/feed/LibraryTab';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, AlertTriangle } from 'lucide-react';
+
+const SOURCE_LABELS: Record<string, string> = {
+  arxiv: 'arXiv',
+  semantic_scholar: 'Semantic Scholar',
+  openalex: 'OpenAlex',
+  pubmed: 'PubMed',
+};
 
 const VALID_TABS = new Set(['library', 'new', 'discover', 'ask', 'pulse']);
 
@@ -25,11 +33,31 @@ export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
+  const [degradedSources, setDegradedSources] = useState<string[]>([]);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [activeTab, setActiveTab] = useState(
     tabParam && VALID_TABS.has(tabParam) ? tabParam : 'library',
   );
-  const [bothSearching, setBothSearching] = useState(false);
+  const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([]);
+
+  // Load enabled external sources to drive the checkbox group
+  const { data: allSources } = useQuery<SourceConfig[]>({
+    queryKey: ['sources'],
+    queryFn: fetchSources,
+  });
+
+  // Derive the list of searchable (non-local) enabled sources
+  const externalSources = (allSources ?? []).filter(
+    (s) => s.source_type !== 'local' && s.enabled,
+  );
+
+  // Initialise selectedSourceTypes once sources load (all checked by default)
+  useEffect(() => {
+    if (externalSources.length > 0 && selectedSourceTypes.length === 0) {
+      setSelectedSourceTypes(externalSources.map((s) => s.source_type));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [externalSources.length]);
 
   // Sync tab → URL when user clicks a tab
   const handleTabChange = useCallback(
@@ -63,21 +91,23 @@ export function ResearchFeedPage() {
   const searchMutation = useMutation({
     mutationFn: ({
       query,
-      source,
+      sourceTypes,
       maxResults,
       filters,
     }: {
       query: string;
-      source: string;
+      sourceTypes: string[];
       maxResults: number;
       filters: SearchFilters;
-    }) => searchPreview(query, source, maxResults, filters),
+    }) => searchPreview(query, sourceTypes, maxResults, filters),
     onSuccess: (data) => {
-      setPreviewResults(data);
+      setPreviewResults(data.results);
+      setDegradedSources(data.degraded_sources);
       setSaveMessage(null);
     },
     onError: () => {
       setPreviewResults([]);
+      setDegradedSources([]);
       setSaveMessage(null);
     },
   });
@@ -95,39 +125,13 @@ export function ResearchFeedPage() {
     },
   });
 
-  const handleSearch = useCallback(async (
+  const handleSearch = useCallback((
     query: string,
-    source: string,
+    sourceTypes: string[],
     maxResults: number,
     filters: SearchFilters,
   ) => {
-    if (source === 'both') {
-      setBothSearching(true);
-      setSaveMessage(null);
-      try {
-        const [arxivResult, s2Result] = await Promise.allSettled([
-          searchPreview(query, 'arxiv', maxResults, filters),
-          searchPreview(query, 'semantic_scholar', maxResults, filters),
-        ]);
-        const arxivPapers = arxivResult.status === 'fulfilled' ? arxivResult.value : [];
-        const s2Papers = s2Result.status === 'fulfilled' ? s2Result.value : [];
-        const seen = new Set<string>();
-        const merged: SearchPreviewResult[] = [];
-        for (const paper of [...arxivPapers, ...s2Papers]) {
-          if (!seen.has(paper.external_id)) {
-            seen.add(paper.external_id);
-            merged.push(paper);
-          }
-        }
-        setPreviewResults(merged);
-      } catch {
-        setPreviewResults([]);
-      } finally {
-        setBothSearching(false);
-      }
-    } else {
-      searchMutation.mutate({ query, source, maxResults, filters });
-    }
+    searchMutation.mutate({ query, sourceTypes, maxResults, filters });
   }, [searchMutation]);
 
   function handleSave(papers: SearchPreviewResult[]) {
@@ -136,6 +140,7 @@ export function ResearchFeedPage() {
 
   function handleClearPreview() {
     setPreviewResults([]);
+    setDegradedSources([]);
     setSaveMessage(null);
   }
 
@@ -177,10 +182,45 @@ export function ResearchFeedPage() {
           <div className="space-y-4">
             <div>
               <h2 className="text-sm font-medium">Discover New Papers</h2>
-              <p className="text-xs text-muted-foreground mb-2">Search ArXiv, Semantic Scholar and other sources — results can be added to your library.</p>
+              <p className="text-xs text-muted-foreground mb-2">Search across your enabled sources — results can be added to your library.</p>
             </div>
-            <SearchBar onSearch={handleSearch} isLoading={bothSearching || searchMutation.isPending} />
+
+            {/* Multi-source checkbox group */}
+            {externalSources.length > 0 && (
+              <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
+                <span className="text-xs font-medium text-muted-foreground">Sources:</span>
+                {externalSources.map((source) => (
+                  <label key={source.source_type} className="flex items-center gap-1.5 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
+                      checked={selectedSourceTypes.includes(source.source_type)}
+                      onChange={(e) => {
+                        setSelectedSourceTypes((prev) =>
+                          e.target.checked
+                            ? [...prev, source.source_type]
+                            : prev.filter((t) => t !== source.source_type),
+                        );
+                      }}
+                    />
+                    <span className="text-sm">{SOURCE_LABELS[source.source_type] ?? source.source_type}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <SearchBar
+              onSearch={handleSearch}
+              isLoading={searchMutation.isPending}
+              sourceTypes={selectedSourceTypes}
+            />
             {searchErrorMessage && <p className="text-sm text-destructive">{searchErrorMessage}</p>}
+            {degradedSources.length > 0 && (
+              <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
+                <AlertTriangle className="h-4 w-4 shrink-0" />
+                <span>Some sources had errors: {degradedSources.map((s) => SOURCE_LABELS[s] ?? s).join(', ')}</span>
+              </div>
+            )}
             {saveMessage && (
               <p className={`text-sm ${saveMessage.type === 'success' ? 'text-green-600' : 'text-destructive'}`}>
                 {saveMessage.text}

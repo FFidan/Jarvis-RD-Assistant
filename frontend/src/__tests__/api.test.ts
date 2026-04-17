@@ -107,7 +107,7 @@ describe('apiFetch', () => {
         method: 'POST',
         body: JSON.stringify({
           query: 'Neural ODE',
-          source: 'semantic_scholar',
+          source_types: ['semantic_scholar'],
           max_results: 10,
           year_from: null,
           year_to: null,

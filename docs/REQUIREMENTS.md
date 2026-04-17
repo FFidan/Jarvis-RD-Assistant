@@ -179,6 +179,13 @@ Contains cross-cutting utilities shared by paper_ingestion, learning_engine, and
 - `db_helpers.py` -- `dynamic_update()`, `delete_or_404()`, `fmt_safe()`,
   `init_pg_connection()`, `validated_model()`
 - `ratelimit.py` -- `create_limiter()` with trusted-network X-Forwarded-For handling
+- `jobs.py` -- Unified Async Job System: `@job_handler` registry, `create_job()`,
+  `update_job_status()`, `fetch_job()`, and per-service worker loop. Both
+  `paper_ingestion` and `learning_engine` run their own worker loop instance, polling
+  the shared `jobs` table and dispatching to registered handlers by `kind`. All
+  long-running operations (pulse.generate, paper.process, paper.analyze, card.generate,
+  card.generate_batch) are dispatched through this system instead of blocking HTTP
+  handlers or using in-memory state.
 
 Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 
@@ -211,7 +218,7 @@ Note:
 
 ## Database Migrations
 
-22 migrations currently applied in `db/migrations/` (001-022). Fresh installs get all tables via `db/init.sql`.
+23 migrations currently applied in `db/migrations/` (001-023). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/app/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
@@ -230,6 +237,11 @@ Migration 018 does not modify any existing column on any existing table — it i
 - **020**: `telegram_user_pairings` table for pairing flow (Telegram bot onboarding without requiring pre-configured TELEGRAM_CHAT_ID)
 - **021**: `tracked_authors` UNIQUE NULLS NOT DISTINCT (author deduplication)
 - **022**: Fix `pulse_decks.cron` JSONB double-encoding regression (Round-7 audit finding CRIT-001)
+
+**Migration 023** (2026-04-17) for the Unified Async Job System:
+- New table: `jobs` — stores all async background jobs with columns `id`, `kind`, `status` (`pending | running | done | failed | cancelled`), `payload` (JSONB input), `result` (JSONB output), `error` (TEXT), `created_at`, `updated_at`, `started_at`, `finished_at`. Indexed on `(status, created_at)` for efficient worker polling.
+- New column: `paper_sources.display_order INTEGER NOT NULL DEFAULT 0` — enables drag-to-reorder of paper sources in Settings → Sources.
+- New column: `pulse_decks.degraded_reason TEXT NULL` — distinguishes soft degraded runs (deck produced with fallback scoring) from fatal errors tracked in `last_error`.
 
 ## Phase 1 Discovery & Pulse dependencies (shipped)
 

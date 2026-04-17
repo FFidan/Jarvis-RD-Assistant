@@ -14,11 +14,11 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Project Manager** -- Lightweight task and milestone tracking with paper linking, deadline warnings, and progress monitoring.
 
-- **My Day** -- Daily productivity command center surfacing today's tasks, project progress, and due flashcards in one view, with per-task Focus buttons to start a Pomodoro session.
+- **My Day** -- Triage dashboard that opens each morning to a DayHeader showing today's counters (focus time, tasks, cards due), a Pulse preview card surfacing the 3 most-relevant new papers with a link to the full deck, a Pomodoro + task block, ActionItems (overdue + due-today tasks), and Learning/Project summaries. The full Pulse deck lives at Research Feed → Today's Pulse tab.
 
-- **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations.
+- **Pomodoro Timer** -- Wall-clock based work/break timer with pause/resume, browser notifications, auto-logging of completed sessions to focus history, and configurable durations. A compact Global Pomodoro widget in the TopBar shows the running timer on every page when a session is active; clicking it navigates back to My Day.
 
-- **Discovery & Pulse** -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day view and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations.
+- **Discovery & Pulse** -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day preview and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Pulse settings (enable/schedule/scoring weights/diagnostics) live in Settings → Pulse tab.
 
 ### Key Design Choices
 
@@ -267,7 +267,7 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-022)
+│   └── migrations/             # Versioned schema changes (001-023)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -340,7 +340,7 @@ docker compose exec postgres psql -U jarvis -d jarvis -c \
 
 - [docs/PRD.md](docs/PRD.md) — Product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — Non-functional requirements and technical constraints.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the [1.2.1] post-audit hotfix.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the [1.2.4] Round-7 audit remediation.
 - [AGENTS.md](AGENTS.md) — Repository-level guidance for contributors (human or AI).
 
 ## License

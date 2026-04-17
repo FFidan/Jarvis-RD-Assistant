@@ -146,7 +146,7 @@ A ChatGPT-Pulse-inspired subsystem that discovers new papers from external sourc
 - New database tables: `pulse_decks`, `pulse_cards`, `pulse_ratings`, `pdf_resolutions`. New optional column: `topics.description`.
 - New API router `services/paper_ingestion/app/routers/pulse.py` exposes six endpoints: `POST /api/pulse/generate`, `GET /api/pulse/today`, `GET /api/pulse/history`, `POST /api/pulse/rate`, `GET /api/pulse/explain/{card_id}`, `GET /api/pulse/stats`.
 - New frontend components: `PulseDeck` (My Day widget), `PulseCard` (card component matching existing Research Feed card style), `WhyPopover` (transparency dialog), and a reusable `InfoTooltip` primitive (generalized `(i)` info tooltip for Settings).
-- Settings extensions: Topics gain optional description field, Automation gains Pulse toggle + time picker, Sources gain API-key fields and provider tooltips, Recommendations section renamed to "Pulse & Recommendations" with weight sliders for the new signals.
+- Settings extensions: Topics gain optional description field, Automation retains general scheduling controls (Pulse controls moved to dedicated tab), Sources gain API-key fields and provider tooltips. A new dedicated **Pulse** settings tab consolidates enable/schedule/scoring weights/manual generate/diagnostics, replacing the former "Recommendations" tab.
 - Existing `services/telegram_bot/app/orchestration/research_pulse.py` (~165 lines of naive keyword search + notify) is gutted and rewritten as a ~40-line thin delivery wrapper over `GET /api/pulse/today`.
 - APScheduler gains one new job (`pulse_overnight`) in `scheduler.py`; no new scheduling mechanism.
 
@@ -245,16 +245,36 @@ These features were promoted from v2 or added during development:
 - **10-page React dashboard**: Home, Research Feed, Paper Detail, Learning Cards,
   Projects, Settings, Analytics, Extractions, Citation Graph, Knowledge Graph
 
+### Shipped Beyond MVP (v1.2.0 to v1.2.4)
+
+These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent audit remediation cycles:
+
+- **Unified Async Job System** (migration 023): `jobs` table in PostgreSQL, `jarvis_common/jobs.py` module with `@job_handler` registry and per-service worker loops, REST endpoints (`POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` SSE, `POST /api/jobs/{id}/cancel`), frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toast notifications. Migrated kinds in Phase 1: `pulse.generate`, `paper.process`, `paper.analyze`, `card.generate`, `card.generate_batch`. Phase 2 items (Summarize, Extraction, Batch Process, Scan Local, Citations, Weekly Digest) remain on the roadmap.
+- **My Day redesigned as triage dashboard**: `DayHeader` with counters (focus time, tasks, cards due), Pulse preview card (3 top papers + link to full deck at Research Feed → Today's Pulse), Pomodoro + Tasks block, ActionItems (overdue + due-today tasks with Focus buttons), Learning summary, Project summary. Replaces the previous full PulseDeck widget on the My Day page.
+- **Global Pomodoro header widget**: compact timer display in the TopBar, visible on every page when a session is active, hidden when idle. Clicking it navigates back to My Day.
+- **Source drag-to-reorder**: `paper_sources.display_order` column + `PATCH /api/sources/reorder` endpoint + `@dnd-kit/sortable` grip handle UI in Settings → Sources.
+- **Discover multi-source search**: checkbox multi-select over ArXiv, Semantic Scholar, OpenAlex, PubMed with backend fan-out, per-source result deduplication, and per-source error isolation.
+- **Pulse Diagnostics**: `GET /api/pulse/debug` endpoint + expandable Diagnostics section in Settings → Pulse tab.
+- **Pulse settings tab**: dedicated "Pulse" tab in Settings consolidating enable/schedule/scoring weights/manual generate/diagnostics. Replaces the former "Recommendations" tab. Automation tab no longer carries Pulse controls.
+- **Info-bubble tooltips**: hover tooltips on source cards, notification rows, and Paper Detail action buttons for context-sensitive help.
+- **Pulse `degraded_reason`**: `pulse_decks.degraded_reason` column (migration 023) distinguishes soft degraded runs (deck produced with fallback scoring) from fatal errors (`last_error`). Frontend shows the appropriate contextual message.
+- **PubMed sort fix**: PubMed search relevance sort was previously silently ignored (hardcoded to `pub_date`). Now correctly passes `sort=relevance`.
+- **Local-paper analyze fix**: locally-uploaded PDFs skip the download step in "Analyze Paper" instead of erroring with "no PDF URL".
+- **Generate Cards error link**: "no processed chunks" error in Generate Cards is now a clickable link to Process PDF.
+- **Sidebar label**: "Feed" renamed to "Research Feed" throughout navigation.
+
 ### My Day — Daily Productivity Command Center
 
-The My Day page is the researcher's daily hub, combining task management with focused work tracking:
+The My Day page is the researcher's daily triage hub, redesigned around a morning review workflow:
 
-- **Pomodoro Timer**: Wall-clock based 25/5/15 timer with pause/resume, auto-logging of completed sessions, browser notifications, and configurable durations (15-60 min work, 3-15 min short break, 10-30 min long break, 2-8 cycles)
-- **Quick-Add Tasks**: Create tasks from the daily view with optional project assignment; standalone tasks (no project) are supported
-- **Today's Tasks**: Filtered view of tasks due today/overdue + tasks completed today, with project badges linking to the Projects page, completion circles, and per-task Focus buttons to start a Pomodoro attached to that task
-- **Project Pulse**: At-a-glance view of active project progress (done/total tasks) with next milestone and deadline
-- **Learning Integration**: Cards due count with direct link to review; recommended papers with match scores
-- **Focus Tracking**: Daily focus hours accumulated from Pomodoro sessions, focus streak tracking (consecutive days with focus time)
+- **DayHeader**: Summary counters for today's focus time, pending tasks, and cards due, giving an instant status snapshot at a glance.
+- **Pulse Preview Card**: Shows the 3 most-relevant papers from today's Pulse deck with a "View full deck" link navigating to Research Feed → Today's Pulse tab. Keeps My Day focused on triage rather than full deck review.
+- **Pomodoro + Tasks block**: Wall-clock based 25/5/15 timer with pause/resume, auto-logging of completed sessions, browser notifications, and configurable durations (15-60 min work, 3-15 min short break, 10-30 min long break, 2-8 cycles). Quick-Add Tasks creates tasks from My Day with optional project assignment.
+- **ActionItems**: Filtered view of overdue + due-today tasks with project badges and per-task Focus buttons to start a Pomodoro session.
+- **Learning Summary**: Cards due count with direct link to review.
+- **Project Summary**: At-a-glance view of active project progress (done/total tasks) with next milestone and deadline.
+- **Focus Tracking**: Daily focus hours accumulated from Pomodoro sessions, focus streak tracking (consecutive days with focus time).
+- **Global Pomodoro widget** (TopBar): when a Pomodoro session is running, a compact timer badge is visible in the navigation bar on every page. Clicking it navigates back to My Day. Hidden when no session is active.
 
 ---
 
@@ -453,11 +473,13 @@ verification pipeline applies to any summaries or flashcards generated from it. 
 itself does not generate verified claims — it generates *reasons to look at a paper* with
 transparent per-signal scoring.
 
-### 8.5 Phase 1 — Discovery & Pulse Subsystem (SHIPPED 2026-04-11)
+### 8.5 Phase 1 — Discovery & Pulse + Jobs Subsystems (SHIPPED 2026-04-11 / 2026-04-17)
 
 A proactive overnight paper discovery subsystem that complements the existing library
 management features. The architectural design is embedded in §3.1.1; this section
 captures the roadmap phasing, acceptance criteria, and attribution.
+
+**Unified Async Job System (SHIPPED 2026-04-17):** migration 023 adds the `jobs` table and `jarvis_common/jobs.py` with the `@job_handler` registry and per-service worker loops. `pulse.generate`, `paper.process`, `paper.analyze`, `card.generate`, and `card.generate_batch` are migrated in Phase 1. Phase 2 items: Summarize, Extraction, Batch Process, Scan Local, Citations, Weekly Digest. See §3.4 "Shipped Beyond MVP" for the full Jobs architecture.
 
 #### 8.5.1 Phase 1 (target)
 
