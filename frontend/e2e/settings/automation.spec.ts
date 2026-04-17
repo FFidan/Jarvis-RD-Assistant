@@ -25,7 +25,7 @@ test.describe('Settings - Automation', () => {
       // Nudge labels should be human-readable, not raw nudge_type keys
       // e.g. "Automated Paper Search" instead of "research_pulse"
       const humanReadableLabels = [
-        'Automated Paper Search',
+        'Background Paper Search',
         'Flashcard Review Reminder',
         'Project Deadline Alert',
         'Daily Briefing',

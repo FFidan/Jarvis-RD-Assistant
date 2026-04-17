@@ -28,7 +28,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 2, title: 'Paper Beta' },
     ]),
     fetchExtractionTable: vi.fn().mockResolvedValue([]),
-    batchExtract: vi.fn().mockResolvedValue({ extracted: 2, skipped: 0, failed: 0 }),
+    batchExtract: vi.fn().mockResolvedValue({ job_id: 'fake-id', total: 2 }),
   };
 });
 

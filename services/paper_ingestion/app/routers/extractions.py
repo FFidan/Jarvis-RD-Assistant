@@ -12,13 +12,13 @@ from datetime import UTC, datetime
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request
+from jarvis_common import jobs as jobs_lib
 from starlette.responses import StreamingResponse
 
 from app.deps import limiter
-from app.extraction import batch_extract, extract_fields_for_paper
+from app.extraction import extract_fields_for_paper
 from app.models import (
     BatchExtractionRequest,
-    BatchExtractionResponse,
     ExtractedField,
     ExtractionField,
     ExtractionRequest,
@@ -49,7 +49,9 @@ async def list_templates(request: Request) -> list[ExtractionTemplateResponse]:
                 "SELECT * FROM extraction_templates ORDER BY is_default DESC, name"
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
     return [
         ExtractionTemplateResponse(
             id=r["id"],
@@ -82,7 +84,9 @@ async def create_template(
                 body.is_default,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
         except asyncpg.UniqueViolationError:
             raise HTTPException(409, f"Template '{body.name}' already exists")
     return ExtractionTemplateResponse(
@@ -108,7 +112,9 @@ async def update_template(
                 "SELECT * FROM extraction_templates WHERE id = $1", template_id
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
         if not existing:
             raise HTTPException(404, f"Template {template_id} not found")
 
@@ -171,7 +177,9 @@ async def delete_template(request: Request, template_id: int) -> None:
                 "DELETE FROM extraction_templates WHERE id = $1", template_id
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
         if result == "DELETE 0":
             raise HTTPException(404, f"Template {template_id} not found")
 
@@ -205,9 +213,7 @@ async def extract_paper(
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])
 @limiter.limit("60/minute")
-async def get_paper_extractions(
-    request: Request, paper_id: int
-) -> list[ExtractionResponse]:
+async def get_paper_extractions(request: Request, paper_id: int) -> list[ExtractionResponse]:
     """Get all extractions for a paper."""
     async with request.app.state.db_pool.acquire() as conn:
         try:
@@ -218,7 +224,9 @@ async def get_paper_extractions(
                 paper_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
     result = []
     for r in rows:
         exts = r["extractions"] or {}
@@ -226,34 +234,32 @@ async def get_paper_extractions(
             k: ExtractedField(**v) if isinstance(v, dict) else ExtractedField(value=v)
             for k, v in exts.items()
         }
-        result.append(ExtractionResponse(
-            id=r["id"],
-            paper_id=r["paper_id"],
-            template_id=r["template_id"],
-            extractions=parsed,
-            extraction_model=r["extraction_model"],
-            created_at=r["created_at"],
-        ))
+        result.append(
+            ExtractionResponse(
+                id=r["id"],
+                paper_id=r["paper_id"],
+                template_id=r["template_id"],
+                extractions=parsed,
+                extraction_model=r["extraction_model"],
+                created_at=r["created_at"],
+            )
+        )
     return result
 
 
-@router.post("/extractions/batch", response_model=BatchExtractionResponse)
+@router.post("/extractions/batch")
 @limiter.limit("2/minute")
-async def batch_extract_papers(
-    request: Request, body: BatchExtractionRequest
-) -> BatchExtractionResponse:
-    """Batch extract fields for multiple papers."""
-    embedder = getattr(request.app.state, "embedder", None)
-    verifier = getattr(request.app.state, "verifier", None)
-
-    return await batch_extract(
-        request.app.state.http_client,
+async def batch_extract_papers(request: Request, body: BatchExtractionRequest) -> dict[str, object]:
+    """Enqueue a background job to batch-extract fields for multiple papers."""
+    job_id = await jobs_lib.enqueue(
         request.app.state.db_pool,
-        body.paper_ids,
-        body.template_id,
-        embedder=embedder,
-        verifier=verifier,
+        "extraction.batch",
+        payload={
+            "paper_ids": body.paper_ids,
+            "template_id": body.template_id,
+        },
     )
+    return {"job_id": job_id, "total": len(body.paper_ids)}
 
 
 @router.get("/extractions/table", response_model=None)
@@ -283,7 +289,9 @@ async def get_extraction_table(
                 template_id,
             )
         except asyncpg.exceptions.UndefinedTableError:
-            raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+            raise HTTPException(
+                503, "extraction_templates table not found (migration 011 not applied)"
+            )
 
         template_fields: list[ExtractionField] = []
         if template_row and template_row["fields"]:
@@ -307,10 +315,13 @@ async def get_extraction_table(
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1 AND pe.paper_id = ANY($2)
                        ORDER BY p.title""",
-                    template_id, ids,
+                    template_id,
+                    ids,
                 )
             except asyncpg.exceptions.UndefinedTableError:
-                raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+                raise HTTPException(
+                    503, "extraction_templates table not found (migration 011 not applied)"
+                )
         else:
             try:
                 rows = await conn.fetch(
@@ -322,7 +333,9 @@ async def get_extraction_table(
                     template_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
-                raise HTTPException(503, "extraction_templates table not found (migration 011 not applied)")
+                raise HTTPException(
+                    503, "extraction_templates table not found (migration 011 not applied)"
+                )
 
     result: list[ExtractionTableRow] = []
     for r in rows:
@@ -331,11 +344,13 @@ async def get_extraction_table(
             k: ExtractedField(**v) if isinstance(v, dict) else ExtractedField(value=v)
             for k, v in exts.items()
         }
-        result.append(ExtractionTableRow(
-            paper_id=r["paper_id"],
-            paper_title=r["paper_title"],
-            extractions=parsed,
-        ))
+        result.append(
+            ExtractionTableRow(
+                paper_id=r["paper_id"],
+                paper_title=r["paper_title"],
+                extractions=parsed,
+            )
+        )
 
     if format == "csv":
         output = io.StringIO()

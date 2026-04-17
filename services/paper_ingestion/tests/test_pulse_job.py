@@ -453,3 +453,59 @@ async def test_ctx_cancellation_is_respected(patch_pipeline):
     pool, _conn = _make_pool_and_conn()
     with pytest.raises(asyncio.CancelledError):
         await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC), ctx=ctx)
+
+
+# ---------------------------------------------------------------------------
+# Medium #15 — parameterised fatal-error vs degraded_reason distinction
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage_mock, expected_last_error_fragment",
+    [
+        # Stage 1: embedding filter raises → last_error set, degraded_reason NULL
+        ("stage1_embedding_filter", "stage1"),
+        # Stage 3: weighted-combine raises → last_error set, degraded_reason NULL
+        ("stage3_combine", "stage3"),
+        # assemble_deck raises → last_error set, degraded_reason NULL
+        ("assemble_deck", "assemble_deck"),
+        # upsert_paper raises → last_error set, degraded_reason NULL
+        ("upsert_paper", "upsert_paper"),
+    ],
+)
+async def test_fatal_stage_errors_set_last_error_not_degraded(
+    patch_pipeline,
+    stage_mock: str,
+    expected_last_error_fragment: str,
+):
+    """Fatal stage exceptions populate last_error but leave degraded_reason NULL.
+
+    Degraded is only for cases where a fallback is used and a deck is still
+    produced (e.g. stage2 LLM timeout).  Any stage that has no fallback and
+    records to stats['last_error'] is FATAL — degraded_reason must stay None
+    so that the pulse_decks.degraded_reason column is not falsely populated.
+    """
+    from app.pulse.job import run_pulse
+
+    patch_pipeline["mocks"][stage_mock].side_effect = RuntimeError("boom")
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # 1. last_error must be populated with the exception message
+    assert stats["last_error"] is not None, (
+        f"Expected last_error to be set after {stage_mock} raises, got None"
+    )
+    assert expected_last_error_fragment in stats["last_error"], (
+        f"Expected '{expected_last_error_fragment}' in last_error, got: {stats['last_error']!r}"
+    )
+    assert "boom" in stats["last_error"], (
+        f"Expected exception message 'boom' in last_error, got: {stats['last_error']!r}"
+    )
+
+    # 2. degraded_reason must be NULL (fatal, not degraded)
+    assert stats.get("degraded_reason") is None, (
+        f"Expected degraded_reason to be None for fatal {stage_mock} error, "
+        f"got: {stats.get('degraded_reason')!r}"
+    )

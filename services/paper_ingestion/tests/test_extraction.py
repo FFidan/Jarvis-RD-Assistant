@@ -23,7 +23,9 @@ from app.models import (
 
 def test_extraction_field_valid():
     """ExtractionField accepts valid data."""
-    f = ExtractionField(name="methodology", label="Methodology", description="Research method", type="text")
+    f = ExtractionField(
+        name="methodology", label="Methodology", description="Research method", type="text"
+    )
     assert f.name == "methodology"
     assert f.type == "text"
 
@@ -69,8 +71,13 @@ def test_template_response():
     now = datetime.now(tz=UTC)
     fields = [ExtractionField(name="m", label="M", description="d")]
     resp = ExtractionTemplateResponse(
-        id=1, name="Test", description="desc", fields=fields,
-        is_default=True, created_at=now, updated_at=now,
+        id=1,
+        name="Test",
+        description="desc",
+        fields=fields,
+        is_default=True,
+        created_at=now,
+        updated_at=now,
     )
     assert resp.id == 1
     assert resp.is_default is True
@@ -103,7 +110,9 @@ def test_extraction_response():
     """ExtractionResponse validates correctly."""
     now = datetime.now(tz=UTC)
     resp = ExtractionResponse(
-        id=1, paper_id=10, template_id=1,
+        id=1,
+        paper_id=10,
+        template_id=1,
         extractions={"methodology": ExtractedField(value="survey")},
         extraction_model="smart",
         created_at=now,
@@ -144,8 +153,18 @@ def test_build_extraction_prompt_valid():
     from app.extraction import build_extraction_prompt
 
     fields = [
-        {"name": "methodology", "label": "Methodology", "description": "Research method", "type": "text"},
-        {"name": "sample_size", "label": "Sample Size", "description": "N participants", "type": "number"},
+        {
+            "name": "methodology",
+            "label": "Methodology",
+            "description": "Research method",
+            "type": "text",
+        },
+        {
+            "name": "sample_size",
+            "label": "Sample Size",
+            "description": "N participants",
+            "type": "number",
+        },
     ]
     prompt = build_extraction_prompt(fields, "Test Paper", "Some paper text here.")
     assert "Test Paper" in prompt
@@ -195,13 +214,34 @@ async def test_extract_fields_happy_path():
     # Template
     mock_conn.fetchrow.side_effect = [
         # Template lookup
-        {"id": 1, "name": "Test", "fields": [{"name": "methodology", "label": "Methodology", "description": "d", "type": "text"}], "is_default": True},
+        {
+            "id": 1,
+            "name": "Test",
+            "fields": [
+                {"name": "methodology", "label": "Methodology", "description": "d", "type": "text"}
+            ],
+            "is_default": True,
+        },
         # Paper lookup
         {"id": 10, "title": "Test Paper"},
         # INSERT RETURNING
-        {"id": 1, "paper_id": 10, "template_id": 1,
-         "extractions": {"methodology": {"value": "survey", "quote": "We used a survey", "verified": False, "confidence": 0.5, "chunk_id": None, "page_number": None}},
-         "extraction_model": "smart", "created_at": datetime.now(tz=UTC)},
+        {
+            "id": 1,
+            "paper_id": 10,
+            "template_id": 1,
+            "extractions": {
+                "methodology": {
+                    "value": "survey",
+                    "quote": "We used a survey",
+                    "verified": False,
+                    "confidence": 0.5,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
+            "extraction_model": "smart",
+            "created_at": datetime.now(tz=UTC),
+        },
     ]
     mock_conn.fetch.return_value = [
         {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
@@ -210,7 +250,13 @@ async def test_extract_fields_happy_path():
     mock_http = AsyncMock()
     mock_response = MagicMock()
     mock_response.json.return_value = {
-        "choices": [{"message": {"content": '{"methodology": {"value": "survey", "quote": "We used a survey"}}'}}]
+        "choices": [
+            {
+                "message": {
+                    "content": '{"methodology": {"value": "survey", "quote": "We used a survey"}}'
+                }
+            }
+        ]
     }
     mock_response.raise_for_status = MagicMock()
     mock_http.post.return_value = mock_response
@@ -329,8 +375,18 @@ async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncate
             "paper_id": 10,
             "template_id": 1,
             "extractions": {
-                "methodology": {"value": "survey", "quote": None, "verified": False, "confidence": 0.0},
-                "limitation": {"value": "bias", "quote": None, "verified": False, "confidence": 0.0},
+                "methodology": {
+                    "value": "survey",
+                    "quote": None,
+                    "verified": False,
+                    "confidence": 0.0,
+                },
+                "limitation": {
+                    "value": "bias",
+                    "quote": None,
+                    "verified": False,
+                    "confidence": 0.0,
+                },
             },
             "extraction_model": "smart",
             "created_at": datetime.now(tz=UTC),
@@ -393,3 +449,93 @@ async def test_batch_extract_skips_existing():
     result = await batch_extract(mock_http, mock_pool, [1, 2], 1)
     assert result.skipped == 2
     assert result.extracted == 0
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_reports_progress_with_ctx():
+    """batch_extract calls ctx.update_progress and ctx.is_cancelled between papers."""
+    from app.extraction import batch_extract
+
+    mock_conn = AsyncMock()
+    mock_conn.fetchval.return_value = 1  # all skipped -> no extraction calls
+
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conn
+    mock_cm.__aexit__.return_value = False
+
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = mock_cm
+
+    mock_http = AsyncMock()
+
+    ctx = AsyncMock()
+    ctx.is_cancelled.return_value = False
+
+    result = await batch_extract(mock_http, mock_pool, [1, 2, 3], 1, ctx=ctx)
+
+    assert result.skipped == 3
+    # Progress reported at start + after each paper + done = 5 calls for 3 papers
+    assert ctx.update_progress.await_count >= 4
+    # is_cancelled checked once per paper
+    assert ctx.is_cancelled.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_batch_extract_job_handler(monkeypatch):
+    """extraction.batch job handler delegates to batch_extract and shapes result."""
+    import app.extraction_jobs as extraction_jobs_mod
+
+    # Create a stand-in for app.main.app.state
+    class _State:
+        embedder = "sentinel-embedder"
+        verifier = "sentinel-verifier"
+
+    class _App:
+        state = _State()
+
+    fake_main = MagicMock()
+    fake_main.app = _App()
+    monkeypatch.setitem(__import__("sys").modules, "app.main", fake_main)
+
+    called = {}
+
+    async def fake_batch_extract(
+        http_client,
+        db_pool,
+        paper_ids,
+        template_id,
+        embedder=None,
+        verifier=None,
+        ctx=None,
+    ):
+        called["http_client"] = http_client
+        called["db_pool"] = db_pool
+        called["paper_ids"] = paper_ids
+        called["template_id"] = template_id
+        called["embedder"] = embedder
+        called["verifier"] = verifier
+        called["ctx"] = ctx
+        return BatchExtractionResponse(extracted=2, failed=0, skipped=1)
+
+    monkeypatch.setattr("app.extraction.batch_extract", fake_batch_extract)
+
+    mock_pool = MagicMock()
+    mock_http = AsyncMock()
+
+    ctx = AsyncMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled.return_value = False
+
+    result = await extraction_jobs_mod._extraction_batch_job(
+        mock_pool,
+        mock_http,
+        {"paper_ids": [10, 20, 30], "template_id": 7},
+        ctx,
+    )
+
+    assert called["paper_ids"] == [10, 20, 30]
+    assert called["template_id"] == 7
+    assert called["embedder"] == "sentinel-embedder"
+    assert called["verifier"] == "sentinel-verifier"
+    assert called["ctx"] is ctx
+    assert result == {"extracted": 2, "failed": 0, "skipped": 1, "total": 3}

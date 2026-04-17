@@ -5,7 +5,8 @@ test.describe('@live-smoke Live app smoke', () => {
   test('shell loads with sidebar, health labels, and dashboard heading', async ({ page }) => {
     await ensureAuthenticated(page);
 
-    await expect(page.getByRole('link', { name: 'Feed' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Research Feed' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'My Day' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Projects' })).toBeVisible();
     await expect(page.getByText('Paper Ingestion')).toBeVisible();
     await expect(page.getByText('Learning Engine')).toBeVisible();
@@ -14,12 +15,14 @@ test.describe('@live-smoke Live app smoke', () => {
   test('feed, projects, and settings pages render stable live headings', async ({ page }) => {
     await ensureAuthenticated(page);
 
-    await page.getByRole('link', { name: 'Feed' }).click();
+    await page.getByRole('link', { name: 'Research Feed' }).click();
     await expect(page).toHaveURL(/\/feed$/);
     await expect(page.getByRole('heading', { name: 'Research Feed' })).toBeVisible({
       timeout: 10000,
     });
-    await expect(page.getByPlaceholder('Search arXiv or Semantic Scholar...')).toBeVisible();
+    // Discover tab uses a multi-source placeholder
+    await page.getByRole('tab', { name: 'Discover' }).click();
+    await expect(page.getByPlaceholder(/Search your selected sources/)).toBeVisible();
 
     await page.getByRole('link', { name: 'Projects' }).click();
     await expect(page).toHaveURL(/\/projects$/);

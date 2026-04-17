@@ -177,9 +177,7 @@ export function ExtractionTablePage() {
 
         {extractMutation.isSuccess && (
           <span className="text-sm text-green-600">
-            Done: {extractMutation.data.extracted} extracted,{' '}
-            {extractMutation.data.skipped} skipped,{' '}
-            {extractMutation.data.failed} failed
+            Queued {extractMutation.data.total} papers (job {extractMutation.data.job_id.slice(0, 8)})
           </span>
         )}
 

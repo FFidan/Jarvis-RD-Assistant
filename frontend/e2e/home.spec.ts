@@ -1,59 +1,50 @@
 import { test, expect } from '@playwright/test';
 import { ensureAuthenticated } from './helpers/auth';
 
-test.describe('Home Page', () => {
+test.describe('My Day Page', () => {
   test.beforeEach(async ({ page }) => {
     await ensureAuthenticated(page);
+    await page.goto('/my-day');
   });
 
-  test('dashboard metrics tiles load and display numbers', async ({ page }) => {
-    // Wait for metric tiles to appear — they are rendered inside cards with titles
-    const expectedTiles = [
-      'Total Papers',
-      'Unread Papers',
-      'Pending Papers',
-      'Due Cards',
-      'Active Projects',
-      'Topics',
-      'Nudges',
-    ];
+  test('DayHeader renders time-of-day greeting and counter strip', async ({ page }) => {
+    // DayHeader shows a greeting based on the current hour: one of
+    // "Good morning" / "Good afternoon" / "Good evening".
+    await expect(
+      page.getByRole('heading', {
+        name: /Good (morning|afternoon|evening)/,
+      }),
+    ).toBeVisible({ timeout: 10000 });
 
-    for (const title of expectedTiles) {
-      // Each metric tile has a CardTitle with the metric name
-      await expect(page.getByText(title).first()).toBeVisible();
-    }
-
-    // At least one tile should display a numeric value (text-2xl font-bold)
-    const metricValues = page.locator('.text-2xl.font-bold');
-    await expect(metricValues.first()).toBeVisible();
+    // Counter strip labels (DayHeader)
+    await expect(page.getByText('Pulse papers')).toBeVisible();
+    await expect(page.getByText('Cards due')).toBeVisible();
+    await expect(page.getByText('Tasks today')).toBeVisible();
+    await expect(page.getByText('Unprocessed uploads')).toBeVisible();
   });
 
-  test('page has description heading visible', async ({ page }) => {
-    // The home page has a main heading "Dashboard"
-    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-
-    // Quick Navigation section heading
-    await expect(page.getByText('Quick Navigation')).toBeVisible();
+  test('PulsePreviewCard is present on My Day', async ({ page }) => {
+    // PulsePreviewCard header contains "Today's Pulse" (with or without count suffix).
+    await expect(page.getByText(/Today's Pulse/)).toBeVisible({ timeout: 10000 });
   });
 
-  test('quick navigation links work', async ({ page }) => {
-    // Click on "Research Feed" quick link — should navigate to /feed
-    await page.getByRole('link', { name: /Research Feed/ }).click();
-    await expect(page).toHaveURL(/\/feed$/);
-
-    // Navigate back to home
-    await page.goto('/');
-    await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-
-    // Click on "Analytics" quick link
-    await page.getByRole('link', { name: /Analytics/ }).click();
-    await expect(page).toHaveURL(/\/analytics$/);
+  test('ActionItemsCard is present on My Day', async ({ page }) => {
+    // ActionItemsCard title is "Action Items"
+    await expect(page.getByRole('heading', { name: 'Action Items' })).toBeVisible({
+      timeout: 10000,
+    });
   });
 
-  test('loading skeleton shown while data fetches', async ({ page }) => {
-    await page.reload();
+  test('Focus + Tasks row renders', async ({ page }) => {
+    // PomodoroTimer sibling card has "Today's Tasks" heading
+    await expect(page.getByRole('heading', { name: "Today's Tasks" })).toBeVisible({
+      timeout: 10000,
+    });
+  });
 
-    const skeletonsOrTiles = page.locator('[class*="skeleton"], .text-2xl.font-bold');
-    await expect(skeletonsOrTiles.first()).toBeVisible({ timeout: 10000 });
+  test('counter strip displays numeric values after data loads', async ({ page }) => {
+    // At least one tabular-nums value should appear once data loads
+    const metricValues = page.locator('.tabular-nums');
+    await expect(metricValues.first()).toBeVisible({ timeout: 10000 });
   });
 });

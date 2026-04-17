@@ -306,6 +306,7 @@ async def lifespan(app: FastAPI):
     from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
 
     importlib.import_module("app.paper_jobs")
+    importlib.import_module("app.extraction_jobs")
     importlib.import_module("app.pulse.job")
 
     _kinds_paper_ingestion: set[str] = {

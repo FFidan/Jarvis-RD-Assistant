@@ -17,9 +17,9 @@ from typing import Any
 
 import asyncpg
 import httpx
-
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
+
 from app.models import (
     BatchExtractionResponse,
     ExtractedField,
@@ -29,9 +29,7 @@ from app.models import (
 logger = logging.getLogger(__name__)
 
 
-def build_extraction_prompt(
-    fields: list[dict], title: str, text: str
-) -> str:
+def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     """Build the LLM prompt for field extraction."""
     field_specs = "\n".join(
         f'- "{f["name"]}" ({f.get("type", "text")}): {f.get("description", f["label"])}'
@@ -86,9 +84,7 @@ async def extract_fields_for_paper(
 
         fields = template["fields"]  # JSONB, already parsed
 
-        paper = await conn.fetchrow(
-            "SELECT id, title FROM papers WHERE id = $1", paper_id
-        )
+        paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
         if not paper:
             raise ValueError(f"Paper {paper_id} not found")
 
@@ -124,12 +120,8 @@ async def extract_fields_for_paper(
 
         if selected_chunks:
             if chunk_search_failed:
-                prioritized_chunks = [
-                    c for c in chunks if c["chunk_index"] in selected_chunks
-                ]
-                remaining_chunks = [
-                    c for c in chunks if c["chunk_index"] not in selected_chunks
-                ]
+                prioritized_chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
+                remaining_chunks = [c for c in chunks if c["chunk_index"] not in selected_chunks]
                 chunks = prioritized_chunks + remaining_chunks
             else:
                 chunks = [c for c in chunks if c["chunk_index"] in selected_chunks]
@@ -152,17 +144,21 @@ async def extract_fields_for_paper(
     from app.models import ChunkResponse
 
     extractions: dict[str, ExtractedField] = {}
-    chunk_responses = [
-        ChunkResponse(
-            id=c["id"],
-            paper_id=paper_id,
-            chunk_index=c["chunk_index"],
-            content=c["content"],
-            page_number=c["page_number"],
-            created_at=datetime.now(UTC),
-        )
-        for c in chunks
-    ] if verifier else []
+    chunk_responses = (
+        [
+            ChunkResponse(
+                id=c["id"],
+                paper_id=paper_id,
+                chunk_index=c["chunk_index"],
+                content=c["content"],
+                page_number=c["page_number"],
+                created_at=datetime.now(UTC),
+            )
+            for c in chunks
+        ]
+        if verifier
+        else []
+    )
 
     for field in fields:
         field_name = field["name"]
@@ -197,9 +193,7 @@ async def extract_fields_for_paper(
             page_number=page_number,
         )
 
-    extraction_json = {
-        k: v.model_dump() for k, v in extractions.items()
-    }
+    extraction_json = {k: v.model_dump() for k, v in extractions.items()}
 
     async with db_pool.acquire() as conn:
         try:
@@ -246,32 +240,55 @@ async def batch_extract(
     template_id: int,
     embedder: Any | None = None,
     verifier: Any | None = None,
+    ctx: object | None = None,
 ) -> BatchExtractionResponse:
-    """Extract fields for multiple papers, skipping those already extracted."""
+    """Extract fields for multiple papers, skipping those already extracted.
+
+    When ``ctx`` is provided (a JobContext-like object with ``update_progress``
+    and ``is_cancelled`` coroutines), progress is reported between papers and
+    cancellation is honored.
+    """
     extracted = 0
     failed = 0
     skipped = 0
+    total = len(paper_ids)
 
-    for paper_id in paper_ids:
+    if ctx is not None:
+        await ctx.update_progress(0.0, f"Starting: {total} papers")  # type: ignore[attr-defined]
+
+    for i, paper_id in enumerate(paper_ids):
+        if ctx is not None and await ctx.is_cancelled():  # type: ignore[attr-defined]
+            break
         async with db_pool.acquire() as conn:
             try:
                 existing = await conn.fetchval(
                     "SELECT id FROM paper_extractions WHERE paper_id = $1 AND template_id = $2",
-                    paper_id, template_id,
+                    paper_id,
+                    template_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 existing = None
         if existing:
             skipped += 1
-            continue
+        else:
+            try:
+                await extract_fields_for_paper(
+                    http_client, db_pool, paper_id, template_id, embedder, verifier
+                )
+                extracted += 1
+            except Exception:
+                logger.exception("Extraction failed for paper %d", paper_id)
+                failed += 1
 
-        try:
-            await extract_fields_for_paper(
-                http_client, db_pool, paper_id, template_id, embedder, verifier
+        if ctx is not None:
+            progress = (i + 1) / max(total, 1)
+            await ctx.update_progress(  # type: ignore[attr-defined]
+                progress, f"Processed {i + 1}/{total} papers"
             )
-            extracted += 1
-        except Exception:
-            logger.exception("Extraction failed for paper %d", paper_id)
-            failed += 1
+
+    if ctx is not None:
+        await ctx.update_progress(  # type: ignore[attr-defined]
+            1.0, f"Done: {extracted} extracted, {skipped} skipped, {failed} failed"
+        )
 
     return BatchExtractionResponse(extracted=extracted, failed=failed, skipped=skipped)
