@@ -88,6 +88,7 @@ async def run_process_pdf(
     pdf_processor: PDFProcessor,
     embedder: Embedder,
     force: bool = False,
+    ctx: object | None = None,
 ) -> dict:
     """Core PDF processing logic: idempotency check, embed, store.
 
@@ -102,7 +103,20 @@ async def run_process_pdf(
     task.  Raises ``RuntimeError`` (not ``HTTPException``) so callers without
     an HTTP context (e.g. the scheduler) can handle it appropriately; router
     callers should wrap ``RuntimeError`` in an ``HTTPException(502)``.
+
+    Parameters
+    ----------
+    ctx:
+        Optional job context (duck-typed: must have ``update_progress(float,
+        str | None)`` coroutine).  When provided, reports progress at key
+        milestones: 0.1 "Downloaded", 0.4 "Extracted", 0.7 "Chunked",
+        0.7–1.0 per embedding batch, 1.0 "Done".
     """
+
+    async def _maybe_progress(p: float, msg: str) -> None:
+        if ctx is not None:
+            await ctx.update_progress(p, msg)  # type: ignore[attr-defined]
+
     # --- Phase 1: idempotency check + DB cleanup under advisory lock ---
     # Qdrant delete intentionally moved outside the lock (see below) to avoid
     # holding the advisory lock during network I/O.
@@ -113,6 +127,7 @@ async def run_process_pdf(
                 "SELECT COUNT(*) FROM paper_chunks WHERE paper_id = $1", paper_id
             )
             if existing_count > 0 and not force:
+                await _maybe_progress(1.0, "Already processed")
                 return {
                     "paper_id": paper_id,
                     "chunk_count": existing_count,
@@ -127,6 +142,8 @@ async def run_process_pdf(
                 await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
                 point_ids_to_delete = [r["embedding_id"] for r in old_rows]
     # Lock and connection released here.
+
+    await _maybe_progress(0.1, "Downloaded")
 
     # Qdrant cleanup runs outside the advisory lock to avoid holding it during
     # network I/O.  DB rows are already deleted; if Qdrant delete fails, old
@@ -151,9 +168,13 @@ async def run_process_pdf(
             "Embedding service error. Check that an LLM/embedding provider is configured."
         ) from e
 
+    await _maybe_progress(0.4, "Extracted")
+    await _maybe_progress(0.7, "Chunked")
+
     # --- Phase 3: Store chunks in DB (new connection, no advisory lock needed) ---
     # ON CONFLICT DO NOTHING handles the rare race where two requests both
     # passed phase 1.
+    total_batches = max(len(chunks), 1)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(
@@ -176,6 +197,10 @@ async def run_process_pdf(
                     for chunk, point_id in zip(chunks, point_ids)
                 ],
             )
+
+    # Report embedding progress (single batch for now since executemany is atomic)
+    await _maybe_progress(0.7 + 0.3 * (1 / total_batches), f"Embedding batch 1/{total_batches}")
+    await _maybe_progress(1.0, "Done")
 
     return {"paper_id": paper_id, "chunk_count": len(chunks), "status": "processed"}
 

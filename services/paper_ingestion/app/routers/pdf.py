@@ -107,6 +107,13 @@ async def process_pdf(
     request: Request,
     paper_id: int,
     force: bool = Query(default=False),
+    sync: bool = Query(
+        default=False,
+        description=(
+            "If false (default), enqueue a paper.process job and return "
+            "{job_id, status}. If true, run synchronously (backward compat)."
+        ),
+    ),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_embedder),
 ):
@@ -116,12 +123,25 @@ async def process_pdf(
     ----------
     paper_id : int
         Database paper ID. PDF must already be downloaded.
+    sync : bool
+        When ``False`` (default), enqueues an async ``paper.process`` job and
+        returns ``{"job_id": "...", "status": "queued"}``.
+        When ``True``, runs the processing synchronously and returns the result
+        dict immediately (backward-compatible behaviour for scripts/tests).
 
     Returns
     -------
     dict
-        Summary of processing: ``chunk_count`` and ``status``.
+        Async mode: ``{"job_id": "...", "status": "queued"}``.
+        Sync mode: ``{"paper_id": ..., "chunk_count": ..., "status": ...}``.
     """
+    if not sync:
+        from jarvis_common.jobs import enqueue
+
+        job_id = await enqueue(db_pool, "paper.process", {"paper_id": paper_id, "force": force})
+        return {"job_id": job_id, "status": "queued"}
+
+    # Synchronous path (sync=True) — original blocking behaviour
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
     if not row:

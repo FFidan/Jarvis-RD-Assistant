@@ -5,10 +5,11 @@ import logging
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import StreamingResponse
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["analyze"])
@@ -35,7 +36,12 @@ def _sse_event(data: dict | str) -> str:
 
 
 async def _analyze_stream(request: Request, paper_id: int):
-    """Async generator: download → process → summarize with SSE progress events."""
+    """Async generator: download → process → summarize with SSE progress events.
+
+    B6 fix: local papers (``source_type='local'`` or ``pdf_local_path`` already
+    set) skip the download step entirely — they never have a ``pdf_url`` and
+    that is expected, not an error.
+    """
     db_pool = request.app.state.db_pool
     http_client = request.app.state.http_client
     pdf_processor = request.app.state.pdf_processor
@@ -46,36 +52,56 @@ async def _analyze_stream(request: Request, paper_id: int):
     try:
         # Phase 1a: Check paper state (short query, no lock)
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+            row = await conn.fetchrow(
+                "SELECT id, source_type, pdf_url, pdf_downloaded, pdf_local_path "
+                "FROM papers WHERE id = $1",
+                paper_id,
+            )
         if not row:
             yield _sse_event({"type": "error", "step": "downloading", "message": "Paper not found"})
             yield _sse_event("[DONE]")
             return
-        if not row["pdf_url"]:
+
+        # B6: local papers skip the download step — they already have a pdf_local_path
+        is_local = row["source_type"] == "local" or row["pdf_local_path"] is not None
+        if not is_local and not row["pdf_url"]:
             yield _sse_event(
                 {"type": "error", "step": "downloading", "message": "Paper has no PDF URL"}
             )
             yield _sse_event("[DONE]")
             return
 
-        # Phase 1b: Download outside any transaction
-        if not row["pdf_downloaded"]:
+        if is_local:
+            # Local paper: skip download, emit skipped event
+            yield _sse_event(
+                {
+                    "type": "step",
+                    "step": "downloading",
+                    "status": "skipped",
+                    "reason": "local paper",
+                }
+            )
+        elif row["pdf_downloaded"]:
+            # Already downloaded: nothing to do
+            yield _sse_event({"type": "step", "step": "downloading", "status": "completed"})
+        else:
+            # Phase 1b: Download outside any transaction
             pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
             # Phase 1c: Update DB (short query)
             async with db_pool.acquire() as conn:
                 row = await conn.fetchrow(
                     "UPDATE papers SET pdf_local_path = $1, pdf_downloaded = TRUE "
-                    "WHERE id = $2 RETURNING *",
+                    "WHERE id = $2 RETURNING id, source_type, pdf_url, pdf_downloaded,"
+                    " pdf_local_path",
                     str(pdf_path),
                     paper_id,
                 )
+            yield _sse_event({"type": "step", "step": "downloading", "status": "completed"})
     except Exception as exc:
         logger.error("Download failed for paper %d: %s", paper_id, exc)
         yield _sse_event({"type": "error", "step": "downloading", "message": "PDF download failed"})
         yield _sse_event("[DONE]")
         return
-
-    yield _sse_event({"type": "step", "step": "downloading", "status": "completed"})
 
     # ---- Step 2: Process PDF ----
     yield _sse_event({"type": "step", "step": "processing", "status": "started"})
@@ -157,13 +183,27 @@ async def _analyze_stream(request: Request, paper_id: int):
 
 @router.post("/api/papers/{paper_id}/analyze")
 @limiter.limit("5/minute")
-async def analyze_paper(request: Request, paper_id: int):
+async def analyze_paper(
+    request: Request,
+    paper_id: int,
+    async_mode: bool = Query(default=False, alias="async"),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
     """Chain download → process → summarize with SSE progress events.
 
-    Returns a streaming response with ``text/event-stream`` content type.
-    Each step emits ``started`` / ``completed`` events.  On error the stream
-    includes a single ``error`` event and terminates.
+    Default (no ``?async=true``): returns a streaming ``text/event-stream`` response.
+    Each step emits ``started`` / ``completed`` events; on error emits a single
+    ``error`` event and terminates.
+
+    With ``?async=true``: enqueues a ``paper.analyze`` job and returns
+    ``{"job_id": "...", "status": "queued"}`` immediately.
     """
+    if async_mode:
+        from jarvis_common.jobs import enqueue
+
+        job_id = await enqueue(db_pool, "paper.analyze", {"paper_id": paper_id})
+        return {"job_id": job_id, "status": "queued"}
+
     return StreamingResponse(
         _analyze_stream(request, paper_id),
         media_type="text/event-stream",

@@ -12,9 +12,7 @@ import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from app.routers.analyze import _sse_event, _analyze_stream
-
+from app.routers.analyze import _analyze_stream, _sse_event
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,6 +70,7 @@ async def _collect_events(request, paper_id, *, mock_process=None, mock_summariz
     # without pulling in qdrant_client/numpy/fitz.
     fake_pdf_workflow = types.ModuleType("app.services.pdf_workflow")
     fake_pdf_workflow._run_process_pdf = _mock_process  # type: ignore[attr-defined]
+    fake_pdf_workflow.run_process_pdf = _mock_process  # type: ignore[attr-defined]
 
     fake_summarization = types.ModuleType("app.services.summarization")
     fake_summarization.generate_paper_summary = _mock_summarize  # type: ignore[attr-defined]
@@ -96,7 +95,7 @@ async def _collect_events(request, paper_id, *, mock_process=None, mock_summariz
 
     try:
         with (
-            patch("app.routers.analyze.Path") as MockPath,
+            patch("app.routers.analyze.Path") as MockPath,  # noqa: N806
             patch("app.routers.analyze.os.environ.get", side_effect=_selective_env_get),
         ):
             mock_path_instance = MagicMock()
@@ -150,6 +149,7 @@ async def test_analyze_stream_happy_path():
     """Full chain yields download->process->summarize step events + complete + [DONE]."""
     paper_row = {
         "id": 1,
+        "source_type": "arxiv",
         "pdf_url": "https://arxiv.org/pdf/test.pdf",
         "pdf_downloaded": False,
         "pdf_local_path": None,
@@ -207,9 +207,10 @@ async def test_analyze_stream_paper_not_found():
 
 @pytest.mark.asyncio
 async def test_analyze_stream_no_pdf_url():
-    """Stream emits error when paper has no PDF URL."""
+    """Stream emits error when a non-local paper has no PDF URL."""
     paper_row = {
         "id": 2,
+        "source_type": "arxiv",
         "pdf_url": None,
         "pdf_downloaded": False,
         "pdf_local_path": None,
@@ -233,9 +234,14 @@ async def test_analyze_stream_no_pdf_url():
 
 @pytest.mark.asyncio
 async def test_analyze_stream_already_downloaded():
-    """If paper already has PDF downloaded, it skips download call and continues."""
+    """If paper already has PDF downloaded (pdf_local_path set), skips download.
+
+    B6 note: when pdf_local_path is already set, is_local=True, so the step
+    yields 'skipped' rather than 'completed'. Both skip the actual HTTP download.
+    """
     paper_row = {
         "id": 2,
+        "source_type": "arxiv",
         "pdf_url": "https://arxiv.org/pdf/test.pdf",
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/2.pdf",
@@ -246,7 +252,10 @@ async def test_analyze_stream_already_downloaded():
 
     assert len(events) == 8
     assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
-    assert events[1] == {"type": "step", "step": "downloading", "status": "completed"}
+    # pdf_local_path is set → treated as local → skipped (not an error)
+    assert events[1]["type"] == "step"
+    assert events[1]["step"] == "downloading"
+    assert events[1]["status"] == "skipped"
 
     # download_pdf should NOT have been called
     mock_request.app.state.pdf_processor.download_pdf.assert_not_called()
@@ -262,6 +271,7 @@ async def test_analyze_stream_process_failure():
     """Stream emits error event when processing fails."""
     paper_row = {
         "id": 3,
+        "source_type": "arxiv",
         "pdf_url": "https://arxiv.org/pdf/test.pdf",
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/3.pdf",
@@ -288,6 +298,7 @@ async def test_analyze_stream_summarize_failure():
     """Stream emits error event when summarization fails."""
     paper_row = {
         "id": 4,
+        "source_type": "arxiv",
         "pdf_url": "https://arxiv.org/pdf/test.pdf",
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/4.pdf",
@@ -302,3 +313,67 @@ async def test_analyze_stream_summarize_failure():
     assert events[5]["type"] == "error"
     assert events[5]["step"] == "summarizing"
     assert events[6] == "[DONE]"
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — B6: local paper skips download
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_local_paper_skips_download():
+    """B6: local paper (source_type='local') skips download step, processes to completion."""
+    paper_row = {
+        "id": 5,
+        "source_type": "local",
+        "pdf_url": None,  # local papers have no pdf_url — was the original bug
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/5.pdf",
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    events, _ = await _collect_events(mock_request, 5)
+
+    # Expect: download started, download skipped, process started, process completed,
+    #         summarize started, summarize completed, complete, [DONE] = 8 events
+    assert len(events) == 8, f"Expected 8 events, got {len(events)}: {events}"
+    assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
+    # skipped event (not an error)
+    assert events[1]["type"] == "step"
+    assert events[1]["step"] == "downloading"
+    assert events[1]["status"] == "skipped"
+    assert events[1].get("reason") == "local paper"
+    # Processing proceeds normally
+    assert events[2] == {"type": "step", "step": "processing", "status": "started"}
+    assert events[3]["type"] == "step"
+    assert events[3]["step"] == "processing"
+    assert events[3]["status"] == "completed"
+    assert events[4] == {"type": "step", "step": "summarizing", "status": "started"}
+    assert events[5] == {"type": "step", "step": "summarizing", "status": "completed"}
+    assert events[6] == {"type": "complete", "paper_id": 5}
+    assert events[7] == "[DONE]"
+
+    # download_pdf must NOT have been called for a local paper
+    mock_request.app.state.pdf_processor.download_pdf.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_local_paper_with_pdf_local_path():
+    """B6: paper with pdf_local_path already set (any source_type) skips download."""
+    paper_row = {
+        "id": 6,
+        "source_type": "arxiv",  # not 'local' source_type, but has pdf_local_path
+        "pdf_url": "https://arxiv.org/pdf/6.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/6.pdf",  # already set → treated as local
+    }
+    mock_request = _make_mock_request(paper_row)
+
+    events, _ = await _collect_events(mock_request, 6)
+
+    # download step should be skipped (pdf_local_path is already set)
+    assert events[1]["type"] == "step"
+    assert events[1]["step"] == "downloading"
+    assert events[1]["status"] == "skipped"
+
+    mock_request.app.state.pdf_processor.download_pdf.assert_not_called()

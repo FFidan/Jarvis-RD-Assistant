@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi.dependencies import utils as fastapi_dependency_utils
 from fastapi import BackgroundTasks, HTTPException
+from fastapi.dependencies import utils as fastapi_dependency_utils
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[1]
 if str(_SERVICE_ROOT) not in sys.path:
@@ -39,7 +39,7 @@ sys.modules.setdefault(
 )
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
-from app.routers import pdf
+from app.routers import pdf  # noqa: E402
 
 
 class FakeRecord(dict):
@@ -165,6 +165,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
             request,
             paper_id=1,
             force=False,
+            sync=True,  # use sync path to exercise path-traversal protection
             db_pool=pool,
             embedder=embedder,
         )
@@ -174,7 +175,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
-    """process_pdf should hand valid requests to the shared workflow helper."""
+    """process_pdf with sync=True should hand valid requests to the shared workflow helper."""
     storage_dir = tmp_path / "storage"
     storage_dir.mkdir()
     paper_path = storage_dir / "1.pdf"
@@ -190,21 +191,49 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
     processor = MagicMock()
     embedder = MagicMock()
     request = _request_with_state(pdf_processor=processor, embedder=embedder)
-    run_process_pdf = AsyncMock(return_value={"paper_id": 1, "chunk_count": 8, "status": "processed"})
+    run_process_pdf = AsyncMock(
+        return_value={"paper_id": 1, "chunk_count": 8, "status": "processed"}
+    )
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf)
 
+    # sync=True exercises the synchronous (backward-compat) code path
     result = await pdf.process_pdf.__wrapped__(
         request,
         paper_id=1,
         force=True,
+        sync=True,
         db_pool=pool,
         embedder=embedder,
     )
 
     assert result == {"paper_id": 1, "chunk_count": 8, "status": "processed"}
     run_process_pdf.assert_awaited_once_with(1, paper_path, pool, processor, embedder, force=True)
+
+
+@pytest.mark.asyncio
+async def test_process_pdf_async_enqueues_job():
+    """process_pdf without sync=True (default) enqueues a paper.process job."""
+    from unittest.mock import patch as mock_patch
+
+    job_id = "test-job-uuid"
+    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
+    pool = MagicMock()  # not used in async path — enqueue is patched
+
+    # Patch jarvis_common.jobs.enqueue so no DB connection is needed
+    with mock_patch("jarvis_common.jobs.enqueue", new=AsyncMock(return_value=job_id)):
+        result = await pdf.process_pdf.__wrapped__(
+            request,
+            paper_id=42,
+            force=False,
+            sync=False,
+            db_pool=pool,
+            embedder=MagicMock(),
+        )
+
+    assert result["job_id"] == job_id
+    assert result["status"] == "queued"
 
 
 @pytest.mark.asyncio
