@@ -5,7 +5,7 @@ import { AuthorSection } from '@/components/settings/AuthorSection';
 import { IngestionSection } from '@/components/settings/IngestionSection';
 import { AutomationSection } from '@/components/settings/AutomationSection';
 import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
-import { RecommendationSection } from '@/components/settings/RecommendationSection';
+import { PulseSection } from '@/components/settings/PulseSection';
 import { TimerSection } from '@/components/settings/TimerSection';
 import { PairTelegram } from '@/components/setup/PairTelegram';
 
@@ -22,7 +22,7 @@ export function SettingsPage() {
           <TabsTrigger value="ingestion">Models & Notifications</TabsTrigger>
           <TabsTrigger value="automation">Automation</TabsTrigger>
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
-          <TabsTrigger value="recommendation">Recommendations</TabsTrigger>
+          <TabsTrigger value="pulse">Pulse</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
@@ -51,8 +51,8 @@ export function SettingsPage() {
           <ExtractionTemplateSection />
         </TabsContent>
 
-        <TabsContent value="recommendation">
-          <RecommendationSection />
+        <TabsContent value="pulse">
+          <PulseSection />
         </TabsContent>
 
         <TabsContent value="timer">

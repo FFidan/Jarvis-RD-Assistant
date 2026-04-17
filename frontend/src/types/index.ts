@@ -661,3 +661,29 @@ export interface WhyExplanation {
   llm_relevance: number | null;
   llm_novelty: number | null;
 }
+
+export interface PulseTopicEmbedding {
+  key: string;
+  dim: number | null;
+  ok: boolean;
+  non_null: boolean;
+}
+
+export interface PulseTopCard {
+  card_id: number;
+  paper_id: number;
+  title: string;
+  signals: Record<string, number>;
+  final_score: number;
+  llm_relevance: number | null;
+  llm_novelty: number | null;
+}
+
+export interface PulseDebugInfo {
+  deck_date: string;
+  card_count: number;
+  degraded_reason: string | null;
+  source_counts: Record<string, number>;
+  topic_embeddings: PulseTopicEmbedding[];
+  top_cards: PulseTopCard[];
+}

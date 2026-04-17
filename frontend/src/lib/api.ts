@@ -180,6 +180,7 @@ import type {
   PulseDeck,
   PulseRating,
   PulseStats,
+  PulseDebugInfo,
   WhyExplanation,
   SetupStatus,
   TelegramPairing,
@@ -660,6 +661,9 @@ export const generatePulseNow = () =>
 
 export const fetchPulseStats = (days = 30) =>
   apiFetch<PulseStats>(`/api/pulse/stats?days=${days}`);
+
+export const fetchPulseDebug = () =>
+  apiFetch<PulseDebugInfo>('/api/pulse/debug');
 
 // --- Jobs ---
 

@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MyDayPage } from '@/pages/MyDayPage';
 import * as api from '@/lib/api';
-import type { MyDayResponse } from '@/types';
+import type { MyDayResponse, RetentionStats, PulseDeck } from '@/types';
 
 // Mock the api module
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -13,11 +13,26 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchMyDay: vi.fn(),
     fetchProjects: vi.fn(),
+    fetchPulseToday: vi.fn(),
+    fetchFeedPapers: vi.fn(),
+    getStats: vi.fn(),
     createQuickTask: vi.fn(),
     logFocusSession: vi.fn(),
     updateTask: vi.fn(),
   };
 });
+
+// Mock job store
+vi.mock('@/stores/job-store', () => ({
+  useJobStore: vi.fn((selector: (s: unknown) => unknown) =>
+    selector({
+      jobs: {},
+      activeAborts: {},
+      hasRunning: () => false,
+      startJob: vi.fn(),
+    }),
+  ),
+}));
 
 const mockMyDayData: MyDayResponse = {
   tasks: [
@@ -43,6 +58,19 @@ const mockMyDayData: MyDayResponse = {
   ],
 };
 
+const mockRetentionStats: RetentionStats = {
+  total_cards: 50,
+  due_now: 5,
+  reviewed_today: 3,
+  average_retention: 0.85,
+  reviews_by_rating: {},
+  streak_days: 7,
+};
+
+const mockPulseDeck: PulseDeck | null = null;
+
+const mockFeedResponse = { papers: [], total: 0 };
+
 function renderWithProviders() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -60,85 +88,83 @@ describe('MyDayPage', () => {
   beforeEach(() => {
     vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
     vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
+    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
   });
 
-  it("renders heading with today's date", async () => {
+  it('renders greeting and date', async () => {
     renderWithProviders();
-    expect(await screen.findByText('My Day')).toBeInTheDocument();
+    // DayHeader renders greeting text (Good morning/afternoon/evening)
+    const greeting = await screen.findByText(/Good (morning|afternoon|evening)/);
+    expect(greeting).toBeInTheDocument();
   });
 
-  it('renders tasks with project badges', async () => {
+  it('renders counter strip with Pulse papers label', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Pulse papers')).toBeInTheDocument();
+  });
+
+  it('renders counter strip with Cards due label', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Cards due')).toBeInTheDocument();
+  });
+
+  it('renders counter strip with Tasks today label', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Tasks today')).toBeInTheDocument();
+  });
+
+  it('renders tasks from my-day data', async () => {
     renderWithProviders();
     expect(await screen.findByText('Fix embedding pipeline')).toBeInTheDocument();
-    // 'JARVIS' appears as both the task badge and the project pulse link
-    expect(screen.getAllByText('JARVIS').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('Buy groceries')).toBeInTheDocument();
   });
 
-  it('renders standalone tasks without badge', async () => {
+  it("renders Today's Pulse section", async () => {
     renderWithProviders();
-    expect(await screen.findByText('Buy groceries')).toBeInTheDocument();
+    expect(await screen.findByText("Today's Pulse")).toBeInTheDocument();
   });
 
-  it('shows Pomodoro timer in idle state', async () => {
+  it('renders Pomodoro timer in idle state', async () => {
     renderWithProviders();
     expect(await screen.findByText('Pomodoro Timer')).toBeInTheDocument();
     expect(screen.getByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Start Focus')).toBeInTheDocument();
   });
 
-  it('shows project pulse with progress', async () => {
+  it('renders Action Items card', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Action Items')).toBeInTheDocument();
+  });
+
+  it('shows "all caught up" when no unprocessed papers or failed jobs', async () => {
+    renderWithProviders();
+    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  });
+
+  it('renders Learning card from LearningCardsSummary', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Learning')).toBeInTheDocument();
+  });
+
+  it('shows Review Now button when due_now > 0', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('Review Now')).toBeInTheDocument();
+  });
+
+  it('shows streak days from retention stats', async () => {
+    renderWithProviders();
+    expect(await screen.findByText('7 day streak')).toBeInTheDocument();
+  });
+
+  it('shows project pulse', async () => {
     renderWithProviders();
     expect(await screen.findByText('Project Progress')).toBeInTheDocument();
-    // 'JARVIS' appears as both the task badge and the project pulse link
     expect(screen.getAllByText('JARVIS').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('70%')).toBeInTheDocument();
-  });
-
-  it('shows learning card count', async () => {
-    renderWithProviders();
-    expect(await screen.findByText('5 cards due')).toBeInTheDocument();
-    expect(screen.getByText('Review Now')).toBeInTheDocument();
-  });
-
-  it('collapses Learning and Recommended when both empty', async () => {
-    vi.mocked(api.fetchMyDay).mockResolvedValue({
-      ...mockMyDayData,
-      cards_due: 0,
-      recommendations: [],
-    });
-    renderWithProviders();
-    // Compact row should appear
-    expect(await screen.findByText('No reviews or recommendations right now')).toBeInTheDocument();
-    // The individual card titles should NOT appear
-    expect(screen.queryByText('Learning')).not.toBeInTheDocument();
-    expect(screen.queryByText('Recommended')).not.toBeInTheDocument();
-  });
-
-  it('shows Learning card when cards are due even if no recommendations', async () => {
-    vi.mocked(api.fetchMyDay).mockResolvedValue({
-      ...mockMyDayData,
-      cards_due: 3,
-      recommendations: [],
-    });
-    renderWithProviders();
-    expect(await screen.findByText('3 cards due')).toBeInTheDocument();
-    // Grid still renders with both cards
-    expect(screen.getByText('Learning')).toBeInTheDocument();
-    expect(screen.getByText('Recommended')).toBeInTheDocument();
-  });
-
-  it('renders project badges as clickable links', async () => {
-    renderWithProviders();
-    await screen.findByText('Fix embedding pipeline');
-    // Find the JARVIS text elements - they appear as badge and in project pulse
-    const jarvisElements = screen.getAllByText('JARVIS');
-    // At least one should be inside a link to /projects
-    const badgeLink = jarvisElements.find(el => el.closest('a[href="/projects"]'));
-    expect(badgeLink).toBeTruthy();
   });
 
   it('shows Pause button when timer is in work phase', async () => {
-    // Import and set store state to simulate work phase
     const { usePomodoroStore } = await import('@/stores/pomodoro-store');
     usePomodoroStore.setState({
       phase: 'work',
@@ -151,11 +177,9 @@ describe('MyDayPage', () => {
     });
 
     renderWithProviders();
-    await screen.findByText('My Day');
+    await screen.findByText('Pomodoro Timer');
     expect(screen.getByText('Pause')).toBeInTheDocument();
-    expect(screen.getByText(/Stop & Log/)).toBeInTheDocument();
 
-    // Clean up store
     usePomodoroStore.getState().reset();
   });
 });

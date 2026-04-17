@@ -29,6 +29,9 @@ vi.mock('@/lib/api', () => ({
   deleteExtractionTemplate: vi.fn(),
   checkHealth: vi.fn(),
   fetchPulseStats: vi.fn().mockResolvedValue({ last_run_at: null, decks_generated: 0, last_error: null }),
+  fetchPulseDebug: vi.fn().mockResolvedValue({ deck_date: '2026-04-17', card_count: 5, degraded_reason: null, source_counts: {}, topic_embeddings: [], top_cards: [] }),
+  createJob: vi.fn().mockResolvedValue({ job_id: 'test-job-id', status: 'queued' }),
+  listJobs: vi.fn().mockResolvedValue([]),
   getSetupStatus: vi.fn().mockResolvedValue({
     setup_completed: true,
     models_ready: true,
@@ -73,6 +76,16 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('tab', { name: 'Models & Notifications' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Automation' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Extraction Templates' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Recommendations' })).not.toBeInTheDocument();
+  });
+
+  it('switches to Pulse tab on click', async () => {
+    const user = userEvent.setup();
+    renderSettingsPage();
+    const pulseTab = screen.getByRole('tab', { name: 'Pulse' });
+    await user.click(pulseTab);
+    expect(pulseTab).toHaveAttribute('data-state', 'active');
   });
 
   it('defaults to Topics tab', () => {

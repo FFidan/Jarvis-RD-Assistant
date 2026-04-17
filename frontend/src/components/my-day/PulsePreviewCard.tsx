@@ -1,0 +1,225 @@
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import { PulseCard } from '@/components/pulse/PulseCard';
+import { useJobStore } from '@/stores/job-store';
+import { fetchPulseToday, generatePulseNow, ratePulseCard } from '@/lib/api';
+import type { PulseDeck, PulseRating } from '@/types';
+
+/** Format a date as "HH:MM" (24h). */
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+/** Returns the age in hours since `iso`. */
+function hoursAgo(iso: string): number {
+  return (Date.now() - new Date(iso).getTime()) / (1000 * 60 * 60);
+}
+
+/** Next auto-run estimate: next 6 AM. */
+function nextAutoRun(): string {
+  const d = new Date();
+  d.setDate(d.getDate() + (d.getHours() >= 6 ? 1 : 0));
+  d.setHours(6, 0, 0, 0);
+  return formatTime(d.toISOString());
+}
+
+interface GenerateButtonProps {
+  deck: PulseDeck | null;
+  isGenerating: boolean;
+  onGenerate: () => void;
+  onRefetch: () => void;
+}
+
+function GenerateButton({ deck, isGenerating, onGenerate, onRefetch }: GenerateButtonProps) {
+  if (isGenerating) {
+    return (
+      <Button size="sm" disabled>
+        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+        Generating…
+      </Button>
+    );
+  }
+
+  if (!deck) {
+    return (
+      <Button size="sm" onClick={onGenerate}>
+        Generate Pulse now
+      </Button>
+    );
+  }
+
+  const age = hoursAgo(deck.generated_at);
+  if (age < 1) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-muted-foreground">
+          Pulse up to date · next auto-run at {nextAutoRun()}
+        </span>
+        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={onRefetch} title="Force refresh">
+          <RefreshCw className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+    );
+  }
+
+  return (
+    <Button size="sm" variant="outline" onClick={onGenerate}>
+      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+      Refresh Pulse
+    </Button>
+  );
+}
+
+interface PulsePreviewCardProps {
+  containerRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const [ratedCards, setRatedCards] = useState<Set<number>>(new Set());
+
+  const {
+    data: deck,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useQuery<PulseDeck | null>({
+    queryKey: ['pulse-today'],
+    queryFn: fetchPulseToday,
+  });
+
+  const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
+
+  const generateMutation = useMutation({
+    mutationFn: generatePulseNow,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      queryClient.invalidateQueries({ queryKey: ['pulse-history'] });
+    },
+  });
+
+  const rateMutation = useMutation({
+    mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
+      ratePulseCard(paperId, rating),
+    onSuccess: (_data, { paperId }) => {
+      setRatedCards((prev) => new Set(prev).add(paperId));
+    },
+  });
+
+  const handleRate = (paperId: number, rating: PulseRating) => {
+    rateMutation.mutate({ paperId, rating });
+  };
+
+  const handleOpen = (paperId: number) => {
+    navigate(`/paper/${paperId}`);
+  };
+
+  if (isLoading) {
+    return (
+      <div ref={containerRef} className="space-y-3">
+        <Skeleton className="h-6 w-56" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Card ref={containerRef} className="border-destructive/50 bg-destructive/5">
+        <CardHeader className="pb-2">
+          <CardTitle className="text-destructive text-base">Failed to load Pulse</CardTitle>
+        </CardHeader>
+        <CardContent className="flex items-center justify-between gap-4">
+          <p className="text-muted-foreground text-sm">
+            {error instanceof Error ? error.message : 'Unknown error'}
+          </p>
+          <Button variant="outline" size="sm" onClick={() => refetch()}>
+            Retry
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const previewCards = deck?.cards.slice(0, 3) ?? [];
+  const totalCount = deck?.card_count ?? 0;
+
+  return (
+    <Card ref={containerRef}>
+      <CardHeader className="pb-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Sparkles className="h-5 w-5" />
+            {deck
+              ? `Today's Pulse — ${totalCount} paper${totalCount !== 1 ? 's' : ''}`
+              : "Today's Pulse"}
+          </CardTitle>
+          <GenerateButton
+            deck={deck ?? null}
+            isGenerating={isGenerating || generateMutation.isPending}
+            onGenerate={() => generateMutation.mutate()}
+            onRefetch={() => refetch()}
+          />
+        </div>
+        {generateMutation.isError && (
+          <p className="text-destructive text-xs mt-1">Generation failed. Please retry.</p>
+        )}
+      </CardHeader>
+
+      <CardContent className="space-y-3">
+        {/* Empty state: no deck ever generated */}
+        {!deck && (
+          <div className="flex flex-col items-center gap-3 py-6 text-center">
+            <Sparkles className="h-8 w-8 text-muted-foreground" />
+            <div>
+              <p className="font-medium">Generate your first Pulse</p>
+              <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+                Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Degraded warning banner */}
+        {deck && (deck.stats as Record<string, unknown>)['degraded_reason'] && (
+          <div className="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+            <span>{String((deck.stats as Record<string, unknown>)['degraded_reason'])}</span>
+          </div>
+        )}
+
+        {/* Top 3 preview cards */}
+        {previewCards.map((card) => (
+          <PulseCard
+            key={card.card_id}
+            card={card}
+            onRate={handleRate}
+            onOpen={handleOpen}
+            rated={ratedCards.has(card.paper_id)}
+          />
+        ))}
+
+        {/* "View all" link */}
+        {deck && totalCount > 0 && (
+          <div className="pt-1 text-right">
+            <Link
+              to="/feed?tab=pulse"
+              className="text-sm text-primary hover:underline"
+            >
+              View all {totalCount} →
+            </Link>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

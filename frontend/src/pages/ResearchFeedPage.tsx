@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
   ApiError,
@@ -18,11 +19,46 @@ import { LibraryTab } from '@/components/feed/LibraryTab';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
 import { BookOpen } from 'lucide-react';
 
+const VALID_TABS = new Set(['library', 'new', 'discover', 'ask', 'pulse']);
+
 export function ResearchFeedPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
   const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-  const [activeTab, setActiveTab] = useState('library');
+  const [activeTab, setActiveTab] = useState(
+    tabParam && VALID_TABS.has(tabParam) ? tabParam : 'library',
+  );
   const [bothSearching, setBothSearching] = useState(false);
+
+  // Sync tab → URL when user clicks a tab
+  const handleTabChange = useCallback(
+    (value: string) => {
+      setActiveTab(value);
+      if (value === 'library') {
+        // Don't pollute URL with default tab
+        setSearchParams((prev) => {
+          prev.delete('tab');
+          return prev;
+        });
+      } else {
+        setSearchParams((prev) => {
+          prev.set('tab', value);
+          return prev;
+        });
+      }
+    },
+    [setSearchParams],
+  );
+
+  // When the URL ?tab param changes externally (e.g. deep-link navigation),
+  // update active tab
+  useEffect(() => {
+    const t = searchParams.get('tab');
+    if (t && VALID_TABS.has(t) && t !== activeTab) {
+      setActiveTab(t);
+    }
+  }, [searchParams]); // intentionally omit activeTab to avoid loop
 
   const searchMutation = useMutation({
     mutationFn: ({
@@ -52,6 +88,7 @@ export function ResearchFeedPage() {
       setSaveMessage({ type: 'success', text: `Saved ${data.length} paper(s) to your library.` });
       setPreviewResults([]);
       setActiveTab('library');
+      setSearchParams((prev) => { prev.delete('tab'); return prev; });
     },
     onError: () => {
       setSaveMessage({ type: 'error', text: 'Save failed. Check service logs.' });
@@ -119,7 +156,7 @@ export function ResearchFeedPage() {
       </h1>
       <p className="text-muted-foreground text-sm">Discover and manage research papers from your configured sources</p>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="library">Library</TabsTrigger>
           <TabsTrigger value="new">New</TabsTrigger>
