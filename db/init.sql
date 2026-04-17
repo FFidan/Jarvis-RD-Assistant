@@ -65,6 +65,7 @@ CREATE TABLE paper_sources (
     enabled         BOOLEAN DEFAULT TRUE,
     priority        INTEGER NOT NULL DEFAULT 1,
     config          JSONB DEFAULT '{}',
+    display_order   INTEGER NOT NULL DEFAULT 0,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -567,7 +568,8 @@ CREATE TABLE IF NOT EXISTS pulse_decks (
     deck_date       DATE NOT NULL UNIQUE,  -- single-user system
     card_count      INTEGER NOT NULL DEFAULT 0,
     generated_at    TIMESTAMPTZ DEFAULT NOW(),
-    stats           JSONB DEFAULT '{}'::jsonb  -- candidate count, LLM calls, duration, etc.
+    stats           JSONB DEFAULT '{}'::jsonb,  -- candidate count, LLM calls, duration, etc.
+    degraded_reason TEXT
 );
 
 -- Pulse cards — the papers in each deck with score metadata
@@ -616,6 +618,26 @@ CREATE TABLE IF NOT EXISTS pdf_resolutions (
 );
 CREATE INDEX IF NOT EXISTS idx_pdf_resolutions_doi
     ON pdf_resolutions(doi) WHERE doi IS NOT NULL;
+
+-- Async job queue — generic status machine for long-running background tasks
+CREATE TABLE IF NOT EXISTS jobs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued'
+    CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  progress REAL NOT NULL DEFAULT 0.0,
+  progress_message TEXT,
+  result JSONB,
+  error JSONB,
+  cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ,
+  user_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_status_kind ON jobs(status, kind);
+CREATE INDEX IF NOT EXISTS idx_jobs_created_desc ON jobs(created_at DESC);
 
 -- Register new source types for Discovery & Pulse
 INSERT INTO paper_sources (source_type, enabled, config)
