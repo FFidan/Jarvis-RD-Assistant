@@ -33,7 +33,10 @@ async def run_auto_pipeline(app) -> None:
     try:
         # 1. Query enabled sources and topics
         async with db_pool.acquire() as conn:
-            sources_rows = await conn.fetch("SELECT * FROM paper_sources WHERE enabled = TRUE")
+            sources_rows = await conn.fetch(
+                "SELECT * FROM paper_sources WHERE enabled = TRUE"
+                " ORDER BY display_order ASC, id ASC"
+            )
             topics_rows = await conn.fetch("SELECT name FROM topics")
 
         topics = [row["name"] for row in topics_rows]

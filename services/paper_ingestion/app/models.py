@@ -348,6 +348,7 @@ class SourceResponse(BaseModel):
     enabled: bool
     config: dict = Field(default_factory=dict)
     priority: int = 1
+    display_order: int = 0
     created_at: datetime
 
 
@@ -355,6 +356,7 @@ class SourceUpdate(BaseModel):
     enabled: bool | None = None
     config: dict | None = None
     priority: int | None = None
+    display_order: int | None = None
 
 
 class NoteCreate(BaseModel):

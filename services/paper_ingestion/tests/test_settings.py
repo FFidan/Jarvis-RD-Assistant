@@ -262,6 +262,7 @@ async def test_list_sources(_app):
             enabled=True,
             config={},
             priority=1,
+            display_order=0,
             created_at=_now(),
         ),
     ]
@@ -275,6 +276,130 @@ async def test_list_sources(_app):
     body = resp.json()
     assert len(body) == 1
     assert body[0]["source_type"] == "arxiv"
+
+
+@pytest.mark.asyncio
+async def test_list_sources_ordered_by_display_order(_app):
+    """GET /api/sources issues ORDER BY display_order ASC, id ASC."""
+
+    app, conn, _ = _app
+    conn.fetch.return_value = [
+        FakeRecord(
+            id=2,
+            source_type="pubmed",
+            enabled=True,
+            config={},
+            priority=1,
+            display_order=1,
+            created_at=_now(),
+        ),
+        FakeRecord(
+            id=1,
+            source_type="arxiv",
+            enabled=True,
+            config={},
+            priority=1,
+            display_order=2,
+            created_at=_now(),
+        ),
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/sources")
+
+    assert resp.status_code == 200
+    # Verify the SQL passed to fetch includes ORDER BY display_order
+    fetch_sql = conn.fetch.call_args[0][0]
+    assert "display_order" in fetch_sql.lower()
+    body = resp.json()
+    assert body[0]["source_type"] == "pubmed"
+    assert body[1]["source_type"] == "arxiv"
+
+
+@pytest.mark.asyncio
+async def test_reorder_sources_persists_order(_app):
+    """PATCH /api/sources/reorder updates display_order and returns ordered list."""
+    app, conn, _ = _app
+    # First fetch: existing source_types validation
+    conn.fetch.side_effect = [
+        [
+            FakeRecord(source_type="arxiv"),
+            FakeRecord(source_type="pubmed"),
+            FakeRecord(source_type="openalex"),
+        ],
+        # Second fetch: return after update
+        [
+            FakeRecord(
+                id=2,
+                source_type="pubmed",
+                enabled=True,
+                config={},
+                priority=1,
+                display_order=1,
+                created_at=_now(),
+            ),
+            FakeRecord(
+                id=3,
+                source_type="openalex",
+                enabled=True,
+                config={},
+                priority=1,
+                display_order=2,
+                created_at=_now(),
+            ),
+            FakeRecord(
+                id=1,
+                source_type="arxiv",
+                enabled=True,
+                config={},
+                priority=1,
+                display_order=3,
+                created_at=_now(),
+            ),
+        ],
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch(
+            "/api/sources/reorder",
+            json={"source_types": ["pubmed", "openalex", "arxiv"]},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 3
+    assert body[0]["source_type"] == "pubmed"
+    assert body[0]["display_order"] == 1
+    assert body[2]["source_type"] == "arxiv"
+    assert body[2]["display_order"] == 3
+    # Verify execute was called for each source_type in order
+    assert conn.execute.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_reorder_sources_unknown_source_returns_400(_app):
+    """PATCH /api/sources/reorder returns 400 for unknown source_type."""
+    app, conn, _ = _app
+    conn.fetch.return_value = [
+        FakeRecord(source_type="arxiv"),
+        FakeRecord(source_type="pubmed"),
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.patch(
+            "/api/sources/reorder",
+            json={"source_types": ["arxiv", "nonexistent_source"]},
+        )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "nonexistent_source" in detail
 
 
 @pytest.mark.asyncio

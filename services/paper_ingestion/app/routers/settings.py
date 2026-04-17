@@ -8,6 +8,7 @@ from typing import Any
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException, Request
 from jarvis_common import dynamic_update
+from pydantic import BaseModel
 
 from app.deps import limiter
 from app.models import (
@@ -61,7 +62,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
 _NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
 _NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
 
-_SOURCE_ALLOWED_COLUMNS: set[str] = {"enabled", "priority", "config"}
+_SOURCE_ALLOWED_COLUMNS: set[str] = {"enabled", "priority", "config", "display_order"}
 _SOURCE_JSONB_COLUMNS: frozenset[str] = frozenset({"config"})
 
 
@@ -259,11 +260,38 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
 # --- Paper Sources ---
 
 
+class ReorderRequest(BaseModel):
+    source_types: list[str]
+
+
 @router.get("/sources", response_model=list[SourceResponse])
 @limiter.limit("60/minute")
 async def list_sources(request: Request) -> list[SourceResponse]:
     async with request.app.state.db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY id")
+        rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
+    return [SourceResponse(**dict(r)) for r in rows]
+
+
+@router.patch("/sources/reorder", response_model=list[SourceResponse])
+@limiter.limit("10/minute")
+async def reorder_sources(request: Request, body: ReorderRequest) -> list[SourceResponse]:
+    """Persist UI drag-and-drop order by assigning display_order = position index."""
+    async with request.app.state.db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT source_type FROM paper_sources")
+    existing = {r["source_type"] for r in rows}
+    missing = set(body.source_types) - existing
+    if missing:
+        raise HTTPException(400, detail=f"Unknown sources: {sorted(missing)}")
+    async with request.app.state.db_pool.acquire() as conn:
+        async with conn.transaction():
+            for idx, stype in enumerate(body.source_types, start=1):
+                await conn.execute(
+                    "UPDATE paper_sources SET display_order = $1 WHERE source_type = $2",
+                    idx,
+                    stype,
+                )
+    async with request.app.state.db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
     return [SourceResponse(**dict(r)) for r in rows]
 
 

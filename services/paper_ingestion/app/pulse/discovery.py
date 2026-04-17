@@ -88,7 +88,8 @@ async def discover_candidates(
     """
     async with db_pool.acquire() as conn:
         source_rows = await conn.fetch(
-            "SELECT id, source_type, enabled, config FROM paper_sources WHERE enabled = TRUE"
+            "SELECT id, source_type, enabled, config FROM paper_sources"
+            " WHERE enabled = TRUE ORDER BY display_order ASC, id ASC"
         )
 
     if not source_rows:
