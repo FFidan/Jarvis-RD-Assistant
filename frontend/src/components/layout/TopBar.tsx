@@ -1,9 +1,11 @@
 import { useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
 
 const pageTitles: Record<string, string> = {
   '/': 'Home',
+  '/my-day': 'My Day',
   '/feed': 'Research Feed',
   '/analytics': 'Analytics',
   '/projects': 'Projects',
@@ -36,6 +38,9 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         </Button>
       )}
       <h1 className="text-lg font-semibold">{title}</h1>
+      <div className="ml-auto flex items-center gap-2">
+        <HeaderPomodoro />
+      </div>
     </header>
   );
 }

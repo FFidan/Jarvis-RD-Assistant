@@ -88,7 +88,7 @@ describe('MyDayPage', () => {
 
   it('shows project pulse with progress', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Project Pulse')).toBeInTheDocument();
+    expect(await screen.findByText('Project Progress')).toBeInTheDocument();
     // 'JARVIS' appears as both the task badge and the project pulse link
     expect(screen.getAllByText('JARVIS').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('70%')).toBeInTheDocument();

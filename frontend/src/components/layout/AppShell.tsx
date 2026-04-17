@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TopBar } from '@/components/layout/TopBar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
 
 interface AppShellProps {
   children: ReactNode;
@@ -9,6 +10,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  usePomodoroTick();
 
   return (
     <div className="flex h-screen overflow-hidden">

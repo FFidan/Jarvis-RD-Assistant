@@ -144,11 +144,12 @@ describe('ResearchFeedPage', () => {
     expect(libraryTab).toHaveAttribute('data-state', 'active');
   });
 
-  it('renders the cross-paper chat expander', async () => {
+  it('renders the Ask tab heading and description', async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Ask' }));
-    expect(screen.getByText('Ask across all papers')).toBeInTheDocument();
+    expect(screen.getByText('Ask Questions')).toBeInTheDocument();
+    expect(screen.getByText(/Get answers synthesised from your entire library/i)).toBeInTheDocument();
   });
 
   it('renders the search input', async () => {
@@ -225,14 +226,11 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByText('Search Result Paper')).not.toBeInTheDocument();
   });
 
-  it('expands cross-paper chat when clicked', async () => {
+  it('shows StreamingChat with cross-paper scope in Ask tab', async () => {
     const user = userEvent.setup();
     renderPage();
 
     await user.click(screen.getByRole('tab', { name: 'Ask' }));
-
-    const expandBtn = screen.getByText('Ask across all papers');
-    await user.click(expandBtn);
 
     await waitFor(() => {
       expect(screen.getByTestId('streaming-chat')).toBeInTheDocument();

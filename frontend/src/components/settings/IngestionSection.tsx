@@ -147,6 +147,28 @@ function formatConfigValue(value: unknown): string {
 /** Preferred order for groups (unlisted groups sort alphabetically after these). */
 const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Other'];
 
+const NOTIFICATION_LABELS: Record<string, string> = {
+  'notifications.morning_briefing': 'Morning Briefing',
+  'notifications.paper_digest': 'Paper Digest',
+  'notifications.review_reminder': 'Review Reminder',
+  'notifications.timezone': 'Timezone',
+};
+
+const NOTIFICATION_TOOLTIPS: Record<string, string> = {
+  'notifications.morning_briefing':
+    "A concise morning summary delivered at your configured time — today's Pulse deck highlights, cards due for review, and project deadlines.",
+  'notifications.paper_digest':
+    'Weekly digest of saved papers grouped by topic with short summaries, delivered every Sunday morning.',
+  'notifications.review_reminder':
+    'Reminds you when there are learning cards due for spaced-repetition review; fires once per day if reviews are pending.',
+};
+
+function notificationLabel(key: string): string {
+  if (NOTIFICATION_LABELS[key]) return NOTIFICATION_LABELS[key];
+  const suffix = key.split('.').pop() ?? key;
+  return suffix.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // ---------------------------------------------------------------------------
 // NotificationRow — inline time picker + enabled toggle
 // ---------------------------------------------------------------------------
@@ -179,7 +201,12 @@ function NotificationRow({
   return (
     <Card key={entry.key}>
       <CardContent className="flex items-center gap-4 p-4">
-        <span className="shrink-0 font-mono text-sm">{entry.key}</span>
+        <span className="flex shrink-0 items-center gap-1 font-medium text-sm">
+          {notificationLabel(entry.key)}
+          {NOTIFICATION_TOOLTIPS[entry.key] && (
+            <InfoTooltip content={NOTIFICATION_TOOLTIPS[entry.key]} />
+          )}
+        </span>
         <div className="flex flex-1 items-center gap-4">
           <div className="flex items-center gap-2">
             <Label htmlFor={`time-${entry.key}`} className="text-sm">

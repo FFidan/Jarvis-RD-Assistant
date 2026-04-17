@@ -26,7 +26,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/my-day', label: 'My Day', icon: Sun },
-  { path: '/feed', label: 'Feed', icon: Newspaper },
+  { path: '/feed', label: 'Research Feed', icon: Newspaper },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/projects', label: 'Projects', icon: FolderKanban },
   { path: '/cards', label: 'Learning Cards', icon: GraduationCap },

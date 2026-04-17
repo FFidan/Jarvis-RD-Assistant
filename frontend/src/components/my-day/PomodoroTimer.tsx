@@ -57,14 +57,6 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run once on mount
 
-  // Tick interval — only runs when not idle (Bug #5 fix)
-  // Uses getState().tick() to avoid stale closures; only dep is `phase`.
-  useEffect(() => {
-    if (phase === 'idle') return;
-    const id = setInterval(() => usePomodoroStore.getState().tick(), 1000);
-    return () => clearInterval(id);
-  }, [phase]);
-
   // Auto-log completed sessions (Bug #1)
   useEffect(() => {
     if (!completedSession) return;

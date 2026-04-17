@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Upload } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { uploadPdf, processPdf } from '@/lib/api';
 
 type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
@@ -23,6 +24,31 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
 
   const updateFile = (index: number, patch: Partial<FileEntry>) =>
     setFiles(prev => prev.map((f, i) => (i === index ? { ...f, ...patch } : f)));
+
+  const retryFile = (index: number) => {
+    const entry = files[index];
+    if (!entry) return;
+    setFiles(prev => prev.map((f, i) => (i === index ? { ...f, status: 'idle', error: undefined } : f)));
+    void (async () => {
+      try {
+        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'uploading' as FileStatus } : f)));
+        const paper = await uploadPdf(entry.file, entry.file.name.replace(/\.pdf$/i, ''));
+        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'processing' as FileStatus } : f)));
+        await processPdf(paper.id);
+        setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'done' as FileStatus } : f)));
+        queryClient.invalidateQueries({ queryKey: ['feed'] });
+        onComplete?.();
+      } catch (err) {
+        setFiles(s =>
+          s.map((f, si) =>
+            si === index
+              ? { ...f, status: 'error' as FileStatus, error: err instanceof Error ? err.message : 'Upload failed' }
+              : f,
+          ),
+        );
+      }
+    })();
+  };
 
   const processFiles = useCallback(async (newFiles: File[]) => {
     const entries: FileEntry[] = newFiles.map(f => ({ file: f, status: 'idle' as FileStatus }));
@@ -105,9 +131,16 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
         <ul className="space-y-1">
           {files.map((entry, i) => (
             <li key={i} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2 text-xs">
-              <span className="truncate max-w-[70%] font-medium">{entry.file.name}</span>
-              <span className={statusColor[entry.status]}>
-                {entry.status === 'error' ? (entry.error ?? 'Error') : statusLabel[entry.status]}
+              <span className="truncate max-w-[60%] font-medium">{entry.file.name}</span>
+              <span className="flex items-center gap-2">
+                <span className={statusColor[entry.status]}>
+                  {entry.status === 'error' ? (entry.error ?? 'Error') : statusLabel[entry.status]}
+                </span>
+                {entry.status === 'error' && (
+                  <Button variant="ghost" size="sm" className="h-5 px-2 text-xs" onClick={() => retryFile(i)}>
+                    Retry
+                  </Button>
+                )}
               </span>
             </li>
           ))}

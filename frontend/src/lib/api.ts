@@ -496,10 +496,6 @@ export async function uploadPdf(file: File, title: string): Promise<{ id: number
   return apiFetch('/api/upload-pdf', { method: 'POST', body: form });
 }
 
-export async function processPdf(paperId: number): Promise<{ chunk_count: number; status: string }> {
-  return apiFetch(`/api/process-pdf/${paperId}`, { method: 'POST' });
-}
-
 export const batchProcessPapers = (limit?: number) =>
   apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number }>('/api/papers/batch-process', {
     method: 'POST',

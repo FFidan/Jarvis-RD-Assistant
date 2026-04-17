@@ -120,8 +120,11 @@ export function SourceApiKeysStep({ onNext, onBack }: SourceApiKeysStepProps) {
           <Button variant="ghost" onClick={onBack}>
             Back
           </Button>
-          <Button onClick={onNext}>
+          <Button variant="outline" onClick={onNext}>
             Skip for now
+          </Button>
+          <Button onClick={onNext}>
+            Continue
             <ArrowRight className="ml-2 h-4 w-4" />
           </Button>
         </>

@@ -73,7 +73,7 @@ COMMENT ON TABLE paper_sources IS 'Pluggable paper source registry. Each row is 
 -- Seed default sources
 INSERT INTO paper_sources (source_type, enabled, config) VALUES
     ('arxiv', TRUE, '{}'),
-    ('semantic_scholar', FALSE, '{}'),
+    ('semantic_scholar', FALSE, '{"key_env": "SEMANTIC_SCHOLAR_API_KEY", "requires_key": false}'),
     ('local', FALSE, '{}')  -- TODO: Enable when local PDF ingestion is implemented
 ON CONFLICT (source_type) DO NOTHING;
 

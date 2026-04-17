@@ -10,6 +10,14 @@ import { EmptyState } from '@/components/EmptyState';
 import { Plug, Key, Pencil, Check, X, AlertTriangle } from 'lucide-react';
 import type { SourceConfig } from '@/types';
 
+const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+  arxiv: 'ArXiv',
+  semantic_scholar: 'Semantic Scholar',
+  openalex: 'OpenAlex',
+  pubmed: 'PubMed',
+  local: 'Local',
+};
+
 function getConfigString(
   config: Record<string, unknown> | null | undefined,
   key: string,
@@ -75,7 +83,7 @@ export function SourceSection() {
             <div className="flex items-center gap-4">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="font-medium capitalize">{source.source_type}</span>
+                  <span className="font-medium">{SOURCE_DISPLAY_NAMES[source.source_type] ?? source.source_type}</span>
                   <Badge variant={source.enabled ? 'default' : 'outline'}>
                     {source.enabled ? 'Enabled' : 'Disabled'}
                   </Badge>

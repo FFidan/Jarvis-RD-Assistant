@@ -68,8 +68,8 @@ describe('SetupWizard', () => {
     expect(await screen.findByText('HOME')).toBeInTheDocument();
   });
 
-  it('step 6 calls markSetupCompleted on mount and navigates home on success', async () => {
-    renderWizard('/setup?step=6');
+  it('step 7 calls markSetupCompleted on mount and navigates home on success', async () => {
+    renderWizard('/setup?step=7');
     await waitFor(() => {
       expect(api.markSetupCompleted).toHaveBeenCalled();
     });
@@ -77,17 +77,17 @@ describe('SetupWizard', () => {
     expect(await screen.findByText('HOME')).toBeInTheDocument();
   });
 
-  it('step 6 calls markSetupCompleted exactly once (hasTriggered guard)', async () => {
-    renderWizard('/setup?step=6');
+  it('step 7 calls markSetupCompleted exactly once (hasTriggered guard)', async () => {
+    renderWizard('/setup?step=7');
     await waitFor(() => {
       expect(api.markSetupCompleted).toHaveBeenCalledTimes(1);
     });
   });
 
-  it('step 6 shows error state with retry button when markSetupCompleted fails', async () => {
+  it('step 7 shows error state with retry button when markSetupCompleted fails', async () => {
     vi.mocked(api.markSetupCompleted).mockRejectedValueOnce(new Error('Server error'));
     const user = userEvent.setup();
-    renderWizard('/setup?step=6');
+    renderWizard('/setup?step=7');
     expect(await screen.findByText(/setup completion failed/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument();
     // Clicking retry fires another mutation call.
@@ -107,7 +107,7 @@ describe('SetupWizard', () => {
   it('renders step 4 automation form', () => {
     renderWizard('/setup?step=4');
     expect(screen.getByText('Automation schedule')).toBeInTheDocument();
-    expect(screen.getByLabelText('Daily run time')).toBeInTheDocument();
+    expect(screen.getByText('Daily run time')).toBeInTheDocument();
   });
 
   it('AutomationStep writes pulse.enabled=true on submit (default checked)', async () => {
@@ -143,8 +143,8 @@ describe('SetupWizard', () => {
     });
   });
 
-  it('renders step 5 telegram pairing', () => {
-    renderWizard('/setup?step=5');
+  it('renders step 6 telegram pairing', () => {
+    renderWizard('/setup?step=6');
     expect(screen.getByText(/pair telegram/i)).toBeInTheDocument();
   });
 });
