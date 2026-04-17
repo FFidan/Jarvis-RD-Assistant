@@ -13,6 +13,7 @@ vi.mock('@/lib/api', () => ({
   deleteTopic: vi.fn(),
   fetchSources: vi.fn().mockResolvedValue([]),
   updateSource: vi.fn(),
+  reorderSources: vi.fn(),
   fetchTrackedAuthors: vi.fn().mockResolvedValue([]),
   createTrackedAuthor: vi.fn(),
   updateTrackedAuthor: vi.fn(),

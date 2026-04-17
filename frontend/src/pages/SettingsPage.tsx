@@ -1,6 +1,6 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TopicSection } from '@/components/settings/TopicSection';
-import { SourceSection } from '@/components/settings/SourceSection';
+import { SourcesList } from '@/components/settings/SourcesList';
 import { AuthorSection } from '@/components/settings/AuthorSection';
 import { IngestionSection } from '@/components/settings/IngestionSection';
 import { AutomationSection } from '@/components/settings/AutomationSection';
@@ -32,7 +32,7 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="sources">
-          <SourceSection />
+          <SourcesList />
         </TabsContent>
 
         <TabsContent value="authors">

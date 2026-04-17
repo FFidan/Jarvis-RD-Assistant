@@ -240,6 +240,7 @@ export interface SourceConfig {
   enabled: boolean;
   config: Record<string, unknown>;
   priority: number;
+  display_order: number;
   created_at: string;
 }
 

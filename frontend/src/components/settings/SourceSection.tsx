@@ -1,21 +1,34 @@
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchSources, updateSource } from '@/lib/api';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
+import { updateSource } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { EmptyState } from '@/components/EmptyState';
-import { Plug, Key, Pencil, Check, X, AlertTriangle } from 'lucide-react';
+import { GripVertical, Key, Pencil, Check, X } from 'lucide-react';
 import type { SourceConfig } from '@/types';
 
-const SOURCE_DISPLAY_NAMES: Record<string, string> = {
+export const SOURCE_DISPLAY_NAMES: Record<string, string> = {
   arxiv: 'ArXiv',
   semantic_scholar: 'Semantic Scholar',
   openalex: 'OpenAlex',
   pubmed: 'PubMed',
   local: 'Local',
+};
+
+export const SOURCE_DESCRIPTIONS: Record<string, string> = {
+  local: "PDFs you've uploaded directly. No API key needed; always enabled.",
+  arxiv:
+    'Open-access preprint server covering physics, math, CS, quant-bio and economics. No API key required.',
+  semantic_scholar:
+    'AI-powered academic search by Allen Institute for AI. Optional API key raises rate limits.',
+  openalex:
+    'Free, open catalog of the global research graph (250M+ works). Provide your email for the polite pool.',
+  pubmed:
+    'NCBI\'s biomedical literature database. No API key required but one increases rate limits.',
 };
 
 function getConfigString(
@@ -27,23 +40,25 @@ function getConfigString(
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-function getConfigBool(
-  config: Record<string, unknown> | null | undefined,
-  key: string,
-): boolean {
-  if (!config) return false;
-  return config[key] === true;
+interface SourceSectionProps {
+  source: SourceConfig;
+  displayIdx: number;
 }
 
-export function SourceSection() {
+export function SourceSection({ source, displayIdx }: SourceSectionProps) {
   const queryClient = useQueryClient();
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingKey, setEditingKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
 
-  const { data: sources = [], isLoading } = useQuery({
-    queryKey: ['sources'],
-    queryFn: fetchSources,
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: source.source_type,
   });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+  };
 
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: number; data: Partial<SourceConfig> }) =>
@@ -53,64 +68,68 @@ export function SourceSection() {
     },
   });
 
-  const handleToggle = (source: SourceConfig) => {
+  const handleToggle = () => {
     updateMut.mutate({ id: source.id, data: { enabled: !source.enabled } });
   };
 
-  if (isLoading) {
-    return <div className="py-8 text-center text-muted-foreground">Loading sources...</div>;
-  }
-
-  if (sources.length === 0) {
-    return <EmptyState title="No sources" description="No paper sources configured." icon={Plug} />;
-  }
+  const config = source.config as Record<string, unknown> | null | undefined;
+  const keyEnv = getConfigString(config, 'key_env');
+  const description = SOURCE_DESCRIPTIONS[source.source_type];
 
   return (
-    <div className="space-y-2">
-      <p className="text-sm text-muted-foreground mb-4">
-        Sources are the databases JARVIS queries to discover new papers. Enabled sources are polled
-        during each discovery run. Priority controls fetch order when sources compete for rate-limit
-        budget — lower number = higher priority.
-      </p>
-      {sources.map((source) => {
-        const config = source.config as Record<string, unknown> | null | undefined;
-        const keyEnv = getConfigString(config, 'key_env');
-        const requiresKey = getConfigBool(config, 'requires_key');
-        const isComplex = !!keyEnv;
-        return (
-        <Card key={source.id}>
-          <CardContent className={isComplex ? 'flex flex-col gap-3 p-4' : 'flex items-center gap-4 p-4'}>
-            <div className="flex items-center gap-4">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-medium">{SOURCE_DISPLAY_NAMES[source.source_type] ?? source.source_type}</span>
-                  <Badge variant={source.enabled ? 'default' : 'outline'}>
-                    {source.enabled ? 'Enabled' : 'Disabled'}
-                  </Badge>
-                  <Badge variant="secondary" className="flex items-center gap-1">
-                    Priority: {source.priority}
-                    <InfoTooltip content="Fetch priority order. Sources with lower numbers are polled first when the rate-limit budget is tight. Sources with the same priority run concurrently." />
-                  </Badge>
-                  {requiresKey && (
-                    <Badge variant="outline" className="gap-1 text-amber-600">
-                      <AlertTriangle className="h-3 w-3" />
-                      Requires API key
-                    </Badge>
-                  )}
-                </div>
-              </div>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => handleToggle(source)}
-                disabled={updateMut.isPending}
-              >
-                {source.enabled ? 'Disable' : 'Enable'}
-              </Button>
+    <div ref={setNodeRef} style={style}>
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-4">
+          {/* Header row */}
+          <div className="flex items-center gap-3">
+            {/* Drag handle */}
+            <button
+              type="button"
+              className="cursor-grab text-muted-foreground hover:text-foreground active:cursor-grabbing shrink-0"
+              aria-label="Drag to reorder"
+              {...attributes}
+              {...listeners}
+            >
+              <GripVertical className="h-4 w-4" />
+            </button>
+
+            {/* Position pill */}
+            <span className="text-xs font-mono text-muted-foreground w-6 shrink-0 text-center">
+              #{displayIdx}
+            </span>
+
+            {/* Source name + info bubble */}
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              <span className="font-medium truncate">
+                {SOURCE_DISPLAY_NAMES[source.source_type] ?? source.source_type}
+              </span>
+              {description && <InfoTooltip content={description} side="right" />}
             </div>
-            {keyEnv && (
+
+            {/* Status badges */}
+            <div className="flex items-center gap-2 shrink-0">
+              <Badge variant={source.enabled ? 'default' : 'outline'}>
+                {source.enabled ? 'Enabled' : 'Disabled'}
+              </Badge>
+            </div>
+
+            {/* Toggle button */}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={handleToggle}
+              disabled={updateMut.isPending}
+              className="shrink-0"
+            >
+              {source.enabled ? 'Disable' : 'Enable'}
+            </Button>
+          </div>
+
+          {/* API key row — shown for all cards; either edit UI or "No API key required" */}
+          <div className="pl-9">
+            {keyEnv ? (
               <div>
-                {editingId !== source.id ? (
+                {!editingKey ? (
                   <div className="flex items-center gap-2">
                     <Key className="h-4 w-4 text-muted-foreground" />
                     {source.config?.api_key ? (
@@ -124,7 +143,10 @@ export function SourceSection() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
-                      onClick={() => { setEditingId(source.id); setApiKey(''); }}
+                      onClick={() => {
+                        setEditingKey(true);
+                        setApiKey('');
+                      }}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </Button>
@@ -153,7 +175,7 @@ export function SourceSection() {
                               },
                             },
                           },
-                          { onSuccess: () => setEditingId(null) },
+                          { onSuccess: () => setEditingKey(false) },
                         )
                       }
                       disabled={updateMut.isPending}
@@ -164,20 +186,22 @@ export function SourceSection() {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
-                      onClick={() => setEditingId(null)}
+                      onClick={() => setEditingKey(false)}
                     >
                       <X className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 )}
-                <p className="text-xs text-muted-foreground mt-1">API key enables higher rate limits</p>
-                <p className="text-xs text-muted-foreground mt-1">Changes effective after service restart.</p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  API key enables higher rate limits. Changes effective after service restart.
+                </p>
               </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No API key required.</p>
             )}
-          </CardContent>
-        </Card>
-        );
-      })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

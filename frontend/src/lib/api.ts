@@ -203,6 +203,12 @@ export const deleteTopic = (id: number) =>
 export const fetchSources = () => apiFetch<SourceConfig[]>('/api/sources');
 export const updateSource = (id: number, data: Partial<SourceConfig>) =>
   apiFetch<SourceConfig>(`/api/sources/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+export const reorderSources = (source_types: string[]) =>
+  apiFetch<SourceConfig[]>('/api/sources/reorder', {
+    method: 'PATCH',
+    body: JSON.stringify({ source_types }),
+    headers: { 'Content-Type': 'application/json' },
+  });
 
 // --- Tracked Authors ---
 export const fetchTrackedAuthors = () => apiFetch<TrackedAuthor[]>('/api/authors');
