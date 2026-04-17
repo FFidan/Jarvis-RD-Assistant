@@ -1,8 +1,10 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TopBar } from '@/components/layout/TopBar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
+import { Toaster } from '@/components/ui/toaster';
 import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
+import { useJobStore } from '@/stores/job-store';
 
 interface AppShellProps {
   children: ReactNode;
@@ -11,6 +13,12 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   usePomodoroTick();
+
+  // Re-subscribe to any jobs that were running before the page was refreshed
+  const hydrate = useJobStore((s) => s.hydrate);
+  useEffect(() => {
+    hydrate();
+  }, [hydrate]);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -32,6 +40,8 @@ export function AppShell({ children }: AppShellProps) {
         <TopBar onMenuClick={() => setMobileOpen(true)} />
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
       </div>
+
+      <Toaster position="bottom-right" />
     </div>
   );
 }

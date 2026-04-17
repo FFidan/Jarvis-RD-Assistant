@@ -2,6 +2,7 @@ import { useLocation } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
+import { JobsIndicator } from '@/components/layout/JobsIndicator';
 
 const pageTitles: Record<string, string> = {
   '/': 'Home',
@@ -39,6 +40,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       )}
       <h1 className="text-lg font-semibold">{title}</h1>
       <div className="ml-auto flex items-center gap-2">
+        <JobsIndicator />
         <HeaderPomodoro />
       </div>
     </header>
