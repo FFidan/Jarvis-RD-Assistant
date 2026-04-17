@@ -304,3 +304,89 @@ async def test_batch_job_handler_records_missing_chunks_error():
     assert result["cards_created"] == 0
     assert len(result["errors"]) == 1
     assert "99" in result["errors"][0]
+
+
+# ---------------------------------------------------------------------------
+# generate_cards_core raises JobError (not HTTPException) for missing deck/paper
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_deck_not_found_raises_job_error():
+    """generate_cards_core raises JobError (not HTTPException) when deck is missing."""
+    pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+
+    conn.fetchval.return_value = None  # deck does NOT exist
+
+    card_generator = AsyncMock()
+    fsrs_manager = MagicMock()
+
+    with pytest.raises(JobError) as exc_info:
+        await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=999999,
+            deck_id=999999,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+        )
+
+    exc = exc_info.value
+    # str(JobError) returns the message passed to __init__
+    assert str(exc) == "Deck not found"
+    # Must NOT contain the "404:" prefix that HTTPException would produce
+    assert "404" not in str(exc)
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_deck_not_found_no_404_prefix():
+    """str(JobError) is exactly 'Deck not found' — no '404:' prefix."""
+    pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+    conn.fetchval.return_value = None  # deck missing
+
+    card_generator = AsyncMock()
+    fsrs_manager = MagicMock()
+
+    with pytest.raises(JobError) as exc_info:
+        await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=1,
+            deck_id=999999,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+        )
+
+    assert str(exc_info.value) == "Deck not found"
+
+
+@pytest.mark.asyncio
+async def test_generate_cards_core_paper_not_found_raises_job_error():
+    """generate_cards_core raises JobError when paper is missing."""
+    pool, conn = _make_pool_and_conn()
+    http_client = AsyncMock()
+
+    conn.fetchval.return_value = 1  # deck exists
+    conn.fetchrow.return_value = None  # paper does NOT exist
+
+    card_generator = AsyncMock()
+    fsrs_manager = MagicMock()
+
+    with pytest.raises(JobError) as exc_info:
+        await generation.generate_cards_core(
+            pool=pool,
+            http_client=http_client,
+            paper_id=999999,
+            deck_id=1,
+            max_cards=5,
+            fsrs_manager=fsrs_manager,
+            card_generator=card_generator,
+        )
+
+    exc = exc_info.value
+    assert str(exc) == "Paper not found"
+    assert "404" not in str(exc)

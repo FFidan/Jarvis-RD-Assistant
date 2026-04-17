@@ -91,6 +91,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       queued: 5,
       total_unprocessed: 10,
       skipped_missing_pdf: 2,
+      job_id: 'job-abc',
     }),
     fetchTopics: vi.fn().mockResolvedValue([
       {
@@ -182,6 +183,31 @@ describe('ResearchFeedPage', () => {
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Discover' }));
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
+  });
+
+  it('disables Search button and shows help text when no sources are selected', async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+
+    // Wait for all source checkboxes to render
+    await waitFor(() => {
+      expect(screen.getByLabelText('arXiv')).toBeInTheDocument();
+    });
+
+    // Uncheck every external source
+    await user.click(screen.getByLabelText('arXiv'));
+    await user.click(screen.getByLabelText('Semantic Scholar'));
+    await user.click(screen.getByLabelText('OpenAlex'));
+    await user.click(screen.getByLabelText('PubMed'));
+
+    // Type a query so the "empty query" disabling rule doesn't mask this behaviour
+    const searchInput = screen.getByPlaceholderText('Search your selected sources…');
+    await user.type(searchInput, 'neural networks');
+
+    const searchBtn = screen.getByRole('button', { name: /search/i });
+    expect(searchBtn).toBeDisabled();
+    expect(screen.getByText('Select at least one source')).toBeInTheDocument();
   });
 
   it('renders source checkboxes in Discover tab for enabled non-local sources', async () => {

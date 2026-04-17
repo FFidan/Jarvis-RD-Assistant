@@ -35,29 +35,27 @@ export function PaperDetailPage() {
   const paperDetailNoteDismissed = useUIStore((s) => s.paperDetailNoteDismissed);
   const setPaperDetailNoteDismissed = useUIStore((s) => s.setPaperDetailNoteDismissed);
 
-  // If ?action=process, expand Manual steps and scroll the Process PDF button
-  // into view with a brief animate-pulse. Delayed 400ms to allow data render.
-  useEffect(() => {
-    if (searchParams.get('action') !== 'process') return;
-    const attempt = () => {
-      const el = document.getElementById('paper-action-process');
-      if (el) {
-        const details = el.closest('details');
-        if (details && !details.open) details.open = true;
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        setProcessPulse(true);
-        setTimeout(() => setProcessPulse(false), 1500);
-      }
-    };
-    const t = setTimeout(attempt, 400);
-    return () => clearTimeout(t);
-  }, [searchParams]);
-
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['paper-detail', paperId],
     queryFn: () => fetchPaperDetail(paperId),
     enabled: !isNaN(paperId) && paperId > 0,
   });
+
+  // If ?action=process, expand Manual steps and scroll the Process PDF button
+  // into view with a brief animate-pulse. Waits for data to be available so
+  // the scroll target exists in the DOM before attempting the scroll.
+  useEffect(() => {
+    if (!data) return;
+    if (searchParams.get('action') !== 'process') return;
+    const el = document.getElementById('paper-action-process');
+    if (!el) return;
+    const details = el.closest('details');
+    if (details && !details.open) details.open = true;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setProcessPulse(true);
+    const t = setTimeout(() => setProcessPulse(false), 1500);
+    return () => clearTimeout(t);
+  }, [data, searchParams]);
 
   if (isNaN(paperId) || paperId <= 0) {
     return (

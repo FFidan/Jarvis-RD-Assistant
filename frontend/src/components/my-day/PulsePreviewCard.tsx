@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { Sparkles, RefreshCw, Loader2, AlertTriangle } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import { useJobStore } from '@/stores/job-store';
-import { fetchPulseToday, generatePulseNow, ratePulseCard } from '@/lib/api';
+import { ApiError, fetchPulseToday, ratePulseCard } from '@/lib/api';
 import type { PulseDeck, PulseRating } from '@/types';
 
 /** Format a date as "HH:MM" (24h). */
@@ -81,7 +82,6 @@ interface PulsePreviewCardProps {
 
 export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [ratedCards, setRatedCards] = useState<Set<number>>(new Set());
 
   const {
@@ -95,15 +95,20 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
     queryFn: fetchPulseToday,
   });
 
+  const startJob = useJobStore((s) => s.startJob);
   const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
 
-  const generateMutation = useMutation({
-    mutationFn: generatePulseNow,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
-      queryClient.invalidateQueries({ queryKey: ['pulse-history'] });
-    },
-  });
+  const handleGenerate = async () => {
+    try {
+      await startJob('pulse.generate', {});
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 429) {
+        toast.error('Rate limited — you can generate up to 3 Pulse decks per hour.');
+      } else {
+        toast.error('Failed to start Pulse generation');
+      }
+    }
+  };
 
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
@@ -165,14 +170,11 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
           </CardTitle>
           <GenerateButton
             deck={deck ?? null}
-            isGenerating={isGenerating || generateMutation.isPending}
-            onGenerate={() => generateMutation.mutate()}
+            isGenerating={isGenerating}
+            onGenerate={handleGenerate}
             onRefetch={() => refetch()}
           />
         </div>
-        {generateMutation.isError && (
-          <p className="text-destructive text-xs mt-1">Generation failed. Please retry.</p>
-        )}
       </CardHeader>
 
       <CardContent className="space-y-3">
@@ -190,10 +192,10 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
         )}
 
         {/* Degraded warning banner */}
-        {deck && (deck.stats as Record<string, unknown>)['degraded_reason'] && (
+        {deck && deck.degraded_reason && (
           <div className="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
             <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-            <span>{String((deck.stats as Record<string, unknown>)['degraded_reason'])}</span>
+            <span>{deck.degraded_reason}</span>
           </div>
         )}
 

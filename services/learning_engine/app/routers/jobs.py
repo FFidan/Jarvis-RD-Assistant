@@ -13,8 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
+from jarvis_common import current_user_id, verify_api_key
 from jarvis_common import jobs as jobs_lib
-from jarvis_common import verify_api_key
 from pydantic import BaseModel, field_validator
 
 from app.deps import limiter
@@ -108,7 +108,11 @@ async def list_jobs(
 
 
 @router.get("/{job_id}/stream")
-async def stream_job(request: Request, job_id: str) -> StreamingResponse:
+async def stream_job(
+    request: Request,
+    job_id: str,
+    user_id: int | None = Depends(current_user_id),
+) -> StreamingResponse:
     """SSE stream of progress updates for the given job.
 
     Emits a ``data:`` event whenever progress, progress_message, or status
@@ -116,9 +120,12 @@ async def stream_job(request: Request, job_id: str) -> StreamingResponse:
     """
     pool = request.app.state.db_pool
 
-    # Verify the job exists first
+    # Verify the job exists first and enforce ownership.
+    # Use 404 (not 403) to avoid leaking job existence to unauthorized callers.
     initial = await jobs_lib.get(pool, job_id)
     if initial is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    if initial.get("user_id") is not None and initial["user_id"] != user_id:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
     _terminal_statuses = frozenset({"succeeded", "failed", "cancelled"})

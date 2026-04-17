@@ -293,6 +293,36 @@ def test_debug_404_when_no_deck(client):
     assert resp.status_code == 404
 
 
+def test_today_surfaces_degraded_reason_at_top_level(client):
+    """GET /today returns degraded_reason as a top-level typed field.
+
+    Loads the deck via the real load_today() path (no mock) so we exercise
+    the SELECT list + _build_deck_response pipeline end-to-end.
+    """
+    tc, pool, conn = client
+    from datetime import date, datetime
+
+    from tests.conftest import FakeRecord
+
+    deck_row = FakeRecord(
+        {
+            "id": 9,
+            "deck_date": date(2026, 4, 10),
+            "card_count": 0,
+            "generated_at": datetime(2026, 4, 10, 4, 0, tzinfo=None),
+            "stats": {"candidate_count": 0},
+            "degraded_reason": "Stage 2 verifier timeout",
+        }
+    )
+    conn.fetchrow.return_value = deck_row
+    conn.fetch.return_value = []
+
+    resp = tc.get("/api/pulse/today")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["degraded_reason"] == "Stage 2 verifier timeout"
+
+
 def test_stats_includes_degraded_reason(client):
     """GET /stats returns degraded_reason from the typed DB column."""
     tc, pool, conn = client

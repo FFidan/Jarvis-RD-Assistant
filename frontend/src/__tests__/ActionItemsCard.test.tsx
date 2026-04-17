@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { ActionItemsCard } from '@/components/my-day/ActionItemsCard';
@@ -14,31 +14,42 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
+const mockStartJob = vi.fn().mockResolvedValue('job-1');
+
 vi.mock('@/stores/job-store', () => ({
   useJobStore: vi.fn((selector: (s: unknown) => unknown) =>
     selector({
       jobs: {},
       activeAborts: {},
       hasRunning: () => false,
-      startJob: vi.fn().mockResolvedValue('job-1'),
+      startJob: mockStartJob,
     }),
   ),
 }));
 
 const emptyFeed: FeedResponse = { papers: [], total: 0 };
 
+const makePaper = (id: number, title: string, pdf_downloaded = true) => ({
+  id, external_id: `arxiv:00${id}`, source_type: 'arxiv' as const, title,
+  authors: [], abstract: null, published_date: null, url: '', pdf_url: null,
+  pdf_local_path: null, pdf_downloaded, citation_count: 0,
+  priority_score: null, metadata: {}, is_read: false,
+  discovered_at: null, created_at: '', summary_brief: null, tldr: null,
+  confidence: null, user_status: 'new' as const, rating: null,
+});
+
 const paperFeed: FeedResponse = {
-  papers: [
-    {
-      id: 1, external_id: 'arxiv:001', source_type: 'arxiv', title: 'Paper Needs Processing',
-      authors: [], abstract: null, published_date: null, url: '', pdf_url: null,
-      pdf_local_path: null, pdf_downloaded: true, citation_count: 0,
-      priority_score: null, metadata: {}, is_read: false,
-      discovered_at: null, created_at: '', summary_brief: null, tldr: null,
-      confidence: null, user_status: 'new', rating: null,
-    },
-  ],
+  papers: [makePaper(1, 'Paper Needs Processing')],
   total: 1,
+};
+
+const threePaperFeed: FeedResponse = {
+  papers: [
+    makePaper(1, 'Paper One'),
+    makePaper(2, 'Paper Two'),
+    makePaper(3, 'Paper Three'),
+  ],
+  total: 3,
 };
 
 function renderWithProviders() {
@@ -55,6 +66,11 @@ function renderWithProviders() {
 }
 
 describe('ActionItemsCard', () => {
+  beforeEach(() => {
+    mockStartJob.mockReset();
+    mockStartJob.mockResolvedValue('job-1');
+  });
+
   it('shows "all caught up" when no action items', async () => {
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(emptyFeed);
     renderWithProviders();
@@ -88,5 +104,29 @@ describe('ActionItemsCard', () => {
     // Link should point to paper detail with ?action=process
     const link = processBtn.closest('a');
     expect(link?.getAttribute('href')).toMatch(/\/paper\/1\?action=process/);
+  });
+
+  it('Process All fires all jobs in parallel (not sequentially)', async () => {
+    // startJob never resolves — so if it were sequential the second call would
+    // never happen until the first settled; with Promise.all all 3 are called
+    // synchronously before any settle.
+    mockStartJob.mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.fetchFeedPapers).mockResolvedValue(threePaperFeed);
+
+    renderWithProviders();
+
+    // Wait for the button to appear (data loaded)
+    const btn = await screen.findByText(/Process all/);
+
+    fireEvent.click(btn);
+
+    // All three calls must have been dispatched synchronously inside Promise.all
+    await waitFor(() => {
+      expect(mockStartJob).toHaveBeenCalledTimes(3);
+    });
+
+    expect(mockStartJob).toHaveBeenCalledWith('paper.process', { paper_id: 1 });
+    expect(mockStartJob).toHaveBeenCalledWith('paper.process', { paper_id: 2 });
+    expect(mockStartJob).toHaveBeenCalledWith('paper.process', { paper_id: 3 });
   });
 });

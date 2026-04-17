@@ -321,7 +321,6 @@ async def lifespan(app: FastAPI):
         "extraction.batch",
         "citations.batch_fetch",
         "digest.weekly",
-        "noop.test",
     }
     _jobs_stop = asyncio.Event()
     app.state.jobs_worker_stop = _jobs_stop

@@ -84,11 +84,11 @@ async def generate_cards_core(
     async with pool.acquire() as conn:
         deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", deck_id)
         if not deck:
-            raise HTTPException(status_code=404, detail="Deck not found")
+            raise JobError("Deck not found")
 
         paper = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not paper:
-            raise HTTPException(status_code=404, detail="Paper not found")
+            raise JobError("Paper not found")
 
         if ctx:
             await ctx.update_progress(0.2, "Fetching chunks")
@@ -154,7 +154,7 @@ async def generate_cards_core(
                         due_at,
                     )
                 except asyncpg.ForeignKeyViolationError as exc:
-                    raise HTTPException(status_code=404, detail="Deck or paper not found") from exc
+                    raise JobError("Deck or paper not found") from exc
                 created.append(row_to_card_response(row))
 
     if ctx:
@@ -235,10 +235,8 @@ async def _card_generate_batch_job(
             papers_processed += 1
             cards_created += result["cards_created"]
         except JobError as exc:
-            # Paper has no chunks — record but continue batch
+            # Paper has no chunks or not found — record but continue batch
             errors.append(f"Paper {paper_id}: {exc}")
-        except HTTPException as exc:
-            errors.append(f"Paper {paper_id}: {exc.detail}")
         except Exception as exc:
             logger.exception("Batch generate failed for paper %s", paper_id)
             errors.append(f"Paper {paper_id}: {exc}")

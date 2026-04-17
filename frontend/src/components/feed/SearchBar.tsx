@@ -94,7 +94,10 @@ export function SearchBar({ onSearch, isLoading, sourceTypes }: SearchBarProps) 
               <ChevronDown className="h-3 w-3 ml-1" />
             )}
           </Button>
-          <Button onClick={handleSubmit} disabled={isLoading || !query.trim()}>
+          <Button
+            onClick={handleSubmit}
+            disabled={isLoading || !query.trim() || sourceTypes.length === 0}
+          >
             {isLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : (

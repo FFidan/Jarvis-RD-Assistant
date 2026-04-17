@@ -96,12 +96,17 @@ async def lifespan(app: FastAPI):
         )
 
     # Start the jobs worker — handles all job kinds owned by this service.
+    # Explicitly import routers that register @job_handler decorators so the
+    # handlers are present in the registry before the worker begins polling.
+    import importlib
+
     from jarvis_common import jobs as jobs_lib
+
+    importlib.import_module("app.routers.generation")
 
     _kinds_learning_engine: set[str] = {
         "card.generate",
         "card.generate_batch",
-        "noop.test",
     }
     _jobs_stop = asyncio.Event()
     app.state.jobs_worker_stop = _jobs_stop

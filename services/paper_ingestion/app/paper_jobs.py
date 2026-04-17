@@ -99,9 +99,8 @@ async def _paper_process_job(
         pdf_processor,
         embedder,
         force=force,
+        ctx=_SubCtx(ctx, 0.1, 1.0),
     )
-
-    await ctx.update_progress(1.0, "Done")
     return result
 
 
@@ -205,3 +204,116 @@ async def _paper_analyze_job(
         "chunk_count": result.get("chunk_count", 0),
         "process_status": result.get("status"),
     }
+
+
+# ---------------------------------------------------------------------------
+# papers.batch_process handler
+# ---------------------------------------------------------------------------
+
+
+@job_handler("papers.batch_process")
+async def _papers_batch_process_job(
+    pool: Any,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Process many papers' PDFs in a single background job.
+
+    Payload keys:
+        paper_ids (list[int]): DB paper IDs whose PDFs should be processed.
+    """
+    from app.main import app as _app  # lazy import avoids circular at module load
+    from app.services.pdf_workflow import run_process_pdf
+
+    paper_ids: list[int] = list(payload.get("paper_ids", []))
+    total = len(paper_ids)
+
+    pdf_processor = _app.state.pdf_processor
+    embedder = _app.state.embedder
+
+    processed = 0
+    skipped = 0
+    errors: list[str] = []
+
+    await ctx.update_progress(0.05, f"Starting: {total} papers")
+
+    for i, paper_id in enumerate(paper_ids):
+        if await ctx.is_cancelled():
+            break
+        inner_start = (i / max(total, 1)) * 0.9 + 0.05
+        inner_end = ((i + 1) / max(total, 1)) * 0.9 + 0.05
+        await ctx.update_progress(inner_start, f"Processing paper {paper_id} ({i + 1}/{total})")
+        try:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT pdf_downloaded, pdf_local_path FROM papers WHERE id = $1",
+                    paper_id,
+                )
+            if not row or not row["pdf_downloaded"] or not row["pdf_local_path"]:
+                skipped += 1
+                continue
+            pdf_path = Path(row["pdf_local_path"])
+            if not pdf_path.resolve().is_relative_to(Path(PDF_STORAGE_PATH).resolve()):
+                skipped += 1
+                continue
+            if not pdf_path.exists():
+                skipped += 1
+                continue
+            sub_ctx = _SubCtx(ctx, inner_start, inner_end)
+            await run_process_pdf(paper_id, pdf_path, pool, pdf_processor, embedder, ctx=sub_ctx)
+            processed += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Batch process failed for paper %s", paper_id)
+            errors.append(f"Paper {paper_id}: {exc}")
+
+    await ctx.update_progress(1.0, f"Done: {processed} processed, {skipped} skipped")
+    return {"processed": processed, "skipped": skipped, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# papers.batch_summarize handler
+# ---------------------------------------------------------------------------
+
+
+@job_handler("papers.batch_summarize")
+async def _papers_batch_summarize_job(
+    pool: Any,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Summarize many papers in a single background job.
+
+    Payload keys:
+        paper_ids (list[int]): DB paper IDs to summarize.
+    """
+    from app.main import app as _app  # lazy import avoids circular at module load
+    from app.services.summarization import generate_paper_summary
+
+    paper_ids: list[int] = list(payload.get("paper_ids", []))
+    total = len(paper_ids)
+
+    verifier = _app.state.verifier
+    embedder = _app.state.embedder
+
+    summarized = 0
+    failed = 0
+    errors: list[str] = []
+
+    await ctx.update_progress(0.0, f"Starting: {total} papers")
+    for i, paper_id in enumerate(paper_ids):
+        if await ctx.is_cancelled():
+            break
+        frac = (i / max(total, 1)) * 0.95
+        await ctx.update_progress(frac, f"Summarizing paper {paper_id} ({i + 1}/{total})")
+        try:
+            await generate_paper_summary(paper_id, pool, http_client, verifier, embedder)
+            summarized += 1
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            errors.append(f"Paper {paper_id}: {exc}")
+            logger.exception("Batch summarize failed for paper %s", paper_id)
+
+    await ctx.update_progress(1.0, f"Done: {summarized} ok, {failed} failed")
+    return {"summarized": summarized, "failed": failed, "errors": errors}

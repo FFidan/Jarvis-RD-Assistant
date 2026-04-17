@@ -267,7 +267,10 @@ describe('JobStore', () => {
   it('hydrate: re-subscribes to running jobs from API', async () => {
     const { listJobs } = await import('@/lib/api');
     const runningJob = makeJob({ id: 'j8', status: 'running' });
-    vi.mocked(listJobs).mockResolvedValue([runningJob]);
+    // hydrate now calls listJobs twice (running + queued)
+    vi.mocked(listJobs)
+      .mockResolvedValueOnce([runningJob]) // running call
+      .mockResolvedValueOnce([]);           // queued call
 
     // Return empty stream so subscribe terminates cleanly
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -286,5 +289,35 @@ describe('JobStore', () => {
     vi.mocked(listJobs).mockRejectedValue(new Error('Network error'));
 
     await expect(useJobStore.getState().hydrate()).resolves.not.toThrow();
+  });
+
+  it('test_hydrate_resubscribes_queued: hydrate picks up both running and queued jobs', async () => {
+    const { listJobs } = await import('@/lib/api');
+    const jobA_running = makeJob({ id: 'job-running-1', kind: 'pulse.generate', status: 'running' });
+    const jobB_queued = makeJob({ id: 'job-queued-1', kind: 'paper.process', status: 'queued' });
+
+    // listJobs called twice: first for running, then for queued
+    vi.mocked(listJobs)
+      .mockResolvedValueOnce([jobA_running]) // status: 'running'
+      .mockResolvedValueOnce([jobB_queued]); // status: 'queued'
+
+    // Return empty stream so subscribe terminates cleanly for both jobs
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(createMockSSEStream([]), { status: 200 }),
+    );
+
+    await useJobStore.getState().hydrate();
+
+    // Both calls must have been made
+    expect(listJobs).toHaveBeenCalledWith({ status: 'running' });
+    expect(listJobs).toHaveBeenCalledWith({ status: 'queued' });
+    expect(listJobs).toHaveBeenCalledTimes(2);
+
+    // Both jobs must appear in the store
+    const jobs = useJobStore.getState().jobs;
+    expect(jobs['job-running-1']).toBeDefined();
+    expect(jobs['job-running-1'].status).toBe('running');
+    expect(jobs['job-queued-1']).toBeDefined();
+    expect(jobs['job-queued-1'].status).toBe('queued');
   });
 });

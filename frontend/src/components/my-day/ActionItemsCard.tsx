@@ -33,10 +33,11 @@ export function ActionItemsCard() {
   const unprocessed: FeedPaper[] = savedFeed?.papers ?? [];
 
   const handleProcessAll = useCallback(async () => {
-    for (const paper of unprocessed) {
-      if (!paper.pdf_downloaded) continue; // can only process if PDF exists
-      await startJob('paper.process', { paper_id: paper.id }).catch(() => {});
-    }
+    await Promise.all(
+      unprocessed
+        .filter((p) => p.pdf_downloaded)
+        .map((p) => startJob('paper.process', { paper_id: p.id }).catch(() => {})),
+    );
     // Refresh after queuing
     queryClient.invalidateQueries({ queryKey: ['action-items-unprocessed'] });
   }, [unprocessed, startJob, queryClient]);

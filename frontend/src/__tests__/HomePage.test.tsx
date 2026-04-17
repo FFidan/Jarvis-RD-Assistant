@@ -153,11 +153,21 @@ describe('HomePage', () => {
 
     it('calls batchProcessPapers when user confirms', async () => {
       vi.spyOn(window, 'confirm').mockReturnValue(true);
-      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 0, skipped_missing_pdf: 0 });
+      vi.mocked(batchProcessPapers).mockResolvedValue({ queued: 5, total_unprocessed: 5, skipped_missing_pdf: 0, job_id: 'job-123' });
       renderHomePage();
       const button = screen.getByRole('button', { name: /Process PDFs/i });
       await userEvent.click(button);
       await waitFor(() => expect(batchProcessPapers).toHaveBeenCalledTimes(1));
+    });
+
+    it('calls batchSummarizePapers and shows queued count', async () => {
+      vi.spyOn(window, 'confirm').mockReturnValue(true);
+      vi.mocked(batchSummarizePapers).mockResolvedValue({ total_unsummarized: 7, job_id: 'job-sum-1' });
+      renderHomePage();
+      const button = screen.getByRole('button', { name: /Summarize/i });
+      await userEvent.click(button);
+      await waitFor(() => expect(batchSummarizePapers).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText('Queued 7 papers')).toBeInTheDocument();
     });
   });
 });

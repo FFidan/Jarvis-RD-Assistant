@@ -156,13 +156,13 @@ const MOCK_NOTES = [
   },
 ];
 
-function renderPage(paperId = '42') {
+function renderPage(paperId = '42', search = '') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[`/paper/${paperId}`]}>
+      <MemoryRouter initialEntries={[`/paper/${paperId}${search}`]}>
         <Routes>
           <Route path="paper/:paperId" element={<PaperDetailPage />} />
         </Routes>
@@ -397,5 +397,57 @@ describe('PaperDetailPage', () => {
     });
 
     expect(screen.queryByText(/Paper Detail is the workspace/)).not.toBeInTheDocument();
+  });
+
+  describe('?action=process scroll behaviour', () => {
+    // jsdom does not implement scrollIntoView — define it before spying
+    beforeEach(() => {
+      if (!Element.prototype.scrollIntoView) {
+        Element.prototype.scrollIntoView = () => {};
+      }
+    });
+
+    it('does not call scrollIntoView while data is still loading', async () => {
+      const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+      // fetchPaperDetail never resolves during this test
+      mockFetchPaperDetail.mockReturnValue(new Promise(() => {}));
+
+      renderPage('42', '?action=process');
+
+      // Give any synchronous effects a chance to fire
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(scrollIntoViewSpy).not.toHaveBeenCalled();
+
+      scrollIntoViewSpy.mockRestore();
+    });
+
+    it('calls scrollIntoView once data has loaded', async () => {
+      const scrollIntoViewSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+
+      // Set up a DOM node that matches the scroll target id
+      const el = document.createElement('button');
+      el.id = 'paper-action-process';
+      document.body.appendChild(el);
+
+      mockFetchPaperDetail.mockResolvedValue({
+        paper: MOCK_PAPER,
+        summary: MOCK_SUMMARY,
+        chunks: MOCK_CHUNKS,
+        user_state: MOCK_USER_STATE,
+      });
+
+      renderPage('42', '?action=process');
+
+      await waitFor(() => {
+        expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+      });
+
+      expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);
+      expect(scrollIntoViewSpy).toHaveBeenCalledWith({ behavior: 'smooth', block: 'center' });
+
+      document.body.removeChild(el);
+      scrollIntoViewSpy.mockRestore();
+    });
   });
 });

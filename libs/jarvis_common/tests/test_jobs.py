@@ -11,8 +11,13 @@ gets a fresh jobs table via the ``db_pool`` fixture.
 
 from __future__ import annotations
 
-import asyncio
 import os
+
+# NOTE: Must be set BEFORE importing jarvis_common.jobs so the gated
+# ``noop.test`` handler registers at module import time.
+os.environ.setdefault("DEV_MODE", "true")
+
+import asyncio
 import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -533,3 +538,53 @@ async def test_worker_loop_picks_up_and_finishes_job(db_pool):
             await asyncio.wait_for(worker_task, timeout=2.0)
         except (TimeoutError, asyncio.CancelledError):
             worker_task.cancel()
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_worker_loop_reaps_stale_running_jobs(db_pool):
+    """_reap_stale_jobs() should mark running jobs older than 30 min as failed."""
+    from jarvis_common.jobs import _reap_stale_jobs
+
+    # Insert a 'running' job whose started_at is 45 minutes in the past.
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, started_at)
+            VALUES ($1, 'running', NOW() - INTERVAL '45 minutes')
+            RETURNING id::text
+            """,
+            "noop.test",
+        )
+    assert row is not None
+    stale_id = row["id"]
+
+    # Also insert a fresh running job that should NOT be reaped.
+    async with db_pool.acquire() as conn:
+        row_fresh = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, started_at)
+            VALUES ($1, 'running', NOW() - INTERVAL '1 minute')
+            RETURNING id::text
+            """,
+            "noop.test",
+        )
+    assert row_fresh is not None
+    fresh_id = row_fresh["id"]
+
+    # Run reaper once.
+    await _reap_stale_jobs(db_pool)
+
+    from jarvis_common.jobs import get
+
+    stale = await get(db_pool, stale_id)
+    fresh = await get(db_pool, fresh_id)
+
+    assert stale is not None
+    assert stale["status"] == "failed"
+    assert stale["error"] is not None
+    assert stale["error"]["message"] == "Job stalled: worker restart or crash"
+    assert stale["finished_at"] is not None
+
+    assert fresh is not None
+    assert fresh["status"] == "running"  # untouched

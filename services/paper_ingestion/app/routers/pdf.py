@@ -430,22 +430,6 @@ async def scan_local_pdfs(
 # ---------------------------------------------------------------------------
 
 
-async def _process_paper_background(
-    paper_id: int,
-    pdf_path: Path,
-    db_pool: asyncpg.Pool,
-    pdf_processor: "PDFProcessor",
-    embedder,
-    force: bool = False,
-) -> None:
-    """Background task: process a single paper via the shared workflow helper."""
-    try:
-        await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder, force=force)
-        logger.info("Batch processed paper %d successfully", paper_id)
-    except Exception:
-        logger.error("Batch processing failed for paper %d", paper_id, exc_info=True)
-
-
 @router.post("/api/papers/batch-process", response_model=BatchProcessResponse)
 @limiter.limit("2/minute")
 async def batch_process_papers(
@@ -458,8 +442,9 @@ async def batch_process_papers(
     """Queue unprocessed papers for chunk extraction + embedding.
 
     Finds papers with ``pdf_downloaded=True`` that have no ``paper_chunks`` rows,
-    up to ``limit`` papers. Each is queued as a FastAPI background task.
-    Returns immediately with the queued count.
+    up to ``limit`` papers.  Enqueues a single ``papers.batch_process`` job
+    that processes all selected papers, returning a ``job_id`` the caller
+    can poll via ``GET /api/jobs/{job_id}``.
 
     When ``force=True``, includes ALL papers with downloaded PDFs (even those
     already processed), allowing re-extraction with updated models.
@@ -474,8 +459,10 @@ async def batch_process_papers(
     Returns
     -------
     dict
-        ``{queued, total_unprocessed, skipped_missing_pdf}``
+        ``{queued, total_unprocessed, skipped_missing_pdf, job_id}``
     """
+    from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
     async with db_pool.acquire() as conn:
         if force:
             rows = await conn.fetch(
@@ -503,10 +490,9 @@ async def batch_process_papers(
                 limit,
             )
 
-    pdf_processor = request.app.state.pdf_processor
-    embedder = request.app.state.embedder
-
-    queued = 0
+    # Pre-flight filter: only enqueue ids whose PDFs are inside storage + exist.
+    # This preserves the previous response-shape counts (queued/skipped_missing_pdf).
+    queued_ids: list[int] = []
     skipped = 0
     for row in rows:
         paper_id = row["id"]
@@ -518,19 +504,19 @@ async def batch_process_papers(
         if not pdf_path.exists():
             skipped += 1
             continue
-        background_tasks.add_task(
-            _process_paper_background,
-            paper_id=paper_id,
-            pdf_path=pdf_path,
-            db_pool=db_pool,
-            pdf_processor=pdf_processor,
-            embedder=embedder,
-            force=force,
+        queued_ids.append(paper_id)
+
+    job_id: str | None = None
+    if queued_ids:
+        job_id = await jobs_lib.enqueue(
+            db_pool,
+            "papers.batch_process",
+            payload={"paper_ids": queued_ids},
         )
-        queued += 1
 
     return {
-        "queued": queued,
+        "queued": len(queued_ids),
         "total_unprocessed": len(rows),
         "skipped_missing_pdf": skipped,
+        "job_id": job_id,
     }

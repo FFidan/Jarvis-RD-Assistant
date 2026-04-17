@@ -12,6 +12,16 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
 import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob } from '@/lib/api';
+import { queryClient } from '@/lib/query-client';
+
+/**
+ * Per-kind query invalidation: when a job of the given kind reaches
+ * `succeeded`, each listed query key is invalidated so the UI refetches
+ * the new state (e.g. the freshly generated Pulse deck).
+ */
+const INVALIDATE_ON_SUCCESS: Record<string, string[][]> = {
+  'pulse.generate': [['pulse-today'], ['pulse-history']],
+};
 
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
@@ -160,6 +170,14 @@ export const useJobStore = create<JobStore>()(
                     // Fire toast notification
                     if (updated.status === 'succeeded') {
                       toast.success(`${updated.kind} completed`);
+                      // Invalidate any queries registered for this kind so
+                      // the UI refetches the freshly materialised state.
+                      const keys = INVALIDATE_ON_SUCCESS[updated.kind];
+                      if (keys) {
+                        for (const key of keys) {
+                          queryClient.invalidateQueries({ queryKey: key });
+                        }
+                      }
                     } else if (updated.status === 'failed') {
                       const msg = updated.error?.message ?? `${updated.kind} failed`;
                       const actionLink = updated.error?.action_link;
@@ -232,8 +250,12 @@ export const useJobStore = create<JobStore>()(
 
       async hydrate() {
         try {
-          const running = await apiListJobs({ status: 'running' });
-          for (const job of running) {
+          const [running, queued] = await Promise.all([
+            apiListJobs({ status: 'running' }),
+            apiListJobs({ status: 'queued' }),
+          ]);
+          const jobs = [...running, ...queued];
+          for (const job of jobs) {
             get()._upsertJob(job);
             // Only subscribe if not already subscribed
             if (!get().activeAborts[job.id]) {

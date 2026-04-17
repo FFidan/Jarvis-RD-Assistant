@@ -175,7 +175,7 @@ export function HomePage() {
               label="Summarize"
               icon={FileText}
               mutationFn={batchSummarizePapers}
-              formatResult={(d: any) => `Summarized ${d.summarized} papers`}
+              formatResult={(d: any) => `Queued ${d.total_unsummarized} papers`}
               confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
             />
             <BatchButton

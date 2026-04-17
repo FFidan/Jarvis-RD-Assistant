@@ -1,6 +1,6 @@
 """Shared utilities for JARVIS microservices."""
 
-from jarvis_common.auth import validate_production_config, verify_api_key
+from jarvis_common.auth import current_user_id, validate_production_config, verify_api_key
 from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,
@@ -43,6 +43,7 @@ from jarvis_common.text_utils import author_matches, normalize_author_name
 __all__ = [
     "verify_api_key",
     "validate_production_config",
+    "current_user_id",
     "create_limiter",
     "rate_limit_exceeded_handler",
     "dynamic_update",

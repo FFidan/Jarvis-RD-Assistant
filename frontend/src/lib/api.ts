@@ -153,7 +153,6 @@ import type {
   SourceCountRow,
   StatusCountRow,
   ExtractionTableRow,
-  BatchExtractionResponse,
   PaperBrief,
   Project,
   ProjectDetail,
@@ -293,7 +292,7 @@ export const fetchExtractionTable = (templateId: number, paperIds: number[]) =>
     `/api/extractions/table?template_id=${templateId}${paperIds.length ? `&paper_ids=${paperIds.join(',')}` : ''}`,
   );
 export const batchExtract = (templateId: number, paperIds: number[]) =>
-  apiFetch<BatchExtractionResponse>('/api/extractions/batch', {
+  apiFetch<{ job_id: string; total: number }>('/api/extractions/batch', {
     method: 'POST',
     body: JSON.stringify({ template_id: templateId, paper_ids: paperIds }),
   });
@@ -520,13 +519,13 @@ export async function uploadPdf(file: File, title: string): Promise<{ id: number
 }
 
 export const batchProcessPapers = (limit?: number) =>
-  apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number }>('/api/papers/batch-process', {
+  apiFetch<{ queued: number; total_unprocessed: number; skipped_missing_pdf: number; job_id: string | null }>('/api/papers/batch-process', {
     method: 'POST',
     body: JSON.stringify({ limit: limit || 10 }),
   });
 
 export const batchSummarizePapers = (limit?: number) =>
-  apiFetch<{ summarized: number; failed: number; total_unsummarized: number }>(
+  apiFetch<{ total_unsummarized: number; job_id: string | null }>(
     `/api/papers/batch-summarize?limit=${limit || 10}`,
     { method: 'POST' },
   );
@@ -662,8 +661,13 @@ export async function ratePulseCard(
 export const explainPulseCard = (cardId: number) =>
   apiFetch<WhyExplanation>(`/api/pulse/explain/${cardId}`);
 
+/**
+ * Kick off a Pulse generation. Backend now returns `{job_id, status}` —
+ * the deck is built asynchronously; consumers should poll `/api/jobs/{id}`
+ * (or subscribe via the job store's SSE stream) for completion.
+ */
 export const generatePulseNow = () =>
-  apiFetch<PulseDeck>('/api/pulse/generate', { method: 'POST' });
+  apiFetch<{ job_id: string; status: string }>('/api/pulse/generate', { method: 'POST' });
 
 export const fetchPulseStats = (days = 30) =>
   apiFetch<PulseStats>(`/api/pulse/stats?days=${days}`);

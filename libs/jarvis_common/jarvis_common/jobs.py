@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -291,6 +293,38 @@ async def run_job(
 
 
 # ---------------------------------------------------------------------------
+# Stale-job reaper
+# ---------------------------------------------------------------------------
+
+# Module-level sentinel tracking the last time the reaper ran (monotonic seconds).
+# 0.0 forces the reaper to fire on the first worker_loop iteration.
+_last_reap_ts: float = 0.0
+
+_STALE_REAP_INTERVAL_SEC: float = 60.0
+
+
+async def _reap_stale_jobs(pool: asyncpg.Pool) -> None:
+    """Mark any ``running`` job older than 30 minutes as ``failed``.
+
+    Called periodically from ``worker_loop`` to clean up jobs that were
+    abandoned when a worker crashed or restarted mid-handler.
+    """
+    # Pass a dict rather than a JSON string so the asyncpg JSONB codec
+    # (registered via ``init_pg_connection``) handles encoding.  Feeding a
+    # pre-serialised string results in double-encoded values that later
+    # decode as strings instead of objects.
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE jobs SET status='failed',"
+            " error = $1::jsonb,"
+            " finished_at = NOW()"
+            " WHERE status='running'"
+            "   AND started_at < NOW() - INTERVAL '30 minutes'",
+            {"message": "Job stalled: worker restart or crash"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # worker_loop
 # ---------------------------------------------------------------------------
 
@@ -312,11 +346,22 @@ async def worker_loop(
         poll_interval: seconds between polls when the queue is empty.
         stop_event: set this to stop the loop gracefully.
     """
+    global _last_reap_ts
+
     logger.info("jobs.worker_loop started (kinds=%s)", kinds or "all")
     kind_list: list[str] = sorted(kinds) if kinds else []
 
     while not stop_event.is_set():
         try:
+            # Reap stale running jobs at most once per 60 seconds.
+            now = time.monotonic()
+            if now - _last_reap_ts >= _STALE_REAP_INTERVAL_SEC:
+                _last_reap_ts = now
+                try:
+                    await _reap_stale_jobs(pool)
+                except Exception:
+                    logger.exception("jobs.worker_loop stale-job reaper failed — continuing")
+
             if kind_list:
                 rows = await pool.fetch(
                     "SELECT id::text FROM jobs WHERE status = 'queued' AND kind = ANY($1::text[])"
@@ -351,17 +396,20 @@ async def worker_loop(
 
 
 # ---------------------------------------------------------------------------
-# Dev-only noop handler (stripped via env check in production if desired)
+# Dev-only noop handler — only registered when DEV_MODE is enabled so that
+# production workers cannot accidentally claim/execute it.
 # ---------------------------------------------------------------------------
 
 
-@job_handler("noop.test")
-async def _noop_test(  # noqa: RUF029 — registered via @job_handler
-    _pool: asyncpg.Pool,
-    _http_client: httpx.AsyncClient,
-    payload: dict[str, Any],
-    ctx: JobContext,
-) -> dict[str, Any]:
-    await ctx.update_progress(0.5, "halfway")
-    await asyncio.sleep(0.1)
-    return {"ok": True, "echo": payload}
+if os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes"):
+
+    @job_handler("noop.test")
+    async def _noop_test(  # noqa: RUF029 — registered via @job_handler
+        _pool: asyncpg.Pool,
+        _http_client: httpx.AsyncClient,
+        payload: dict[str, Any],
+        ctx: JobContext,
+    ) -> dict[str, Any]:
+        await ctx.update_progress(0.5, "halfway")
+        await asyncio.sleep(0.1)
+        return {"ok": True, "echo": payload}

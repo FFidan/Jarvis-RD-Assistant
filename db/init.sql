@@ -638,6 +638,7 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_status_kind ON jobs(status, kind);
 CREATE INDEX IF NOT EXISTS idx_jobs_created_desc ON jobs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id) WHERE user_id IS NOT NULL;
 
 -- Register new source types for Discovery & Pulse
 INSERT INTO paper_sources (source_type, enabled, config)

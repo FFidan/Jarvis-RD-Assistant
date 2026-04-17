@@ -649,6 +649,7 @@ export interface PulseDeck {
   generated_at: string;
   cards: PulseCardItem[];
   stats: Record<string, unknown>;
+  degraded_reason?: string | null;
 }
 
 export interface PulseStats {

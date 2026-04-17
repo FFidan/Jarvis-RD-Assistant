@@ -23,6 +23,8 @@ from app.routers.search import (
     _normalize_title,
     _round_robin_merge,
 )
+from fastapi import HTTPException
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # Unit tests for helpers
@@ -354,3 +356,71 @@ async def test_preview_budget_split_respects_max_results(monkeypatch):
     assert sum(call_budgets.values()) == 10
     assert max(call_budgets.values()) <= 4
     assert min(call_budgets.values()) >= 3
+
+
+# ---------------------------------------------------------------------------
+# Empty source_types guard (fixes ZeroDivisionError 500 on empty list)
+# ---------------------------------------------------------------------------
+
+
+def test_empty_source_types_rejected_by_pydantic():
+    """Pydantic's min_length=1 rejects empty source_types lists at validation time.
+
+    This is the primary defense — user payloads with source_types=[] should
+    never reach the router's budget-split math (which would ZeroDivisionError).
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        SearchRequest(query="test", source_types=[])
+    # The error should mention the source_types field and a min-length-ish message.
+    errors = exc_info.value.errors()
+    assert any(
+        "source_types" in (err.get("loc") or ()) and "at least 1" in str(err.get("msg", "")).lower()
+        for err in errors
+    ), f"Expected min_length validation error on source_types, got: {errors}"
+
+
+@pytest.mark.asyncio
+async def test_empty_source_types_defensive_guard_preview():
+    """Defensive guard in search_papers_preview raises HTTPException 400.
+
+    Pydantic normally blocks empty source_types before the handler runs, but
+    the guard protects against future payload changes or direct internal calls
+    that bypass the Pydantic layer (belt-and-suspenders).
+    """
+    body = SearchRequest.model_construct(
+        query="test",
+        source=None,
+        source_types=[],
+        max_results=10,
+        year_from=None,
+        year_to=None,
+        sort_by="relevance",
+        author=None,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await search.search_papers_preview.__wrapped__(
+            MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        )
+    assert exc_info.value.status_code == 400
+    assert "at least one source" in exc_info.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_empty_source_types_defensive_guard_search():
+    """Defensive guard in search_papers (non-preview) raises HTTPException 400."""
+    body = SearchRequest.model_construct(
+        query="test",
+        source=None,
+        source_types=[],
+        max_results=10,
+        year_from=None,
+        year_to=None,
+        sort_by="relevance",
+        author=None,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        await search.search_papers.__wrapped__(
+            MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        )
+    assert exc_info.value.status_code == 400
+    assert "at least one source" in exc_info.value.detail.lower()

@@ -146,6 +146,8 @@ async def search_papers(
         Papers found, per-source counts, and any degraded sources.
         Papers are deduplicated across sources.
     """
+    if not body.source_types:
+        raise HTTPException(status_code=400, detail="At least one source must be selected")
     source_types = body.source_types
     n = len(source_types)
     base_per_source = max(1, body.max_results // n)
@@ -245,6 +247,8 @@ async def search_papers_preview(
     Supports multi-source fan-out; returns deduplicated results with
     per_source_counts and degraded_sources metadata.
     """
+    if not body.source_types:
+        raise HTTPException(status_code=400, detail="At least one source must be selected")
     source_types = body.source_types
     n = len(source_types)
     base_per_source = max(1, body.max_results // n)

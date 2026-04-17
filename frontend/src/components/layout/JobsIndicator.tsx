@@ -94,7 +94,7 @@ function JobRow({ job, onCancel, onRemove }: JobRowProps) {
       </div>
 
       {isActive && (
-        <Progress value={job.progress} className="h-1.5" />
+        <Progress value={(job.progress ?? 0) * 100} className="h-1.5" />
       )}
 
       {job.progress_message && (

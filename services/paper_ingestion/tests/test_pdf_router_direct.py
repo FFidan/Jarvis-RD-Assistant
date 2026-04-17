@@ -273,7 +273,7 @@ async def test_scan_local_pdfs_skips_symlinks_and_non_pdfs(tmp_path, monkeypatch
 
 @pytest.mark.asyncio
 async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, monkeypatch):
-    """batch_process_papers should only queue files inside storage that exist on disk."""
+    """batch_process_papers should enqueue a single job for valid papers only."""
     storage_dir = tmp_path / "storage"
     storage_dir.mkdir()
     good_pdf = storage_dir / "10.pdf"
@@ -295,6 +295,17 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
 
+    # Mock jobs_lib.enqueue (imported lazily inside the router)
+    fake_jobs = types.ModuleType("jarvis_common.jobs")
+    fake_enqueue = AsyncMock(return_value="job-abc123")
+    fake_jobs.enqueue = fake_enqueue  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "jarvis_common.jobs", fake_jobs)
+
+    # jarvis_common package with .jobs attribute (for `from jarvis_common import jobs as jobs_lib`)
+    import jarvis_common  # noqa: PLC0415
+
+    monkeypatch.setattr(jarvis_common, "jobs", fake_jobs, raising=False)
+
     result = await pdf.batch_process_papers.__wrapped__(
         request,
         background_tasks=background_tasks,
@@ -302,5 +313,15 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         db_pool=pool,
     )
 
-    assert result == {"queued": 1, "total_unprocessed": 3, "skipped_missing_pdf": 2}
-    background_tasks.add_task.assert_called_once()
+    assert result == {
+        "queued": 1,
+        "total_unprocessed": 3,
+        "skipped_missing_pdf": 2,
+        "job_id": "job-abc123",
+    }
+    fake_enqueue.assert_awaited_once()
+    # Verify payload contains only the valid paper_id
+    call_kwargs = fake_enqueue.await_args.kwargs
+    call_args = fake_enqueue.await_args.args
+    payload = call_kwargs.get("payload") if "payload" in call_kwargs else call_args[2]
+    assert payload == {"paper_ids": [10]}

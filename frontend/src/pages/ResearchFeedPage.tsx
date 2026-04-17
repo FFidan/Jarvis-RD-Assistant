@@ -187,25 +187,30 @@ export function ResearchFeedPage() {
 
             {/* Multi-source checkbox group */}
             {externalSources.length > 0 && (
-              <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
-                <span className="text-xs font-medium text-muted-foreground">Sources:</span>
-                {externalSources.map((source) => (
-                  <label key={source.source_type} className="flex items-center gap-1.5 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
-                      checked={selectedSourceTypes.includes(source.source_type)}
-                      onChange={(e) => {
-                        setSelectedSourceTypes((prev) =>
-                          e.target.checked
-                            ? [...prev, source.source_type]
-                            : prev.filter((t) => t !== source.source_type),
-                        );
-                      }}
-                    />
-                    <span className="text-sm">{SOURCE_LABELS[source.source_type] ?? source.source_type}</span>
-                  </label>
-                ))}
+              <div className="space-y-1">
+                <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
+                  <span className="text-xs font-medium text-muted-foreground">Sources:</span>
+                  {externalSources.map((source) => (
+                    <label key={source.source_type} className="flex items-center gap-1.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
+                        checked={selectedSourceTypes.includes(source.source_type)}
+                        onChange={(e) => {
+                          setSelectedSourceTypes((prev) =>
+                            e.target.checked
+                              ? [...prev, source.source_type]
+                              : prev.filter((t) => t !== source.source_type),
+                          );
+                        }}
+                      />
+                      <span className="text-sm">{SOURCE_LABELS[source.source_type] ?? source.source_type}</span>
+                    </label>
+                  ))}
+                </div>
+                {selectedSourceTypes.length === 0 && (
+                  <p className="text-xs text-destructive">Select at least one source</p>
+                )}
               </div>
             )}
 

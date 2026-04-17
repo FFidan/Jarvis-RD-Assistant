@@ -246,7 +246,10 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=500)
     # Legacy field kept for backward compat; migrated to source_types by validator.
     source: SourceType | None = None
-    source_types: list[SourceType] = Field(default_factory=lambda: [SourceType.ARXIV])
+    source_types: list[SourceType] = Field(
+        default_factory=lambda: [SourceType.ARXIV],
+        min_length=1,
+    )
     max_results: int = Field(default=10, ge=1, le=200)
     year_from: int | None = Field(default=None, ge=1900, le=2100)
     year_to: int | None = Field(default=None, ge=1900, le=2100)
@@ -895,6 +898,7 @@ class BatchProcessResponse(BaseModel):
     queued: int
     total_unprocessed: int
     skipped_missing_pdf: int
+    job_id: str | None = None
 
 
 class WeeklyDigestResponse(BaseModel):
@@ -1014,6 +1018,7 @@ class PulseDeckResponse(BaseModel):
     generated_at: datetime
     cards: list[PulseCardResponse]
     stats: dict
+    degraded_reason: str | None = None
 
 
 class PulseGenerateResponse(BaseModel):

@@ -42,6 +42,16 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     )
 
 
+async def current_user_id(request: Request) -> int | None:
+    """Return the current user's integer ID, or None in single-tenant mode.
+
+    Placeholder: multi-user support is not implemented yet.  Always returns
+    None so that user_id ownership checks are a no-op for single-tenant
+    deployments while remaining forward-compatible with future multi-user work.
+    """
+    return None
+
+
 def validate_production_config() -> None:
     """Crash at startup if production config is unsafe.
 

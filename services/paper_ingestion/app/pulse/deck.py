@@ -200,6 +200,7 @@ def _build_deck_response(
         generated_at=generated_at,
         cards=cards,
         stats=deck_row.get("stats") or {},
+        degraded_reason=deck_row.get("degraded_reason"),
     )
 
 
@@ -214,7 +215,7 @@ async def load_today(db_pool: Any) -> "PulseDeckResponse | None":
     async with db_pool.acquire() as conn:
         deck_row = await conn.fetchrow(
             """
-            SELECT id, deck_date, card_count, generated_at, stats
+            SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
             WHERE deck_date = CURRENT_DATE
             """
@@ -269,7 +270,7 @@ async def load_history(
     async with db_pool.acquire() as conn:
         deck_rows = await conn.fetch(
             """
-            SELECT id, deck_date, card_count, generated_at, stats
+            SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
             WHERE deck_date < CURRENT_DATE
               AND deck_date >= CURRENT_DATE - ($1 || ' days')::INTERVAL

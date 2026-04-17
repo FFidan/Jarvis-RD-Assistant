@@ -75,7 +75,13 @@ async def batch_summarize_papers(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
 ):
-    """Find processed papers without summaries and summarize them."""
+    """Enqueue a single batch-summarize job for processed papers without summaries.
+
+    Returns immediately with a ``job_id`` that can be polled via
+    ``GET /api/jobs/{job_id}``.
+    """
+    from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT p.id FROM papers p
@@ -84,21 +90,15 @@ async def batch_summarize_papers(
                ORDER BY p.created_at DESC LIMIT $1""",
             limit,
         )
-    summarized, failed = 0, 0
-    for row in rows:
-        try:
-            await generate_paper_summary(
-                row["id"],
-                db_pool,
-                http_client,
-                verifier,
-                request.app.state.embedder,
-            )
-            summarized += 1
-        except Exception:
-            logger.exception("Batch summarize failed for paper %d", row["id"])
-            failed += 1
-    return {"summarized": summarized, "failed": failed, "total_unsummarized": len(rows)}
+    paper_ids = [row["id"] for row in rows]
+    job_id: str | None = None
+    if paper_ids:
+        job_id = await jobs_lib.enqueue(
+            db_pool,
+            "papers.batch_summarize",
+            payload={"paper_ids": paper_ids},
+        )
+    return {"total_unsummarized": len(rows), "job_id": job_id}
 
 
 # ---------------------------------------------------------------------------
