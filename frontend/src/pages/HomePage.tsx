@@ -11,19 +11,21 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { SetupBanner } from '@/components/setup/SetupBanner';
 
-function BatchButton({
+interface BatchButtonProps<T> {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  mutationFn: () => Promise<T>;
+  formatResult: (data: T) => string;
+  confirmMessage?: string;
+}
+
+function BatchButton<T>({
   label,
   icon: Icon,
   mutationFn,
   formatResult,
   confirmMessage,
-}: {
-  label: string;
-  icon: React.ComponentType<{ className?: string }>;
-  mutationFn: () => Promise<any>;
-  formatResult: (data: any) => string;
-  confirmMessage?: string;
-}) {
+}: BatchButtonProps<T>) {
   const queryClient = useQueryClient();
   const mutation = useMutation({
     mutationFn,
@@ -168,21 +170,21 @@ export function HomePage() {
               label="Process PDFs"
               icon={Cog}
               mutationFn={batchProcessPapers}
-              formatResult={(d: any) => `Queued ${d.queued} papers`}
+              formatResult={(d) => `Queued ${d.queued} papers`}
               confirmMessage="This will process PDFs for all papers in your library. This may take several minutes. Continue?"
             />
             <BatchButton
               label="Summarize"
               icon={FileText}
               mutationFn={batchSummarizePapers}
-              formatResult={(d: any) => `Queued ${d.total_unsummarized} papers`}
+              formatResult={(d) => `Queued ${d.total_unsummarized} papers`}
               confirmMessage="This will generate AI summaries for all unprocessed papers. This costs LLM tokens. Continue?"
             />
             <BatchButton
               label="Extract Entities"
               icon={Sparkles}
               mutationFn={batchExtractEntities}
-              formatResult={(d: any) => `Extracted ${d.extracted} papers`}
+              formatResult={(d) => `Extracted ${d.extracted} papers`}
               confirmMessage="This will extract entities from all papers. This costs LLM tokens. Continue?"
             />
           </div>

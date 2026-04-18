@@ -25,13 +25,12 @@ enforces ~9 req/s (0.11 s interval) via an asyncio.Lock-based rate limiter
 shared across all calls on the same instance.
 """
 
-import asyncio
 import logging
 import os
-import time
 from datetime import UTC, date, datetime
 
 import httpx
+from jarvis_common.rate_limiter import SourceRateLimiter
 
 from app.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from app.sources.base import PaperSource
@@ -106,18 +105,12 @@ class OpenAlexSource(PaperSource):
         self._api_key: str | None = cfg_key or os.environ.get("OPENALEX_API_KEY")
         self._email: str = os.environ.get("OPENALEX_EMAIL", "")
         self._missing_key_warned = False
-        self._last_request_time: float = 0.0
-        self._rate_lock = asyncio.Lock()
+        # rate: ~9 req/s (polite-pool target ≤10 req/s)
+        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / 0.11)
 
     async def _rate_limit(self) -> None:
         """Enforce OpenAlex polite-pool rate limit: ≤10 req/s (~9 req/s target)."""
-        interval = 0.11
-        async with self._rate_lock:
-            elapsed = time.monotonic() - self._last_request_time
-            wait = max(0.0, interval - elapsed)
-            if wait:
-                await asyncio.sleep(wait)
-            self._last_request_time = time.monotonic()
+        await self._rate_limiter.acquire()
 
     def _check_api_key(self) -> bool:
         """Return True if the source has at least an email or API key configured.

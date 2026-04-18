@@ -6,7 +6,7 @@ populated at import time; enabled/disabled state comes from the DB at
 runtime.
 """
 
-from typing import Type, TypeVar
+from typing import TypeVar
 
 from app.sources.base import PaperSource
 
@@ -14,10 +14,10 @@ _T = TypeVar("_T", bound=PaperSource)
 
 # Registry populated at import time by @register_source decorators.
 # Not frozen because registration happens during module import.
-_SOURCE_CLASSES: dict[str, Type[PaperSource]] = {}
+_SOURCE_CLASSES: dict[str, type[PaperSource]] = {}
 
 
-def register_source(cls: Type[_T]) -> Type[_T]:
+def register_source(cls: type[_T]) -> type[_T]:
     """Class decorator that registers a PaperSource implementation.
 
     Parameters
@@ -44,7 +44,7 @@ def register_source(cls: Type[_T]) -> Type[_T]:
     return cls
 
 
-def get_source_class(source_type: str) -> Type[PaperSource] | None:
+def get_source_class(source_type: str) -> type[PaperSource] | None:
     """Look up a registered PaperSource class by type string.
 
     Parameters

@@ -33,10 +33,7 @@ INSERT INTO user_config (key, value) VALUES
     ('llm.smart_model', '"smart"'),
     ('llm.fast_model', '"fast"'),
     ('llm.embed_model', '"embed"'),
-    ('notifications.timezone', '"Europe/Berlin"'),
-    ('notifications.morning_briefing', '{"enabled": true, "cron": "30 8 * * *"}'),
-    ('notifications.paper_digest', '{"enabled": true, "cron": "0 9 * * *"}'),
-    ('notifications.review_reminder', '{"enabled": true, "cron": "0 14 * * *"}'),
+    ('user.timezone', '"UTC"'),
     ('fsrs.desired_retention', '0.9'),
     ('fsrs.learning_steps', '[1, 10]'),
     ('paper.max_daily', '20'),
@@ -432,15 +429,16 @@ CREATE TABLE tracked_authors (
     enabled         BOOLEAN DEFAULT TRUE,
     last_checked_at TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE (author_name, s2_author_id)
+    -- NULLS NOT DISTINCT: two NULL s2_author_id values are treated as equal
+    -- (matches migration 021 semantics; requires PostgreSQL 15+).
+    CONSTRAINT tracked_authors_name_s2_unique
+        UNIQUE NULLS NOT DISTINCT (author_name, s2_author_id)
 );
 
 COMMENT ON TABLE tracked_authors IS 'Authors to track for new-publication alerts.';
 
 CREATE INDEX IF NOT EXISTS idx_tracked_authors_enabled
     ON tracked_authors(enabled) WHERE enabled = TRUE;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tracked_authors_name_no_s2
-    ON tracked_authors (author_name) WHERE s2_author_id IS NULL;
 
 CREATE TABLE author_alert_log (
     id                SERIAL PRIMARY KEY,
@@ -522,6 +520,7 @@ CREATE TABLE entity_relationships (
     paper_id          INTEGER REFERENCES papers(id) ON DELETE SET NULL,
     evidence_quote    TEXT,
     confidence        FLOAT DEFAULT 1.0,
+    page_number       INTEGER,
     metadata          JSONB DEFAULT '{}',
     created_at        TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(source_entity_id, target_entity_id, relationship_type, paper_id)
@@ -661,4 +660,21 @@ INSERT INTO user_config (key, value) VALUES
     ('pulse.stage2_top_k', '50'::jsonb),
     ('pulse.weights',
      '{"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1, "author_bonus": 0.15, "recency": 0.05}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
+
+-- Telegram pairing — short-lived codes used by the setup wizard to link a
+-- Telegram chat to the JARVIS owner (migration 020).
+CREATE TABLE IF NOT EXISTS telegram_pairing (
+    code        TEXT PRIMARY KEY,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS telegram_pairing_expires_idx
+    ON telegram_pairing (expires_at);
+
+-- Seed setup / Telegram config keys in user_config (migration 020).
+INSERT INTO user_config (key, value) VALUES
+    ('telegram.owner_chat_id', 'null'::jsonb),
+    ('setup.completed',        'false'::jsonb)
 ON CONFLICT (key) DO NOTHING;

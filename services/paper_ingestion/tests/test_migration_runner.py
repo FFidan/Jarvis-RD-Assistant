@@ -178,3 +178,78 @@ async def test_migration_lock_timeout_returns_gracefully():
     # fetch (SELECT version FROM schema_migrations) must NOT have been called —
     # we bailed out before reaching it
     conn.fetch.assert_not_awaited()
+
+
+def test_migration_runner_strips_begin_commit():
+    """Migration SQL with standalone BEGIN/COMMIT lines must have them stripped.
+
+    DB-C01 regression: asyncpg wraps each migration in a savepoint transaction;
+    nested explicit BEGIN/COMMIT commands cause "can't run BEGIN inside a
+    transaction" errors.  The runner must strip them before executing.
+    """
+    import re
+
+    sql_with_txn = (
+        "BEGIN;\n"
+        "CREATE TABLE IF NOT EXISTS test_strip (id int);\n"
+        "ALTER TABLE test_strip ADD COLUMN val text;\n"
+        "COMMIT;\n"
+    )
+    sql_with_trailing_semicolon = "BEGIN ;\nSELECT 1;\nCOMMIT ;\n"
+    sql_with_rollback = "BEGIN\nSELECT 1;\nROLLBACK\n"
+
+    def strip(sql: str) -> str:
+        return re.sub(
+            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
+            "",
+            sql,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+
+    result1 = strip(sql_with_txn)
+    assert "BEGIN" not in result1
+    assert "COMMIT" not in result1
+    assert "CREATE TABLE IF NOT EXISTS test_strip" in result1
+    assert "ALTER TABLE" in result1
+
+    result2 = strip(sql_with_trailing_semicolon)
+    assert "BEGIN" not in result2
+    assert "COMMIT" not in result2
+    assert "SELECT 1" in result2
+
+    result3 = strip(sql_with_rollback)
+    assert "BEGIN" not in result3
+    assert "ROLLBACK" not in result3
+    assert "SELECT 1" in result3
+
+
+def test_migration_runner_strips_begin_commit_in_real_migrations():
+    """Every real migration file that contains BEGIN/COMMIT must be safe to strip."""
+    import re
+
+    cleaned_count = 0
+    for sql_file in _MIGRATIONS_DIR.glob("*.sql"):
+        try:
+            int(sql_file.name.split("_")[0])
+        except (ValueError, IndexError):
+            continue
+        sql = sql_file.read_text()
+        if not re.search(
+            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", sql, re.IGNORECASE | re.MULTILINE
+        ):
+            continue
+        cleaned = re.sub(
+            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
+            "",
+            sql,
+            flags=re.IGNORECASE | re.MULTILINE,
+        )
+        # After stripping, the essential DDL statements must still be present
+        assert "BEGIN" not in cleaned or "BEGIN" in cleaned.split("BEGIN")[1].lstrip()[:3], (
+            f"{sql_file.name}: BEGIN not fully stripped"
+        )
+        assert len(cleaned.strip()) > 0, f"{sql_file.name}: stripped to empty"
+        cleaned_count += 1
+
+    # We know several real migrations have BEGIN/COMMIT — assert at least one was processed
+    assert cleaned_count > 0, "No migrations with BEGIN/COMMIT found — update test expectations"

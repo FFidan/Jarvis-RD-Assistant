@@ -208,7 +208,7 @@ async def extract_fields_for_paper(
                    RETURNING id, paper_id, template_id, extractions, extraction_model, created_at""",
                 paper_id,
                 template_id,
-                json.dumps(extraction_json),
+                extraction_json,
                 smart_model,
                 json.dumps(llm_result),
             )

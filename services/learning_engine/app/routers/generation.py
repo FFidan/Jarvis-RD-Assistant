@@ -127,9 +127,10 @@ async def generate_cards_core(
             max_cards=max_cards,
             model=smart_model,
         )
-    except Exception as exc:
+    except (httpx.HTTPError, asyncpg.PostgresError, ValueError, RuntimeError) as exc:
         logger.exception("Card generation failed for paper %s", paper_id)
         raise RuntimeError("Card generation failed") from exc
+    # JobError propagates naturally — carries action_link payload for the UI
 
     if ctx:
         await ctx.update_progress(0.85, "Verifying")
@@ -231,6 +232,7 @@ async def _card_generate_batch_job(
                 paper_id=paper_id,
                 deck_id=deck_id,
                 max_cards=max_per_paper,
+                ctx=ctx,
             )
             papers_processed += 1
             cards_created += result["cards_created"]

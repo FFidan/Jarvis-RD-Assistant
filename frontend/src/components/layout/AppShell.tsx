@@ -4,7 +4,7 @@ import { TopBar } from '@/components/layout/TopBar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/toaster';
 import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
-import { useJobStore } from '@/stores/job-store';
+import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 
 interface AppShellProps {
   children: ReactNode;
@@ -19,6 +19,11 @@ export function AppShell({ children }: AppShellProps) {
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // Re-hydrate job state when user returns to the tab after being away
+  useEffect(() => {
+    registerVisibilityHydrate();
+  }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">

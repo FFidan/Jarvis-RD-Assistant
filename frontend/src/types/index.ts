@@ -8,7 +8,7 @@
 
 // --- Enums ---
 
-export type SourceType = 'arxiv' | 'semantic_scholar' | 'local';
+export type SourceType = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed' | 'local';
 
 export type PaperStatus = 'new' | 'reading' | 'read' | 'archived' | 'starred';
 

@@ -55,16 +55,12 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
     external_id = f"s2:{paper_id}"
 
     # Check if paper already exists
-    existing = await conn.fetchrow(
-        "SELECT id FROM papers WHERE external_id = $1", external_id
-    )
+    existing = await conn.fetchrow("SELECT id FROM papers WHERE external_id = $1", external_id)
     if existing:
         return existing["id"]
 
     # Build authors list
-    authors = [
-        a.get("name", "") for a in (paper_data.get("authors") or []) if a.get("name")
-    ]
+    authors = [a.get("name", "") for a in (paper_data.get("authors") or []) if a.get("name")]
 
     # Parse publication date
     published_date: date | None = None
@@ -94,7 +90,7 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
         published_date,
         url,
         citation_count,
-        json.dumps(metadata),
+        metadata,
     )
     return row["id"] if row else None
 
@@ -240,7 +236,8 @@ async def sync_citations_for_paper(
 
         await conn.execute(
             "UPDATE papers SET citations_fetched_at = $1 WHERE id = $2",
-            datetime.now(UTC), paper_id,
+            datetime.now(UTC),
+            paper_id,
         )
         return citations_added, references_added, stubs_created
 

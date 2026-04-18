@@ -2,6 +2,7 @@
 
 import ipaddress
 import os
+from collections.abc import Callable
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -70,9 +71,21 @@ def _real_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def create_limiter() -> Limiter:
-    """Create a rate limiter using real client IP as key."""
-    return Limiter(key_func=_real_ip)
+def create_limiter(default_limits: list[str | Callable[..., str]] | None = None) -> Limiter:
+    """Create a rate limiter using real client IP as key.
+
+    Parameters
+    ----------
+    default_limits:
+        Optional list of limit strings applied as a global cap on every
+        request (e.g. ``["600/minute"]``).  These are enforced by
+        ``SlowAPIMiddleware`` before any route-level auth takes effect,
+        providing a first-line defence against unauthenticated brute-force.
+        Defaults to ``["600/minute"]`` when not specified.
+    """
+    if default_limits is None:
+        default_limits = ["600/minute"]
+    return Limiter(key_func=_real_ip, default_limits=default_limits)
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:

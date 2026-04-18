@@ -1,10 +1,10 @@
 """Shared LiteLLM request helpers for paper-ingestion modules and scripts."""
 
-from dataclasses import dataclass, replace
 import json
 import logging
 import os
 import re
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -107,8 +107,7 @@ async def request_chat_completion_content(
         resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
         raise RuntimeError(
-            f"LiteLLM chat error {exc.response.status_code}: "
-            f"{exc.response.text[:200]}"
+            f"LiteLLM chat error {exc.response.status_code}: {exc.response.text[:200]}"
         ) from exc
     except httpx.TimeoutException as exc:
         raise RuntimeError("LiteLLM chat request timed out") from exc
@@ -141,8 +140,13 @@ async def call_llm_json_value(
         options=resolved_options,
         config=config,
     )
+    stripped = raw.strip()
+    if not stripped or stripped[0] not in ("{", "["):
+        raise ValueError(
+            f"LLM returned non-JSON content (expected '{{' or '[', got {stripped[:50]!r})"
+        )
     try:
-        return json.loads(raw)
+        return json.loads(stripped)
     except json.JSONDecodeError as exc:
         raise ValueError(f"LLM returned invalid JSON: {raw[:200]}") from exc
 

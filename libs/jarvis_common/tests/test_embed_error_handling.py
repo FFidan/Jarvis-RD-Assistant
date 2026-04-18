@@ -4,8 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-
-from jarvis_common.llm_client import embed_texts, LiteLLMConfig
+from jarvis_common.llm_client import LiteLLMConfig, embed_texts
 
 
 def _mock_response(json_data: dict, status_code: int = 200) -> MagicMock:
@@ -16,7 +15,9 @@ def _mock_response(json_data: dict, status_code: int = 200) -> MagicMock:
     resp.raise_for_status = MagicMock()
     if status_code >= 400:
         resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-            "error", request=MagicMock(), response=resp,
+            "error",
+            request=MagicMock(),
+            response=resp,
         )
     return resp
 
@@ -75,12 +76,14 @@ async def test_embed_texts_malformed_items(mock_client, config):
 
 async def test_embed_texts_success(mock_client, config):
     """Normal success case should return embeddings in order."""
-    mock_client.post.return_value = _mock_response({
-        "data": [
-            {"index": 0, "embedding": [0.1, 0.2, 0.3]},
-            {"index": 1, "embedding": [0.4, 0.5, 0.6]},
-        ]
-    })
+    mock_client.post.return_value = _mock_response(
+        {
+            "data": [
+                {"index": 0, "embedding": [0.1, 0.2, 0.3]},
+                {"index": 1, "embedding": [0.4, 0.5, 0.6]},
+            ]
+        }
+    )
     result = await embed_texts(mock_client, ["hello", "world"], config=config)
     assert len(result) == 2
     assert result[0] == [0.1, 0.2, 0.3]
@@ -89,22 +92,22 @@ async def test_embed_texts_success(mock_client, config):
 
 async def test_embed_texts_reorders_by_index(mock_client, config):
     """Embeddings returned out of order should be sorted by index."""
-    mock_client.post.return_value = _mock_response({
-        "data": [
-            {"index": 2, "embedding": [0.7, 0.8]},
-            {"index": 0, "embedding": [0.1, 0.2]},
-            {"index": 1, "embedding": [0.4, 0.5]},
-        ]
-    })
+    mock_client.post.return_value = _mock_response(
+        {
+            "data": [
+                {"index": 2, "embedding": [0.7, 0.8]},
+                {"index": 0, "embedding": [0.1, 0.2]},
+                {"index": 1, "embedding": [0.4, 0.5]},
+            ]
+        }
+    )
     result = await embed_texts(mock_client, ["a", "b", "c"], config=config)
     assert result == [[0.1, 0.2], [0.4, 0.5], [0.7, 0.8]]
 
 
 async def test_embed_texts_sends_correct_payload(mock_client, config):
     """embed_texts should POST to /v1/embeddings with the right payload."""
-    mock_client.post.return_value = _mock_response({
-        "data": [{"index": 0, "embedding": [1.0]}]
-    })
+    mock_client.post.return_value = _mock_response({"data": [{"index": 0, "embedding": [1.0]}]})
     await embed_texts(mock_client, ["hello"], model="embed", config=config)
 
     mock_client.post.assert_awaited_once_with(

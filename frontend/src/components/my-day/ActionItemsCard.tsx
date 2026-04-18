@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, CheckCircle2, InboxIcon } from 'lucide-react';
@@ -12,6 +12,7 @@ import type { FeedPaper } from '@/types';
 export function ActionItemsCard() {
   const queryClient = useQueryClient();
   const startJob = useJobStore((s) => s.startJob);
+  const isRunning = useJobStore((s) => s.isRunning);
 
   /** Papers saved but not yet processed (no chunks). */
   const {
@@ -24,10 +25,13 @@ export function ActionItemsCard() {
   });
 
   /** Failed jobs from the job store (paper.process kind). */
-  const failedJobs = useJobStore((s) =>
-    Object.values(s.jobs).filter(
-      (j) => j.kind === 'paper.process' && j.status === 'failed',
-    ),
+  const jobs = useJobStore((s) => s.jobs);
+  const failedJobs = useMemo(
+    () =>
+      Object.values(jobs).filter(
+        (j) => j.kind === 'paper.process' && j.status === 'failed',
+      ),
+    [jobs],
   );
 
   const unprocessed: FeedPaper[] = savedFeed?.papers ?? [];
@@ -35,12 +39,12 @@ export function ActionItemsCard() {
   const handleProcessAll = useCallback(async () => {
     await Promise.all(
       unprocessed
-        .filter((p) => p.pdf_downloaded)
+        .filter((p) => p.pdf_downloaded && !isRunning('paper.process', { paper_id: p.id }))
         .map((p) => startJob('paper.process', { paper_id: p.id }).catch(() => {})),
     );
     // Refresh after queuing
     queryClient.invalidateQueries({ queryKey: ['action-items-unprocessed'] });
-  }, [unprocessed, startJob, queryClient]);
+  }, [unprocessed, startJob, isRunning, queryClient]);
 
   const processable = unprocessed.filter((p) => p.pdf_downloaded);
 
@@ -74,6 +78,9 @@ export function ActionItemsCard() {
             </Button>
           )}
         </div>
+        <p className="text-xs text-muted-foreground mt-1">
+          Papers discovered by your sources that haven&apos;t been indexed for AI search yet
+        </p>
       </CardHeader>
 
       <CardContent>

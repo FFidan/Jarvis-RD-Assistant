@@ -45,7 +45,7 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
             </p>
           )}
           {messages.map((msg, i) => (
-            <div key={i}>
+            <div key={`${msg.role}:${msg.content.slice(0, 8)}:${i}`}>
               <ChatMessage
                 message={msg}
                 isLoading={isStreaming && i === messages.length - 1 && msg.role === 'assistant'}

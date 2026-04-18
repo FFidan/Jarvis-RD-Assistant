@@ -226,6 +226,14 @@ case "$access_mode" in
   3)
     ACCESS_MODE_LABEL="tunnel"
     DASHBOARD_BIND_HOST="127.0.0.1"
+    # Zero-Trust gate — must be acknowledged before proceeding.
+    if [ -z "${JARVIS_TUNNEL_ACK_ZT_CONFIGURED:-}" ] || [ "$JARVIS_TUNNEL_ACK_ZT_CONFIGURED" != "1" ]; then
+      printf '\n'
+      printf '\033[0;31m[WARNING] Cloudflare tunnel exposes your services to the internet!\033[0m\n'
+      printf 'You MUST configure Zero-Trust access policies at https://one.dash.cloudflare.com/\n'
+      printf 'Once configured, set JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1 in your .env to proceed.\n'
+      exit 1
+    fi
     printf '\n'
     cat <<'EOF'
 Create a free tunnel at:
@@ -492,9 +500,13 @@ printf '\n%s================================================================%s\n
 printf '%s   ✅ Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
-printf '  API key:      %s%s%s\n' "$C_BOLD" "$JARVIS_API_KEY" "$C_RESET"
-printf '  %s%s Save this key — you will need it to log in.%s\n' \
-  "$C_YELLOW" "WARNING:" "$C_RESET"
+# Write the API key to a protected file instead of printing it to the terminal.
+_KEY_FILE="${HOME}/.config/jarvis/api-key"
+mkdir -p "${HOME}/.config/jarvis"
+printf '%s' "$JARVIS_API_KEY" > "$_KEY_FILE"
+chmod 600 "$_KEY_FILE"
+printf '  API key:      written to %s (starts: %s...)\n' "$_KEY_FILE" "${JARVIS_API_KEY:0:8}"
+printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
 printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'

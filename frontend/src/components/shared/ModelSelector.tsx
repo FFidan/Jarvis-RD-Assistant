@@ -25,7 +25,7 @@ interface SystemModels {
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
-  role?: string;
+  configKey?: string;
 }
 
 function filterModelsForRole(
@@ -54,7 +54,7 @@ function filterModelsForRole(
   return models;
 }
 
-export function ModelSelector({ value, onChange, role }: ModelSelectorProps) {
+export function ModelSelector({ value, onChange, configKey: role }: ModelSelectorProps) {
   const { data, error } = useQuery<SystemModels>({
     queryKey: ['system-models'],
     queryFn: () => apiFetch<SystemModels>('/api/system/models'),

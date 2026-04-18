@@ -25,6 +25,7 @@ from jarvis_common.llm_client import (
     call_llm,
     get_litellm_config,
 )
+from jarvis_common.prompt_safety import escape_llm_text
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +147,10 @@ async def generate_weekly_summary(
         papers_context = ""
         for i, p in enumerate(papers[:10], 1):
             brief = p.get("summary_brief") or p.get("title", "")
-            papers_context += f"\n[Paper {i}]: {p['title']}\n  Summary: {brief[:300]}\n"
+            papers_context += (
+                f"\n[Paper {i}]: {escape_llm_text(p['title'])}"
+                f"\n  Summary: {escape_llm_text(brief[:300])}\n"
+            )
 
         themes: list[dict] = []
         summary = f"{len(papers)} papers on {topic_name} this week."
@@ -157,7 +161,7 @@ async def generate_weekly_summary(
                     http_client,
                     DIGEST_PROMPT.format(
                         count=len(papers[:10]),
-                        topic=topic_name,
+                        topic=escape_llm_text(topic_name),
                         papers_context=papers_context,
                     ),
                     options=ChatCompletionOptions(

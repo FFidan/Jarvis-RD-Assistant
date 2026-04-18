@@ -113,8 +113,9 @@ def test_history_returns_list(client):
     assert isinstance(body, list)
     assert len(body) == 2
     m.assert_awaited_once()
-    kwargs = m.await_args.kwargs
-    assert kwargs.get("days") == 14 or (len(m.await_args.args) >= 2 and m.await_args.args[1] == 14)
+    call = m.await_args
+    assert call is not None
+    assert call.kwargs.get("days") == 14 or (len(call.args) >= 2 and call.args[1] == 14)
 
 
 def test_rate_persists_rating(client):

@@ -4,6 +4,7 @@ from jarvis_common.auth import current_user_id, validate_production_config, veri
 from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,
+    escape_like,
     fmt_safe,
     get_embed_model,
     get_fast_model,
@@ -35,7 +36,8 @@ from jarvis_common.llm_client import (
 )
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.models import HealthCheckResponse
-from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
+from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
+from jarvis_common.rate_limiter import SourceRateLimiter
 from jarvis_common.ratelimit import create_limiter, rate_limit_exceeded_handler
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.text_utils import author_matches, normalize_author_name
@@ -44,10 +46,12 @@ __all__ = [
     "verify_api_key",
     "validate_production_config",
     "current_user_id",
+    "SourceRateLimiter",
     "create_limiter",
     "rate_limit_exceeded_handler",
     "dynamic_update",
     "delete_or_404",
+    "escape_like",
     "fmt_safe",
     "init_pg_connection",
     "quote_ident",
@@ -64,6 +68,7 @@ __all__ = [
     "normalize_author_name",
     "author_matches",
     "escape_llm_text",
+    "safe_for_prompt",
     "wrap_delimited",
     "ChatCompletionOptions",
     "LiteLLMConfig",

@@ -37,7 +37,7 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
   const [front, setFront] = useState('');
   const [back, setBack] = useState('');
   const [cardType, setCardType] = useState<string>('concept');
-  const [deckId, setDeckId] = useState<string>(defaultDeckId ? String(defaultDeckId) : '');
+  const [deckId, setDeckId] = useState<string>(() => (defaultDeckId != null ? String(defaultDeckId) : ''));
 
   const { data: decks = [] } = useQuery({
     queryKey: ['decks'],
@@ -62,13 +62,6 @@ export function CreateCardForm({ open, onOpenChange, defaultDeckId }: CreateCard
       setCardType('concept');
     },
   });
-
-  // Sync default deck when it changes
-  useEffect(() => {
-    if (defaultDeckId && !deckId) {
-      setDeckId(String(defaultDeckId));
-    }
-  }, [defaultDeckId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

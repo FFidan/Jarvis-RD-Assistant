@@ -1,4 +1,12 @@
-"""Tests for GET /health endpoint of the learning_engine service.
+"""Tests for GET /health and /health/internal endpoints of the learning_engine service.
+
+Public /health (ζ4: SEC-H09):
+- Returns only {"status": "ok"|"degraded"} — no dependency details exposed.
+- HTTP 200 when all deps are reachable; HTTP 503 when any check fails.
+
+Authenticated /health/internal:
+- Returns full {status, service, checks} payload.
+- Requires valid API key.
 
 Also covers M26 regression: HealthCheckResponse importable from jarvis_common.
 """
@@ -44,9 +52,14 @@ def app_with_deps():
     app.dependency_overrides.clear()
 
 
+# ---------------------------------------------------------------------------
+# Public /health tests (status-only, no auth required)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_health_returns_200_when_ok(app_with_deps):
-    """GET /health → 200 when all dependencies are reachable."""
+    """GET /health → 200 and status='ok' — no dependency details exposed."""
     app = app_with_deps
     app.state.db_pool = _make_mock_pool(raise_on_acquire=False)
 
@@ -60,12 +73,16 @@ async def test_health_returns_200_when_ok(app_with_deps):
         resp = await client.get("/health")
 
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    # Public endpoint must NOT expose internal details
+    assert "service" not in body
+    assert "checks" not in body
 
 
 @pytest.mark.asyncio
 async def test_health_returns_503_when_degraded(app_with_deps):
-    """GET /health → 503 when a dependency is unavailable."""
+    """GET /health → 503 and status='degraded' — no checks dict (SEC-H09)."""
     app = app_with_deps
     # Simulate DB failure
     app.state.db_pool = _make_mock_pool(raise_on_acquire=True)
@@ -82,6 +99,58 @@ async def test_health_returns_503_when_degraded(app_with_deps):
     assert resp.status_code == 503
     body = resp.json()
     assert body["status"] == "degraded"
+    # Public endpoint must NOT expose which dependency failed
+    assert "checks" not in body
+
+
+# ---------------------------------------------------------------------------
+# /health/internal tests (full details, requires auth)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_internal_returns_full_details(app_with_deps):
+    """GET /health/internal → 200 with {status, service, checks} when authed."""
+    app = app_with_deps
+    app.state.db_pool = _make_mock_pool(raise_on_acquire=False)
+
+    mock_http = AsyncMock()
+    mock_http.get = AsyncMock(return_value=MagicMock(status_code=200))
+    app.state.http_client = mock_http
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health/internal")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    # "service" field is present and non-empty (exact value depends on which
+    # app module sys.modules has cached when running cross-service test suites)
+    assert "service" in body and body["service"]
+    assert body["checks"]["postgres"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_health_internal_503_has_all_checks(app_with_deps):
+    """GET /health/internal → 503 with checks dict when DB is down."""
+    app = app_with_deps
+    app.state.db_pool = _make_mock_pool(raise_on_acquire=True)
+
+    mock_http = AsyncMock()
+    mock_http.get = AsyncMock(return_value=MagicMock(status_code=200))
+    app.state.http_client = mock_http
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health/internal")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert "checks" in body
     assert body["checks"]["postgres"] == "unavailable"
 
 

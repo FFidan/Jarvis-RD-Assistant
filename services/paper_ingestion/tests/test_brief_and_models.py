@@ -55,7 +55,6 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -236,6 +235,7 @@ async def test_system_models_full_response(_app):
     """GET /api/system/models returns installed, hardware, and current keys."""
     app, conn, mock_http = _app
     from app.main import get_system_models
+
     request = _make_request(app.state.db_pool, mock_http)
 
     # Mock config DB fetch: return LLM config entries
@@ -297,6 +297,7 @@ async def test_system_models_ollama_unreachable(_app):
     """GET /api/system/models returns empty installed list when Ollama is down."""
     app, conn, mock_http = _app
     from app.main import get_system_models
+
     request = _make_request(app.state.db_pool, mock_http)
 
     conn.fetch.return_value = []
@@ -317,6 +318,7 @@ async def test_system_models_no_config(_app):
     """GET /api/system/models returns empty current dict when no config exists."""
     app, conn, mock_http = _app
     from app.main import get_system_models
+
     request = _make_request(app.state.db_pool, mock_http)
 
     # DB returns no config rows
@@ -359,6 +361,7 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
     """GET /api/system/models degrades when config loading fails but still returns Ollama data."""
     app, conn, mock_http = _app
     from app.main import get_system_models
+
     request = _make_request(app.state.db_pool, mock_http)
 
     conn.fetch.side_effect = RuntimeError("db unavailable")
@@ -387,6 +390,7 @@ async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     """GET /api/system/models keeps installed models even when runtime probe fails."""
     app, conn, mock_http = _app
     from app.main import get_system_models
+
     request = _make_request(app.state.db_pool, mock_http)
 
     conn.fetch.return_value = []

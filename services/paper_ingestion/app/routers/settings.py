@@ -1,10 +1,12 @@
 """Settings, nudges, and source management endpoints."""
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable
 from typing import Any
 
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException, Request
 from jarvis_common import dynamic_update
@@ -38,11 +40,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         # FSRS
         "fsrs.desired_retention",
         "fsrs.learning_steps",
-        # Notifications
-        "notifications.timezone",
-        "notifications.morning_briefing",
-        "notifications.paper_digest",
-        "notifications.review_reminder",
+        # User preferences
+        "user.timezone",
         # Recommendation engine
         "recommendation.liked_weight",
         "recommendation.project_weight",
@@ -254,6 +253,19 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
             _NUDGE_ALLOWED_COLUMNS,
             jsonb_columns=_NUDGE_JSONB_COLUMNS,
         )
+    if "cron_expression" in updates and row:
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            with contextlib.suppress(JobLookupError):
+                scheduler.reschedule_job(
+                    f"nudge_{row['nudge_type']}",
+                    trigger=CronTrigger.from_crontab(updates["cron_expression"], timezone="UTC"),
+                )
+                logger.info(
+                    "nudge_%s rescheduled live (cron=%s)",
+                    row["nudge_type"],
+                    updates["cron_expression"],
+                )
     return NudgeResponse(**dict(row))
 
 

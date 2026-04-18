@@ -47,6 +47,7 @@ class _FakeVectorParams:
         self.size = size
         self.distance = distance
 
+
 if "qdrant_client" not in sys.modules:
     sys.modules["qdrant_client"] = SimpleNamespace(AsyncQdrantClient=MagicMock())
 
@@ -73,6 +74,7 @@ if getattr(sys.modules.get("app.embedder"), "Embedder", None) is object:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_chunk_row(
     paper_id: int,
@@ -134,12 +136,13 @@ def _make_mock_http_client(embedding_dim: int = 768) -> AsyncMock:
         resp = MagicMock()
         resp.status_code = 200
         resp.raise_for_status = MagicMock()
-        resp.json = MagicMock(return_value={
-            "data": [
-                {"index": i, "embedding": [0.1] * embedding_dim}
-                for i in range(len(texts))
-            ]
-        })
+        resp.json = MagicMock(
+            return_value={
+                "data": [
+                    {"index": i, "embedding": [0.1] * embedding_dim} for i in range(len(texts))
+                ]
+            }
+        )
         return resp
 
     client.post = _post
@@ -154,18 +157,29 @@ def _make_mock_http_client(embedding_dim: int = 768) -> AsyncMock:
 async def test_old_qdrant_points_deleted():
     """When re-embedding a paper, old Qdrant points are deleted first."""
     # Import here to allow patching
-    sys_path_ctx = patch.dict("os.environ", {
-        "LITELLM_BASE_URL": "http://test:4000",
-        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
-    })
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        },
+    )
     with sys_path_ctx:
         import importlib
+
         import scripts.reembed as reembed_mod
+
         importlib.reload(reembed_mod)
 
     old_embedding_ids = [f"old-uuid-{i}" for i in range(3)]
     chunks = [
-        _make_chunk_row(1, i, f"chunk {i}", embedding_id=old_embedding_ids[i], embedding_model="qwen3-embedding:0.6b")
+        _make_chunk_row(
+            1,
+            i,
+            f"chunk {i}",
+            embedding_id=old_embedding_ids[i],
+            embedding_model="qwen3-embedding:0.6b",
+        )
         for i in range(3)
     ]
 
@@ -201,19 +215,21 @@ async def test_old_qdrant_points_deleted():
 
 async def test_db_embedding_model_updated():
     """After re-embedding, embedding_model column is updated to new model name."""
-    sys_path_ctx = patch.dict("os.environ", {
-        "LITELLM_BASE_URL": "http://test:4000",
-        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
-    })
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        },
+    )
     with sys_path_ctx:
         import importlib
+
         import scripts.reembed as reembed_mod
+
         importlib.reload(reembed_mod)
 
-    chunks = [
-        _make_chunk_row(42, i, f"chunk {i}", embedding_model=None)
-        for i in range(2)
-    ]
+    chunks = [_make_chunk_row(42, i, f"chunk {i}", embedding_model=None) for i in range(2)]
 
     pool = _make_mock_pool(fetch_return=chunks)
     qdrant = AsyncMock()
@@ -245,13 +261,18 @@ async def test_db_embedding_model_updated():
 
 async def test_idempotent_skip_already_reembedded():
     """Running re-embed when all papers are already done results in no work."""
-    sys_path_ctx = patch.dict("os.environ", {
-        "LITELLM_BASE_URL": "http://test:4000",
-        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
-    })
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        },
+    )
     with sys_path_ctx:
         import importlib
+
         import scripts.reembed as reembed_mod
+
         importlib.reload(reembed_mod)
 
     # Mock the pool for main() — the initial query returns no papers
@@ -271,8 +292,10 @@ async def test_idempotent_skip_already_reembedded():
     async def _fake_create_pool(*args, **kwargs):
         return pool
 
-    with patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool), \
-         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant):
+    with (
+        patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
+        patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+    ):
         await reembed_mod.main()
 
     # Pool was used only for the initial query, then closed
@@ -290,13 +313,18 @@ async def test_idempotent_skip_already_reembedded():
 
 async def test_main_exits_when_pool_creation_fails():
     """main should exit with status 1 when the database pool cannot be created."""
-    sys_path_ctx = patch.dict("os.environ", {
-        "LITELLM_BASE_URL": "http://test:4000",
-        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
-    })
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        },
+    )
     with sys_path_ctx:
         import importlib
+
         import scripts.reembed as reembed_mod
+
         importlib.reload(reembed_mod)
 
     with patch.object(reembed_mod.asyncpg, "create_pool", AsyncMock(return_value=None)):
@@ -313,20 +341,27 @@ async def test_main_exits_when_pool_creation_fails():
 
 async def test_reembed_partial_failure_preserves_old_points():
     """If embed_texts raises on the 2nd call, old Qdrant points are NOT deleted."""
-    sys_path_ctx = patch.dict("os.environ", {
-        "LITELLM_BASE_URL": "http://test:4000",
-        "EMBEDDING_MODEL_NAME": "nomic-embed-text",
-    })
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+        },
+    )
     with sys_path_ctx:
         import importlib
+
         import scripts.reembed as reembed_mod
+
         importlib.reload(reembed_mod)
 
     # Create enough chunks to require 2 batches (EMBED_BATCH_SIZE = 32)
     old_embedding_ids = [f"old-uuid-{i}" for i in range(40)]
     chunks = [
         _make_chunk_row(
-            1, i, f"chunk {i}",
+            1,
+            i,
+            f"chunk {i}",
             embedding_id=old_embedding_ids[i],
             embedding_model="qwen3-embedding:0.6b",
         )
@@ -375,8 +410,12 @@ async def test_embedder_payload_includes_model_name():
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
 
     chunks = [
-        ChunkForEmbedding(chunk_index=0, content="hello world", page_number=1, start_char=0, end_char=11),
-        ChunkForEmbedding(chunk_index=1, content="foo bar", page_number=1, start_char=11, end_char=18),
+        ChunkForEmbedding(
+            chunk_index=0, content="hello world", page_number=1, start_char=0, end_char=11
+        ),
+        ChunkForEmbedding(
+            chunk_index=1, content="foo bar", page_number=1, start_char=11, end_char=18
+        ),
     ]
 
     await embedder.embed_and_store(paper_id=99, chunks=chunks)

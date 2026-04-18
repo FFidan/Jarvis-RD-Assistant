@@ -5,7 +5,6 @@ Uses the Semantic Scholar Academic Graph API
 Rate limit: 1 request/second on the free tier.
 """
 
-import asyncio
 import logging
 import os
 from datetime import date
@@ -13,6 +12,7 @@ from typing import Any
 from urllib.parse import quote as _url_quote
 
 import httpx
+from jarvis_common.rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
 from app.models import PaperCreate, PaperSourceConfig, SourceType
@@ -44,20 +44,15 @@ class SemanticScholarSource(PaperSource):
 
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         super().__init__(config, http_client)
-        self._last_request_time: float = 0.0
-        self._rate_lock = asyncio.Lock()
         # Optional API key for higher rate limits (config overrides env var)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        # rate: 1/RATE_LIMIT_DELAY req/s (S2 free-tier 1 req/s)
+        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 
     async def _rate_limit(self) -> None:
         """Enforce Semantic Scholar free-tier rate limit (1 req/sec)."""
-        async with self._rate_lock:
-            now = asyncio.get_running_loop().time()
-            elapsed = now - self._last_request_time
-            if elapsed < RATE_LIMIT_DELAY:
-                await asyncio.sleep(RATE_LIMIT_DELAY - elapsed)
-            self._last_request_time = asyncio.get_running_loop().time()
+        await self._rate_limiter.acquire()
 
     def _build_headers(self) -> dict[str, str]:
         """Build request headers, including API key if configured."""

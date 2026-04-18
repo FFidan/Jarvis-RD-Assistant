@@ -114,9 +114,9 @@ test.describe('PDF upload triggers paper.analyze job @jobs', () => {
   });
 
   test('upload sample.pdf → job visible → navigate to processed paper', async ({ page }) => {
-    await page.goto('/feed?tab=new');
+    await page.goto('/feed?tab=inbox');
 
-    // The PdfUploadZone sits inside the New tab. Grab the hidden file input.
+    // The PdfUploadZone sits inside the Inbox tab. Grab the hidden file input.
     // The zone attaches a `<input type="file" accept=".pdf" multiple>` element.
     const fileInput = page.locator('input[type="file"][accept=".pdf"]').first();
     await expect(fileInput).toBeAttached({ timeout: 10_000 });

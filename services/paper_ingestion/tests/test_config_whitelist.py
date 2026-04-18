@@ -1,19 +1,27 @@
 """Tests for config key whitelist and settings validation."""
 
+import pytest
 from app.routers.settings import _ALLOWED_CONFIG_KEYS
-
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
-    "fsrs.desired_retention", "fsrs.learning_steps",
-    "llm.smart_model", "llm.fast_model", "llm.embed_model",
+    "fsrs.desired_retention",
+    "fsrs.learning_steps",
+    "llm.smart_model",
+    "llm.fast_model",
+    "llm.embed_model",
 }
 
-# Keys seeded in init.sql that the frontend filters as notifications
-_NOTIFICATION_KEYS = {
-    "notifications.timezone", "notifications.morning_briefing",
-    "notifications.paper_digest", "notifications.review_reminder",
+# Vestigial notification keys removed in Wave-1 β1 (APScheduler owns scheduled_nudges)
+_REMOVED_NOTIFICATION_KEYS = {
+    "notifications.timezone",
+    "notifications.morning_briefing",
+    "notifications.paper_digest",
+    "notifications.review_reminder",
 }
+
+# New user-preferences key replacing notifications.timezone
+_USER_PREF_KEYS = {"user.timezone"}
 
 
 def test_frontend_metadata_keys_all_allowed():
@@ -22,10 +30,22 @@ def test_frontend_metadata_keys_all_allowed():
     assert not missing, f"Frontend keys not in backend whitelist: {missing}"
 
 
-def test_notification_keys_all_allowed():
-    """Notification config keys from init.sql must be in the backend whitelist."""
-    missing = _NOTIFICATION_KEYS - _ALLOWED_CONFIG_KEYS
-    assert not missing, f"Notification keys not in backend whitelist: {missing}"
+def test_removed_notification_keys_rejected():
+    """Vestigial notifications.* keys must NOT be in the whitelist (they were removed)."""
+    still_present = _REMOVED_NOTIFICATION_KEYS & _ALLOWED_CONFIG_KEYS
+    assert not still_present, f"Vestigial notification keys still in whitelist: {still_present}"
+
+
+@pytest.mark.parametrize("key", sorted(_REMOVED_NOTIFICATION_KEYS))
+def test_removed_notification_key_not_in_whitelist(key: str):
+    """Each removed notification key is individually verified absent."""
+    assert key not in _ALLOWED_CONFIG_KEYS, f"{key!r} should have been removed from whitelist"
+
+
+def test_user_timezone_allowed():
+    """user.timezone must be in the whitelist as the replacement for notifications.timezone."""
+    missing = _USER_PREF_KEYS - _ALLOWED_CONFIG_KEYS
+    assert not missing, f"User-pref keys not in backend whitelist: {missing}"
 
 
 def test_unknown_key_not_allowed():

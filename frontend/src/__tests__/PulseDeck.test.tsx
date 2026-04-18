@@ -6,9 +6,20 @@ import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
 import type { PulseDeck as PulseDeckType } from '@/types';
 
+const mockStartJob = vi.fn();
+const mockHasRunning = vi.fn().mockReturnValue(false);
+
+vi.mock('@/stores/job-store', () => ({
+  useJobStore: vi.fn((selector: (s: unknown) => unknown) =>
+    selector({
+      startJob: mockStartJob,
+      hasRunning: mockHasRunning,
+    }),
+  ),
+}));
+
 vi.mock('@/lib/api', () => ({
   fetchPulseToday: vi.fn(),
-  generatePulseNow: vi.fn(),
   ratePulseCard: vi.fn(),
   explainPulseCard: vi.fn().mockResolvedValue({
     card_id: 1,
@@ -19,7 +30,7 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchPulseToday, generatePulseNow, ratePulseCard } = await import(
+const { fetchPulseToday, ratePulseCard } = await import(
   '@/lib/api'
 );
 
@@ -101,17 +112,17 @@ describe('PulseDeck', () => {
     ).toBeInTheDocument();
   });
 
-  it('calls generatePulseNow when generate button clicked in empty state', async () => {
+  it('calls startJob when generate button clicked in empty state', async () => {
     const user = userEvent.setup();
     vi.mocked(fetchPulseToday).mockResolvedValue(null);
-    vi.mocked(generatePulseNow).mockResolvedValue(makeDeck());
+    mockStartJob.mockResolvedValue('test-job');
     renderDeck();
     const button = await screen.findByRole('button', {
       name: /generate now/i,
     });
     await user.click(button);
     await waitFor(() => {
-      expect(generatePulseNow).toHaveBeenCalledTimes(1);
+      expect(mockStartJob).toHaveBeenCalledWith('pulse.generate', {});
     });
   });
 

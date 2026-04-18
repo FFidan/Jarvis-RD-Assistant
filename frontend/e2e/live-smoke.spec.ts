@@ -20,8 +20,8 @@ test.describe('@live-smoke Live app smoke', () => {
     await expect(page.getByRole('heading', { name: 'Research Feed' })).toBeVisible({
       timeout: 10000,
     });
-    // Discover tab uses a multi-source placeholder
-    await page.getByRole('tab', { name: 'Discover' }).click();
+    // Search tab uses a multi-source placeholder
+    await page.getByRole('tab', { name: 'Search' }).click();
     await expect(page.getByPlaceholder(/Search your selected sources/)).toBeVisible();
 
     await page.getByRole('link', { name: 'Projects' }).click();

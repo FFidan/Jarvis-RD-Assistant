@@ -246,6 +246,6 @@ async def test_sse_stream_noop_roundtrip(app_with_pool, worker_task) -> None:
 
     # At least one progress frame (either pre-terminal or the terminal one
     # with progress=1.0 — the noop handler emits 0.5 then the runner sets 1.0).
-    progress_values = [e.get("progress") for e in events if e.get("progress") is not None]
+    progress_values: list[float] = [p for e in events if (p := e.get("progress")) is not None]
     assert progress_values, f"No progress frames emitted; events={events}"
     assert max(progress_values) == 1.0, f"Expected a frame with progress=1.0, saw {progress_values}"

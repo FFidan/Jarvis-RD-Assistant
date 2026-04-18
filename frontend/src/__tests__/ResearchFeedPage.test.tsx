@@ -146,11 +146,11 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByText('Research Feed')).toBeInTheDocument();
   });
 
-  it('renders both tab triggers (New and Library)', () => {
+  it('renders both tab triggers (Inbox and Library)', () => {
     renderPage();
-    expect(screen.getByRole('tab', { name: 'New' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Inbox' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Library' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Discover' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
   });
@@ -172,7 +172,7 @@ describe('ResearchFeedPage', () => {
   it('renders the search input with updated placeholder', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
     expect(
       screen.getByPlaceholderText('Search your selected sources…'),
     ).toBeInTheDocument();
@@ -181,14 +181,14 @@ describe('ResearchFeedPage', () => {
   it('renders search button', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
   });
 
   it('disables Search button and shows help text when no sources are selected', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     // Wait for all source checkboxes to render
     await waitFor(() => {
@@ -210,10 +210,10 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByText('Select at least one source')).toBeInTheDocument();
   });
 
-  it('renders source checkboxes in Discover tab for enabled non-local sources', async () => {
+  it('renders source checkboxes in Search tab for enabled non-local sources', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     // Wait for sources to load
     await waitFor(() => {
@@ -222,7 +222,7 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByLabelText('Semantic Scholar')).toBeInTheDocument();
     expect(screen.getByLabelText('OpenAlex')).toBeInTheDocument();
     expect(screen.getByLabelText('PubMed')).toBeInTheDocument();
-    // Local source should not appear in the Discover tab checkboxes
+    // Local source should not appear in the Search tab checkboxes
     expect(screen.queryByLabelText('Local')).not.toBeInTheDocument();
   });
 
@@ -231,7 +231,7 @@ describe('ResearchFeedPage', () => {
     const { searchPreview } = await import('@/lib/api');
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     // Wait for checkboxes
     await waitFor(() => {
@@ -284,7 +284,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search your selected sources…')).toBeInTheDocument();
@@ -322,7 +322,7 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
@@ -346,7 +346,7 @@ describe('ResearchFeedPage', () => {
 
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Discover' }));
+    await user.click(screen.getByRole('tab', { name: 'Search' }));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');

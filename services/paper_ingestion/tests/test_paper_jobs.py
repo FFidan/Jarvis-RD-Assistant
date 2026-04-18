@@ -24,7 +24,7 @@ def _ensure_stub(name: str) -> MagicMock:
         mock = MagicMock()
         sys.modules[name] = mock
         _STUBS[name] = mock
-    return sys.modules[name]
+    return sys.modules[name]  # type: ignore[return-value]
 
 
 # app.pdf_processor is imported at module level in paper_jobs.py for PDF_STORAGE_PATH.
@@ -109,6 +109,7 @@ async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
         pj.PDF_STORAGE_PATH = original_storage
 
     mock_run.assert_awaited_once()
+    assert mock_run.await_args is not None
     call_kwargs = mock_run.await_args.kwargs
     assert "ctx" in call_kwargs, (
         f"run_process_pdf was not called with ctx= kwarg; actual kwargs: {list(call_kwargs.keys())}"

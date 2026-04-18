@@ -311,7 +311,12 @@ def get_review_conversation_handler() -> ConversationHandler:
         Ready-to-register conversation handler for flashcard review.
     """
     return ConversationHandler(
-        entry_points=[CommandHandler("review", review_start)],
+        entry_points=[
+            CommandHandler("review", review_start),
+            # Allow the review flow to be triggered by the inline "Start review"
+            # button (callback_data="start_review") in addition to the /review command.
+            CallbackQueryHandler(review_start, pattern=r"^start_review$"),
+        ],
         states={
             SHOWING_FRONT: [
                 CallbackQueryHandler(show_answer, pattern=r"^show_answer$"),

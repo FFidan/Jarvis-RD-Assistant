@@ -80,7 +80,7 @@ async def create_template(
                    VALUES ($1, $2, $3::jsonb, $4) RETURNING *""",
                 body.name,
                 body.description,
-                json.dumps(fields_json),
+                fields_json,
                 body.is_default,
             )
         except asyncpg.exceptions.UndefinedTableError:
@@ -145,7 +145,7 @@ async def update_template(
             idx += 1
         if "fields" in updates and updates["fields"] is not None:
             set_clauses.append(f"fields = ${idx}::jsonb")
-            params.append(json.dumps([f.model_dump() for f in body.fields or []]))
+            params.append([f.model_dump() for f in body.fields or []])
             idx += 1
         if "is_default" in updates:
             set_clauses.append(f"is_default = ${idx}")

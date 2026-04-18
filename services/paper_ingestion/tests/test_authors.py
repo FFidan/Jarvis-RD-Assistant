@@ -12,8 +12,8 @@ from app.models import (
     TrackedAuthorUpdate,
 )
 from app.routers.authors import author_matches
-from jarvis_common import normalize_author_name
 from httpx import ASGITransport
+from jarvis_common import normalize_author_name
 
 # ---------------------------------------------------------------------------
 # Unit tests: normalize_author_name

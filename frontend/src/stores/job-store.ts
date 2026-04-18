@@ -11,16 +11,24 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
-import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob } from '@/lib/api';
+import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob, getJob as apiGetJob } from '@/lib/api';
 import { queryClient } from '@/lib/query-client';
 
 /**
  * Per-kind query invalidation: when a job of the given kind reaches
  * `succeeded`, each listed query key is invalidated so the UI refetches
  * the new state (e.g. the freshly generated Pulse deck).
+ *
+ * Values are functions so paper_id etc. can be threaded through from payload.
  */
-const INVALIDATE_ON_SUCCESS: Record<string, string[][]> = {
-  'pulse.generate': [['pulse-today'], ['pulse-history']],
+const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
+  'pulse.generate':         () => [['pulse-today'], ['pulse-history'], ['pulse-stats']],
+  'paper.process':          (j) => [['paper', String(j.payload?.paper_id)], ['action-items-unprocessed']],
+  'card.generate':          () => [['decks'], ['cards']],
+  'paper.analyze':          (j) => [['paper', String(j.payload?.paper_id)]],
+  'papers.batch_process':   () => [['papers'], ['action-items-unprocessed']],
+  'papers.batch_summarize': () => [['papers']],
+  'extraction.batch':       () => [['extractions']],
 };
 
 /** Terminal statuses — job will not receive more events. */
@@ -35,6 +43,7 @@ export interface Job {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   progress: number;
   progress_message: string | null;
+  payload?: Record<string, unknown> | null;
   result: Record<string, unknown> | null;
   error: {
     message: string;
@@ -60,6 +69,11 @@ interface JobStore {
   removeJob: (jobId: string) => void;
   /** Returns true when a job of this kind is queued or running. */
   hasRunning: (kind: string) => boolean;
+  /**
+   * Returns true when a job of the given kind is queued or running AND every
+   * key/value pair in `payload` matches the job's payload.
+   */
+  isRunning: (kind: string, payload: Record<string, unknown>) => boolean;
   /** On app mount: re-subscribe to any jobs that are still running. */
   hydrate: () => Promise<void>;
 
@@ -124,6 +138,38 @@ export const useJobStore = create<JobStore>()(
         const apiKey = useAuthStore.getState().getApiKey();
         const headers: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
 
+        // Internal helper: fire toast + invalidate queries for a terminal job
+        const _handleTerminal = (job: Job) => {
+          if (job.status === 'succeeded') {
+            toast.success(`${job.kind} completed`);
+            const keysFactory = INVALIDATE_ON_SUCCESS[job.kind];
+            if (keysFactory) {
+              for (const key of keysFactory(job)) {
+                queryClient.invalidateQueries({ queryKey: key });
+              }
+            }
+          } else if (job.status === 'failed') {
+            const msg = job.error?.message ?? `${job.kind} failed`;
+            const actionLink = job.error?.action_link;
+            if (actionLink) {
+              toast.error(msg, {
+                action: {
+                  label: actionLink.label,
+                  onClick: () => {
+                    window.location.href = actionLink.href;
+                  },
+                },
+              });
+            } else {
+              toast.error(msg);
+            }
+          }
+          get()._cleanupSubscription(jobId);
+          setTimeout(() => {
+            get().removeJob(jobId);
+          }, EVICT_DELAY_MS);
+        };
+
         // Stream job events via GET SSE endpoint
         (async () => {
           try {
@@ -144,10 +190,31 @@ export const useJobStore = create<JobStore>()(
             const reader = res.body.getReader();
             const decoder = new TextDecoder();
             let buffer = '';
+            let terminalReceived = false;
 
             while (true) {
               const { done, value } = await reader.read();
-              if (done) break;
+              if (done) {
+                // Stream closed without a terminal event — fall back to a REST poll
+                if (!terminalReceived) {
+                  try {
+                    const finalJob = await apiGetJob(jobId).catch(() => null);
+                    if (finalJob) {
+                      set((s) => ({ jobs: { ...s.jobs, [jobId]: finalJob } }));
+                      if (TERMINAL_STATUSES.has(finalJob.status)) {
+                        _handleTerminal(finalJob);
+                      } else {
+                        // Still running — re-subscribe
+                        get()._cleanupSubscription(jobId);
+                        get().subscribe(jobId);
+                      }
+                    }
+                  } catch {
+                    /* best-effort */
+                  }
+                }
+                break;
+              }
               buffer += decoder.decode(value, { stream: true });
               const lines = buffer.split('\n');
               buffer = lines.pop() ?? '';
@@ -158,6 +225,12 @@ export const useJobStore = create<JobStore>()(
                 if (raw === '[DONE]') break;
                 try {
                   const event = JSON.parse(raw) as Partial<Job>;
+                  // streaming_timeout sentinel — treat as non-terminal; let fallback poll resolve
+                  if ((event as { status?: string }).status === 'streaming_timeout') {
+                    get()._cleanupSubscription(jobId);
+                    get().subscribe(jobId);
+                    return;
+                  }
                   const current = get().jobs[jobId] ?? {};
                   const updated: Job = {
                     ...(current as Job),
@@ -167,39 +240,8 @@ export const useJobStore = create<JobStore>()(
                   get()._upsertJob(updated);
 
                   if (TERMINAL_STATUSES.has(updated.status)) {
-                    // Fire toast notification
-                    if (updated.status === 'succeeded') {
-                      toast.success(`${updated.kind} completed`);
-                      // Invalidate any queries registered for this kind so
-                      // the UI refetches the freshly materialised state.
-                      const keys = INVALIDATE_ON_SUCCESS[updated.kind];
-                      if (keys) {
-                        for (const key of keys) {
-                          queryClient.invalidateQueries({ queryKey: key });
-                        }
-                      }
-                    } else if (updated.status === 'failed') {
-                      const msg = updated.error?.message ?? `${updated.kind} failed`;
-                      const actionLink = updated.error?.action_link;
-                      if (actionLink) {
-                        toast.error(msg, {
-                          action: {
-                            label: actionLink.label,
-                            onClick: () => {
-                              window.location.href = actionLink.href;
-                            },
-                          },
-                        });
-                      } else {
-                        toast.error(msg);
-                      }
-                    }
-                    // Clean up subscription
-                    get()._cleanupSubscription(jobId);
-                    // Schedule eviction after 5 minutes
-                    setTimeout(() => {
-                      get().removeJob(jobId);
-                    }, EVICT_DELAY_MS);
+                    terminalReceived = true;
+                    _handleTerminal(updated);
                     break;
                   }
                 } catch {
@@ -248,6 +290,16 @@ export const useJobStore = create<JobStore>()(
         );
       },
 
+      isRunning(kind, payload) {
+        return Object.values(get().jobs).some((j) => {
+          if (j.kind !== kind) return false;
+          if (j.status !== 'running' && j.status !== 'queued') return false;
+          return Object.entries(payload).every(
+            ([k, v]) => j.payload != null && j.payload[k] === v,
+          );
+        });
+      },
+
       async hydrate() {
         try {
           const [running, queued] = await Promise.all([
@@ -277,3 +329,19 @@ export const useJobStore = create<JobStore>()(
     },
   ),
 );
+
+/**
+ * Register a document `visibilitychange` listener that re-hydrates job state
+ * whenever the user returns to the tab (e.g. after the screen has been locked
+ * or the user switched away for a long time).
+ *
+ * Call once from the root layout component.
+ */
+export function registerVisibilityHydrate(): void {
+  if (typeof document === 'undefined') return;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      useJobStore.getState().hydrate();
+    }
+  });
+}

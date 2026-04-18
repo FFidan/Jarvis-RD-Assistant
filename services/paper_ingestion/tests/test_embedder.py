@@ -5,12 +5,14 @@ import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+
 class _LocalFakeEncoding:
     def encode(self, text):
         return list(text)
 
     def decode(self, tokens):
         return "".join(tokens)
+
 
 if "tiktoken" not in sys.modules:
     fake_tiktoken = types.ModuleType("tiktoken")
@@ -45,7 +47,7 @@ if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models.VectorParams = object
     sys.modules["qdrant_client.models"] = fake_qdrant_models
 
-from app.embedder import Embedder
+from app.embedder import Embedder  # noqa: E402
 
 
 async def test_chunk_text_basic():
@@ -93,9 +95,7 @@ async def test_embed_texts_uses_shared_litellm_config_fallback(monkeypatch):
 
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json.return_value = {
-        "data": [{"index": 0, "embedding": [0.1] * 768}]
-    }
+    response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 768}]}
     mock_http = AsyncMock()
     mock_http.post.return_value = response
     mock_qdrant = AsyncMock()
@@ -200,6 +200,4 @@ async def test_discover_from_seeds_deduplicates_and_ignores_null_payloads():
 
     results = await embedder.discover_from_seeds([7], db_pool=db_pool, limit=3)
 
-    assert results == [
-        {"paper_id": 21, "score": 0.89, "content": "better candidate"}
-    ]
+    assert results == [{"paper_id": 21, "score": 0.89, "content": "better candidate"}]

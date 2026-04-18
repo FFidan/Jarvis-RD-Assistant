@@ -8,6 +8,7 @@ system/models, and router registration.  Endpoint logic lives in
 import asyncio
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from datetime import UTC
 from pathlib import Path
@@ -32,6 +33,7 @@ from jarvis_common import (
 from jarvis_common.llm_client import get_litellm_config
 from qdrant_client import AsyncQdrantClient
 from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 # Trigger source registration via imports
@@ -101,8 +103,18 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                     continue
                 logger.info("Applying migration %s: %s", version, sql_file.name)
                 sql = sql_file.read_text()
+                # Strip standalone BEGIN/COMMIT/ROLLBACK lines so they don't
+                # conflict with the outer asyncpg transaction (savepoint) wrapper.
+                # asyncpg runs each migration inside a savepoint; nested explicit
+                # transaction commands cause "can't run BEGIN inside a transaction".
+                cleaned_sql = re.sub(
+                    r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
+                    "",
+                    sql,
+                    flags=re.IGNORECASE | re.MULTILINE,
+                )
                 async with conn.transaction():
-                    await conn.execute(sql)
+                    await conn.execute(cleaned_sql)
                     await conn.execute(
                         "INSERT INTO schema_migrations (version) VALUES ($1)", version
                     )
@@ -366,23 +378,37 @@ app = FastAPI(
     dependencies=[Depends(verify_api_key)],
 )
 
-# CORS
+# Middleware registration order (Starlette: last-added = outermost = runs first):
+#   1. CORS  — must be outermost so OPTIONS preflight is handled before anything else
+#   2. SlowAPIMiddleware — global 600/minute cap runs pre-auth (auth is a route Depends)
+#   3. RequestIDMiddleware — assigns request ID before further processing
+
+# RequestIDMiddleware (innermost middleware — added first)
+app.add_middleware(RequestIDMiddleware)
+
+# Rate limiting — pre-auth global cap; runs before route-level auth Depends.
+# SlowAPIMiddleware reads app.state.limiter (set below) for per-route limits
+# and also enforces a 600/minute global cap via the default_limits on the limiter.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# CORS (outermost — added last so it runs first for preflight)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.environ.get("CORS_ORIGINS", "https://localhost:3001").split(","),
+    allow_origins=[
+        o.strip()
+        for o in os.environ.get("CORS_ORIGINS", "https://localhost:3001").split(",")
+        if o.strip()
+    ],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
-app.add_middleware(RequestIDMiddleware)
 
 # Standardized error handlers
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, validation_exception_handler)
 app.add_exception_handler(Exception, generic_exception_handler)
-
-# Rate limiting
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 # ---------------------------------------------------------------------------
 # Router registration
@@ -438,15 +464,8 @@ app.include_router(jobs.router)
 # ---------------------------------------------------------------------------
 
 
-@app.get("/health", dependencies=[], response_model=HealthCheckResponse)
-async def health_check(request: Request) -> HealthCheckResponse:
-    """Return service health status with dependency probes (no auth required).
-
-    Checks PostgreSQL, Qdrant, and LiteLLM connectivity. Returns ``"ok"``
-    when all dependencies are reachable, ``"degraded"`` if any check fails.
-    Returns HTTP 503 when degraded so Docker healthchecks and upstreams can
-    detect failure by status code.
-    """
+async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
+    """Execute all dependency probes and return (status, checks)."""
     checks: dict[str, str] = {}
 
     # PostgreSQL
@@ -479,10 +498,43 @@ async def health_check(request: Request) -> HealthCheckResponse:
         checks["litellm"] = "unavailable"
 
     status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    return status, checks
+
+
+@app.get("/health", dependencies=[], response_model=None)
+async def health_check(request: Request) -> dict[str, str]:
+    """Public health probe — returns only ``{"status": "ok"|"degraded"|"down"}``.
+
+    No dependency details are exposed to unauthenticated callers.
+    Docker healthchecks and upstreams check the HTTP status code: 200 = ok,
+    503 = degraded.  Use ``GET /health/internal`` (requires auth) for the full
+    dependency breakdown.
+    """
+    from fastapi.responses import JSONResponse
+
+    status, _ = await _run_health_checks(request)
+    content = {"status": status}
+    if status == "degraded":
+        return JSONResponse(status_code=503, content=content)  # type: ignore[return-value]
+    return content  # type: ignore[return-value]
+
+
+@app.get("/health/internal", response_model=HealthCheckResponse)
+async def health_check_internal(
+    request: Request,
+    _auth: None = Depends(verify_api_key),
+) -> HealthCheckResponse:
+    """Authenticated health probe — returns full dependency details.
+
+    Includes individual check results for PostgreSQL, Qdrant, and LiteLLM.
+    Requires a valid API key.  Returns HTTP 503 when any dependency is
+    unavailable.
+    """
+    from fastapi.responses import JSONResponse
+
+    status, checks = await _run_health_checks(request)
     body = HealthCheckResponse(status=status, service="paper_ingestion", checks=checks)
     if status == "degraded":
-        from fastapi.responses import JSONResponse
-
         return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]
     return body
 

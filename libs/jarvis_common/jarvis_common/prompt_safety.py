@@ -7,6 +7,53 @@ interpolate untrusted user or paper text should use these helpers.
 
 from __future__ import annotations
 
+import re
+
+# Control characters to strip in 'strip' mode (C0, C1, and a few unicode specials).
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\ufeff]")
+
+
+def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
+    """Sanitise text before interpolating it into an LLM prompt.
+
+    Parameters
+    ----------
+    text:
+        Raw input string (user question, paper title, abstract, etc.).
+        ``None`` is treated as an empty string.
+    mode:
+        ``'escape'`` — HTML-encode ``<`` and ``>`` so XML-style delimiters
+        cannot be forged (former :func:`escape_llm_text` behaviour).
+
+        ``'delimit'`` — escape then wrap in XML delimiters.  Not useful
+        on its own; delegates to :func:`wrap_delimited`.  Raises
+        ``ValueError`` unless called via :func:`wrap_delimited`.
+
+        ``'strip'`` — strip ASCII/Unicode control characters that could
+        confuse tokenisers or embed hidden instructions.
+
+    Returns
+    -------
+    str
+        Sanitised string safe for use in LLM prompts.
+
+    Raises
+    ------
+    ValueError
+        If *mode* is not one of the recognised values.
+    """
+    if text is None:
+        text = ""
+    if mode == "escape":
+        return text.replace("<", "&lt;").replace(">", "&gt;")
+    if mode == "strip":
+        return _CTRL_RE.sub("", text)
+    if mode == "delimit":
+        raise ValueError(
+            "mode='delimit' must be used via wrap_delimited(), not safe_for_prompt() directly"
+        )
+    raise ValueError(f"Unknown safe_for_prompt mode: {mode!r}")
+
 
 def escape_llm_text(text: str) -> str:
     """Escape angle-brackets so tagged delimiters can't be forged by input.
@@ -14,6 +61,9 @@ def escape_llm_text(text: str) -> str:
     Replaces ``<`` with ``&lt;`` and ``>`` with ``&gt;`` so that crafted
     inputs like ``</paper_text>IGNORE ABOVE`` cannot break out of their
     delimiter tags in the LLM prompt.
+
+    .. deprecated::
+        Use :func:`safe_for_prompt` with ``mode='escape'`` (the default).
 
     Parameters
     ----------
@@ -25,7 +75,7 @@ def escape_llm_text(text: str) -> str:
     str
         Escaped string safe for interpolation inside XML-style delimiters.
     """
-    return text.replace("<", "&lt;").replace(">", "&gt;")
+    return safe_for_prompt(text, mode="escape")
 
 
 def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:

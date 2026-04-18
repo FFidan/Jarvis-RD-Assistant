@@ -110,7 +110,7 @@ describe('ModelSelector', () => {
   });
 
   it('shows "current" badge when model matches role', async () => {
-    renderComponent({ value: 'mistral-nemo', role: 'llm.smart_model' });
+    renderComponent({ value: 'mistral-nemo', configKey: 'llm.smart_model' });
     await waitFor(() => {
       expect(screen.getByText('current')).toBeInTheDocument();
     });

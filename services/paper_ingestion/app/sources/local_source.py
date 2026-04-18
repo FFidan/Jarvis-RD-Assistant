@@ -6,11 +6,11 @@ search/fetch interface.  This stub exists so that ``source_type="local"``
 is present in the source registry.
 """
 
+import httpx
+
 from app.models import PaperCreate, PaperSourceConfig
 from app.sources.base import PaperSource
 from app.sources.registry import register_source
-
-import httpx
 
 
 @register_source

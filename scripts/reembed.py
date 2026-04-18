@@ -45,10 +45,12 @@ if __package__:
 else:
     from _db import get_dsn
 
-from jarvis_common.llm_client import (
+from jarvis_common.llm_client import (  # noqa: E402
     LiteLLMConfig,
-    embed_texts as embed_texts_shared,
     get_litellm_config,
+)
+from jarvis_common.llm_client import (  # noqa: E402
+    embed_texts as embed_texts_shared,
 )
 
 # ---------------------------------------------------------------------------
@@ -68,9 +70,8 @@ COLLECTION_NAME = "paper_chunks"
 BATCH_SIZE = int(os.environ.get("REEMBED_BATCH_SIZE", "5"))
 EMBED_BATCH_SIZE = 32  # chunks per embedding API call
 
-async def embed_texts(
-    client: httpx.AsyncClient, texts: list[str]
-) -> list[list[float]]:
+
+async def embed_texts(client: httpx.AsyncClient, texts: list[str]) -> list[list[float]]:
     """Get embeddings for a batch of texts via LiteLLM."""
     return await embed_texts_shared(
         client,
@@ -118,7 +119,9 @@ async def reembed_paper(
     if len(all_embeddings) != len(rows):
         logger.error(
             "Embedding count mismatch for paper %d: expected %d, got %d. Skipping.",
-            paper_id, len(rows), len(all_embeddings),
+            paper_id,
+            len(rows),
+            len(all_embeddings),
         )
         return 0
 
@@ -228,9 +231,7 @@ async def main() -> None:
                     count = await reembed_paper(pid, pool, qdrant, http_client)
                     total_chunks += count
                     done += 1
-                    logger.info(
-                        "  [%d/%d] paper_id=%d  chunks=%d", done, total, pid, count
-                    )
+                    logger.info("  [%d/%d] paper_id=%d  chunks=%d", done, total, pid, count)
                 except Exception:
                     logger.exception("Failed to re-embed paper_id=%d, skipping", pid)
                     done += 1

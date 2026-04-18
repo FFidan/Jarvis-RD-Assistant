@@ -12,13 +12,13 @@ from typing import TYPE_CHECKING
 import asyncpg
 import httpx
 from fastapi import HTTPException
-from jarvis_common import fmt_safe, get_fast_model
+from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     build_litellm_headers,
     get_litellm_config,
 )
-from jarvis_common.prompt_safety import escape_llm_text
+from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
 
 from app.decomposition import decompose_query
 from app.models import AskRequest, CrossPaperAskRequest
@@ -83,15 +83,15 @@ async def _prepare_single_paper_rag(
         )
 
     # Build RAG prompt — full chunk text flows through to the prompt.
-    # C-10: Wrap question in XML-style delimiters to prevent prompt injection.
-    # M-1: Also XML-encode the question to prevent tag injection via user input.
-    safe_question = escape_llm_text(fmt_safe(body.question))
+    # C-10: Wrap question and title in XML-style delimiters to prevent prompt injection.
+    # Content between XML tags is DATA — never instructions.
+    safe_question = escape_llm_text(body.question)
     context_blocks = "\n\n".join(
         f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
         for c in chunks
     )
     prompt = (
-        f'Paper: "{fmt_safe(paper["title"])}"\n\n'
+        f"Paper: {wrap_delimited('title', paper['title'])}\n\n"
         "Answer using ONLY these excerpts. If not covered, say so.\n\n"
         f"EXCERPTS:\n{context_blocks}\n\n"
         f"<question>{safe_question}</question>\n\nANSWER:"
@@ -203,7 +203,7 @@ async def _prepare_cross_paper_rag(
     paper_meta = {row["id"]: row for row in rows}
 
     # 5. Build prompt with per-paper sections
-    safe_question = escape_llm_text(fmt_safe(body.question))
+    safe_question = escape_llm_text(body.question)
 
     # Group selected chunks by paper for the prompt
     prompt_chunks_by_paper: dict[int, list[dict]] = {}
@@ -217,7 +217,7 @@ async def _prepare_cross_paper_rag(
     paper_number_map: dict[int, int] = {}
     for i, pid in enumerate(prompt_chunks_by_paper.keys(), start=1):
         meta = paper_meta.get(pid)
-        title = fmt_safe(meta["title"]) if meta else f"Paper ID {pid}"
+        title = wrap_delimited("title", meta["title"]) if meta else f"Paper ID {pid}"
         paper_number_map[pid] = i
 
         excerpts = "\n".join(

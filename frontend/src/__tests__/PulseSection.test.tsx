@@ -57,7 +57,6 @@ describe('PulseSection', () => {
       avg_duration_s: 12.3,
       last_run_at: '2026-04-10T04:00:00Z',
       last_error: null,
-      degraded_reason: null,
     });
   });
 
@@ -95,7 +94,6 @@ describe('PulseSection', () => {
       avg_duration_s: null,
       last_run_at: null,
       last_error: 'scoring pipeline exploded',
-      degraded_reason: null,
     });
     renderSection();
     await waitFor(() => {

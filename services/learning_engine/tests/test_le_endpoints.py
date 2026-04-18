@@ -850,4 +850,6 @@ async def test_health_check_ok(_app):
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["service"] == "learning_engine"
+    # Public /health no longer exposes service/checks — SEC-H09
+    assert "service" not in body
+    assert "checks" not in body

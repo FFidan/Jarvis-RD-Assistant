@@ -5,6 +5,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from jarvis_common import escape_like
 
 from app.converters import (
     row_to_chunk_response,
@@ -47,10 +48,10 @@ async def list_papers_brief(
             rows = await conn.fetch(
                 """SELECT id, title, source_type, published_date
                    FROM papers
-                   WHERE title ILIKE '%' || $1 || '%'
+                   WHERE title ILIKE '%' || $1 || '%' ESCAPE '\\'
                    ORDER BY created_at DESC
                    LIMIT 200""",
-                search,
+                escape_like(search),
             )
         else:
             rows = await conn.fetch(

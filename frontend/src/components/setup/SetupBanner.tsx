@@ -1,25 +1,18 @@
-import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Rocket, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { getSetupStatus } from '@/lib/api';
-
-const DISMISS_KEY = 'setup-banner-dismissed';
+import { useUIStore } from '@/stores/ui-store';
 
 /**
  * Persistent banner surfaced on HomePage while setup is incomplete.
- * Hidden forever once the user clicks Dismiss (localStorage flag).
+ * Hidden forever once the user clicks Dismiss (Zustand ui-store flag,
+ * persisted via localStorage through the `jarvis-ui` key).
  */
 export function SetupBanner() {
   const navigate = useNavigate();
-  const [dismissed, setDismissed] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(DISMISS_KEY) === 'true';
-    } catch {
-      return false;
-    }
-  });
+  const { setupBannerDismissed, dismissSetupBanner } = useUIStore();
 
   const { data } = useQuery({
     queryKey: ['setup-status'],
@@ -27,17 +20,8 @@ export function SetupBanner() {
     staleTime: 30_000,
   });
 
-  if (dismissed) return null;
+  if (setupBannerDismissed) return null;
   if (!data || data.setup_completed !== false) return null;
-
-  const handleDismiss = () => {
-    try {
-      localStorage.setItem(DISMISS_KEY, 'true');
-    } catch {
-      // ignore (private-mode etc.)
-    }
-    setDismissed(true);
-  };
 
   return (
     <div className="flex items-start gap-3 rounded-md border border-primary/40 bg-primary/5 p-4">
@@ -52,7 +36,7 @@ export function SetupBanner() {
         <Button size="sm" onClick={() => navigate('/setup?step=1')}>
           Resume setup
         </Button>
-        <Button size="icon" variant="ghost" onClick={handleDismiss} aria-label="Dismiss">
+        <Button size="icon" variant="ghost" onClick={dismissSetupBanner} aria-label="Dismiss">
           <X className="h-4 w-4" />
         </Button>
       </div>

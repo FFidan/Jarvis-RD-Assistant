@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchConfig,
   setConfig,
   fetchPulseStats,
   fetchPulseDebug,
+  ApiError,
 } from '@/lib/api';
+import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
 import {
   Card,
   CardContent,
@@ -20,6 +22,7 @@ import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { TimeSelect } from '@/components/ui/time-select';
 import { formatDate } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
+import { toast } from 'sonner';
 import { useJobStore } from '@/stores/job-store';
 import type { ConfigEntry, PulseStats, PulseDebugInfo } from '@/types';
 
@@ -29,8 +32,6 @@ import type { ConfigEntry, PulseStats, PulseDebugInfo } from '@/types';
 
 const CRON_TOOLTIP =
   'The time of day when Pulse discovery runs automatically. Papers are scored and ranked so your deck is ready when you start your day.';
-
-const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
   embedding: 0.2,
@@ -86,45 +87,10 @@ const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function cronToHumanReadable(cron: string): string {
-  const parts = cron.split(/\s+/);
-  if (parts.length < 5) return cron;
-  const [minStr, hourStr, , , dowStr] = parts;
-  const minute = parseInt(minStr, 10);
-  const hour = parseInt(hourStr, 10);
-  if (isNaN(minute) || isNaN(hour)) return cron;
-  const time = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-  if (dowStr === '*') return `Daily at ${time}`;
-  if (dowStr === '1-5') return `Weekdays at ${time}`;
-  if (dowStr === '0,6' || dowStr === '6,0') return `Weekends at ${time}`;
-  if (dowStr.includes('-') || dowStr.includes(',')) return `Custom days at ${time}`;
-  const dow = parseInt(dowStr, 10);
-  if (isNaN(dow)) return `Custom days at ${time}`;
-  const dayName = DAY_NAMES[dow] ?? dowStr;
-  return `Weekly on ${dayName} at ${time}`;
-}
-
 function isValidCron(s: string): boolean {
   const parts = s.trim().split(/\s+/);
   if (parts.length !== 5) return false;
   return parts.every((p) => /^[*/0-9,\-]+$/.test(p));
-}
-
-function cronToTime(cron: string): string {
-  const parts = cron.split(/\s+/);
-  const minute = parseInt(parts[0], 10);
-  const hour = parseInt(parts[1], 10);
-  if (isNaN(minute) || isNaN(hour)) return '09:00';
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
-
-function timeToCron(time: string, originalCron: string): string {
-  const [hourStr, minuteStr] = time.split(':');
-  const hour = parseInt(hourStr, 10);
-  const minute = parseInt(minuteStr, 10);
-  if (isNaN(hour) || isNaN(minute)) return originalCron;
-  const parts = originalCron.split(/\s+/);
-  return `${minute} ${hour} ${parts[2] ?? '*'} ${parts[3] ?? '*'} ${parts[4] ?? '*'}`;
 }
 
 function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
@@ -301,8 +267,8 @@ export function PulseSection() {
   });
 
   const { data: stats } = useQuery<PulseStats>({
-    queryKey: ['pulse-stats', 1],
-    queryFn: () => fetchPulseStats(1),
+    queryKey: ['pulse-stats'],
+    queryFn: () => fetchPulseStats(),
     refetchInterval: 60_000,
   });
 
@@ -318,7 +284,11 @@ export function PulseSection() {
   const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 50);
   const likedWeight = Number(getConfigValue(configs, 'recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue(configs, 'recommendation.project_weight', 0.4));
-  const pulseWeights = coerceWeights(getConfigValue(configs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS));
+  const pulseWeights = useMemo(
+    () => coerceWeights(getConfigValue(configs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [configs],
+  );
 
   const [localCron, setLocalCron] = useState(cron);
   const [localLikedWeight, setLocalLikedWeight] = useState(likedWeight);
@@ -630,7 +600,15 @@ export function PulseSection() {
           )}
 
           <Button
-            onClick={() => void startJob('pulse.generate', {})}
+            onClick={() => {
+              startJob('pulse.generate', {}).catch((err: unknown) => {
+                if (err instanceof ApiError && err.status === 429) {
+                  toast.error('Rate limit reached. Try again in a minute.');
+                } else {
+                  toast.error('Failed to start Pulse generation.');
+                }
+              });
+            }}
             disabled={isPulseRunning}
             className="w-full"
           >

@@ -4,7 +4,6 @@ import { fetchConfig, setConfig } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { TimeSelect } from '@/components/ui/time-select';
 import { Switch } from '@/components/ui/switch';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
@@ -14,57 +13,11 @@ import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ConfigEntry } from '@/types';
 
 // ---------------------------------------------------------------------------
-// Cron <-> time helpers
-// ---------------------------------------------------------------------------
-
-/** Parse "M H * * *" cron string to "HH:MM" for <input type="time">. */
-function cronToTime(cron: string): string {
-  const parts = cron.split(/\s+/);
-  try {
-    const minute = parseInt(parts[0], 10);
-    const hour = parseInt(parts[1], 10);
-    if (isNaN(minute) || isNaN(hour)) return '09:00';
-    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-  } catch {
-    return '09:00';
-  }
-}
-
-/** Convert "HH:MM" back to "M H * * *" cron string. */
-function timeToCron(time: string): string {
-  const [hourStr, minuteStr] = time.split(':');
-  const hour = parseInt(hourStr, 10);
-  const minute = parseInt(minuteStr, 10);
-  if (isNaN(hour) || isNaN(minute)) return '0 9 * * *';
-  return `${minute} ${hour} * * *`;
-}
-
-/** Try to parse a config value as a notification config {cron, enabled}. */
-function parseNotificationValue(
-  value: unknown,
-): { cron: string; enabled: boolean } | null {
-  try {
-    const obj = typeof value === 'string' ? JSON.parse(value) : value;
-    if (
-      obj &&
-      typeof obj === 'object' &&
-      typeof (obj as Record<string, unknown>).cron === 'string' &&
-      typeof (obj as Record<string, unknown>).enabled === 'boolean'
-    ) {
-      return obj as { cron: string; enabled: boolean };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Config metadata for human-readable labels and grouping
 // ---------------------------------------------------------------------------
 
 /** Keys that belong to other tabs (Pulse, Setup, Telegram) and should not
- *  appear in the "Models & Notifications" ingestion section. */
+ *  appear in the "Models & Preferences" ingestion section. */
 const HIDE_FROM_UI = new Set([
   'setup.completed',
   'telegram.owner_chat_id',
@@ -137,6 +90,12 @@ const CONFIG_METADATA: Record<
       'Automatically generate spaced-repetition flashcards when a paper is summarized.',
     type: 'boolean',
   },
+  'user.timezone': {
+    group: 'Preferences',
+    label: 'Timezone',
+    description: 'Your local timezone for scheduling notifications and reports (e.g. Europe/Berlin, America/New_York).',
+    type: 'string',
+  },
 };
 
 /** Format a config value for display. */
@@ -145,102 +104,7 @@ function formatConfigValue(value: unknown): string {
 }
 
 /** Preferred order for groups (unlisted groups sort alphabetically after these). */
-const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Other'];
-
-const NOTIFICATION_LABELS: Record<string, string> = {
-  'notifications.morning_briefing': 'Morning Briefing',
-  'notifications.paper_digest': 'Paper Digest',
-  'notifications.review_reminder': 'Review Reminder',
-  'notifications.timezone': 'Timezone',
-};
-
-const NOTIFICATION_TOOLTIPS: Record<string, string> = {
-  'notifications.morning_briefing':
-    "A concise morning summary delivered at your configured time — today's Pulse deck highlights, cards due for review, and project deadlines.",
-  'notifications.paper_digest':
-    'Weekly digest of saved papers grouped by topic with short summaries, delivered every Sunday morning.',
-  'notifications.review_reminder':
-    'Reminds you when there are learning cards due for spaced-repetition review; fires once per day if reviews are pending.',
-};
-
-function notificationLabel(key: string): string {
-  if (NOTIFICATION_LABELS[key]) return NOTIFICATION_LABELS[key];
-  const suffix = key.split('.').pop() ?? key;
-  return suffix.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-}
-
-// ---------------------------------------------------------------------------
-// NotificationRow — inline time picker + enabled toggle
-// ---------------------------------------------------------------------------
-
-function NotificationRow({
-  entry,
-  onSave,
-  isPending,
-}: {
-  entry: ConfigEntry;
-  onSave: (key: string, value: unknown) => void;
-  isPending: boolean;
-}) {
-  const parsed = parseNotificationValue(entry.value);
-  if (!parsed) {
-    // Fallback: render raw value (backward compatible)
-    return null;
-  }
-
-  const timeValue = cronToTime(parsed.cron);
-
-  const handleTimeChange = (newTime: string) => {
-    onSave(entry.key, { cron: timeToCron(newTime), enabled: parsed.enabled });
-  };
-
-  const handleToggle = () => {
-    onSave(entry.key, { cron: parsed.cron, enabled: !parsed.enabled });
-  };
-
-  return (
-    <Card key={entry.key}>
-      <CardContent className="flex items-center gap-4 p-4">
-        <span className="flex shrink-0 items-center gap-1 font-medium text-sm">
-          {notificationLabel(entry.key)}
-          {NOTIFICATION_TOOLTIPS[entry.key] && (
-            <InfoTooltip content={NOTIFICATION_TOOLTIPS[entry.key]} />
-          )}
-        </span>
-        <div className="flex flex-1 items-center gap-4">
-          <div className="flex items-center gap-2">
-            <Label htmlFor={`time-${entry.key}`} className="text-sm">
-              Time
-            </Label>
-            <TimeSelect value={timeValue} onChange={handleTimeChange} disabled={isPending} />
-          </div>
-          <div className="flex items-center gap-2">
-            <Label htmlFor={`toggle-${entry.key}`} className="text-sm">
-              Enabled
-            </Label>
-            <button
-              id={`toggle-${entry.key}`}
-              type="button"
-              role="switch"
-              aria-checked={parsed.enabled}
-              onClick={handleToggle}
-              disabled={isPending}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
-                parsed.enabled ? 'bg-primary' : 'bg-input'
-              }`}
-            >
-              <span
-                className={`pointer-events-none block h-5 w-5 rounded-full bg-background shadow-lg ring-0 transition-transform ${
-                  parsed.enabled ? 'translate-x-5' : 'translate-x-0'
-                }`}
-              />
-            </button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Preferences', 'Other'];
 
 // ---------------------------------------------------------------------------
 // IngestionSection
@@ -286,10 +150,6 @@ export function IngestionSection() {
     setMut.mutate({ key: editingKey, value: parsed });
   };
 
-  const handleNotificationSave = (key: string, value: unknown) => {
-    setMut.mutate({ key, value });
-  };
-
   if (isLoading) {
     return <div className="py-8 text-center text-muted-foreground">Loading config...</div>;
   }
@@ -304,14 +164,11 @@ export function IngestionSection() {
     );
   }
 
-  // Separate notification entries from regular config; hide keys owned by other tabs
-  const notificationEntries = configs.filter((e) => e.key.startsWith('notifications.'));
-  const regularEntries = configs
-    .filter((e) => !e.key.startsWith('notifications.'))
-    .filter((e) => !HIDE_FROM_UI.has(e.key));
+  // Filter out keys owned by other tabs
+  const visibleEntries = configs.filter((e) => !HIDE_FROM_UI.has(e.key));
 
-  // Group regular configs by metadata group
-  const grouped = regularEntries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
+  // Group configs by metadata group
+  const grouped = visibleEntries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
     const group = CONFIG_METADATA[entry.key]?.group ?? 'Other';
     (acc[group] ??= []).push(entry);
     return acc;
@@ -371,7 +228,7 @@ export function IngestionSection() {
               <ModelSelector
                 value={currentValue}
                 onChange={(v) => setMut.mutate({ key: entry.key, value: v })}
-                role={entry.key}
+                configKey={entry.key}
               />
             </div>
           </CardContent>
@@ -446,24 +303,6 @@ export function IngestionSection() {
 
   return (
     <div className="space-y-2">
-      {/* Notification entries with time picker + toggle */}
-      {notificationEntries.map((entry) => {
-        const parsed = parseNotificationValue(entry.value);
-        if (parsed) {
-          return (
-            <NotificationRow
-              key={entry.key}
-              entry={entry}
-              onSave={handleNotificationSave}
-              isPending={setMut.isPending}
-            />
-          );
-        }
-        // Fallback: render as regular entry
-        return renderEntry(entry);
-      })}
-
-      {/* Grouped config entries with labels and descriptions */}
       {sortedGroups.map((group) => (
         <div key={group}>
           <h4 className="mt-4 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">

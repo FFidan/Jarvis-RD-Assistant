@@ -7,9 +7,8 @@ by falling back to a new Card instead of crashing.
 from __future__ import annotations
 
 import pytest
-from fsrs import Rating
-
 from app.fsrs_manager import FSRSManager
+from fsrs import Rating
 
 
 @pytest.fixture
@@ -51,8 +50,19 @@ class TestScheduleReviewCorruptState:
             ({"garbage": True}, "dict with wrong keys"),
             ({}, "empty dict"),
             ({"stability": "not_a_number", "difficulty": "bad"}, "non-numeric values"),
-            ({"due": "invalid-date", "stability": 0, "difficulty": 0, "elapsed_days": 0,
-              "scheduled_days": 0, "reps": 0, "lapses": 0, "state": 99}, "invalid state enum"),
+            (
+                {
+                    "due": "invalid-date",
+                    "stability": 0,
+                    "difficulty": 0,
+                    "elapsed_days": 0,
+                    "scheduled_days": 0,
+                    "reps": 0,
+                    "lapses": 0,
+                    "state": 99,
+                },
+                "invalid state enum",
+            ),
         ],
         ids=["garbage_keys", "empty_dict", "non_numeric_values", "invalid_state_enum"],
     )
@@ -60,9 +70,7 @@ class TestScheduleReviewCorruptState:
         self, manager: FSRSManager, corrupt_state: dict, description: str
     ) -> None:
         """Corrupt dict fsrs_state should not crash; returns valid results."""
-        new_state, review_log, next_due = manager.schedule_review(
-            corrupt_state, Rating.Good
-        )
+        new_state, review_log, next_due = manager.schedule_review(corrupt_state, Rating.Good)
 
         assert isinstance(new_state, dict), f"Failed for {description}"
         assert isinstance(review_log, dict), f"Failed for {description}"
@@ -71,7 +79,8 @@ class TestScheduleReviewCorruptState:
     def test_string_state_falls_back(self, manager: FSRSManager) -> None:
         """A string instead of a dict should trigger fallback."""
         new_state, review_log, next_due = manager.schedule_review(
-            "not a dict", Rating.Good  # type: ignore[arg-type]
+            "not a dict",
+            Rating.Good,  # type: ignore[arg-type]
         )
 
         assert isinstance(new_state, dict)
@@ -81,22 +90,19 @@ class TestScheduleReviewCorruptState:
     def test_none_state_falls_back(self, manager: FSRSManager) -> None:
         """None fsrs_state should trigger fallback."""
         new_state, review_log, next_due = manager.schedule_review(
-            None, Rating.Good  # type: ignore[arg-type]
+            None,
+            Rating.Good,  # type: ignore[arg-type]
         )
 
         assert isinstance(new_state, dict)
         assert isinstance(review_log, dict)
         assert next_due is not None
 
-    def test_corrupt_state_produces_same_result_as_new_card(
-        self, manager: FSRSManager
-    ) -> None:
+    def test_corrupt_state_produces_same_result_as_new_card(self, manager: FSRSManager) -> None:
         """Corrupt state fallback should behave identically to a fresh card review."""
         # Review a fresh card
         fresh_state, _ = manager.create_new_card()
-        fresh_result, fresh_log, fresh_due = manager.schedule_review(
-            fresh_state, Rating.Good
-        )
+        fresh_result, fresh_log, fresh_due = manager.schedule_review(fresh_state, Rating.Good)
 
         # Review with corrupt state (also falls back to Card())
         corrupt_result, corrupt_log, corrupt_due = manager.schedule_review(

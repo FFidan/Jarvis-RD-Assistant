@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from jarvis_common import llm_client
 
 
@@ -14,9 +13,7 @@ async def test_call_llm_posts_expected_payload(monkeypatch):
     """call_llm should send the standard JSON-object completion payload."""
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json.return_value = {
-        "choices": [{"message": {"content": '{"answer": "ok"}'}}]
-    }
+    response.json.return_value = {"choices": [{"message": {"content": '{"answer": "ok"}'}}]}
     http_client = AsyncMock()
     http_client.post.return_value = response
     config = llm_client.LiteLLMConfig(
@@ -56,9 +53,7 @@ async def test_call_llm_strips_think_blocks(monkeypatch):
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {
-        "choices": [
-            {"message": {"content": '<think>hidden</think>\n{"answer":"clean"}'}}
-        ]
+        "choices": [{"message": {"content": '<think>hidden</think>\n{"answer":"clean"}'}}]
     }
     http_client = AsyncMock()
     http_client.post.return_value = response

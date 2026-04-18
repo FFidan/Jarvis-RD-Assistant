@@ -100,8 +100,7 @@ def test_legacy_source_single_migrated():
 def test_legacy_source_both_migrated():
     """``source: "both"`` migrates to ``source_types: ["arxiv", "semantic_scholar"]``."""
 
-    data = {"query": "test", "source": "both"}
-    req = SearchRequest(**data)
+    req = SearchRequest.model_validate({"query": "test", "source": "both"})
     assert SourceType.ARXIV in req.source_types
     assert SourceType.SEMANTIC_SCHOLAR in req.source_types
 

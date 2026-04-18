@@ -50,6 +50,8 @@ describe('AutomationSection', () => {
         enabled: true,
         cron_expression: '0 8 * * *',
         last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
       },
     ]);
     renderSection();
@@ -67,6 +69,8 @@ describe('AutomationSection', () => {
         enabled: false,
         cron_expression: '0 7 * * *',
         last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
       },
     ]);
     const user = userEvent.setup();

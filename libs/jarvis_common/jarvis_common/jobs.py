@@ -296,10 +296,6 @@ async def run_job(
 # Stale-job reaper
 # ---------------------------------------------------------------------------
 
-# Module-level sentinel tracking the last time the reaper ran (monotonic seconds).
-# 0.0 forces the reaper to fire on the first worker_loop iteration.
-_last_reap_ts: float = 0.0
-
 _STALE_REAP_INTERVAL_SEC: float = 60.0
 
 
@@ -346,7 +342,9 @@ async def worker_loop(
         poll_interval: seconds between polls when the queue is empty.
         stop_event: set this to stop the loop gracefully.
     """
-    global _last_reap_ts
+    # Local sentinel — 0.0 forces the reaper to fire on the first iteration.
+    # Using a local variable prevents cross-test state leakage.
+    last_reap_ts: float = 0.0
 
     logger.info("jobs.worker_loop started (kinds=%s)", kinds or "all")
     kind_list: list[str] = sorted(kinds) if kinds else []
@@ -355,8 +353,8 @@ async def worker_loop(
         try:
             # Reap stale running jobs at most once per 60 seconds.
             now = time.monotonic()
-            if now - _last_reap_ts >= _STALE_REAP_INTERVAL_SEC:
-                _last_reap_ts = now
+            if now - last_reap_ts >= _STALE_REAP_INTERVAL_SEC:
+                last_reap_ts = now
                 try:
                     await _reap_stale_jobs(pool)
                 except Exception:

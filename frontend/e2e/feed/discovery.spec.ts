@@ -46,8 +46,8 @@ test.beforeEach(async ({ page }) => {
   });
   await stubSources(page);
   await page.goto('/feed');
-  // Open the Discover tab — SearchBar + checkbox group live here.
-  await page.getByRole('tab', { name: 'Discover' }).click();
+  // Open the Search tab — SearchBar + checkbox group live here.
+  await page.getByRole('tab', { name: 'Search' }).click();
   await page.waitForLoadState('networkidle');
 });
 

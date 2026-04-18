@@ -12,13 +12,13 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common import get_fast_model
+from jarvis_common import escape_like, get_fast_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
 from jarvis_common.prompt_safety import wrap_delimited
 
 from app.converters import row_to_chunk_response  # pyright: ignore[reportUnusedImport]
 from app.models import EntityExtractionResponse
-from app.verification import QuoteVerifier  # pyright: ignore[reportUnusedImport]
+from app.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -279,10 +279,11 @@ async def extract_entities_for_paper(
 
     chunk_responses = [row_to_chunk_response(c) for c in chunks]
     full_text = "\n\n".join(c.content for c in chunk_responses)
-    if len(full_text) > 12000:
-        full_text = full_text[:12000]
+    # Truncate only for the LLM prompt input; verification uses the full text
+    # so that evidence appearing beyond char 12000 is not silently dropped.
+    llm_text = full_text[:12000] if len(full_text) > 12000 else full_text
 
-    prompt = build_entity_prompt(paper["title"], full_text)
+    prompt = build_entity_prompt(paper["title"], llm_text)
     try:
         llm_result = await call_llm(
             http_client,
@@ -302,6 +303,7 @@ async def extract_entities_for_paper(
     entities_merged = 0
     relationships_added = 0
     dropped_count = 0
+    dropped_due_to_context_window = 0
 
     entity_map: dict[str, int] = {}
 
@@ -391,6 +393,8 @@ async def extract_entities_for_paper(
 
             # --- Anti-hallucination: verify evidence quote before persisting ---
             if evidence:
+                # Always verify against the FULL text — not the truncated llm_text —
+                # so evidence in the tail of long papers is not silently lost.
                 vr = quote_verifier.verify_quote(evidence, full_text, chunk_responses)
                 if not vr.verified:
                     logger.info(
@@ -401,6 +405,18 @@ async def extract_entities_for_paper(
                     )
                     dropped_count += 1
                     continue
+                # Track evidence that would have been lost with the old truncated verify.
+                if vr.verified and vr.matched_text and len(llm_text) < len(full_text):
+                    # Find approximate char position of the match in full_text
+                    match_pos = full_text.find(vr.matched_text)
+                    if match_pos >= len(llm_text):
+                        dropped_due_to_context_window += 1
+                        logger.debug(
+                            "evidence saved by full-text verify (pos %d > cap %d): %s",
+                            match_pos,
+                            len(llm_text),
+                            vr.matched_text[:80],
+                        )
                 verified_evidence: str | None = vr.matched_text
             else:
                 # No evidence provided — treat as unverified, drop the row
@@ -416,8 +432,8 @@ async def extract_entities_for_paper(
             inserted = await conn.fetchval(
                 """INSERT INTO entity_relationships
                        (source_entity_id, target_entity_id, relationship_type,
-                        paper_id, evidence_quote, confidence)
-                   VALUES ($1, $2, $3, $4, $5, $6)
+                        paper_id, evidence_quote, confidence, page_number)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7)
                    ON CONFLICT (source_entity_id, target_entity_id, relationship_type, paper_id)
                    DO NOTHING
                    RETURNING 1""",
@@ -427,6 +443,7 @@ async def extract_entities_for_paper(
                 paper_id,
                 verified_evidence,
                 confidence,
+                vr.page_number,
             )
             if inserted is not None:
                 relationships_added += 1
@@ -436,6 +453,7 @@ async def extract_entities_for_paper(
         relationships_added=relationships_added,
         entities_merged=entities_merged,
         dropped_relationships=dropped_count,
+        dropped_due_to_context_window=dropped_due_to_context_window,
     )
 
 
@@ -521,10 +539,10 @@ async def query_knowledge_graph(
                    FROM entity_relationships er
                    JOIN entities e1 ON er.source_entity_id = e1.id
                    JOIN entities e2 ON er.target_entity_id = e2.id
-                   WHERE LOWER(e2.name) LIKE $1
+                   WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
                      AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
                    ORDER BY er.confidence DESC""",
-                f"%{target_name}%",
+                f"%{escape_like(target_name)}%",
             )
             return [dict(r) for r in rows]
 
@@ -548,10 +566,10 @@ async def query_knowledge_graph(
                           (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
                    FROM entities e
                    JOIN paper_entities pe ON e.id = pe.entity_id
-                   WHERE LOWER(e.name) LIKE $1
+                   WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
                    ORDER BY e.paper_count DESC
                    LIMIT 20""",
-                f"%{query_lower.strip().rstrip('?. ')}%",
+                f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
             )
             return [dict(r) for r in rows]
     except asyncpg.exceptions.UndefinedTableError:

@@ -2,9 +2,7 @@
 
 from pathlib import Path
 
-import pytest
 import yaml
-
 from app.services.litellm_config import ROLE_TO_ALIAS, update_litellm_model
 
 
@@ -23,9 +21,12 @@ def test_role_to_alias_covers_all_llm_keys():
 def test_update_known_role_rewrites_yaml(tmp_path, monkeypatch):
     """Updating a known role should rewrite the YAML with the new model."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.smart_model", "qwen3:4b")
@@ -53,9 +54,12 @@ def test_update_missing_config_returns_false(tmp_path, monkeypatch):
 def test_update_preserves_provider_prefix(tmp_path, monkeypatch):
     """If the existing model uses a non-ollama provider prefix, preserve it."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "smart", "litellm_params": {"model": "openai/gpt-4"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "smart", "litellm_params": {"model": "openai/gpt-4"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     update_litellm_model("llm.smart_model", "gpt-4-turbo")
@@ -66,9 +70,12 @@ def test_update_preserves_provider_prefix(tmp_path, monkeypatch):
 def test_update_null_litellm_params(tmp_path, monkeypatch):
     """If litellm_params is None/null in the YAML, create it and set the model."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "smart", "litellm_params": None},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "smart", "litellm_params": None},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.smart_model", "mistral-nemo")
@@ -80,9 +87,12 @@ def test_update_null_litellm_params(tmp_path, monkeypatch):
 def test_same_model_no_update(tmp_path, monkeypatch):
     """If the model is already set to the same value, no write should happen."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
     mtime_before = config_path.stat().st_mtime
 
@@ -95,9 +105,12 @@ def test_same_model_no_update(tmp_path, monkeypatch):
 def test_update_no_provider_prefix_defaults_to_ollama(tmp_path, monkeypatch):
     """If the existing model has no provider prefix, default to ollama/."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "fast", "litellm_params": {"model": "qwen3:4b"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "fast", "litellm_params": {"model": "qwen3:4b"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.fast_model", "phi3:mini")
@@ -109,9 +122,12 @@ def test_update_no_provider_prefix_defaults_to_ollama(tmp_path, monkeypatch):
 def test_update_embed_model(tmp_path, monkeypatch):
     """Embed model alias should also be updatable."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.embed_model", "mxbai-embed-large")
@@ -123,11 +139,14 @@ def test_update_embed_model(tmp_path, monkeypatch):
 def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
     """Updating one model alias should not affect other entries in model_list."""
     config_path = tmp_path / "config.yaml"
-    _write_config(config_path, [
-        {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
-        {"model_name": "fast", "litellm_params": {"model": "ollama/qwen3:4b"}},
-        {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
-    ])
+    _write_config(
+        config_path,
+        [
+            {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
+            {"model_name": "fast", "litellm_params": {"model": "ollama/qwen3:4b"}},
+            {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
+        ],
+    )
     monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     update_litellm_model("llm.fast_model", "phi3:mini")

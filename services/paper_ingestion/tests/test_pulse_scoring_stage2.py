@@ -262,7 +262,7 @@ async def test_stage2_partial_failure_others_succeed():
 
 @pytest.mark.asyncio
 async def test_stage2_falls_back_on_llm_error():
-    """When request_chat_completion_content raises RuntimeError, fallback returns stage1 signals."""
+    """When call_llm raises RuntimeError, fallback returns stage1 signals."""
     paper = _make_paper(0)
     stage1_signals = {"embedding": 0.6, "topic": 0.3, "recency": 0.8, "author_bonus": 0.0}
     sc = ScoredCandidate(
@@ -277,7 +277,7 @@ async def test_stage2_falls_back_on_llm_error():
     http_client = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "app.pulse.scoring.request_chat_completion_content",
+        "app.pulse.scoring.call_llm",
         new_callable=AsyncMock,
         side_effect=RuntimeError("LiteLLM unavailable"),
     ):

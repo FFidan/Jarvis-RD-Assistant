@@ -230,3 +230,85 @@ async def test_extraction_keeps_verified_rows():
     assert result.dropped_relationships == 0
     # One fetchval call for the relationship INSERT
     mock_conn.fetchval.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# δ2 — full-text verifier: dropped_due_to_context_window counter
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extraction_uses_full_text_for_verification():
+    """verify_quote must be called with the full un-truncated text.
+
+    BE-C01 regression: previously full_text was truncated to 12000 chars before
+    being passed to verify_quote, so evidence beyond char 12000 was silently
+    dropped.  Now verify_quote receives the original full_text.
+
+    We simulate a paper whose evidence appears beyond the 12000-char mark by
+    providing a long chunk whose content appears after the first 12000 chars.
+    """
+    from app.entity_extractor import extract_entities_for_paper
+
+    # Create content that pushes evidence past the 12000-char LLM cap
+    padding = "A" * 12100
+    evidence_text = "This evidence appears beyond the context window cap."
+    # The chunk content starts with padding, evidence at position ~12100
+    long_content = padding + " " + evidence_text
+
+    chunk = {
+        "id": 11,
+        "chunk_index": 0,
+        "content": long_content,
+        "page_number": 5,
+        "start_char": 0,
+        "end_char": len(long_content),
+        "embedding_id": None,
+        "created_at": __import__("datetime").datetime.now(tz=__import__("datetime").timezone.utc),
+        "paper_id": 1,
+    }
+
+    mock_conn = AsyncMock()
+    mock_conn.fetchrow.return_value = {"id": 1, "title": "Long Paper"}
+    mock_conn.fetch.return_value = [chunk]
+    mock_conn.execute = AsyncMock(return_value="UPDATE 1")
+    mock_conn.fetchval = AsyncMock(return_value=1)
+    pool = _make_pool(mock_conn)
+
+    llm_result = {
+        "entities": [
+            {"name": "Method A", "type": "method", "description": "a method"},
+            {"name": "Dataset B", "type": "dataset", "description": "a dataset"},
+        ],
+        "relationships": [
+            {
+                "source": "Method A",
+                "target": "Dataset B",
+                "type": "evaluated_on",
+                "confidence": 0.9,
+                "evidence": evidence_text,
+            }
+        ],
+    }
+
+    # The verifier returns success; evidence_text is present in full_text at pos > 12000
+    verified_result = _verified(text=evidence_text, page=5)
+
+    with (
+        patch("app.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "app.entity_extractor._find_or_create_entity",
+            AsyncMock(side_effect=[(1, False), (2, False)]),
+        ),
+        patch(
+            "app.entity_extractor.QuoteVerifier.verify_quote",
+            return_value=verified_result,
+        ),
+    ):
+        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+
+    # Relationship was added — full-text verify succeeded
+    assert result.relationships_added == 1
+    assert result.dropped_relationships == 0
+    # dropped_due_to_context_window must be > 0 because the evidence is beyond char 12000
+    assert result.dropped_due_to_context_window >= 1

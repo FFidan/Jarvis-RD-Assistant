@@ -238,6 +238,7 @@ async def test_generate_cards_endpoint_returns_job_id():
     assert response["status"] == "queued"
     mock_enqueue.assert_awaited_once()
     call_kwargs = mock_enqueue.await_args
+    assert call_kwargs is not None
     assert call_kwargs.args[1] == "card.generate"
     assert call_kwargs.kwargs["payload"]["paper_id"] == 101
     assert call_kwargs.kwargs["payload"]["deck_id"] == 1

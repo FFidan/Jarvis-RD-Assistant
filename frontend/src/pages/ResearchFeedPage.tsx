@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import {
@@ -27,7 +27,11 @@ const SOURCE_LABELS: Record<string, string> = {
   pubmed: 'PubMed',
 };
 
-const VALID_TABS = new Set(['library', 'new', 'discover', 'ask', 'pulse']);
+const VALID_TABS = new Set(['library', 'inbox', 'search', 'ask', 'pulse']);
+
+function TabInfo({ children }: { children: React.ReactNode }) {
+  return <p className="text-sm text-muted-foreground mb-4">{children}</p>;
+}
 
 export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -47,8 +51,9 @@ export function ResearchFeedPage() {
   });
 
   // Derive the list of searchable (non-local) enabled sources
-  const externalSources = (allSources ?? []).filter(
-    (s) => s.source_type !== 'local' && s.enabled,
+  const externalSources = useMemo(
+    () => (allSources ?? []).filter((s) => s.source_type !== 'local' && s.enabled),
+    [allSources],
   );
 
   // Initialise selectedSourceTypes once sources load (all checked by default)
@@ -164,22 +169,25 @@ export function ResearchFeedPage() {
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="library">Library</TabsTrigger>
-          <TabsTrigger value="new">New</TabsTrigger>
-          <TabsTrigger value="discover">Discover</TabsTrigger>
+          <TabsTrigger value="inbox">Inbox</TabsTrigger>
+          <TabsTrigger value="search">Search</TabsTrigger>
           <TabsTrigger value="ask">Ask</TabsTrigger>
           <TabsTrigger value="pulse">Pulse</TabsTrigger>
         </TabsList>
 
         <TabsContent value="library">
+          <TabInfo>Browse, search, and filter all papers in your library.</TabInfo>
           <LibraryTab />
         </TabsContent>
 
-        <TabsContent value="new">
+        <TabsContent value="inbox">
+          <TabInfo>Unread papers from your configured sources — mark as read, view, or filter.</TabInfo>
           <NewTab />
         </TabsContent>
 
-        <TabsContent value="discover">
+        <TabsContent value="search">
           <div className="space-y-4">
+            <TabInfo>Search external databases live and save new papers to your library.</TabInfo>
             <div>
               <h2 className="text-sm font-medium">Discover New Papers</h2>
               <p className="text-xs text-muted-foreground mb-2">Search across your enabled sources — results can be added to your library.</p>
@@ -243,6 +251,7 @@ export function ResearchFeedPage() {
         </TabsContent>
 
         <TabsContent value="ask" className="flex-1 flex flex-col mt-0">
+          <TabInfo>Ask AI questions answered from your indexed paper library.</TabInfo>
           <div className="mb-3">
             <h2 className="text-sm font-medium">Ask Questions</h2>
             <p className="text-xs text-muted-foreground">Get answers synthesised from your entire library.</p>
@@ -253,6 +262,7 @@ export function ResearchFeedPage() {
         </TabsContent>
 
         <TabsContent value="pulse">
+          <TabInfo>Your daily AI-curated research briefing and deck history.</TabInfo>
           <div className="space-y-6">
             <PulseDeck />
             <div className="border-t pt-4">

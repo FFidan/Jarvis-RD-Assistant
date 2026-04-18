@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +21,27 @@ from pydantic import BaseModel, field_validator
 from app.deps import limiter
 
 logger = logging.getLogger(__name__)
+
+# SSE keepalive / max-stream constants
+_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
+_MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+
+# ---------------------------------------------------------------------------
+# Allowlist of job kinds that clients may create via POST /api/jobs.
+# Internal-only kinds (paper.download, papers.scan_local, extraction.single,
+# citations.batch_fetch, digest.weekly, paper.summarize) are deliberately
+# excluded — they are only triggered by the service itself.
+# ---------------------------------------------------------------------------
+_PUBLIC_JOB_KINDS: set[str] = {
+    "pulse.generate",
+    "paper.process",
+    "paper.analyze",
+    "papers.batch_process",
+    "papers.batch_summarize",
+    "extraction.batch",
+}
+if os.getenv("DEV_MODE", "false").lower() == "true":
+    _PUBLIC_JOB_KINDS.add("noop.test")
 
 router = APIRouter(
     prefix="/api/jobs",
@@ -55,6 +77,12 @@ class CreateJobRequest(BaseModel):
 @limiter.limit("30/minute")
 async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]:
     """Enqueue a new background job and return its ID."""
+    if body.kind not in _PUBLIC_JOB_KINDS:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Job kind {body.kind!r} is not allowed. "
+            f"Permitted kinds: {sorted(_PUBLIC_JOB_KINDS)}",
+        )
     job_id = await jobs_lib.enqueue(
         request.app.state.db_pool,
         body.kind,
@@ -132,11 +160,28 @@ async def stream_job(
 
     async def _event_generator():
         last_key: tuple | None = None
+        loop = asyncio.get_event_loop()
+        loop_start = loop.time()
+        last_keepalive = loop_start
 
         while True:
             if await request.is_disconnected():
                 logger.debug("SSE client disconnected for job %s", job_id)
                 break
+
+            now = loop.time()
+            elapsed = now - loop_start
+
+            # Hard ceiling — prevent zombie streams
+            if elapsed > _MAX_STREAM_SECONDS:
+                logger.warning("SSE stream timeout for job %s after %.0fs", job_id, elapsed)
+                yield f"data: {json.dumps({'status': 'streaming_timeout'})}\n\n"
+                break
+
+            # Keepalive comment to prevent proxy / browser from closing idle connection
+            if now - last_keepalive >= _KEEPALIVE_INTERVAL:
+                yield ": keepalive\n\n"
+                last_keepalive = now
 
             row = await jobs_lib.get(pool, job_id)
             if row is None:

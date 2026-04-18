@@ -12,6 +12,7 @@ import { SetupStep } from '@/components/setup/SetupStep';
 import { SystemCheck } from '@/components/setup/SystemCheck';
 import { PairTelegram } from '@/components/setup/PairTelegram';
 import { SourceApiKeysStep } from '@/components/setup/SourceApiKeysStep';
+import { timeToCron } from '@/lib/cron-utils';
 import type { Topic } from '@/types';
 
 const TOTAL_STEPS = 7;
@@ -21,14 +22,6 @@ function clampStep(raw: string | null): number {
   if (Number.isNaN(n) || n < 1) return 1;
   if (n > TOTAL_STEPS) return TOTAL_STEPS;
   return n;
-}
-
-function timeToCron(time: string): string {
-  const [hourStr, minuteStr] = time.split(':');
-  const hour = parseInt(hourStr, 10);
-  const minute = parseInt(minuteStr, 10);
-  if (Number.isNaN(hour) || Number.isNaN(minute)) return '0 4 * * *';
-  return `${minute} ${hour} * * *`;
 }
 
 export function SetupWizard() {

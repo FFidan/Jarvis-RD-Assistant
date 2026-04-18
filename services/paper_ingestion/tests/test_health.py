@@ -1,9 +1,12 @@
-"""Tests for the /health endpoint (H17: return 503 when degraded).
+"""Tests for the /health and /health/internal endpoints.
 
-Exercises:
-- HTTP 200 returned when all dependencies are reachable.
-- HTTP 503 returned when any dependency is unavailable.
-- Response body always contains {status, service, checks}.
+Public /health (ζ4: SEC-H09):
+- Returns only {"status": "ok"|"degraded"} — no dependency details exposed.
+- HTTP 200 when all deps are reachable; HTTP 503 when any check fails.
+
+Authenticated /health/internal:
+- Returns full {status, service, checks} payload.
+- Requires valid API key.
 """
 
 import sys
@@ -15,7 +18,7 @@ from unittest.mock import AsyncMock, MagicMock
 # ---------------------------------------------------------------------------
 if "qdrant_client" not in sys.modules:
     _fake_qdrant = types.ModuleType("qdrant_client")
-    _fake_qdrant.AsyncQdrantClient = MagicMock()
+    setattr(_fake_qdrant, "AsyncQdrantClient", MagicMock())
     sys.modules["qdrant_client"] = _fake_qdrant
 
 if "qdrant_client.models" not in sys.modules:
@@ -29,12 +32,12 @@ if "fitz" not in sys.modules:
 
 if "tiktoken" not in sys.modules:
     _fake_tiktoken = types.ModuleType("tiktoken")
-    _fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
+    setattr(_fake_tiktoken, "get_encoding", MagicMock(return_value=MagicMock()))
     sys.modules["tiktoken"] = _fake_tiktoken
 
 if "rapidfuzz" not in sys.modules:
     _fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    _fake_rapidfuzz.fuzz = MagicMock()
+    setattr(_fake_rapidfuzz, "fuzz", MagicMock())
     sys.modules["rapidfuzz"] = _fake_rapidfuzz
 
 import httpx
@@ -111,9 +114,14 @@ def _app():
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Public /health tests (status-only, no auth required)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_health_returns_200_when_all_ok(_app) -> None:
-    """GET /health returns HTTP 200 and status='ok' when all deps are healthy."""
+    """GET /health returns HTTP 200 and status='ok' — no dependency details."""
     app, _conn = _app
 
     async with httpx.AsyncClient(
@@ -124,16 +132,14 @@ async def test_health_returns_200_when_all_ok(_app) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["service"] == "paper_ingestion"
-    assert all(v == "ok" for v in body["checks"].values())
+    # Public endpoint must NOT expose internal details
+    assert "service" not in body
+    assert "checks" not in body
 
 
 @pytest.mark.asyncio
 async def test_health_returns_503_when_degraded(_app) -> None:
-    """GET /health returns HTTP 503 when any dependency is unavailable.
-
-    Simulates Qdrant being down while PostgreSQL and LiteLLM are healthy.
-    """
+    """GET /health returns HTTP 503 and status='degraded' when Qdrant is down."""
     app, _conn = _app
 
     # Override qdrant client to simulate outage
@@ -147,22 +153,61 @@ async def test_health_returns_503_when_degraded(_app) -> None:
     assert resp.status_code == 503, f"Expected 503 when Qdrant is down, got {resp.status_code}"
     body = resp.json()
     assert body["status"] == "degraded"
-    assert body["service"] == "paper_ingestion"
-    assert body["checks"]["qdrant"] == "unavailable"
+    # Public endpoint must NOT expose internal check details
+    assert "checks" not in body
 
 
 @pytest.mark.asyncio
-async def test_health_503_body_has_all_checks(_app) -> None:
-    """503 response body must still include all three dependency checks."""
+async def test_health_public_no_checks_on_503(_app) -> None:
+    """503 from public /health must not include checks dict (SEC-H09)."""
     app, _conn = _app
 
-    # Simulate LiteLLM returning non-200
     app.state.http_client = _make_http_client(litellm_healthy=False)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.get("/health")
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert "checks" not in body
+    assert body["status"] == "degraded"
+
+
+# ---------------------------------------------------------------------------
+# /health/internal tests (full details, requires auth)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_health_internal_returns_full_details(_app) -> None:
+    """GET /health/internal returns {status, service, checks} when authed."""
+    app, _conn = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health/internal")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["service"] == "paper_ingestion"
+    assert all(v == "ok" for v in body["checks"].values())
+
+
+@pytest.mark.asyncio
+async def test_health_internal_503_has_all_checks(_app) -> None:
+    """GET /health/internal returns 503 with full checks when LiteLLM is down."""
+    app, _conn = _app
+
+    app.state.http_client = _make_http_client(litellm_healthy=False)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/health/internal")
 
     assert resp.status_code == 503
     body = resp.json()

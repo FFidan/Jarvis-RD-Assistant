@@ -38,9 +38,9 @@ export function DayHeader({ pulseCardRef, focusRef }: DayHeaderProps) {
   });
 
   const { data: unprocessedFeed, isLoading: uploadsLoading } = useQuery({
-    queryKey: ['feed-unprocessed-count'],
-    queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 1 }),
-    refetchInterval: 120_000,
+    queryKey: ['action-items-unprocessed'],
+    queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
+    refetchInterval: 60_000,
   });
 
   const isLoading = myDayLoading || pulseLoading || uploadsLoading;
@@ -107,9 +107,9 @@ export function DayHeader({ pulseCardRef, focusRef }: DayHeaderProps) {
           )}
         </button>
 
-        {/* Unprocessed uploads */}
+        {/* New papers */}
         <Link
-          to="/feed"
+          to="/feed?tab=inbox"
           className="rounded-lg border bg-card p-3 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {isLoading ? (
@@ -117,7 +117,7 @@ export function DayHeader({ pulseCardRef, focusRef }: DayHeaderProps) {
           ) : (
             <>
               <p className="text-2xl font-bold tabular-nums">{unprocessedCount}</p>
-              <p className="text-xs text-muted-foreground">Unprocessed uploads</p>
+              <p className="text-xs text-muted-foreground">New papers</p>
             </>
           )}
         </Link>

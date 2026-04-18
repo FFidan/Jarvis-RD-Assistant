@@ -4,7 +4,6 @@ Uses the arXiv Atom API (https://export.arxiv.org/api/query).
 Rate limit: 3 requests/second per arXiv Terms of Use.
 """
 
-import asyncio
 import logging
 import re
 from datetime import UTC, date, datetime
@@ -12,6 +11,7 @@ from typing import Any
 
 import httpx
 from defusedxml import ElementTree as ET  # noqa: N817
+from jarvis_common.rate_limiter import SourceRateLimiter
 
 from app.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from app.sources.base import PaperSource
@@ -42,17 +42,12 @@ class ArxivSource(PaperSource):
 
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         super().__init__(config, http_client)
-        self._last_request_time: float = 0.0
-        self._rate_lock = asyncio.Lock()
+        # rate: 1/RATE_LIMIT_DELAY req/s (arXiv 3 req/s limit)
+        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 
     async def _rate_limit(self) -> None:
         """Enforce arXiv 3 req/sec rate limit."""
-        async with self._rate_lock:
-            now = asyncio.get_running_loop().time()
-            elapsed = now - self._last_request_time
-            if elapsed < RATE_LIMIT_DELAY:
-                await asyncio.sleep(RATE_LIMIT_DELAY - elapsed)
-            self._last_request_time = asyncio.get_running_loop().time()
+        await self._rate_limiter.acquire()
 
     async def _fetch_xml(self, params: dict) -> Any:
         """Make a rate-limited GET request to the arXiv API and parse XML.

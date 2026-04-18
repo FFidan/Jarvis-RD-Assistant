@@ -21,7 +21,7 @@ import pytest
 
 if "qdrant_client" not in sys.modules:
     _fake_qdrant = types.ModuleType("qdrant_client")
-    _fake_qdrant.AsyncQdrantClient = MagicMock()
+    _fake_qdrant.AsyncQdrantClient = MagicMock()  # type: ignore[attr-defined]
     sys.modules["qdrant_client"] = _fake_qdrant
 
 if "qdrant_client.models" not in sys.modules:
@@ -35,12 +35,12 @@ if "fitz" not in sys.modules:
 
 if "tiktoken" not in sys.modules:
     _fake_tiktoken = types.ModuleType("tiktoken")
-    _fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
+    _fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
     sys.modules["tiktoken"] = _fake_tiktoken
 
 if "rapidfuzz" not in sys.modules:
     _fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    _fake_rapidfuzz.fuzz = MagicMock()
+    _fake_rapidfuzz.fuzz = MagicMock()  # type: ignore[attr-defined]
     sys.modules["rapidfuzz"] = _fake_rapidfuzz
 
 import httpx

@@ -19,7 +19,7 @@ export function SettingsPage() {
           <TabsTrigger value="topics">Topics</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>
           <TabsTrigger value="authors">Authors</TabsTrigger>
-          <TabsTrigger value="ingestion">Models & Notifications</TabsTrigger>
+          <TabsTrigger value="ingestion">Models & Preferences</TabsTrigger>
           <TabsTrigger value="automation">Automation</TabsTrigger>
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
           <TabsTrigger value="pulse">Pulse</TabsTrigger>

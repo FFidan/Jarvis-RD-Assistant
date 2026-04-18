@@ -22,6 +22,7 @@ vi.mock('@/stores/job-store', () => ({
       jobs: {},
       activeAborts: {},
       hasRunning: () => false,
+      isRunning: () => false,
       startJob: mockStartJob,
     }),
   ),

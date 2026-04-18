@@ -28,59 +28,64 @@ async def refresh_recommendations(app: Any) -> int:
         _logger.info("recommendation: disabled via config, skipping")
         return 0
 
+    # --- Pre-read: fetch IDs and project names without holding the conn
+    #     across slow HTTP/Qdrant calls. ---
     async with db_pool.acquire() as conn:
-        # Signal 1: liked centroid via discover_from_seeds
-        liked_scores: dict[int, tuple[float, str]] = {}
         starred_ids = await _get_starred_ids(conn)
-        if starred_ids:
-            results = await embedder.discover_from_seeds(
-                starred_ids, db_pool, limit=_MAX_RECOMMENDATIONS, score_threshold=0.3
-            )
-            for paper_id, score in _aggregate_to_papers(results):
-                liked_scores[paper_id] = (score, f"similar to {len(starred_ids)} starred paper(s)")
-
-        # Signal 2: project context via search_similar
-        project_scores: dict[int, tuple[float, str]] = {}
-        projects = await conn.fetch(
+        projects_raw = await conn.fetch(
             "SELECT name, description FROM projects WHERE status = 'active'"
         )
-        for proj in projects:
-            text = f"{proj['name']}. {proj['description'] or ''}".strip()
-            if not text:
-                continue
-            results = await embedder.search_similar(text, limit=20, score_threshold=0.3)
-            for paper_id, score in _aggregate_to_papers(results):
-                existing = project_scores.get(paper_id, (0.0, ""))
-                if score > existing[0]:
-                    project_scores[paper_id] = (score, f"relevant to project '{proj['name']}'")
 
-        if not liked_scores and not project_scores:
-            _logger.info(
-                "recommendation: no signals available (no starred papers or active projects)"
-            )
-            return 0
+    # --- HTTP / Qdrant calls (no DB connection held) ---
+    liked_scores: dict[int, tuple[float, str]] = {}
+    if starred_ids:
+        results = await embedder.discover_from_seeds(
+            starred_ids, db_pool, limit=_MAX_RECOMMENDATIONS, score_threshold=0.3
+        )
+        for paper_id, score in _aggregate_to_papers(results):
+            liked_scores[paper_id] = (score, f"similar to {len(starred_ids)} starred paper(s)")
 
-        # Merge signals
-        all_paper_ids = set(liked_scores) | set(project_scores)
-        merged: list[dict] = []
-        for pid in all_paper_ids:
-            liked_s, liked_r = liked_scores.get(pid, (0.0, ""))
-            proj_s, proj_r = project_scores.get(pid, (0.0, ""))
-            score = _compute_score(liked_s, proj_s, liked_weight, project_weight)
-            if score < _MIN_SCORE:
-                continue
-            modes = []
-            reasons = []
-            if liked_s > 0:
-                modes.append("liked")
-                reasons.append(liked_r)
-            if proj_s > 0:
-                modes.append("project")
-                reasons.append(proj_r)
-            merged.append(
-                {"paper_id": pid, "score": score, "modes": modes, "explanation": "; ".join(reasons)}
-            )
+    project_scores: dict[int, tuple[float, str]] = {}
+    for proj in projects_raw:
+        text = f"{proj['name']}. {proj['description'] or ''}".strip()
+        if not text:
+            continue
+        results = await embedder.search_similar(text, limit=20, score_threshold=0.3)
+        for paper_id, score in _aggregate_to_papers(results):
+            existing = project_scores.get(paper_id, (0.0, ""))
+            if score > existing[0]:
+                project_scores[paper_id] = (score, f"relevant to project '{proj['name']}'")
 
+    if not liked_scores and not project_scores:
+        _logger.info("recommendation: no signals available (no starred papers or active projects)")
+        return 0
+
+    # Merge signals
+    all_paper_ids = set(liked_scores) | set(project_scores)
+    merged: list[dict] = []
+    for pid in all_paper_ids:
+        liked_s, liked_r = liked_scores.get(pid, (0.0, ""))
+        proj_s, proj_r = project_scores.get(pid, (0.0, ""))
+        score = _compute_score(liked_s, proj_s, liked_weight, project_weight)
+        if score < _MIN_SCORE:
+            continue
+        modes = []
+        reasons = []
+        if liked_s > 0:
+            modes.append("liked")
+            reasons.append(liked_r)
+        if proj_s > 0:
+            modes.append("project")
+            reasons.append(proj_r)
+        merged.append(
+            {"paper_id": pid, "score": score, "modes": modes, "explanation": "; ".join(reasons)}
+        )
+
+    if not merged:
+        return 0
+
+    # --- Post-write: persist results with a fresh connection ---
+    async with db_pool.acquire() as conn:
         unread_ids = await _filter_unread(conn, [r["paper_id"] for r in merged])
         merged = [r for r in merged if r["paper_id"] in unread_ids]
 
@@ -99,8 +104,8 @@ async def refresh_recommendations(app: Any) -> int:
         await conn.executemany(
             upsert_sql, [(r["paper_id"], r["score"], r["modes"], r["explanation"]) for r in merged]
         )
-        _logger.info("recommendation: saved %d recommendations", len(merged))
-        return len(merged)
+    _logger.info("recommendation: saved %d recommendations", len(merged))
+    return len(merged)
 
 
 def _safe_float(val: object, default: float) -> float:

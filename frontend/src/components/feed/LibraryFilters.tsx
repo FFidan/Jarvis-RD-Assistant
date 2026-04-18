@@ -115,7 +115,7 @@ export function LibraryFilters({
         />
         <MultiSelect
           label="Source"
-          options={SOURCE_OPTIONS}
+          options={[...SOURCE_OPTIONS]}
           selected={selectedSources}
           onChange={onSourceChange}
         />

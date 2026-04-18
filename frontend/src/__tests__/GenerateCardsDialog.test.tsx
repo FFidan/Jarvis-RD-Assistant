@@ -48,7 +48,7 @@ function makeJob(partial: Partial<Job>): Job {
     id: 'test-job-001',
     kind: 'card.generate',
     status: 'queued',
-    progress: null,
+    progress: 0,
     progress_message: null,
     result: null,
     error: null,

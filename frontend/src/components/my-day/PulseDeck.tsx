@@ -1,16 +1,17 @@
 import { useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import {
   fetchPulseToday,
-  generatePulseNow,
   ratePulseCard,
 } from '@/lib/api';
+import { useJobStore } from '@/stores/job-store';
 import type { PulseDeck as PulseDeckType, PulseRating } from '@/types';
 
 /**
@@ -22,7 +23,6 @@ import type { PulseDeck as PulseDeckType, PulseRating } from '@/types';
  */
 export function PulseDeck() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [ratedCards, setRatedCards] = useState<Set<number>>(new Set());
 
   const {
@@ -36,13 +36,8 @@ export function PulseDeck() {
     queryFn: fetchPulseToday,
   });
 
-  const generateMutation = useMutation({
-    mutationFn: generatePulseNow,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
-      queryClient.invalidateQueries({ queryKey: ['pulse-history'] });
-    },
-  });
+  const startJob = useJobStore((s) => s.startJob);
+  const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
 
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
@@ -50,10 +45,8 @@ export function PulseDeck() {
     onSuccess: (_data, { paperId }) => {
       setRatedCards((prev) => new Set(prev).add(paperId));
     },
-    onError: (err) => {
-      // TODO(stream-I): replace with useToast once a toast hook lands.
-      // eslint-disable-next-line no-console
-      console.error('Pulse rating failed', err);
+    onError: (err: Error) => {
+      toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
     },
   });
 
@@ -111,16 +104,11 @@ export function PulseDeck() {
           </p>
           <Button
             size="sm"
-            onClick={() => generateMutation.mutate()}
-            disabled={generateMutation.isPending}
+            onClick={() => void startJob('pulse.generate', {})}
+            disabled={isGenerating}
           >
-            {generateMutation.isPending ? 'Generating...' : 'Generate now'}
+            {isGenerating ? 'Generating...' : 'Generate now'}
           </Button>
-          {generateMutation.isError && (
-            <p className="text-destructive text-xs">
-              Generation failed. Please retry.
-            </p>
-          )}
           <p className="text-xs text-muted-foreground">
             Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
           </p>

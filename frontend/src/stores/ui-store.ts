@@ -6,10 +6,12 @@ interface UIState {
   selectedPaperId: number | null;
   checklistDismissed: boolean;
   paperDetailNoteDismissed: boolean;
+  setupBannerDismissed: boolean;
   toggleSidebar: () => void;
   setSelectedPaperId: (id: number | null) => void;
   dismissChecklist: () => void;
   setPaperDetailNoteDismissed: (value: boolean) => void;
+  dismissSetupBanner: () => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -19,6 +21,7 @@ export const useUIStore = create<UIState>()(
       selectedPaperId: null,
       checklistDismissed: false,
       paperDetailNoteDismissed: false,
+      setupBannerDismissed: false,
 
       toggleSidebar() {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -32,12 +35,16 @@ export const useUIStore = create<UIState>()(
       setPaperDetailNoteDismissed(value: boolean) {
         set({ paperDetailNoteDismissed: value });
       },
+      dismissSetupBanner() {
+        set({ setupBannerDismissed: true });
+      },
     }),
     {
       name: 'jarvis-ui',
       partialize: (state) => ({
         checklistDismissed: state.checklistDismissed,
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,
+        setupBannerDismissed: state.setupBannerDismissed,
       }),
     },
   ),

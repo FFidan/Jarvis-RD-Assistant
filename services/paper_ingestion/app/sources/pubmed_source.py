@@ -26,14 +26,13 @@ This plugin prefers ArticleDate when present; falls back to PubDate, using
 the first of the month when day is absent, and January 1 when month is absent.
 """
 
-import asyncio
 import logging
 import os
-import time
 from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
+from jarvis_common.rate_limiter import SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
 )
@@ -236,18 +235,13 @@ class PubMedSource(PaperSource):
         super().__init__(config, http_client)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("PUBMED_API_KEY")
-        self._last_request_time: float = 0.0
-        self._rate_lock = asyncio.Lock()
+        # rate: 10 req/s with API key, ~3 req/s otherwise
+        interval = 0.1 if self._api_key else 0.34
+        self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / interval)
 
     async def _rate_limit(self) -> None:
         """Enforce NCBI rate limit: 10 req/s with API key, ~3 req/s otherwise."""
-        interval = 0.1 if self._api_key else 0.34
-        async with self._rate_lock:
-            elapsed = time.monotonic() - self._last_request_time
-            wait = max(0.0, interval - elapsed)
-            if wait:
-                await asyncio.sleep(wait)
-            self._last_request_time = time.monotonic()
+        await self._rate_limiter.acquire()
 
     def _base_params(self) -> dict:
         """Build common NCBI E-utilities parameters."""

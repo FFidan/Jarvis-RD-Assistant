@@ -30,6 +30,30 @@ def quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def escape_like(q: str) -> str:
+    """Escape user-supplied LIKE/ILIKE pattern metacharacters.
+
+    Escapes ``\\``, ``%``, and ``_`` so that the string is treated as a
+    literal value rather than a wildcard pattern.  Use together with the
+    ``ESCAPE '\\'`` clause in SQL:
+
+    .. code-block:: sql
+
+        WHERE col ILIKE '%' || $1 || '%' ESCAPE '\\'
+
+    Parameters
+    ----------
+    q:
+        Raw user-supplied search term.
+
+    Returns
+    -------
+    str
+        The input with LIKE metacharacters escaped.
+    """
+    return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 async def init_pg_connection(conn: asyncpg.Connection) -> None:
     """Register JSON/JSONB codec so asyncpg returns dicts, not strings."""
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")

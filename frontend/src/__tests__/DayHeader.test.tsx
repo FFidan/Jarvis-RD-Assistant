@@ -86,9 +86,9 @@ describe('DayHeader', () => {
     expect(await screen.findByText('Tasks today')).toBeInTheDocument();
   });
 
-  it('renders Unprocessed uploads counter', async () => {
+  it('renders New papers counter', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Unprocessed uploads')).toBeInTheDocument();
+    expect(await screen.findByText('New papers')).toBeInTheDocument();
     // 0 unprocessed from mock
     const zeros = await screen.findAllByText('0');
     expect(zeros.length).toBeGreaterThanOrEqual(1);

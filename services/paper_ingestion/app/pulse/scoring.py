@@ -6,7 +6,6 @@ Stage 3 — combine:          Weighted sum → final ranking.
 """
 
 import asyncio
-import json
 import logging
 import math
 from dataclasses import dataclass
@@ -16,7 +15,7 @@ from typing import Any
 import httpx
 from jarvis_common.llm_client import (
     ChatCompletionOptions,
-    request_chat_completion_content,
+    call_llm,
 )
 
 from app.models import PaperCreate
@@ -65,12 +64,20 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _recency_decay(published_date: date | None, now: date | None = None) -> float:
-    """Compute recency decay: exp(-age_days / 30), clamped to [0, 1]."""
+def _recency_decay(published_date: date | None, now: date) -> float:
+    """Compute recency decay: exp(-age_days / 30), clamped to [0, 1].
+
+    Parameters
+    ----------
+    published_date:
+        Publication date of the candidate paper.  Returns 0.0 when None.
+    now:
+        Reference date injected by the caller.  Must be in UTC so that test
+        fixtures produce deterministic results without touching the system clock.
+    """
     if published_date is None:
         return 0.0
-    today = now or date.today()
-    age_days = max(0, (today - published_date).days)
+    age_days = max(0, (now - published_date).days)
     return max(0.0, min(1.0, math.exp(-age_days / 30.0)))
 
 
@@ -99,14 +106,17 @@ async def stage1_embedding_filter(
     top_k:
         Maximum number of candidates to return.
     now:
-        Reference date for recency calculations (defaults to today). Injected
-        for testability.
+        Reference date for recency calculations.  Defaults to today in UTC.
+        Inject an explicit value in tests for deterministic results.
 
     Returns
     -------
     list[ScoredCandidate]
         Top-k candidates sorted by preliminary score descending.
     """
+    # Resolve reference date once so all candidates use the same "today".
+    effective_now: date = now if now is not None else date.today()
+
     if not candidates:
         return []
 
@@ -154,7 +164,7 @@ async def stage1_embedding_filter(
             topic_sim = max((_cosine(cand_vec, tv) for tv in topic_embeddings), default=0.0)
 
         # Recency decay
-        recency = _recency_decay(candidate.published_date, now=now)
+        recency = _recency_decay(candidate.published_date, effective_now)
 
         # Author bonus: dual-set match — display names (lowercased) OR s2 numeric IDs
         author_bonus = 0.0
@@ -232,18 +242,21 @@ async def stage2_llm_rerank(
                     negative_examples=profile.recent_negative_titles,
                     candidate=sc.paper,
                 )
+                # Combine system + user messages into a single prompt so we can
+                # use call_llm, which returns a parsed dict and automatically
+                # sets response_format={"type": "json_object"}.
+                prompt = "\n\n".join(m["content"] for m in messages)
                 options = ChatCompletionOptions(
                     model=_LLM_MODEL,
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
                     response_format={"type": "json_object"},
                 )
-                raw = await request_chat_completion_content(
+                parsed = await call_llm(
                     http_client,
-                    messages=messages,
+                    prompt,
                     options=options,
                 )
-                parsed = json.loads(raw)
                 relevance = int(parsed["relevance"])
                 novelty = int(parsed["novelty"])
                 reasoning = str(parsed.get("reasoning", ""))
@@ -264,7 +277,7 @@ async def stage2_llm_rerank(
                     reasoning=reasoning,
                     final_score=sc.final_score,
                 )
-            except (json.JSONDecodeError, ValueError, RuntimeError, httpx.HTTPError):
+            except (ValueError, RuntimeError, httpx.HTTPError):
                 logger.warning("stage2: LLM scoring failed for %r", sc.paper.title, exc_info=True)
                 return ScoredCandidate(
                     paper=sc.paper,

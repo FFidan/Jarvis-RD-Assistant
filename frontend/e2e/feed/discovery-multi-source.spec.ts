@@ -72,7 +72,7 @@ test.describe('Discover tab multi-source search @feed', () => {
   test('selecting arxiv + pubmed fans out and shows both sources in results', async ({
     page,
   }) => {
-    await page.goto('/feed?tab=discover');
+    await page.goto('/feed?tab=search');
 
     // Wait for the source checkboxes to render.
     const arxivCheckbox = page.getByRole('checkbox', { name: /arxiv/i });

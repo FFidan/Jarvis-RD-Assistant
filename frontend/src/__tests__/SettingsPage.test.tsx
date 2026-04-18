@@ -73,7 +73,7 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('tab', { name: 'Topics' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Sources' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Authors' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Models & Notifications' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Models & Preferences' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Automation' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Extraction Templates' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();

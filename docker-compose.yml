@@ -47,6 +47,11 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -81,6 +86,11 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -110,6 +120,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -132,6 +147,11 @@ services:
         done
         echo "All models ready."
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - jarvis
     pull_policy: missing
@@ -151,6 +171,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -180,6 +205,11 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -225,6 +255,11 @@ services:
         condition: service_healthy
       ollama-bootstrap:
         condition: service_completed_successfully
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -251,6 +286,11 @@ services:
         condition: service_healthy
       paper_ingestion:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -311,6 +351,11 @@ services:
         condition: service_healthy
       learning_engine:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
     networks:
       - jarvis
 
@@ -334,11 +379,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - jarvis
 
   cloudflared:
-    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:latest}
+    image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.1.0}
     container_name: jarvis-cloudflared
     command: tunnel run
     environment:

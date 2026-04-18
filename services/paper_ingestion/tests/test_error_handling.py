@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from app.embedder import Embedder
+from fastapi.responses import JSONResponse
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -112,9 +113,7 @@ async def test_stream_rag_timeout_error_sanitized():
     )
 
     events = []
-    async for event in _stream_rag_events(
-        mock_client, [{"role": "user", "content": "q"}], []
-    ):
+    async for event in _stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
         events.append(event)
 
     error_event = json.loads(events[0].replace("data: ", "").strip())
@@ -133,9 +132,7 @@ async def test_stream_rag_connect_error_sanitized():
     )
 
     events = []
-    async for event in _stream_rag_events(
-        mock_client, [{"role": "user", "content": "q"}], []
-    ):
+    async for event in _stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
         events.append(event)
 
     error_event = json.loads(events[0].replace("data: ", "").strip())
@@ -193,9 +190,7 @@ async def test_search_chunks_qdrant_failure_returns_empty():
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
 
     # Qdrant query_points fails with a connection error
-    mock_qdrant.query_points.side_effect = ConnectionError(
-        "Qdrant connection lost"
-    )
+    mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
 
     result = await embedder.search_chunks_in_paper(
         query_text="test query",
@@ -214,9 +209,7 @@ async def test_search_chunks_global_qdrant_failure_returns_empty():
     embedder = Embedder(mock_http, mock_qdrant)
 
     embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
-    mock_qdrant.query_points.side_effect = ConnectionError(
-        "Qdrant connection lost"
-    )
+    mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
 
     result = await embedder.search_chunks_global(
         query_text="test query",
@@ -233,9 +226,7 @@ async def test_search_chunks_runtime_error_propagates():
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
 
-    embedder.embed_texts = AsyncMock(
-        side_effect=RuntimeError("Embedding service timed out")
-    )
+    embedder.embed_texts = AsyncMock(side_effect=RuntimeError("Embedding service timed out"))
 
     with pytest.raises(RuntimeError, match="Embedding service timed out"):
         await embedder.search_chunks_in_paper(
@@ -251,10 +242,10 @@ async def test_search_chunks_runtime_error_propagates():
 
 
 async def test_health_check_degraded():
-    """Health check returns 'degraded' when one dependency is unavailable."""
+    """health_check_internal returns 'degraded' when one dependency is unavailable."""
     # Mock fitz before importing app.main (fitz/PyMuPDF not on host)
     sys.modules.setdefault("fitz", MagicMock())
-    from app.main import health_check
+    from app.main import health_check_internal
 
     # Mock request with app state
     mock_request = MagicMock()
@@ -281,19 +272,25 @@ async def test_health_check_degraded():
     mock_http.get.return_value = mock_litellm_resp
     mock_request.app.state.http_client = mock_http
 
-    result = await health_check(mock_request)
+    result = await health_check_internal(mock_request)
 
-    assert result["status"] == "degraded"
-    assert result["service"] == "paper_ingestion"
-    assert result["checks"]["postgres"] == "ok"
-    assert result["checks"]["qdrant"] == "unavailable"
-    assert result["checks"]["litellm"] == "ok"
+    # health_check_internal may return a HealthCheckResponse (Pydantic model) or
+    # a JSONResponse (when degraded).  Normalise to dict for assertions.
+    if isinstance(result, JSONResponse):
+        data = json.loads(bytes(result.body))
+    else:
+        data = result.model_dump()
+    assert data["status"] == "degraded"
+    assert data["service"] == "paper_ingestion"
+    assert data["checks"]["postgres"] == "ok"
+    assert data["checks"]["qdrant"] == "unavailable"
+    assert data["checks"]["litellm"] == "ok"
 
 
 async def test_health_check_all_ok():
-    """Health check returns 'ok' when all dependencies are available."""
+    """health_check_internal returns 'ok' when all dependencies are available."""
     sys.modules.setdefault("fitz", MagicMock())
-    from app.main import health_check
+    from app.main import health_check_internal
 
     mock_request = MagicMock()
 
@@ -319,9 +316,14 @@ async def test_health_check_all_ok():
     mock_http.get.return_value = mock_litellm_resp
     mock_request.app.state.http_client = mock_http
 
-    result = await health_check(mock_request)
+    result = await health_check_internal(mock_request)
 
-    assert result["status"] == "ok"
-    assert result["checks"]["postgres"] == "ok"
-    assert result["checks"]["qdrant"] == "ok"
-    assert result["checks"]["litellm"] == "ok"
+    # health_check_internal returns HealthCheckResponse (Pydantic) when ok.
+    if isinstance(result, JSONResponse):
+        data = json.loads(bytes(result.body))
+    else:
+        data = result.model_dump()
+    assert data["status"] == "ok"
+    assert data["checks"]["postgres"] == "ok"
+    assert data["checks"]["qdrant"] == "ok"
+    assert data["checks"]["litellm"] == "ok"
