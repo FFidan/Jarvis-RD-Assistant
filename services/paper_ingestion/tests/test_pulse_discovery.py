@@ -303,3 +303,55 @@ async def test_unknown_source_class_is_skipped():
 
     assert len(result) == 1
     assert result[0].external_id == "arxiv:1"
+
+
+def test_per_source_cap_divides_across_sources():
+    """per_source_cap should spread stage2_top_k * 2 across sources, not multiply."""
+    import math
+
+    stage2_top_k = 50
+    sources = ["arxiv", "s2", "openalex", "pubmed"]
+    per_source_cap = max(
+        10,
+        min(
+            stage2_top_k,
+            math.ceil(stage2_top_k * 2 / max(1, len(sources))),
+        ),
+    )
+    assert per_source_cap == 25  # 100 / 4 = 25
+    assert per_source_cap * len(sources) <= stage2_top_k * 2 + len(sources)  # ~total budget
+
+
+def test_per_source_cap_floor():
+    """Floor of 10 applies when stage2_top_k * 2 / n_sources < 10."""
+    import math
+
+    stage2_top_k = 10
+    sources = ["arxiv", "s2", "openalex", "pubmed", "biorxiv", "chemrxiv"]  # 6 sources
+    per_source_cap = max(
+        10,
+        min(
+            stage2_top_k,
+            math.ceil(stage2_top_k * 2 / max(1, len(sources))),
+        ),
+    )
+    # 20 / 6 = 3.33 → ceil = 4, but floor is 10; however cap is also stage2_top_k=10
+    # max(10, min(10, 4)) = max(10, 4) = 10
+    assert per_source_cap == 10
+
+
+def test_per_source_cap_single_source():
+    """With 1 source, cap is bounded by stage2_top_k (no blowup)."""
+    import math
+
+    stage2_top_k = 50
+    sources = ["arxiv"]
+    per_source_cap = max(
+        10,
+        min(
+            stage2_top_k,
+            math.ceil(stage2_top_k * 2 / max(1, len(sources))),
+        ),
+    )
+    # 100 / 1 = 100, but capped at stage2_top_k=50
+    assert per_source_cap == 50

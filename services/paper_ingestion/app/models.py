@@ -627,9 +627,9 @@ class EntityExtractionResponse(BaseModel):
     relationships_added: int
     entities_merged: int
     dropped_relationships: int = 0
-    dropped_due_to_context_window: int = 0
+    saved_by_full_text_verify: int = 0
     """Number of relationships whose evidence was only found beyond the LLM
-    context window cap (i.e. saved by the full-text verifier path)."""
+    context window cap and saved by the full-text verifier path."""
 
 
 class KnowledgeGraphResponse(BaseModel):

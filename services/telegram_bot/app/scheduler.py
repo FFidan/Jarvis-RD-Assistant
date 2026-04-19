@@ -58,10 +58,41 @@ class JarvisScheduler:
 
     async def load_and_start(self) -> None:
         """Load enabled nudges from DB and start the scheduler."""
+        await self.reload_nudges()
+        self.scheduler.start()
+        logger.info("Scheduler started with %d jobs", len(self.scheduler.get_jobs()))
+
+    async def reload_nudges(self) -> None:
+        """Re-read enabled nudges from DB and re-register all nudge_* jobs.
+
+        Reads ``user.timezone`` from ``user_config`` (defaults to ``"UTC"``),
+        removes every job whose id starts with ``nudge_``, then re-adds jobs
+        using ``CronTrigger`` with the resolved timezone.
+        """
+        # Resolve user timezone
+        tz_row = await self.db_pool.fetchrow(
+            "SELECT value FROM user_config WHERE key = 'user.timezone'"
+        )
+        tz_str: str = (tz_row["value"] if tz_row else None) or "UTC"
+        try:
+            from zoneinfo import ZoneInfo
+
+            tz = ZoneInfo(tz_str)
+        except Exception:
+            logger.warning("Unknown timezone %r, falling back to UTC", tz_str)
+            tz = UTC
+
+        # Remove existing nudge_* jobs
+        for job in list(self.scheduler.get_jobs()):
+            if job.id.startswith("nudge_"):
+                job.remove()
+                logger.debug("Removed stale job: %s", job.id)
+
+        # Re-register from DB
         rows = await self.db_pool.fetch(
             "SELECT id, nudge_type, cron_expression FROM scheduled_nudges WHERE enabled = TRUE"
         )
-
+        registered = 0
         for row in rows:
             nudge_type = row["nudge_type"]
             cron_expr = row["cron_expression"]
@@ -83,7 +114,7 @@ class JarvisScheduler:
                     day=parts[2],
                     month=parts[3],
                     day_of_week=parts[4],
-                    timezone=UTC,
+                    timezone=tz,
                 )
 
                 self.scheduler.add_job(
@@ -95,17 +126,18 @@ class JarvisScheduler:
                     max_instances=1,
                     coalesce=True,
                 )
+                registered += 1
                 logger.info(
-                    "Scheduled job: %s (id=%d, cron=%s)",
+                    "Scheduled job: %s (id=%d, cron=%s, tz=%s)",
                     nudge_type,
                     nudge_id,
                     cron_expr,
+                    tz_str,
                 )
             except Exception:
                 logger.exception("Failed to schedule nudge id=%d", nudge_id)
 
-        self.scheduler.start()
-        logger.info("Scheduler started with %d jobs", len(self.scheduler.get_jobs()))
+        logger.info("reload_nudges: registered %d jobs (tz=%s)", registered, tz_str)
 
     async def _run_job(self, nudge_type: str, nudge_id: int) -> None:
         """Execute a scheduled job and update last_fired_at.

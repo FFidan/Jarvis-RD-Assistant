@@ -233,7 +233,7 @@ async def test_extraction_keeps_verified_rows():
 
 
 # ---------------------------------------------------------------------------
-# δ2 — full-text verifier: dropped_due_to_context_window counter
+# δ2 — full-text verifier: saved_by_full_text_verify counter
 # ---------------------------------------------------------------------------
 
 
@@ -310,5 +310,5 @@ async def test_extraction_uses_full_text_for_verification():
     # Relationship was added — full-text verify succeeded
     assert result.relationships_added == 1
     assert result.dropped_relationships == 0
-    # dropped_due_to_context_window must be > 0 because the evidence is beyond char 12000
-    assert result.dropped_due_to_context_window >= 1
+    # saved_by_full_text_verify must be > 0 because the evidence is beyond char 12000
+    assert result.saved_by_full_text_verify >= 1

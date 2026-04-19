@@ -115,6 +115,7 @@ export const useJobStore = create<JobStore>()(
           status: 'queued',
           progress: 0,
           progress_message: null,
+          payload: payload as Record<string, unknown>,
           result: null,
           error: null,
           created_at: new Date().toISOString(),

@@ -6,6 +6,7 @@ OpenAlex, PubMed, …).
 """
 
 import asyncio
+import time
 
 
 class SourceRateLimiter:
@@ -18,19 +19,30 @@ class SourceRateLimiter:
     burst:
         Maximum token bucket capacity (allows short bursts above the sustained
         rate). Defaults to 1 (no bursting).
+
+    Note: also accepts ``requests_per_minute`` as a convenience alias
+    (converted to rate_per_second internally).
     """
 
-    def __init__(self, rate_per_second: float, burst: int = 1) -> None:
+    def __init__(
+        self,
+        rate_per_second: float = 0.0,
+        burst: int = 1,
+        *,
+        requests_per_minute: float | None = None,
+    ) -> None:
+        if requests_per_minute is not None:
+            rate_per_second = requests_per_minute / 60.0
         self.rate = rate_per_second
         self.capacity = float(burst)
         self.tokens = float(burst)
-        self.last_refill = asyncio.get_event_loop().time()
+        self.last_refill = time.monotonic()
         self._lock = asyncio.Lock()
 
     async def acquire(self) -> None:
         """Acquire one token, sleeping if the bucket is empty."""
         async with self._lock:
-            now = asyncio.get_event_loop().time()
+            now = time.monotonic()
             elapsed = now - self.last_refill
             self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
             self.last_refill = now

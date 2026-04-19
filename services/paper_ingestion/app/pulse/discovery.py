@@ -120,7 +120,13 @@ async def discover_candidates(
     if not sources:
         return []
 
-    per_source_cap = max(10, math.ceil(profile.stage2_top_k * 2))
+    per_source_cap = max(
+        10,
+        min(
+            profile.stage2_top_k,
+            math.ceil(profile.stage2_top_k * 2 / max(1, len(sources))),
+        ),
+    )
 
     logger.info(
         "pulse.discover: fan-out start sources=%d per_source_cap=%d",

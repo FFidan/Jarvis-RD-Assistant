@@ -160,9 +160,13 @@ async def stream_job(
 
     async def _event_generator():
         last_key: tuple | None = None
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         loop_start = loop.time()
         last_keepalive = loop_start
+
+        poll_interval = 2.0
+        idle_ticks = 0
+        last_state: tuple | None = None
 
         while True:
             if await request.is_disconnected():
@@ -187,6 +191,18 @@ async def stream_job(
             if row is None:
                 break
 
+            # Adaptive poll backoff: reset to 2s on any row change; ramp up to 5s
+            # after 30s of no changes to reduce unnecessary DB load.
+            current_state = (row.get("progress"), row.get("progress_message"), row["status"])
+            if current_state != last_state:
+                last_state = current_state
+                idle_ticks = 0
+                poll_interval = 2.0
+            else:
+                idle_ticks += 1
+                if idle_ticks * poll_interval > 30:
+                    poll_interval = min(poll_interval + 1.0, 5.0)
+
             key = (row.get("progress"), row.get("progress_message"), row["status"])
             if key != last_key:
                 last_key = key
@@ -200,12 +216,14 @@ async def stream_job(
                         event_data["result"] = row["result"]
                     if row.get("error") is not None:
                         event_data["error"] = row["error"]
+                    if row.get("payload") is not None:
+                        event_data["payload"] = row["payload"]
                 yield f"data: {json.dumps(event_data)}\n\n"
 
             if row["status"] in _terminal_statuses:
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(poll_interval)
 
     return StreamingResponse(
         _event_generator(),

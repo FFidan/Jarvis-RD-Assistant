@@ -3,10 +3,11 @@
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import Callable
 from typing import Any
 
-from apscheduler.jobstores.base import JobLookupError
+import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, HTTPException, Request
 from jarvis_common import dynamic_update
@@ -26,6 +27,9 @@ from app.services.litellm_config import ROLE_TO_ALIAS, reload_litellm, update_li
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
+
+_TELEGRAM_BOT_URL = os.environ.get("TELEGRAM_BOT_URL", "http://telegram_bot:8002")
+_INTERNAL_API_KEY = os.environ.get("JARVIS_API_KEY", "")
 
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -194,31 +198,15 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
                 "pulse_overnight live reschedule failed (job may not exist yet)",
                 exc_info=True,
             )
-    if key == "auto_fetch_interval_hours":
-        try:
-            import os as _os
-
-            new_interval = float(body.value)
-            # Persist into the process environment so run_auto_pipeline self-gate sees the new value
-            _os.environ["AUTO_FETCH_INTERVAL_HOURS"] = str(new_interval)
-            scheduler = getattr(request.app.state, "scheduler", None)
-            if scheduler is not None:
-                if new_interval > 0:
-                    from apscheduler.triggers.interval import IntervalTrigger
-
-                    scheduler.reschedule_job(
-                        "auto_pipeline",
-                        trigger=IntervalTrigger(hours=int(new_interval)),
-                    )
-                    logger.info("auto_pipeline rescheduled live (interval=%.2fh)", new_interval)
-                else:
-                    # interval disabled: job stays registered but self-gates at runtime
-                    logger.info("auto_fetch_interval_hours set to 0; auto_pipeline will self-gate")
-        except Exception:
-            logger.warning(
-                "auto_pipeline live reschedule failed",
-                exc_info=True,
-            )
+    if key == "user.timezone":
+        # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
+        with contextlib.suppress(Exception):
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{_TELEGRAM_BOT_URL}/internal/reload-nudges",
+                    headers={"X-API-Key": _INTERNAL_API_KEY},
+                    timeout=2.0,
+                )
     return ConfigEntry(key=key, value=body.value)
 
 
@@ -253,19 +241,16 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
             _NUDGE_ALLOWED_COLUMNS,
             jsonb_columns=_NUDGE_JSONB_COLUMNS,
         )
-    if "cron_expression" in updates and row:
-        scheduler = getattr(request.app.state, "scheduler", None)
-        if scheduler is not None:
-            with contextlib.suppress(JobLookupError):
-                scheduler.reschedule_job(
-                    f"nudge_{row['nudge_type']}",
-                    trigger=CronTrigger.from_crontab(updates["cron_expression"], timezone="UTC"),
-                )
-                logger.info(
-                    "nudge_%s rescheduled live (cron=%s)",
-                    row["nudge_type"],
-                    updates["cron_expression"],
-                )
+
+    # Best-effort: notify telegram_bot to reload its nudge jobs
+    with contextlib.suppress(Exception):
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{_TELEGRAM_BOT_URL}/internal/reload-nudges",
+                headers={"X-API-Key": _INTERNAL_API_KEY},
+                timeout=2.0,
+            )
+
     return NudgeResponse(**dict(row))
 
 

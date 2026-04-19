@@ -303,7 +303,7 @@ async def extract_entities_for_paper(
     entities_merged = 0
     relationships_added = 0
     dropped_count = 0
-    dropped_due_to_context_window = 0
+    saved_by_full_text_verify = 0
 
     entity_map: dict[str, int] = {}
 
@@ -410,7 +410,7 @@ async def extract_entities_for_paper(
                     # Find approximate char position of the match in full_text
                     match_pos = full_text.find(vr.matched_text)
                     if match_pos >= len(llm_text):
-                        dropped_due_to_context_window += 1
+                        saved_by_full_text_verify += 1
                         logger.debug(
                             "evidence saved by full-text verify (pos %d > cap %d): %s",
                             match_pos,
@@ -453,7 +453,7 @@ async def extract_entities_for_paper(
         relationships_added=relationships_added,
         entities_merged=entities_merged,
         dropped_relationships=dropped_count,
-        dropped_due_to_context_window=dropped_due_to_context_window,
+        saved_by_full_text_verify=saved_by_full_text_verify,
     )
 
 

@@ -4,6 +4,7 @@ Stateful Telegram bot handling daily briefings, flashcard review sessions,
 task management, and paper interactions via inline keyboards.
 """
 
+import asyncio
 import logging
 import os
 import sys
@@ -19,6 +20,7 @@ from app.handlers import (
     register_callback_handlers,
     register_command_handlers,
 )
+from app.internal_api import start_internal_server
 from app.scheduler import JarvisScheduler
 
 configure_logging("telegram_bot", log_level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -52,6 +54,12 @@ async def post_init(application: Application) -> None:
     await scheduler.load_and_start()
     application.bot_data["scheduler"] = scheduler
 
+    # Start internal HTTP API in the background (for reload-nudges endpoint)
+    asyncio.get_running_loop().create_task(
+        start_internal_server(scheduler),
+        name="internal_api",
+    )
+
     # Register bot commands for the Telegram "/" autocomplete menu
     await application.bot.set_my_commands(
         [
@@ -71,7 +79,7 @@ async def post_init(application: Application) -> None:
         ]
     )
 
-    logger.info("Bot initialized: db_pool, http_client, and scheduler ready")
+    logger.info("Bot initialized: db_pool, http_client, scheduler, and internal API ready")
 
 
 async def post_shutdown(application: Application) -> None:
