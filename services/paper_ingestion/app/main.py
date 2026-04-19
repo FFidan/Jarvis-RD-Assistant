@@ -36,6 +36,7 @@ from qdrant_client import AsyncQdrantClient
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Trigger source registration via imports
 import app.sources  # noqa: F401
@@ -220,7 +221,8 @@ async def _check_pulse_enabled(db_pool) -> bool:
         if isinstance(value, str):
             return value.lower() in ("true", "1", "yes")
         return bool(value)
-    except Exception:
+    except Exception as exc:
+        logger.warning("_check_pulse_enabled: DB lookup failed — assuming disabled", exc_info=exc)
         return False
 
 
@@ -394,7 +396,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS (outermost — added last so it runs first for preflight)
+# CORS — added before ProxyHeadersMiddleware so CORS runs after proxy unwrapping
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -405,6 +407,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
+
+# ProxyHeadersMiddleware (outermost — added last so it runs first, decoding
+# X-Forwarded-For / X-Forwarded-Proto before any other middleware sees the request)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Standardized error handlers
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

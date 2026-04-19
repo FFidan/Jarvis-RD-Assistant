@@ -2,10 +2,11 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.models import TopicCreate, TopicResponse, TopicUpdate
 
 logger = logging.getLogger(__name__)
@@ -16,16 +17,23 @@ _TOPIC_ALLOWED_COLUMNS: set[str] = {"name", "query_terms", "enabled", "category"
 
 @router.get("", response_model=list[TopicResponse])
 @limiter.limit("60/minute")
-async def list_topics(request: Request) -> list[TopicResponse]:
-    async with request.app.state.db_pool.acquire() as conn:
+async def list_topics(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[TopicResponse]:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM topics ORDER BY name")
     return [TopicResponse(**dict(r)) for r in rows]
 
 
 @router.post("", response_model=TopicResponse, status_code=201)
 @limiter.limit("30/minute")
-async def create_topic(request: Request, body: TopicCreate) -> TopicResponse:
-    async with request.app.state.db_pool.acquire() as conn:
+async def create_topic(
+    request: Request,
+    body: TopicCreate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> TopicResponse:
+    async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """INSERT INTO topics (name, query_terms, category, description, enabled)
             VALUES ($1, $2, $3, $4, $5) RETURNING *""",
@@ -40,8 +48,13 @@ async def create_topic(request: Request, body: TopicCreate) -> TopicResponse:
 
 @router.put("/{topic_id}", response_model=TopicResponse)
 @limiter.limit("30/minute")
-async def update_topic(request: Request, topic_id: int, body: TopicUpdate) -> TopicResponse:
-    async with request.app.state.db_pool.acquire() as conn:
+async def update_topic(
+    request: Request,
+    topic_id: int,
+    body: TopicUpdate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> TopicResponse:
+    async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM topics WHERE id = $1", topic_id)
         if not existing:
             raise HTTPException(404, f"Topic {topic_id} not found")
@@ -62,8 +75,12 @@ async def update_topic(request: Request, topic_id: int, body: TopicUpdate) -> To
 
 @router.delete("/{topic_id}", status_code=204)
 @limiter.limit("30/minute")
-async def delete_topic(request: Request, topic_id: int) -> None:
-    async with request.app.state.db_pool.acquire() as conn:
+async def delete_topic(
+    request: Request,
+    topic_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
+    async with db_pool.acquire() as conn:
         await delete_or_404(
             conn,
             "DELETE FROM topics WHERE id = $1",

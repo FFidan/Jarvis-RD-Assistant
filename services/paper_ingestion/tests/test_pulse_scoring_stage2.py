@@ -293,3 +293,50 @@ async def test_stage2_falls_back_on_llm_error():
     assert out.signals == stage1_signals
     # final_score is preserved from stage1
     assert out.final_score == 0.7
+
+
+@pytest.mark.asyncio
+async def test_stage2_valid_json_missing_keys_graceful_fallback():
+    """call_llm returns a valid dict but missing 'relevance'/'novelty' → KeyError handled.
+
+    The LLM might return {"explanation": "..."} without the required scoring
+    keys.  stage2 must catch KeyError and degrade gracefully rather than crash.
+    """
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper, embedding=0.6)]
+    profile = _make_profile()
+
+    # call_llm returns a valid JSON object but without required scoring keys
+    with patch(
+        "app.pulse.scoring.call_llm",
+        new_callable=AsyncMock,
+        return_value={"explanation": "interesting paper", "summary": "..."},
+    ):
+        result = await stage2_llm_rerank(stage1_out, profile, MagicMock())
+
+    assert len(result) == 1
+    assert result[0].llm_relevance is None
+    assert result[0].llm_novelty is None
+    assert result[0].reasoning == "LLM scoring failed"
+
+
+@pytest.mark.asyncio
+async def test_stage2_clamps_out_of_range_scores():
+    """LLM scores outside 1-10 are clamped to the valid range."""
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper)]
+    profile = _make_profile()
+
+    # LLM returns scores outside [1, 10]
+    with patch(
+        "app.pulse.scoring.call_llm",
+        new_callable=AsyncMock,
+        return_value={"relevance": 15, "novelty": -3, "reasoning": "out of range"},
+    ):
+        result = await stage2_llm_rerank(stage1_out, profile, MagicMock())
+
+    assert result[0].llm_relevance == 10  # clamped from 15
+    assert result[0].llm_novelty == 1  # clamped from -3
+    # Normalised signals stay in [0, 1]
+    assert 0.0 <= result[0].signals["llm_relevance"] <= 1.0
+    assert 0.0 <= result[0].signals["llm_novelty"] <= 1.0

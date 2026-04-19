@@ -159,7 +159,7 @@ async def list_jobs(
     status: str | None = None,
     kind: str | None = None,
     limit: int = 50,
-    user_id: int | None = None,
+    user_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Return jobs filtered by status and/or kind, newest first.
 
@@ -286,6 +286,7 @@ async def run_job(
     except asyncio.CancelledError:
         await _finish(pool, job_id, status="cancelled")
         logger.info("job %s cancelled", job_id)
+        raise  # Re-raise to preserve task cancellation semantics
     except JobError as exc:
         error: dict[str, Any] = {"message": str(exc)}
         if exc.action_link is not None:
@@ -390,7 +391,7 @@ async def worker_loop(
                 try:
                     await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
                 except TimeoutError:
-                    pass
+                    pass  # expected: poll interval elapsed, no stop signal — continue loop
         except asyncio.CancelledError:
             break
         except Exception:
@@ -398,7 +399,7 @@ async def worker_loop(
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
             except TimeoutError:
-                pass
+                pass  # expected: poll interval elapsed, no stop signal — continue loop
 
     logger.info("jobs.worker_loop stopped")
 

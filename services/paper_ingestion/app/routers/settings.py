@@ -29,9 +29,6 @@ from app.services.litellm_config import ROLE_TO_ALIAS, reload_litellm, update_li
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
 
-_TELEGRAM_BOT_URL = os.environ.get("TELEGRAM_BOT_URL", "http://telegram_bot:8002")
-_INTERNAL_API_KEY = os.environ.get("JARVIS_API_KEY", "")
-
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
         "llm.smart_model",
@@ -247,13 +244,17 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
             )
     if key == "user.timezone":
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
-        with contextlib.suppress(Exception):
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"{_TELEGRAM_BOT_URL}/internal/reload-nudges",
-                    headers={"X-API-Key": _INTERNAL_API_KEY},
-                    timeout=2.0,
-                )
+        telegram_url = os.getenv("TELEGRAM_BOT_URL", "").strip()
+        if not telegram_url:
+            logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
+        else:
+            with contextlib.suppress(Exception):
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"{telegram_url}/internal/reload-nudges",
+                        headers={"X-API-Key": os.environ.get("JARVIS_API_KEY", "")},
+                        timeout=2.0,
+                    )
     return ConfigEntry(key=key, value=body.value)
 
 
@@ -280,6 +281,12 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
         if not updates:
             return NudgeResponse(**dict(existing))
 
+        if "cron_expression" in updates:
+            try:
+                CronTrigger.from_crontab(updates["cron_expression"])
+            except Exception as exc:
+                raise HTTPException(status_code=422, detail="invalid cron expression") from exc
+
         row = await dynamic_update(
             conn,
             "scheduled_nudges",
@@ -290,13 +297,17 @@ async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> Nu
         )
 
     # Best-effort: notify telegram_bot to reload its nudge jobs
-    with contextlib.suppress(Exception):
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                f"{_TELEGRAM_BOT_URL}/internal/reload-nudges",
-                headers={"X-API-Key": _INTERNAL_API_KEY},
-                timeout=2.0,
-            )
+    telegram_url = os.getenv("TELEGRAM_BOT_URL", "").strip()
+    if not telegram_url:
+        logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
+    else:
+        with contextlib.suppress(Exception):
+            async with httpx.AsyncClient() as client:
+                await client.post(
+                    f"{telegram_url}/internal/reload-nudges",
+                    headers={"X-API-Key": os.getenv("JARVIS_API_KEY", "")},
+                    timeout=2.0,
+                )
 
     return NudgeResponse(**dict(row))
 

@@ -67,7 +67,7 @@ async def _handle_pairing(
                 current_owner = await conn.fetchval(
                     "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id'"
                 )
-                if current_owner not in (None, "null"):
+                if current_owner is not None:
                     await message.reply_text(
                         "This JARVIS instance is already paired. "
                         "Unpair from the dashboard first (Settings → Integrations)."

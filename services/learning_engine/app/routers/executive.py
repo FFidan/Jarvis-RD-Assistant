@@ -82,7 +82,7 @@ async def get_my_day(
         )
         focus_streak_days = 0
         if streak_rows:
-            today = datetime.date.today()
+            today = datetime.datetime.now(datetime.UTC).date()
             # Allow streak to include today or start from yesterday
             expected = (
                 today if streak_rows[0]["log_date"] == today else today - datetime.timedelta(days=1)

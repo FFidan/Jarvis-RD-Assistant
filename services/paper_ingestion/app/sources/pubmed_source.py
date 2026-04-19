@@ -109,8 +109,8 @@ def _parse_pub_date(article_el: etree._Element) -> date | None:  # noqa: SLF001
                     month = _parse_month(month_el.text if month_el is not None else None) or 1
                     day = int(day_el.text) if day_el is not None and day_el.text else 1
                     return date(year, month, day)
-                except (ValueError, OverflowError):
-                    pass
+                except (ValueError, OverflowError) as exc:
+                    logger.debug("PubMed: malformed ArticleDate value — skipping: %s", exc)
 
     # 2. Fall back to PubDate (may be under JournalIssue or directly under Article)
     pub_date_el = article_el.find(".//JournalIssue/PubDate")
@@ -126,8 +126,8 @@ def _parse_pub_date(article_el: etree._Element) -> date | None:  # noqa: SLF001
                 month = _parse_month(month_el.text if month_el is not None else None) or 1
                 day = int(day_el.text) if day_el is not None and day_el.text else 1
                 return date(year, month, day)
-            except (ValueError, OverflowError):
-                pass
+            except (ValueError, OverflowError) as exc:
+                logger.debug("PubMed: malformed PubDate value — skipping: %s", exc)
 
     return None
 

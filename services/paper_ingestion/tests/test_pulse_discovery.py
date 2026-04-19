@@ -355,3 +355,36 @@ def test_per_source_cap_single_source():
     )
     # 100 / 1 = 100, but capped at stage2_top_k=50
     assert per_source_cap == 50
+
+
+@pytest.mark.asyncio
+async def test_source_cache_used_when_provided():
+    """When source_cache contains a source type, that cached instance is used.
+
+    This verifies the rate-limiter preservation path: if source_cache['arxiv']
+    is already populated, discover_candidates uses it instead of instantiating
+    a new object (so rate-limiter state carries over between Pulse runs).
+    """
+    from app.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    cached_stub = _StubSource([_paper("arxiv:cached", "Cached Hit")])
+    source_cache = {"arxiv": cached_stub}
+
+    profile = _make_profile()
+    with patch("app.pulse.discovery.get_source_class") as m:
+        result = await discover_candidates(
+            pool,
+            MagicMock(),
+            profile,
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            source_cache=source_cache,
+        )
+        # get_source_class must NOT be called — the cached instance was used
+        m.assert_not_called()
+
+    assert cached_stub.fetch_new_since_calls == 1
+    assert len(result) == 1
+    assert result[0].external_id == "arxiv:cached"

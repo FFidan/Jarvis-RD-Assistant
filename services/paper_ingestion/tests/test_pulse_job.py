@@ -509,3 +509,91 @@ async def test_fatal_stage_errors_set_last_error_not_degraded(
         f"Expected degraded_reason to be None for fatal {stage_mock} error, "
         f"got: {stats.get('degraded_reason')!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# _pulse_generate_job — job backbone entry point (pulse_now / cron path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pulse_generate_job_happy_path():
+    """_pulse_generate_job calls run_pulse and returns deck_date + card_count."""
+    from app.pulse.job import _pulse_generate_job
+
+    pool, _conn = _make_pool_and_conn()
+    http_client = MagicMock()
+
+    fake_app = MagicMock()
+    fake_app.state.embedder = MagicMock()
+    fake_app.state.sources = None
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(return_value=False)
+
+    now_iso = "2026-04-10T04:00:00+00:00"
+    payload = {"now": now_iso}
+
+    mock_run = AsyncMock(
+        return_value={
+            "deck_date": "2026-04-10",
+            "card_count": 10,
+            "candidate_count": 50,
+            "stage1_survivors": 30,
+            "stage2_scored": 15,
+            "duration_s": 2.3,
+            "last_error": None,
+        }
+    )
+
+    with patch("app.pulse.job.run_pulse", mock_run):
+        with patch("app.main.app", fake_app, create=True):
+            result = await _pulse_generate_job(pool, http_client, payload, ctx)
+
+    assert result["deck_date"] == "2026-04-10"
+    assert result["card_count"] == 10
+    assert "stats" in result
+
+
+@pytest.mark.asyncio
+async def test_pulse_generate_job_now_param_forwarded():
+    """_pulse_generate_job forwards the `now` ISO string to run_pulse as a datetime."""
+    from app.pulse.job import _pulse_generate_job
+
+    pool, _conn = _make_pool_and_conn()
+    http_client = MagicMock()
+
+    fake_app = MagicMock()
+    fake_app.state.embedder = MagicMock()
+    fake_app.state.sources = None
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock()
+    ctx.is_cancelled = AsyncMock(return_value=False)
+
+    now_iso = "2026-01-15T04:00:00+00:00"
+    expected_dt = datetime.fromisoformat(now_iso)
+
+    captured: list[datetime] = []
+
+    async def recording_run_pulse(**kwargs):
+        now_arg = kwargs.get("now")
+        if now_arg is not None:
+            captured.append(now_arg)
+        return {
+            "deck_date": "2026-01-15",
+            "card_count": 5,
+            "candidate_count": 20,
+            "stage1_survivors": 10,
+            "stage2_scored": 5,
+            "duration_s": 1.0,
+            "last_error": None,
+        }
+
+    with patch("app.pulse.job.run_pulse", side_effect=recording_run_pulse):
+        with patch("app.main.app", fake_app, create=True):
+            await _pulse_generate_job(pool, http_client, {"now": now_iso}, ctx)
+
+    assert len(captured) == 1
+    assert captured[0] == expected_dt

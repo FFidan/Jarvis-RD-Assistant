@@ -4,6 +4,7 @@ Exposes a minimal FastAPI application on :8002 that allows other services
 (e.g. paper_ingestion) to trigger scheduler reloads without restarting the bot.
 """
 
+import asyncio
 import logging
 import os
 
@@ -14,6 +15,16 @@ from jarvis_common.auth import verify_api_key
 logger = logging.getLogger(__name__)
 
 _internal_app = FastAPI(title="JARVIS Telegram Bot Internal API", docs_url=None, redoc_url=None)
+
+# Module-level handles set by start_internal_server; used by post_shutdown for graceful stop.
+_server: uvicorn.Server | None = None
+_server_task: asyncio.Task | None = None  # type: ignore[type-arg]
+
+
+@_internal_app.get("/health")
+async def health() -> dict[str, str]:
+    """Health check — no authentication required."""
+    return {"status": "ok"}
 
 
 @_internal_app.post("/internal/reload-nudges", dependencies=[Depends(verify_api_key)])
@@ -39,6 +50,8 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
     port:
         TCP port to listen on (default 8002).
     """
+    global _server, _server_task
+
     # F-01: Refuse to start unauthenticated internal API in DEV_MODE
     dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
     api_key = os.getenv("JARVIS_API_KEY", "")
@@ -58,6 +71,23 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         # Reuse the running asyncio event loop managed by PTB
         loop="none",
     )
-    server = uvicorn.Server(config)
-    # serve() runs until the server shuts down; we run it as a background task
-    await server.serve()
+    _server = uvicorn.Server(config)
+
+    # Capture this task's handle so post_shutdown can cancel/await it
+    _server_task = asyncio.current_task()
+
+    def _on_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                logger.error(
+                    "Internal API server task exited unexpectedly: %s",
+                    exc,
+                    exc_info=exc,
+                )
+
+    if _server_task is not None:
+        _server_task.add_done_callback(_on_done)
+
+    # serve() blocks until the server shuts down
+    await _server.serve()

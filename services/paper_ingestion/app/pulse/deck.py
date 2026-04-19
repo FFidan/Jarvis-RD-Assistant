@@ -273,10 +273,10 @@ async def load_history(
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
             WHERE deck_date < CURRENT_DATE
-              AND deck_date >= CURRENT_DATE - ($1 || ' days')::INTERVAL
+              AND deck_date >= CURRENT_DATE - $1 * INTERVAL '1 day'
             ORDER BY deck_date DESC
             """,
-            str(days),
+            days,
         )
 
         if not deck_rows:

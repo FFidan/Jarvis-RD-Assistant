@@ -219,6 +219,11 @@ async def run_pulse(
         deck = []
     logger.info("pulse.assembled", extra={"cards": len(deck)})
 
+    # Compute stats from in-memory values BEFORE persist so they are available even if persist fails
+    stats["duration_s"] = round(time.monotonic() - start, 3)
+    stats["deck_date"] = now.date().isoformat()
+    stats["card_count"] = len(deck)
+
     # --- 7. persist (upsert papers + persist deck in one transaction) ---
     try:
         async with db_pool.acquire() as conn:
@@ -246,9 +251,6 @@ async def run_pulse(
         stats["last_error"] = f"persist: {exc}"
         logger.exception("pulse.persist failed")
 
-    stats["duration_s"] = round(time.monotonic() - start, 3)
-    stats["deck_date"] = now.date().isoformat()
-    stats["card_count"] = len(deck)
     if degraded_reason:
         stats["degraded_reason"] = degraded_reason
     if ctx:

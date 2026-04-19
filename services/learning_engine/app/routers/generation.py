@@ -232,7 +232,7 @@ async def _card_generate_batch_job(
                 paper_id=paper_id,
                 deck_id=deck_id,
                 max_cards=max_per_paper,
-                ctx=ctx,
+                ctx=None,
             )
             papers_processed += 1
             cards_created += result["cards_created"]

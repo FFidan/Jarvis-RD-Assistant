@@ -344,3 +344,63 @@ async def test_conn_released_before_embed():
     assert embed_idx < acquire2_idx, (
         f"Second connection acquired at {acquire2_idx} before embed at {embed_idx}; events={events}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Config validator edge cases: bad weights / bad deck_size
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_profile_bad_weights_value_falls_back_to_defaults():
+    """When pulse.weights is not a dict (e.g. a bare string), defaults are used."""
+    from unittest.mock import AsyncMock
+
+    pool, conn = _make_pool_and_conn()
+    # Simulate a corrupted / wrong-typed config value
+    bad_config = [
+        FakeRecord({"key": "pulse.weights", "value": "not-a-dict"}),
+        FakeRecord({"key": "pulse.deck_size", "value": 10}),
+        FakeRecord({"key": "pulse.stage2_top_k", "value": 50}),
+    ]
+    conn.fetch.side_effect = [
+        [],  # topics
+        [],  # authors
+        [],  # engaged papers
+        bad_config,  # user_config with bad weights
+        [],  # positives
+        [],  # negatives
+    ]
+    mock_embedder = AsyncMock()
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    # Weights must fall back to the defaults (non-empty dict with known keys)
+    assert isinstance(profile.weights, dict)
+    assert len(profile.weights) > 0
+    assert "embedding" in profile.weights
+
+
+@pytest.mark.asyncio
+async def test_load_profile_empty_topics_produces_valid_profile():
+    """load_profile with no topics still produces a fully usable UserProfile."""
+    from unittest.mock import AsyncMock
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = [
+        [],  # no topics
+        [],  # no authors
+        [],  # no engaged papers
+        _make_config_rows(),  # valid config
+        [],  # no positive ratings
+        [],  # no negative ratings
+    ]
+    mock_embedder = AsyncMock()
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    assert profile.topics == []
+    assert profile.deck_size > 0
+    assert profile.stage2_top_k > 0
+    # An empty-topics profile is valid — scoring stages must handle it
+    assert isinstance(profile.weights, dict)

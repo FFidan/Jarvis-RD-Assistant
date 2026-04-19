@@ -33,6 +33,8 @@ class SourceRateLimiter:
     ) -> None:
         if requests_per_minute is not None:
             rate_per_second = requests_per_minute / 60.0
+        if rate_per_second <= 0:
+            raise ValueError("rate_per_second must be > 0")
         self.rate = rate_per_second
         self.capacity = float(burst)
         self.tokens = float(burst)

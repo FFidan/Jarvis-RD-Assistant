@@ -12,7 +12,7 @@ import os
 import socket
 import threading
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
 import httpx
@@ -30,13 +30,15 @@ SNAPSHOT_DPI = 150
 MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)
 
-ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset({
-    "arxiv.org",
-    "export.arxiv.org",
-    "www.arxiv.org",
-    "pdfs.semanticscholar.org",
-    "www.semanticscholar.org",
-})
+ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset(
+    {
+        "arxiv.org",
+        "export.arxiv.org",
+        "www.arxiv.org",
+        "pdfs.semanticscholar.org",
+        "www.semanticscholar.org",
+    }
+)
 
 # ---------------------------------------------------------------------------
 # Marker PDF text extraction (replaces fitz-based text extraction)
@@ -105,9 +107,7 @@ async def extract_text(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
         ``(start_char, end_char)`` tuples for each page (1-indexed).
     """
     loop = asyncio.get_running_loop()
-    full_text, page_boundaries = await loop.run_in_executor(
-        None, _extract_text_sync, pdf_path
-    )
+    full_text, page_boundaries = await loop.run_in_executor(None, _extract_text_sync, pdf_path)
     return full_text, page_boundaries
 
 
@@ -132,9 +132,7 @@ async def _validate_pdf_url(url: str) -> None:
         raise ValueError("URL has no hostname")
 
     if hostname not in ALLOWED_PDF_DOMAINS:
-        raise ValueError(
-            f"Domain '{hostname}' is not allowed for PDF downloads"
-        )
+        raise ValueError(f"Domain '{hostname}' is not allowed for PDF downloads")
 
     # Resolve hostname and block private IPs
     # Run DNS resolution in thread pool to avoid blocking the event loop
@@ -206,7 +204,7 @@ class PDFProcessor:
         for _ in range(4):  # Up to 4 additional redirects
             if head_resp.status_code not in (301, 302, 303, 307, 308):
                 break
-            redirect_url = head_resp.headers.get("location", "")
+            redirect_url = urljoin(current_url, head_resp.headers.get("location", ""))
             await _validate_pdf_url(redirect_url)
             current_url = redirect_url
             head_resp = await self.http_client.request(
@@ -217,7 +215,9 @@ class PDFProcessor:
         # Stream download directly to disk to avoid memory accumulation
         total_size = 0
         header_bytes = b""
-        async with self.http_client.stream("GET", current_url, timeout=120.0, follow_redirects=False) as stream_resp:
+        async with self.http_client.stream(
+            "GET", current_url, timeout=120.0, follow_redirects=False
+        ) as stream_resp:
             stream_resp.raise_for_status()
             with open(pdf_path, "wb") as f:
                 async for data in stream_resp.aiter_bytes(chunk_size=65536):
@@ -231,12 +231,16 @@ class PDFProcessor:
                         header_bytes = data[:5]
                         if not header_bytes.startswith(b"%PDF-"):
                             pdf_path.unlink(missing_ok=True)
-                            raise ValueError("Downloaded file is not a valid PDF (missing %PDF header)")
+                            raise ValueError(
+                                "Downloaded file is not a valid PDF (missing %PDF header)"
+                            )
                     f.write(data)
 
         bytes_written = total_size
 
-        logger.info("Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path)
+        logger.info(
+            "Downloaded PDF for paper %d (%d bytes) to %s", paper_id, bytes_written, pdf_path
+        )
         return pdf_path
 
     # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
@@ -262,9 +266,7 @@ class PDFProcessor:
         doc = fitz.open(str(pdf_path))
         try:
             if len(doc) > MAX_PDF_PAGES:
-                raise ValueError(
-                    f"PDF has {len(doc)} pages, exceeding limit of {MAX_PDF_PAGES}"
-                )
+                raise ValueError(f"PDF has {len(doc)} pages, exceeding limit of {MAX_PDF_PAGES}")
             paths: list[Path] = []
 
             MAX_PIXMAP_DIMENSION = 4096  # Cap oversized pages

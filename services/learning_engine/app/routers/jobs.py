@@ -99,7 +99,7 @@ async def create_job(
         request.app.state.db_pool,
         body.kind,
         body.payload,
-        user_id=user_id,
+        user_id=str(user_id) if user_id is not None else None,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -145,7 +145,7 @@ async def list_jobs(
         status=status,
         kind=kind,
         limit=limit,
-        user_id=user_id,
+        user_id=str(user_id) if user_id is not None else None,
     )
     return [_serialise_row(r) for r in rows]
 
@@ -156,6 +156,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}/stream")
+@limiter.limit("10/minute")
 async def stream_job(
     request: Request,
     job_id: str,

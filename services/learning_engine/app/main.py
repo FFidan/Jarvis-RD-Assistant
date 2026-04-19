@@ -30,6 +30,7 @@ from jarvis_common import (
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.anki_exporter import AnkiExporter
 from app.card_generator import CardGenerator
@@ -163,7 +164,7 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# CORS (outermost — added last so it runs first for preflight)
+# CORS — added before ProxyHeadersMiddleware so CORS runs after proxy unwrapping
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -174,6 +175,10 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "X-API-Key"],
 )
+
+# ProxyHeadersMiddleware (outermost — added last so it runs first, decoding
+# X-Forwarded-For / X-Forwarded-Proto before any other middleware sees the request)
+app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 # Standardized error handlers
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

@@ -60,7 +60,7 @@ async def test_assemble_deck_picks_top_n():
     assert len(result) == 5
     # Highest scores are from papers 9,8,7,6,5
     scores = [sc.final_score for sc in result]
-    assert scores == sorted(scores, reverse=True)
+    assert scores == sorted((s for s in scores if s is not None), reverse=True)
     assert result[0].final_score == pytest.approx(0.9)
 
 
@@ -91,6 +91,7 @@ async def test_assemble_deck_enforces_rank_ordering():
     result = await assemble_deck(candidates, size=5)
 
     # Best paper has highest score and is first
+    assert result[0].final_score is not None and result[-1].final_score is not None
     assert result[0].final_score >= result[-1].final_score
 
 
@@ -334,3 +335,38 @@ async def test_persist_deck_counts_actual_inserts_when_paper_missing():
 
     # logger.warning must have been called exactly once (for the missing paper)
     mock_logger.warning.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# M17 — empty deck (zero cards) still writes the deck row with card_count=0
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_deck_empty_cards_writes_zero_count_row():
+    """persist_deck with cards=[] must still upsert the pulse_decks row (card_count=0).
+
+    M17 audit finding: an empty-result run must persist a marker row so the
+    scheduler knows the job ran.  card_count=0 is the correct outcome; no
+    card rows should be inserted.
+    """
+    pool, conn = _make_pool_and_conn()
+    deck_date = date(2024, 3, 1)
+
+    # Only one fetchval call: the deck upsert RETURNING id
+    conn.fetchval.return_value = 55
+
+    deck_id = await persist_deck(pool, deck_date, cards=[], stats={"candidate_count": 0})
+
+    # The deck row was upserted and its id returned
+    assert deck_id == 55
+
+    # The UPDATE to set card_count must use 0
+    update_calls = [
+        call
+        for call in conn.execute.call_args_list
+        if "UPDATE pulse_decks SET card_count" in call.args[0]
+    ]
+    assert len(update_calls) == 1
+    _, actual_count, _ = update_calls[0].args
+    assert actual_count == 0, f"Expected card_count=0 for empty deck, got {actual_count}"

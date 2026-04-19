@@ -616,6 +616,7 @@ class RelationshipResponse(BaseModel):
     target_entity_id: int
     relationship_type: str
     paper_id: int | None = None
+    page_number: int | None = None
     evidence_quote: str | None = None
     confidence: float = 1.0
     created_at: datetime | None = None

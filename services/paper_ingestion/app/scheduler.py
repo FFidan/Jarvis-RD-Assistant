@@ -219,7 +219,16 @@ async def _get_pulse_cron(db_pool: Any) -> str:
         return _DEFAULT_PULSE_CRON
     value = row["value"]
     if isinstance(value, str) and value.strip():
-        return value
+        expr = value.strip()
+        try:
+            CronTrigger.from_crontab(expr)
+        except Exception:
+            logger.warning(
+                "pulse.cron value %r is not a valid cron expression; falling back to default",
+                expr,
+            )
+            return _DEFAULT_PULSE_CRON
+        return expr
     return _DEFAULT_PULSE_CRON
 
 

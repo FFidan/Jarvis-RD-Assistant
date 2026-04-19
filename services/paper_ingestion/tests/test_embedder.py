@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 
-class _LocalFakeEncoding:
+class _FakeEncoding:
+    """Character-level encoding stand-in for tiktoken (not installed on host)."""
+
     def encode(self, text):
         return list(text)
 
@@ -16,35 +18,27 @@ class _LocalFakeEncoding:
 
 if "tiktoken" not in sys.modules:
     fake_tiktoken = types.ModuleType("tiktoken")
-
-    class _FakeEncoding:
-        def encode(self, text):
-            return list(text)
-
-        def decode(self, tokens):
-            return "".join(tokens)
-
-    fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
+    fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()  # type: ignore[attr-defined]
     sys.modules["tiktoken"] = fake_tiktoken
 
 if "qdrant_client" not in sys.modules:
     fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = object
+    fake_qdrant.AsyncQdrantClient = object  # type: ignore[attr-defined]
     sys.modules["qdrant_client"] = fake_qdrant
 
 if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = types.SimpleNamespace(COSINE="cosine")
-    fake_qdrant_models.FieldCondition = MagicMock()
-    fake_qdrant_models.Filter = MagicMock()
-    fake_qdrant_models.MatchAny = MagicMock()
-    fake_qdrant_models.MatchValue = MagicMock()
-    fake_qdrant_models.PointIdsList = object
-    fake_qdrant_models.PointStruct = object
-    fake_qdrant_models.RecommendInput = MagicMock()
-    fake_qdrant_models.RecommendQuery = MagicMock()
-    fake_qdrant_models.RecommendStrategy = types.SimpleNamespace(AVERAGE_VECTOR="average")
-    fake_qdrant_models.VectorParams = object
+    fake_qdrant_models.Distance = types.SimpleNamespace(COSINE="cosine")  # type: ignore[attr-defined]
+    fake_qdrant_models.FieldCondition = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.Filter = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.MatchAny = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.MatchValue = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.PointIdsList = object  # type: ignore[attr-defined]
+    fake_qdrant_models.PointStruct = object  # type: ignore[attr-defined]
+    fake_qdrant_models.RecommendInput = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.RecommendQuery = MagicMock()  # type: ignore[attr-defined]
+    fake_qdrant_models.RecommendStrategy = types.SimpleNamespace(AVERAGE_VECTOR="average")  # type: ignore[attr-defined]
+    fake_qdrant_models.VectorParams = object  # type: ignore[attr-defined]
     sys.modules["qdrant_client.models"] = fake_qdrant_models
 
 from app.embedder import Embedder  # noqa: E402
@@ -55,7 +49,7 @@ async def test_chunk_text_basic():
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _LocalFakeEncoding()
+    embedder._encoding = _FakeEncoding()
 
     text = "This is a test sentence. " * 40
     chunks = embedder.chunk_text(text)
@@ -72,7 +66,7 @@ async def test_chunk_text_with_page_boundaries():
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _LocalFakeEncoding()
+    embedder._encoding = _FakeEncoding()
 
     # Make pages large enough that chunks don't span both
     page1 = "Page one has important research content about attention mechanisms. " * 80

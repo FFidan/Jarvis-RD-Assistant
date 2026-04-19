@@ -7,6 +7,7 @@ configured in the scheduled_nudges database table.
 import importlib
 import logging
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import asyncpg
 import httpx
@@ -68,6 +69,12 @@ class JarvisScheduler:
         Reads ``user.timezone`` from ``user_config`` (defaults to ``"UTC"``),
         removes every job whose id starts with ``nudge_``, then re-adds jobs
         using ``CronTrigger`` with the resolved timezone.
+
+        The reload is atomic: all DB rows are parsed into trigger objects first.
+        Rows that fail (bad timezone or invalid cron expression) are WARN-logged
+        and skipped. Only after the prepare pass succeeds are existing jobs
+        removed and new ones registered — leaving the scheduler in a consistent
+        state even if individual rows are malformed.
         """
         # Resolve user timezone
         tz_row = await self.db_pool.fetchrow(
@@ -75,39 +82,35 @@ class JarvisScheduler:
         )
         tz_str: str = (tz_row["value"] if tz_row else None) or "UTC"
         try:
-            from zoneinfo import ZoneInfo
-
             tz = ZoneInfo(tz_str)
-        except Exception:
+        except ZoneInfoNotFoundError:
             logger.warning("Unknown timezone %r, falling back to UTC", tz_str)
-            tz = UTC
+            tz = UTC  # type: ignore[assignment]
 
-        # Remove existing nudge_* jobs
-        for job in list(self.scheduler.get_jobs()):
-            if job.id.startswith("nudge_"):
-                job.remove()
-                logger.debug("Removed stale job: %s", job.id)
-
-        # Re-register from DB
+        # Re-read from DB
         rows = await self.db_pool.fetch(
             "SELECT id, nudge_type, cron_expression FROM scheduled_nudges WHERE enabled = TRUE"
         )
-        registered = 0
+
+        # --- Prepare pass (no mutations yet) ---
+        # Build a list of (nudge_id, nudge_type, cron_expr, trigger) for every
+        # row that parses successfully.  Bad rows are WARN-logged and skipped.
+        prepared: list[tuple[int, str, str, CronTrigger]] = []
         for row in rows:
-            nudge_type = row["nudge_type"]
-            cron_expr = row["cron_expression"]
-            nudge_id = row["id"]
+            nudge_type: str = row["nudge_type"]
+            cron_expr: str = row["cron_expression"]
+            nudge_id: int = row["id"]
 
             if nudge_type not in JOB_REGISTRY:
                 logger.warning("Unknown nudge_type: %s (id=%d)", nudge_type, nudge_id)
                 continue
 
-            try:
-                parts = cron_expr.split()
-                if len(parts) != 5:
-                    logger.warning("Invalid cron expression: %s (id=%d)", cron_expr, nudge_id)
-                    continue
+            parts = cron_expr.split()
+            if len(parts) != 5:
+                logger.warning("Invalid cron expression: %s (id=%d)", cron_expr, nudge_id)
+                continue
 
+            try:
                 trigger = CronTrigger(
                     minute=parts[0],
                     hour=parts[1],
@@ -116,26 +119,42 @@ class JarvisScheduler:
                     day_of_week=parts[4],
                     timezone=tz,
                 )
-
-                self.scheduler.add_job(
-                    self._run_job,
-                    trigger=trigger,
-                    args=[nudge_type, nudge_id],
-                    id=f"nudge_{nudge_id}",
-                    replace_existing=True,
-                    max_instances=1,
-                    coalesce=True,
-                )
-                registered += 1
-                logger.info(
-                    "Scheduled job: %s (id=%d, cron=%s, tz=%s)",
-                    nudge_type,
-                    nudge_id,
+            except ValueError:
+                logger.warning(
+                    "Unparseable cron expression %r (id=%d), skipping",
                     cron_expr,
-                    tz_str,
+                    nudge_id,
                 )
-            except Exception:
-                logger.exception("Failed to schedule nudge id=%d", nudge_id)
+                continue
+
+            prepared.append((nudge_id, nudge_type, cron_expr, trigger))
+
+        # --- Commit pass (only after all rows are prepared) ---
+        # Remove existing nudge_* jobs then register the freshly-built set.
+        for job in list(self.scheduler.get_jobs()):
+            if job.id.startswith("nudge_"):
+                job.remove()
+                logger.debug("Removed stale job: %s", job.id)
+
+        registered = 0
+        for nudge_id, nudge_type, cron_expr, trigger in prepared:
+            self.scheduler.add_job(
+                self._run_job,
+                trigger=trigger,
+                args=[nudge_type, nudge_id],
+                id=f"nudge_{nudge_id}",
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            registered += 1
+            logger.info(
+                "Scheduled job: %s (id=%d, cron=%s, tz=%s)",
+                nudge_type,
+                nudge_id,
+                cron_expr,
+                tz_str,
+            )
 
         logger.info("reload_nudges: registered %d jobs (tz=%s)", registered, tz_str)
 

@@ -90,6 +90,19 @@ async def post_shutdown(application: Application) -> None:
     application : Application
         The python-telegram-bot Application instance.
     """
+    import app.internal_api as _iapi  # local import to avoid circular refs
+
+    # Gracefully stop the internal uvicorn server (D-01 / H-02)
+    if _iapi._server is not None:
+        _iapi._server.should_exit = True
+    if _iapi._server_task is not None:
+        try:
+            await asyncio.wait_for(_iapi._server_task, timeout=5.0)
+        except TimeoutError:
+            logger.warning("Internal API server task did not stop within 5 s — continuing shutdown")
+        except asyncio.CancelledError:
+            logger.warning("Internal API server task was cancelled during shutdown")
+
     scheduler = application.bot_data.get("scheduler")
     if scheduler:
         await scheduler.stop()

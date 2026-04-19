@@ -13,11 +13,12 @@ import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 from fastapi import APIRouter, Depends, Request
 from jarvis_common import verify_api_key
 from pydantic import BaseModel
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,10 @@ def _extract_bot_username(value: Any) -> str | None:
 
 @router.post("/pairing", response_model=PairingResponse)
 @limiter.limit("10/minute")
-async def create_pairing(request: Request) -> PairingResponse:
+async def create_pairing(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> PairingResponse:
     """Generate a pairing code, expire stale codes, return deep link.
 
     Changes from original:
@@ -72,8 +76,7 @@ async def create_pairing(request: Request) -> PairingResponse:
     code = secrets.token_hex(6)  # 12 hex chars
     expires_at = datetime.now(UTC) + _PAIRING_TTL
 
-    pool = request.app.state.db_pool
-    async with pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         async with conn.transaction():
             # Expire-only sweep — preserve valid codes from concurrent callers.
             await conn.execute("DELETE FROM telegram_pairing WHERE expires_at < NOW()")
@@ -103,10 +106,11 @@ async def create_pairing(request: Request) -> PairingResponse:
 
 
 @router.get("/pairing/status", response_model=PairingStatus)
-async def get_pairing_status(request: Request) -> PairingStatus:
+async def get_pairing_status(
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> PairingStatus:
     """Return whether ``telegram.owner_chat_id`` is set in user_config."""
-    pool = request.app.state.db_pool
-    async with pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT value FROM user_config WHERE key = $1",
             "telegram.owner_chat_id",

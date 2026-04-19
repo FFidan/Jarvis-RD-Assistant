@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
+from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
 
 
 class TestEscapeLlmText:
@@ -120,3 +120,61 @@ class TestWrapDelimited:
         result = wrap_delimited("user", "\ufeffstart")
         assert "\ufeff" not in result
         assert "start" in result
+
+
+class TestSafeForPrompt:
+    def test_strip_mode_removes_bidi_isolate_lri(self) -> None:
+        # U+2066 = LEFT-TO-RIGHT ISOLATE
+        result = safe_for_prompt("\u2066text\u2069", mode="strip")
+        assert result == "text"
+        assert "\u2066" not in result
+        assert "\u2069" not in result
+
+    def test_strip_mode_removes_bidi_isolate_rli(self) -> None:
+        # U+2067 = RIGHT-TO-LEFT ISOLATE
+        result = safe_for_prompt("hello\u2067world\u2069", mode="strip")
+        assert result == "helloworld"
+        assert "\u2067" not in result
+
+    def test_strip_mode_removes_bidi_isolate_fsi(self) -> None:
+        # U+2068 = FIRST STRONG ISOLATE
+        result = safe_for_prompt("before\u2068evil\u2069after", mode="strip")
+        assert result == "beforeevilafter"
+        assert "\u2068" not in result
+
+    def test_escape_mode_with_bidi_isolate(self) -> None:
+        # escape mode leaves BIDI isolates untouched (only escapes < and >)
+        result = safe_for_prompt("\u2066text\u2069", mode="escape")
+        # BIDI isolates should remain (escape mode doesn't strip them)
+        assert "\u2066" in result
+        assert "\u2069" in result
+
+    def test_strip_mode_removes_multiple_bidi_isolates(self) -> None:
+        # Test with multiple BIDI isolates in one string
+        result = safe_for_prompt("\u2066a\u2067b\u2068c\u2069", mode="strip")
+        assert result == "abc"
+        assert "\u2066" not in result
+        assert "\u2067" not in result
+        assert "\u2068" not in result
+        assert "\u2069" not in result
+
+    def test_strip_mode_preserves_regular_text(self) -> None:
+        # Ensure regular text is not affected
+        text = "Neural ODEs use dX/dt = f(X, t)"
+        result = safe_for_prompt(text, mode="strip")
+        assert result == text
+
+    def test_strip_mode_with_mixed_content(self) -> None:
+        # Test with BIDI isolates mixed with regular text and spaces
+        result = safe_for_prompt("hello \u2066world\u2069 test", mode="strip")
+        assert result == "hello world test"
+
+    def test_strip_mode_none_input(self) -> None:
+        # Test that None is treated as empty string
+        result = safe_for_prompt(None, mode="strip")
+        assert result == ""
+
+    def test_strip_mode_empty_string(self) -> None:
+        # Test that empty string remains empty
+        result = safe_for_prompt("", mode="strip")
+        assert result == ""

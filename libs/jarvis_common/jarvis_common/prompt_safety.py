@@ -10,7 +10,9 @@ from __future__ import annotations
 import re
 
 # Control characters to strip in 'strip' mode (C0, C1, and a few unicode specials).
-_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\ufeff]")
+_CTRL_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
+)
 
 # BIDI override + isolate characters and zero-width characters that can be used
 # to confuse LLMs or bypass content filters.  Stripped unconditionally in

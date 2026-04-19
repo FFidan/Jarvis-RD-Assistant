@@ -46,3 +46,64 @@ async def test_rate_limiter_acquire_decrements_tokens():
     limiter = SourceRateLimiter(rate_per_second=10.0, burst=3)
     await limiter.acquire()
     assert limiter.tokens == pytest.approx(2.0, abs=0.1)
+
+
+def test_rate_limiter_zero_rate_raises():
+    """rate_per_second=0 raises ValueError at construction time."""
+    from jarvis_common.rate_limiter import SourceRateLimiter
+
+    with pytest.raises(ValueError, match="rate_per_second must be > 0"):
+        SourceRateLimiter(rate_per_second=0.0)
+
+
+def test_rate_limiter_negative_rate_raises():
+    """Negative rate_per_second raises ValueError."""
+    from jarvis_common.rate_limiter import SourceRateLimiter
+
+    with pytest.raises(ValueError):
+        SourceRateLimiter(rate_per_second=-5.0)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_acquire_multiple_within_burst(monkeypatch):
+    """Multiple acquires within burst capacity do not sleep (no asyncio.sleep call)."""
+    import asyncio
+
+    from jarvis_common.rate_limiter import SourceRateLimiter
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    limiter = SourceRateLimiter(rate_per_second=100.0, burst=5)
+    for _ in range(5):
+        await limiter.acquire()
+
+    assert sleep_calls == [], "No sleep expected when burst capacity covers all acquires"
+    assert limiter.tokens == pytest.approx(0.0, abs=0.1)
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_acquire_empty_bucket_sleeps(monkeypatch):
+    """acquire() on an empty bucket calls asyncio.sleep with a positive wait time."""
+    import asyncio
+
+    from jarvis_common.rate_limiter import SourceRateLimiter
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    # burst=1 — first acquire drains the bucket; second must sleep
+    limiter = SourceRateLimiter(rate_per_second=1.0, burst=1)
+    await limiter.acquire()  # drains tokens to 0
+    await limiter.acquire()  # bucket empty → sleep
+
+    assert len(sleep_calls) == 1
+    assert sleep_calls[0] > 0.0

@@ -76,7 +76,9 @@ async def test_create_card_success_uses_evidence_payload():
     fsrs_manager = MagicMock()
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
 
-    with patch.object(cards, "_insert_card", AsyncMock(return_value=_make_card_row(id=5, paper_id=7))) as mock_insert:
+    with patch.object(
+        cards, "_insert_card", AsyncMock(return_value=_make_card_row(id=5, paper_id=7))
+    ) as mock_insert:
         response = await cards.create_card.__wrapped__(
             MagicMock(),
             body=CardCreate(
@@ -93,7 +95,14 @@ async def test_create_card_success_uses_evidence_payload():
 
     assert response.id == 5
     assert response.paper_id == 7
-    assert mock_insert.await_args.args[6] == {"quote": "A", "page_number": 1, "chunk_id": None, "snapshot_path": None, "verified": True}
+    assert mock_insert.await_args is not None
+    assert mock_insert.await_args.args[6] == {
+        "quote": "A",
+        "page_number": 1,
+        "chunk_id": None,
+        "snapshot_path": None,
+        "verified": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -168,3 +177,52 @@ async def test_delete_card_raises_404_when_row_missing():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_create_card_raises_404_on_fk_violation_deck():
+    """create_card maps ForeignKeyViolationError (deck constraint) to 404."""
+    import asyncpg
+
+    pool, conn = _make_pool_and_conn()
+    fsrs_manager = MagicMock()
+    fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
+
+    exc = asyncpg.ForeignKeyViolationError()
+    setattr(exc, "constraint_name", "cards_deck_id_fkey")  # type: ignore[attr-defined]
+
+    with patch.object(cards, "_insert_card", AsyncMock(side_effect=exc)):
+        with pytest.raises(HTTPException, match="Deck not found") as exc_info:
+            await cards.create_card.__wrapped__(
+                MagicMock(),
+                body=CardCreate(
+                    deck_id=99,
+                    card_type=CardType.CONCEPT,
+                    front="Q?",
+                    back="A.",
+                ),
+                db_pool=pool,
+                fsrs_manager=fsrs_manager,
+            )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_cards_no_filters_omits_where_clause():
+    """list_cards without any filter issues a plain SELECT with no WHERE."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = []
+
+    result = await cards.list_cards.__wrapped__(
+        MagicMock(),
+        deck_id=None,
+        due_before=None,
+        limit=20,
+        offset=0,
+        db_pool=pool,
+    )
+
+    assert result == []
+    sql = conn.fetch.await_args.args[0]
+    assert "WHERE" not in sql
