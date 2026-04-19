@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -163,6 +164,14 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
             validator(body.value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    # For pulse.cron: read the current value before overwriting so we can roll back.
+    old_pulse_cron: str | None = None
+    if key == "pulse.cron":
+        async with request.app.state.db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
+        if row is not None and isinstance(row["value"], str):
+            old_pulse_cron = row["value"]
+
     # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
     # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
     # storing e.g. '"0 4 * * *"' instead of '"0 4 * * *"' in JSONB. (WEB-C01)
@@ -193,6 +202,44 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
                     trigger=CronTrigger.from_crontab(body.value),
                 )
                 logger.info("pulse_overnight rescheduled live (cron=%s)", body.value)
+
+                # Bounds check: next_run_time must be within [now, now+366d].
+                # A malformed or adversarial cron could schedule a run in the past
+                # or arbitrarily far in the future.
+                job = scheduler.get_job("pulse_overnight")
+                now = datetime.now(UTC)
+                next_run = job.next_run_time if job is not None else None
+                if next_run is None or not (now <= next_run <= now + timedelta(days=366)):
+                    logger.error(
+                        "pulse_overnight reschedule produced invalid next_run_time=%s"
+                        " for cron=%s; reverting",
+                        next_run,
+                        body.value,
+                    )
+                    # Roll back DB to the old cron value.
+                    _rollback_sql = (
+                        "INSERT INTO user_config (key, value) VALUES ('pulse.cron', $1::jsonb)"
+                        " ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()"
+                    )
+                    async with request.app.state.db_pool.acquire() as conn:
+                        if old_pulse_cron is not None:
+                            await conn.execute(_rollback_sql, old_pulse_cron)
+                        else:
+                            await conn.execute("DELETE FROM user_config WHERE key = 'pulse.cron'")
+                    # Revert the live scheduler trigger.
+                    with contextlib.suppress(Exception):
+                        if old_pulse_cron is not None:
+                            scheduler.reschedule_job(
+                                "pulse_overnight",
+                                trigger=CronTrigger.from_crontab(old_pulse_cron),
+                            )
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cron expression produced an invalid next run time"
+                        " (must be within the next 366 days)",
+                    )
+        except HTTPException:
+            raise
         except Exception:
             logger.warning(
                 "pulse_overnight live reschedule failed (job may not exist yet)",

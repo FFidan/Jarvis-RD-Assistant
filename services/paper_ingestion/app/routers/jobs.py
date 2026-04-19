@@ -58,7 +58,6 @@ router = APIRouter(
 class CreateJobRequest(BaseModel):
     kind: str
     payload: dict[str, Any] = {}
-    user_id: str | None = None
 
     @field_validator("kind")
     @classmethod
@@ -75,7 +74,11 @@ class CreateJobRequest(BaseModel):
 
 @router.post("", status_code=201)
 @limiter.limit("30/minute")
-async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]:
+async def create_job(
+    request: Request,
+    body: CreateJobRequest,
+    user_id: int | None = Depends(current_user_id),
+) -> dict[str, Any]:
     """Enqueue a new background job and return its ID."""
     if body.kind not in _PUBLIC_JOB_KINDS:
         raise HTTPException(
@@ -87,7 +90,7 @@ async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]
         request.app.state.db_pool,
         body.kind,
         body.payload,
-        user_id=body.user_id,
+        user_id=user_id,
     )
     return {"job_id": job_id, "status": "queued"}
 
@@ -99,10 +102,16 @@ async def create_job(request: Request, body: CreateJobRequest) -> dict[str, Any]
 
 @router.get("/{job_id}")
 @limiter.limit("120/minute")
-async def get_job(request: Request, job_id: str) -> dict[str, Any]:
+async def get_job(
+    request: Request,
+    job_id: str,
+    user_id: int | None = Depends(current_user_id),
+) -> dict[str, Any]:
     """Return the full job row for the given job_id."""
     row = await jobs_lib.get(request.app.state.db_pool, job_id)
     if row is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    if row.get("user_id") is not None and row["user_id"] != user_id:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
     return _serialise_row(row)
 
@@ -119,6 +128,7 @@ async def list_jobs(
     status: str | None = Query(default=None),
     kind: str | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=500),
+    user_id: int | None = Depends(current_user_id),
 ) -> list[dict[str, Any]]:
     """Return a list of jobs, optionally filtered by status and/or kind."""
     rows = await jobs_lib.list_jobs(
@@ -126,6 +136,7 @@ async def list_jobs(
         status=status,
         kind=kind,
         limit=limit,
+        user_id=user_id,
     )
     return [_serialise_row(r) for r in rows]
 
@@ -242,10 +253,16 @@ async def stream_job(
 
 @router.post("/{job_id}/cancel")
 @limiter.limit("30/minute")
-async def cancel_job(request: Request, job_id: str) -> dict[str, Any]:
+async def cancel_job(
+    request: Request,
+    job_id: str,
+    user_id: int | None = Depends(current_user_id),
+) -> dict[str, Any]:
     """Request cancellation of a running or queued job."""
     row = await jobs_lib.get(request.app.state.db_pool, job_id)
     if row is None:
+        raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+    if row.get("user_id") is not None and row["user_id"] != user_id:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
     await jobs_lib.request_cancel(request.app.state.db_pool, job_id)
     return {"ok": True}

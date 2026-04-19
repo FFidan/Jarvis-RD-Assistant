@@ -159,12 +159,22 @@ async def list_jobs(
     status: str | None = None,
     kind: str | None = None,
     limit: int = 50,
+    user_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return jobs filtered by status and/or kind, newest first."""
+    """Return jobs filtered by status and/or kind, newest first.
+
+    When ``user_id`` is provided only jobs owned by that user (or jobs with a
+    NULL user_id, i.e. system jobs) are returned.  Passing ``user_id=None``
+    returns all jobs (single-tenant / no-ownership mode).
+    """
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
 
+    if user_id is not None:
+        conditions.append(f"(user_id IS NULL OR user_id = ${idx})")
+        params.append(user_id)
+        idx += 1
     if status is not None:
         conditions.append(f"status = ${idx}")
         params.append(status)
