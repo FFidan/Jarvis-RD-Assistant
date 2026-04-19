@@ -19,6 +19,10 @@ WHERE a.id > b.id
 
 -- 3. Add unique constraint (NULLS NOT DISTINCT means two NULLs are equal,
 --    so single-tenant NULL user_id rows are deduplicated per paper_id)
-ALTER TABLE pulse_ratings
-    ADD CONSTRAINT pulse_ratings_paper_user_uniq
-    UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+--    Wrapped in DO/EXCEPTION for idempotency: init.sql may have already defined it
+DO $$ BEGIN
+  ALTER TABLE pulse_ratings
+      ADD CONSTRAINT pulse_ratings_paper_user_uniq
+      UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;

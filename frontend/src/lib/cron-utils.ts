@@ -13,13 +13,20 @@ const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
  * When `originalCron` is provided the day-of-week / day-of-month / month
  * fields are preserved (e.g. `0 8 * * 1` stays weekly on Monday).
  * When only a time is given (SetupWizard) a daily `* * *` suffix is used.
+ *
+ * `defaultCron` is returned when `time` is invalid (NaN hours/minutes) and
+ * `originalCron` is not supplied.  Defaults to `'0 9 * * *'` (09:00 daily).
  */
-export function timeToCron(time: string, originalCron?: string | null): string {
+export function timeToCron(
+  time: string,
+  originalCron?: string | null,
+  defaultCron = '0 9 * * *',
+): string {
   const [hourStr, minuteStr] = time.split(':');
   const hour = parseInt(hourStr, 10);
   const minute = parseInt(minuteStr, 10);
   if (isNaN(hour) || isNaN(minute)) {
-    return originalCron ?? '0 4 * * *';
+    return originalCron ?? defaultCron;
   }
   if (originalCron) {
     const parts = originalCron.split(/\s+/);

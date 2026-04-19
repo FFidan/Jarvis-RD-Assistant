@@ -36,6 +36,7 @@ class ChatCompletionOptions:
     temperature: float = 0.1
     timeout: float = LLM_TIMEOUT_DEFAULT
     response_format: dict[str, str] | None = None
+    system: str | None = None  # Optional system prompt sent as a system role message
 
     def with_response_format(
         self, response_format: dict[str, str] | None
@@ -87,7 +88,10 @@ async def request_chat_completion_content(
     if messages is None:
         if prompt is None:
             raise ValueError("Either prompt or messages must be provided")
-        messages = [{"role": "user", "content": prompt}]
+        messages = []
+        if options.system:
+            messages.append({"role": "system", "content": options.system})
+        messages.append({"role": "user", "content": prompt})
     payload: dict[str, Any] = {
         "model": options.model,
         "messages": messages,

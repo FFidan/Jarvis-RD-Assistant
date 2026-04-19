@@ -218,6 +218,7 @@ class VerificationResult(BaseModel):
     matched_text: str | None = None  # actual text that matched
     chunk_id: int | None = None
     page_number: int | None = None
+    matched_span_start: int | None = None  # byte offset of matched_text in full_text (O(1) lookup)
 
 
 class VerificationReport(BaseModel):

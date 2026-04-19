@@ -20,9 +20,10 @@ export function AppShell({ children }: AppShellProps) {
     hydrate();
   }, [hydrate]);
 
-  // Re-hydrate job state when user returns to the tab after being away
+  // Re-hydrate job state when user returns to the tab after being away.
+  // Return the cleanup so the listener is removed on unmount.
   useEffect(() => {
-    registerVisibilityHydrate();
+    return registerVisibilityHydrate();
   }, []);
 
   return (

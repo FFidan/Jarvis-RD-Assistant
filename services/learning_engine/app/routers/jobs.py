@@ -32,11 +32,24 @@ _MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
 # operation that should only be triggered through the /api/generation/batch
 # endpoint with its own validation.
 # ---------------------------------------------------------------------------
-_PUBLIC_JOB_KINDS: set[str] = {
-    "card.generate",
-}
-if os.getenv("DEV_MODE", "false").lower() == "true":
-    _PUBLIC_JOB_KINDS.add("noop.test")
+_BASE_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
+    {
+        "card.generate",
+    }
+)
+
+
+def _get_public_job_kinds() -> set[str]:
+    """Return the set of allowed job kinds, evaluated at request time.
+
+    DEV_MODE is read on each call so that it can be toggled without a restart
+    (e.g. in integration tests that set os.environ["DEV_MODE"] at runtime).
+    """
+    kinds = set(_BASE_PUBLIC_JOB_KINDS)
+    if os.getenv("DEV_MODE", "false").lower() == "true":
+        kinds.add("noop.test")
+    return kinds
+
 
 router = APIRouter(
     prefix="/api/jobs",
@@ -75,11 +88,12 @@ async def create_job(
     user_id: int | None = Depends(current_user_id),
 ) -> dict[str, Any]:
     """Enqueue a new background job and return its ID."""
-    if body.kind not in _PUBLIC_JOB_KINDS:
+    public_kinds = _get_public_job_kinds()
+    if body.kind not in public_kinds:
         raise HTTPException(
             status_code=422,
             detail=f"Job kind {body.kind!r} is not allowed. "
-            f"Permitted kinds: {sorted(_PUBLIC_JOB_KINDS)}",
+            f"Permitted kinds: {sorted(public_kinds)}",
         )
     job_id = await jobs_lib.enqueue(
         request.app.state.db_pool,

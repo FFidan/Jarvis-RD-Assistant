@@ -117,8 +117,9 @@ JARVIS_PORTS=(3001 4000 5432 5678 6333 8010 8011 11434)
 PORTS_IN_USE=()
 for port in "${JARVIS_PORTS[@]}"; do
   if command -v ss >/dev/null 2>&1; then
-    # shellcheck disable=SC2143  # grep -q is sufficient; we only care about exit code
-    if ss -tlnp 2>/dev/null | grep -q ":${port} "; then
+    # Match the exact port at end of address field (e.g. *:3001) to avoid
+    # false positives where ":301" matches ":3010" or ":13010".
+    if ss -tlnp 2>/dev/null | awk '{print $4}' | grep -qE ":${port}$"; then
       PORTS_IN_USE+=("$port")
     fi
   elif command -v lsof >/dev/null 2>&1; then
@@ -503,6 +504,7 @@ printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
 # Write the API key to a protected file instead of printing it to the terminal.
 _KEY_FILE="${HOME}/.config/jarvis/api-key"
 mkdir -p "${HOME}/.config/jarvis"
+chmod 700 "${HOME}/.config/jarvis"
 printf '%s' "$JARVIS_API_KEY" > "$_KEY_FILE"
 chmod 600 "$_KEY_FILE"
 printf '  API key:      written to %s (starts: %s...)\n' "$_KEY_FILE" "${JARVIS_API_KEY:0:8}"

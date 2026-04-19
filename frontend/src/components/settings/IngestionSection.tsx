@@ -16,8 +16,8 @@ import type { ConfigEntry } from '@/types';
 // Config metadata for human-readable labels and grouping
 // ---------------------------------------------------------------------------
 
-/** Keys that belong to other tabs (Pulse, Setup, Telegram) and should not
- *  appear in the "Models & Preferences" ingestion section. */
+/** Keys that belong to other tabs (Pulse, Setup, Telegram, Automation) and
+ *  should not appear in the "Models & Preferences" ingestion section. */
 const HIDE_FROM_UI = new Set([
   'setup.completed',
   'telegram.owner_chat_id',
@@ -26,6 +26,8 @@ const HIDE_FROM_UI = new Set([
   'pulse.deck_size',
   'pulse.stage2_top_k',
   'pulse.weights',
+  // Owned exclusively by AutomationSection (timezone combobox)
+  'user.timezone',
 ]);
 
 const CONFIG_METADATA: Record<
@@ -90,21 +92,19 @@ const CONFIG_METADATA: Record<
       'Automatically generate spaced-repetition flashcards when a paper is summarized.',
     type: 'boolean',
   },
-  'user.timezone': {
-    group: 'Preferences',
-    label: 'Timezone',
-    description: 'Your local timezone for scheduling notifications and reports (e.g. Europe/Berlin, America/New_York).',
-    type: 'string',
-  },
 };
+// Note: 'user.timezone' is intentionally excluded from CONFIG_METADATA here;
+// it is owned exclusively by AutomationSection (searchable combobox).
 
 /** Format a config value for display. */
 function formatConfigValue(value: unknown): string {
   return typeof value === 'string' ? value : JSON.stringify(value);
 }
 
-/** Preferred order for groups (unlisted groups sort alphabetically after these). */
-const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Preferences', 'Other'];
+/** Preferred order for groups (unlisted groups sort alphabetically after these).
+ *  Keys without metadata fall into 'Other' which is intentionally omitted here
+ *  so they disappear rather than exposing raw JSON to the UI. */
+const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Preferences'];
 
 // ---------------------------------------------------------------------------
 // IngestionSection
@@ -167,9 +167,11 @@ export function IngestionSection() {
   // Filter out keys owned by other tabs
   const visibleEntries = configs.filter((e) => !HIDE_FROM_UI.has(e.key));
 
-  // Group configs by metadata group
+  // Group configs by metadata group; skip entries without known metadata
+  // ('Other' group is intentionally not rendered — unknown keys silently disappear)
   const grouped = visibleEntries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
-    const group = CONFIG_METADATA[entry.key]?.group ?? 'Other';
+    const group = CONFIG_METADATA[entry.key]?.group;
+    if (!group) return acc; // unknown key — don't expose raw JSON
     (acc[group] ??= []).push(entry);
     return acc;
   }, {});

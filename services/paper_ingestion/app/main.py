@@ -18,6 +18,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from jarvis_common import (
     HealthCheckResponse,
     RequestIDMiddleware,
@@ -510,8 +511,6 @@ async def health_check(request: Request) -> dict[str, str]:
     503 = degraded.  Use ``GET /health/internal`` (requires auth) for the full
     dependency breakdown.
     """
-    from fastapi.responses import JSONResponse
-
     status, _ = await _run_health_checks(request)
     content = {"status": status}
     if status == "degraded":
@@ -530,8 +529,6 @@ async def health_check_internal(
     Requires a valid API key.  Returns HTTP 503 when any dependency is
     unavailable.
     """
-    from fastapi.responses import JSONResponse
-
     status, checks = await _run_health_checks(request)
     body = HealthCheckResponse(status=status, service="paper_ingestion", checks=checks)
     if status == "degraded":

@@ -236,25 +236,27 @@ async def stage2_llm_rerank(
     async def _score_one(sc: ScoredCandidate) -> ScoredCandidate:
         async with semaphore:
             try:
-                messages = build_scoring_prompt(
+                scoring_messages = build_scoring_prompt(
                     topic_context=profile.topics,
                     positive_examples=profile.recent_positive_titles,
                     negative_examples=profile.recent_negative_titles,
                     candidate=sc.paper,
                 )
-                # Combine system + user messages into a single prompt so we can
-                # use call_llm, which returns a parsed dict and automatically
-                # sets response_format={"type": "json_object"}.
-                prompt = "\n\n".join(m["content"] for m in messages)
+                # Extract system and user content to pass via proper roles.
+                system_msg = next(
+                    (m["content"] for m in scoring_messages if m["role"] == "system"), None
+                )
+                user_msg = next(m["content"] for m in scoring_messages if m["role"] == "user")
                 options = ChatCompletionOptions(
                     model=_LLM_MODEL,
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
                     response_format={"type": "json_object"},
+                    system=system_msg,
                 )
                 parsed = await call_llm(
                     http_client,
-                    prompt,
+                    user_msg,
                     options=options,
                 )
                 relevance = int(parsed["relevance"])

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchNudges, updateNudge, fetchConfig, setConfig } from '@/lib/api';
 import { Card, CardContent } from '@/components/ui/card';
@@ -6,10 +6,12 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { TimeSelect } from '@/components/ui/time-select';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { EmptyState } from '@/components/EmptyState';
-import { Bell } from 'lucide-react';
+import { Bell, ChevronsUpDown, Check } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
+import { TIMEZONE_OPTIONS, TIMEZONE_BY_VALUE, TIMEZONE_REGIONS } from '@/lib/timezone-data';
 import type { Nudge } from '@/types';
 
 const nudgeLabels: Record<string, string> = {
@@ -143,6 +145,22 @@ export function AutomationSection() {
         : String(timezoneEntry.value))
     : 'UTC';
 
+  // G-03: keep local input in sync when server value changes (e.g. after page reload)
+  const [timezoneInput, setTimezoneInput] = useState<string>(timezoneValue);
+  useEffect(() => {
+    setTimezoneInput(timezoneValue);
+  }, [timezoneValue]);
+
+  // Timezone combobox open state
+  const [tzOpen, setTzOpen] = useState(false);
+  const [tzSearch, setTzSearch] = useState('');
+
+  const filteredTz = tzSearch.trim()
+    ? TIMEZONE_OPTIONS.filter((tz) =>
+        tz.searchTerms.includes(tzSearch.toLowerCase()),
+      )
+    : TIMEZONE_OPTIONS;
+
   const notificationNudges = nudges.filter((n) => NOTIFICATION_NUDGE_TYPES.has(n.nudge_type));
   const backgroundNudges = nudges.filter((n) => BACKGROUND_NUDGE_TYPES.has(n.nudge_type));
   // Nudges not in either known group fall into background tasks
@@ -166,35 +184,80 @@ export function AutomationSection() {
           <div>
             <h3 className="text-base font-semibold mt-0 mb-2">Notification Schedules</h3>
 
-            {/* Timezone field */}
+            {/* Timezone combobox */}
             <Card className="mb-3">
               <CardContent className="flex items-center gap-4 p-4">
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm">Timezone</div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Your local timezone for scheduling notifications (e.g. Europe/Berlin, America/New_York)
+                    Your local timezone for scheduling notifications
                   </p>
                 </div>
-                <Input
-                  className="w-52"
-                  defaultValue={timezoneValue}
-                  onBlur={(e) => {
-                    const val = e.target.value.trim();
-                    if (val && val !== timezoneValue) {
-                      configMut.mutate({ key: 'user.timezone', value: val });
-                    }
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const val = (e.target as HTMLInputElement).value.trim();
-                      if (val && val !== timezoneValue) {
-                        configMut.mutate({ key: 'user.timezone', value: val });
-                      }
-                    }
-                  }}
-                  disabled={configMut.isPending}
-                  placeholder="UTC"
-                />
+                <Popover open={tzOpen} onOpenChange={setTzOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={tzOpen}
+                      className="w-64 justify-between font-normal text-left"
+                      disabled={configMut.isPending}
+                    >
+                      <span className="truncate">
+                        {TIMEZONE_BY_VALUE.get(timezoneInput)?.label ?? timezoneInput}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 p-0" align="end">
+                    <div className="flex items-center border-b px-3">
+                      <Input
+                        className="h-9 border-0 focus-visible:ring-0 focus-visible:ring-offset-0 shadow-none"
+                        placeholder="Search city or timezone..."
+                        value={tzSearch}
+                        onChange={(e) => setTzSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="max-h-72 overflow-y-auto">
+                      {TIMEZONE_REGIONS.map((region) => {
+                        const items = filteredTz.filter((tz) => tz.region === region);
+                        if (items.length === 0) return null;
+                        return (
+                          <div key={region}>
+                            <div className="px-3 py-1.5 text-xs font-medium text-muted-foreground bg-muted/40">
+                              {region}
+                            </div>
+                            {items.map((tz) => (
+                              <button
+                                key={tz.value}
+                                className={`flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left ${
+                                  timezoneInput === tz.value ? 'bg-accent/60' : ''
+                                }`}
+                                onClick={() => {
+                                  setTimezoneInput(tz.value);
+                                  configMut.mutate({ key: 'user.timezone', value: tz.value });
+                                  setTzOpen(false);
+                                  setTzSearch('');
+                                }}
+                              >
+                                <Check
+                                  className={`h-4 w-4 shrink-0 ${
+                                    timezoneInput === tz.value ? 'opacity-100' : 'opacity-0'
+                                  }`}
+                                />
+                                <span>{tz.label}</span>
+                              </button>
+                            ))}
+                          </div>
+                        );
+                      })}
+                      {filteredTz.length === 0 && (
+                        <p className="px-3 py-4 text-center text-sm text-muted-foreground">
+                          No timezone found.
+                        </p>
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </CardContent>
             </Card>
 

@@ -45,6 +45,8 @@ class QuoteVerifier:
         """Verify a single quote against the full paper text and chunks.
 
         Tries exact substring match first, then fuzzy match (partial_ratio >= 97%).
+        Sets ``matched_span_start`` to the byte offset of ``matched_text`` within
+        ``full_text`` so callers can skip a second O(n) scan.
         """
         if not quote or not quote.strip():
             return VerificationResult(quote=quote, verified=False)
@@ -53,7 +55,8 @@ class QuoteVerifier:
         if len(quote) > MAX_QUOTE_LENGTH:
             logger.warning(
                 "Quote too long (%d chars), truncating to %d for verification",
-                len(quote), MAX_QUOTE_LENGTH,
+                len(quote),
+                MAX_QUOTE_LENGTH,
             )
             quote = quote[:MAX_QUOTE_LENGTH]
 
@@ -61,9 +64,12 @@ class QuoteVerifier:
 
         # --- Strategy 1: Exact substring match ---
         # Use pre-normalized if provided, otherwise normalize here
-        normalized_full = _normalized_full if _normalized_full is not None else self._normalize(full_text)
+        normalized_full = (
+            _normalized_full if _normalized_full is not None else self._normalize(full_text)
+        )
         if normalized_quote in normalized_full:
             chunk_id, page_number = self._find_chunk_for_quote(quote, chunks)
+            span_start = full_text.find(quote)
             return VerificationResult(
                 quote=quote,
                 verified=True,
@@ -72,6 +78,7 @@ class QuoteVerifier:
                 matched_text=quote,
                 chunk_id=chunk_id,
                 page_number=page_number,
+                matched_span_start=span_start if span_start != -1 else None,
             )
 
         # --- Strategy 2: Fuzzy match against each chunk ---
@@ -87,6 +94,7 @@ class QuoteVerifier:
                     break
 
         if best_score >= FUZZY_THRESHOLD and best_chunk is not None:
+            span_start = full_text.find(best_chunk.content)
             return VerificationResult(
                 quote=quote,
                 verified=True,
@@ -95,6 +103,7 @@ class QuoteVerifier:
                 matched_text=best_chunk.content,
                 chunk_id=best_chunk.id,
                 page_number=best_chunk.page_number,
+                matched_span_start=span_start if span_start != -1 else None,
             )
 
         # --- No match found ---
@@ -133,7 +142,9 @@ class QuoteVerifier:
 
         results: list[VerificationResult] = []
         for finding in findings:
-            result = self.verify_quote(finding.quote, full_text, chunks, _normalized_full=normalized_full)
+            result = self.verify_quote(
+                finding.quote, full_text, chunks, _normalized_full=normalized_full
+            )
             results.append(result)
             # NOTE: Mutates findings in place — caller depends on this behavior
             finding.verified = result.verified

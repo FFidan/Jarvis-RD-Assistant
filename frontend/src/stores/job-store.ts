@@ -357,13 +357,19 @@ export const useJobStore = create<JobStore>()(
  * whenever the user returns to the tab (e.g. after the screen has been locked
  * or the user switched away for a long time).
  *
- * Call once from the root layout component.
+ * Call once from the root layout component. Returns a cleanup function that
+ * removes the listener — use it as the useEffect return value to avoid leaks
+ * on unmount.
  */
-export function registerVisibilityHydrate(): void {
-  if (typeof document === 'undefined') return;
-  document.addEventListener('visibilitychange', () => {
+export function registerVisibilityHydrate(): () => void {
+  if (typeof document === 'undefined') return () => {};
+  const handler = () => {
     if (document.visibilityState === 'visible') {
       useJobStore.getState().hydrate();
     }
-  });
+  };
+  document.addEventListener('visibilitychange', handler);
+  return () => {
+    document.removeEventListener('visibilitychange', handler);
+  };
 }

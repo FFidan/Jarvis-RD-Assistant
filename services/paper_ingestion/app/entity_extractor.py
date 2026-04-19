@@ -407,8 +407,10 @@ async def extract_entities_for_paper(
                     continue
                 # Track evidence that would have been lost with the old truncated verify.
                 if vr.verified and vr.matched_text and len(llm_text) < len(full_text):
-                    # Find approximate char position of the match in full_text
-                    match_pos = full_text.find(vr.matched_text)
+                    # Use O(1) span_start recorded by QuoteVerifier; fall back to find() if absent.
+                    match_pos = vr.matched_span_start
+                    if match_pos is None:
+                        match_pos = full_text.find(vr.matched_text)
                     if match_pos >= len(llm_text):
                         saved_by_full_text_verify += 1
                         logger.debug(
