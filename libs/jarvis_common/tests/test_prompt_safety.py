@@ -89,3 +89,34 @@ class TestWrapDelimited:
     def test_empty_text(self) -> None:
         result = wrap_delimited("t", "")
         assert result == "<t>\n\n</t>"
+
+    def test_wrap_delimited_strips_bidi_override(self) -> None:
+        # U+202E = RIGHT-TO-LEFT OVERRIDE — must be removed
+        result = wrap_delimited("user", "hello\u202eworld")
+        assert "\u202e" not in result
+        assert "helloworld" in result
+
+    def test_wrap_delimited_strips_zero_width(self) -> None:
+        # U+200B = ZERO WIDTH SPACE — must be removed
+        result = wrap_delimited("user", "a\u200bb")
+        assert "\u200b" not in result
+        assert "ab" in result
+
+    def test_wrap_delimited_preserves_cjk_and_emoji(self) -> None:
+        result = wrap_delimited("user", "日本語 🎉 café")
+        assert "日本語" in result
+        assert "🎉" in result
+        assert "café" in result
+
+    def test_wrap_delimited_strips_bidi_isolate(self) -> None:
+        # U+2066 = LEFT-TO-RIGHT ISOLATE, U+2069 = POP DIRECTIONAL ISOLATE
+        result = wrap_delimited("user", "\u2066hello\u2069")
+        assert "\u2066" not in result
+        assert "\u2069" not in result
+        assert "hello" in result
+
+    def test_wrap_delimited_strips_bom(self) -> None:
+        # U+FEFF = BOM / zero-width no-break space
+        result = wrap_delimited("user", "\ufeffstart")
+        assert "\ufeff" not in result
+        assert "start" in result

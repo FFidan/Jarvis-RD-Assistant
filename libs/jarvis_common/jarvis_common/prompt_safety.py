@@ -12,6 +12,30 @@ import re
 # Control characters to strip in 'strip' mode (C0, C1, and a few unicode specials).
 _CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\ufeff]")
 
+# BIDI override + isolate characters and zero-width characters that can be used
+# to confuse LLMs or bypass content filters.  Stripped unconditionally in
+# wrap_delimited() regardless of 'mode'.
+#   U+202A-202E: BIDI embedding/override (LRE, RLE, PDF, LRO, RLO)
+#   U+2066-2069: BIDI isolate (LRI, RLI, FSI, PDI)
+#   U+200B-200D: zero-width space, non-joiner, joiner
+#   U+FEFF:      BOM / zero-width no-break space
+_BIDI_ZW_RE = re.compile(
+    "[\u202a-\u202e"  # BIDI embedding/override chars
+    "\u2066-\u2069"  # BIDI isolate chars
+    "\u200b-\u200d"  # zero-width space/non-joiner/joiner
+    "\ufeff"  # BOM / zero-width no-break space
+    "]"
+)
+
+
+def _strip_bidi_zw(text: str) -> str:
+    """Remove BIDI override/isolate and zero-width characters from *text*.
+
+    Only strips the targeted Unicode ranges; CJK, emoji, accented characters,
+    regular spaces, newlines, and tabs are fully preserved.
+    """
+    return _BIDI_ZW_RE.sub("", text)
+
 
 def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     """Sanitise text before interpolating it into an LLM prompt.
@@ -104,7 +128,7 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
     str
         Delimited, escaped (and optionally truncated) string.
     """
-    body = escape_llm_text(text)
+    body = escape_llm_text(_strip_bidi_zw(text))
     if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars]
     return f"<{tag}>\n{body}\n</{tag}>"

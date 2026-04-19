@@ -34,6 +34,18 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
 /** Terminal statuses — job will not receive more events. */
 const TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
 
+/** Backoff constants for SSE reconnect attempts (ms). */
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 8000;
+
+/** Resolves after `ms` milliseconds, or rejects early if the signal fires. */
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); reject(new DOMException('Aborted', 'AbortError')); }, { once: true });
+  });
+
 /** Delay before evicting terminal jobs from the store (ms). */
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -62,7 +74,7 @@ interface JobStore {
   /** POST a new job + subscribe to its SSE stream. Returns the job_id. */
   startJob: (kind: string, payload: unknown) => Promise<string>;
   /** Hook up SSE stream for an existing job id. */
-  subscribe: (jobId: string) => void;
+  subscribe: (jobId: string, reconnectDelay?: number) => void;
   /** Cancel a running job. */
   cancelJob: (jobId: string) => Promise<void>;
   /** Remove a job from the store immediately (e.g. user dismisses). */
@@ -127,7 +139,7 @@ export const useJobStore = create<JobStore>()(
         return job_id;
       },
 
-      subscribe(jobId) {
+      subscribe(jobId, reconnectDelay = RECONNECT_BASE_DELAY_MS) {
         // Avoid double-subscribing
         if (get().activeAborts[jobId]) return;
 
@@ -192,6 +204,8 @@ export const useJobStore = create<JobStore>()(
             const decoder = new TextDecoder();
             let buffer = '';
             let terminalReceived = false;
+            // Track current backoff delay; reset to base on every successful frame
+            let currentReconnectDelay = reconnectDelay;
 
             while (true) {
               const { done, value } = await reader.read();
@@ -205,12 +219,15 @@ export const useJobStore = create<JobStore>()(
                       if (TERMINAL_STATUSES.has(finalJob.status)) {
                         _handleTerminal(finalJob);
                       } else {
-                        // Still running — re-subscribe
+                        // Still running — re-subscribe with exponential backoff
                         get()._cleanupSubscription(jobId);
-                        get().subscribe(jobId);
+                        await sleep(currentReconnectDelay, controller.signal);
+                        const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
+                        get().subscribe(jobId, nextDelay);
                       }
                     }
-                  } catch {
+                  } catch (err) {
+                    if (err instanceof DOMException && err.name === 'AbortError') return;
                     /* best-effort */
                   }
                 }
@@ -226,10 +243,12 @@ export const useJobStore = create<JobStore>()(
                 if (raw === '[DONE]') break;
                 try {
                   const event = JSON.parse(raw) as Partial<Job>;
-                  // streaming_timeout sentinel — treat as non-terminal; let fallback poll resolve
+                  // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
                   if ((event as { status?: string }).status === 'streaming_timeout') {
                     get()._cleanupSubscription(jobId);
-                    get().subscribe(jobId);
+                    await sleep(currentReconnectDelay, controller.signal);
+                    const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
+                    get().subscribe(jobId, nextDelay);
                     return;
                   }
                   const current = get().jobs[jobId] ?? {};
@@ -239,6 +258,8 @@ export const useJobStore = create<JobStore>()(
                     id: jobId,
                   };
                   get()._upsertJob(updated);
+                  // Successful event frame received — reset backoff for any future reconnect
+                  currentReconnectDelay = RECONNECT_BASE_DELAY_MS;
 
                   if (TERMINAL_STATUSES.has(updated.status)) {
                     terminalReceived = true;

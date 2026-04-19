@@ -13,8 +13,8 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import current_user_id, verify_api_key
 from jarvis_common import jobs as jobs_lib
-from jarvis_common import verify_api_key
 
 from app.deps import limiter
 from app.models import (
@@ -90,20 +90,40 @@ async def get_history(
 
 @router.post("/rate")
 @limiter.limit("60/minute")
-async def rate_card(request: Request, body: PulseRateRequest) -> dict:
+async def rate_card(
+    request: Request,
+    body: PulseRateRequest,
+    user_id: int | None = Depends(current_user_id),
+) -> dict:
     """Persist a user rating for a Pulse-shown paper.
 
     Rating is stored in ``pulse_ratings`` with ``source='pulse'`` so that the
     profile centroid refresh can distinguish Pulse clicks from library thumbs.
+
+    Guard: the paper must belong to a Pulse deck before it can be rated.
+    Duplicate ratings (double-click) are handled by ON CONFLICT DO UPDATE.
     """
     try:
         async with request.app.state.db_pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO pulse_ratings (paper_id, rating, source)
-                VALUES ($1, $2, 'pulse')
-                """,
+            # Guard: paper must exist in a pulse deck
+            member = await conn.fetchval(
+                """SELECT 1 FROM pulse_cards pc
+                   JOIN pulse_decks pd ON pc.deck_id = pd.id
+                   WHERE pc.paper_id = $1
+                   LIMIT 1""",
                 body.paper_id,
+            )
+            if not member:
+                raise HTTPException(status_code=404, detail="Paper not found in your pulse deck")
+
+            await conn.execute(
+                """INSERT INTO pulse_ratings (paper_id, user_id, rating, source)
+                   VALUES ($1, $2, $3, 'pulse')
+                   ON CONFLICT (paper_id, user_id) DO UPDATE
+                     SET rating    = EXCLUDED.rating,
+                         created_at = NOW()""",
+                body.paper_id,
+                user_id,
                 body.rating,
             )
     except asyncpg.ForeignKeyViolationError as exc:

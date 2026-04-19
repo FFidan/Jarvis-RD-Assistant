@@ -592,10 +592,12 @@ CREATE INDEX IF NOT EXISTS idx_pulse_cards_deck_rank
 CREATE TABLE IF NOT EXISTS pulse_ratings (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    user_id         INTEGER,  -- NULL in single-tenant mode; forward-compatible for multi-user
     rating          VARCHAR(16) NOT NULL
         CHECK (rating IN ('up', 'down', 'save', 'dismiss', 'open')),
     source          VARCHAR(32) NOT NULL DEFAULT 'pulse',  -- allows future non-Pulse ratings
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT pulse_ratings_paper_user_uniq UNIQUE NULLS NOT DISTINCT (paper_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_ratings_paper
     ON pulse_ratings(paper_id);
