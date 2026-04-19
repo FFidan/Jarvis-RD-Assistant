@@ -208,6 +208,7 @@ export const useJobStore = create<JobStore>()(
             let currentReconnectDelay = reconnectDelay;
 
             while (true) {
+              let streamDone = false;
               const { done, value } = await reader.read();
               if (done) {
                 // Stream closed without a terminal event — fall back to a REST poll
@@ -220,8 +221,10 @@ export const useJobStore = create<JobStore>()(
                         _handleTerminal(finalJob);
                       } else {
                         // Still running — re-subscribe with exponential backoff
+                        // controller is already aborted by _cleanupSubscription, so do NOT
+                        // pass its signal to sleep — it would throw AbortError immediately (G-01)
                         get()._cleanupSubscription(jobId);
-                        await sleep(currentReconnectDelay, controller.signal);
+                        await sleep(currentReconnectDelay);
                         const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
                         get().subscribe(jobId, nextDelay);
                       }
@@ -240,13 +243,15 @@ export const useJobStore = create<JobStore>()(
               for (const line of lines) {
                 if (!line.startsWith('data: ')) continue;
                 const raw = line.slice(6).trim();
-                if (raw === '[DONE]') break;
+                if (raw === '[DONE]') { terminalReceived = true; streamDone = true; break; }
                 try {
                   const event = JSON.parse(raw) as Partial<Job>;
                   // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
                   if ((event as { status?: string }).status === 'streaming_timeout') {
                     get()._cleanupSubscription(jobId);
-                    await sleep(currentReconnectDelay, controller.signal);
+                    // controller is already aborted by _cleanupSubscription, so do NOT
+                    // pass its signal to sleep — it would throw AbortError immediately (G-01)
+                    await sleep(currentReconnectDelay);
                     const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
                     get().subscribe(jobId, nextDelay);
                     return;
@@ -270,6 +275,8 @@ export const useJobStore = create<JobStore>()(
                   /* skip malformed frames */
                 }
               }
+              // [DONE] sentinel received — exit the while(true) read loop (G-02)
+              if (streamDone) break;
             }
 
             await reader.cancel().catch(() => {});

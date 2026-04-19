@@ -279,7 +279,7 @@ async def stage2_llm_rerank(
                     reasoning=reasoning,
                     final_score=sc.final_score,
                 )
-            except (ValueError, RuntimeError, httpx.HTTPError):
+            except (ValueError, RuntimeError, httpx.HTTPError, KeyError, TypeError):
                 logger.warning("stage2: LLM scoring failed for %r", sc.paper.title, exc_info=True)
                 return ScoredCandidate(
                     paper=sc.paper,
