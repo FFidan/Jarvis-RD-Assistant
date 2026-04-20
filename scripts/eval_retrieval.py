@@ -38,6 +38,12 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+
+
+class ScriptError(RuntimeError):
+    """Script-level error; caught by the __main__ block."""
+
+
 logger = logging.getLogger(__name__)
 if __package__:
     from scripts._db import get_dsn
@@ -67,6 +73,7 @@ QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
 COLLECTION_NAME = "paper_chunks"
+
 
 async def embed_text(client: httpx.AsyncClient, text: str) -> list[float]:
     """Get embedding for a single text via LiteLLM."""
@@ -136,8 +143,7 @@ async def main() -> None:
     """Run the retrieval evaluation."""
     pool = await asyncpg.create_pool(get_dsn(), min_size=1, max_size=3)
     if pool is None:
-        logger.error("Failed to create database pool")
-        sys.exit(1)
+        raise ScriptError("Failed to create database pool")
 
     # Fetch verified key findings as ground truth
     async with pool.acquire() as conn:
@@ -219,4 +225,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except ScriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)

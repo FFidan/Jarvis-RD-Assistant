@@ -2,9 +2,23 @@
 
 Re-scores query-passage pairs using a cross-encoder model to produce
 more accurate relevance rankings than bi-encoder similarity alone.
+
+The reranker is optional. Set ``RERANKER_ENABLED=true`` in the environment
+and ensure ``sentence-transformers`` (from ``requirements-optional.txt``) is
+installed to activate it. When disabled or unavailable, :func:`get_reranker`
+returns ``None`` and callers fall back to retrieval-score ordering.
 """
 
 import logging
+import os
+
+try:
+    from sentence_transformers import CrossEncoder
+
+    _HAS_RERANKER = True
+except ImportError:
+    CrossEncoder = None  # type: ignore[assignment,misc]
+    _HAS_RERANKER = False
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +40,6 @@ class Reranker:
         """Lazy-load the cross-encoder model on first use."""
         if self._model is not None:
             return
-        from sentence_transformers import CrossEncoder
-
         try:
             self._model = CrossEncoder(self._model_name, device="cuda")
             logger.info("Cross-encoder loaded on CUDA: %s", self._model_name)
@@ -72,27 +84,49 @@ class Reranker:
         return indexed_scores[:top_k]
 
 
-_reranker_instance: Reranker | None = None
-_reranker_attempted: bool = False
+class _RerankerState:
+    """Module-level state holder for the singleton reranker.
+
+    Using a class instance avoids ``global`` while preserving the
+    "attempt once per process" semantic that ``@lru_cache`` cannot provide
+    (lru_cache permanently caches ``None`` on transient load failures).
+    """
+
+    def __init__(self) -> None:
+        self.instance: Reranker | None = None
+        self.attempted: bool = False
+
+    def get(self) -> Reranker | None:
+        """Return the reranker, loading it on the first call."""
+        if self.instance is not None:
+            return self.instance
+        if self.attempted:
+            return None
+        self.attempted = True
+        try:
+            reranker = Reranker()
+            reranker._load_model_if_needed()
+            self.instance = reranker
+            return reranker
+        except Exception:
+            logger.warning("Reranker unavailable; using retrieval scores only", exc_info=True)
+            return None
+
+
+_reranker_state = _RerankerState()
 
 
 def get_reranker() -> Reranker | None:
     """Get or create the singleton reranker instance.
 
+    Returns ``None`` when the reranker is disabled (``RERANKER_ENABLED`` env
+    var is not ``true``/``1``/``yes``) or when ``sentence-transformers`` is
+    not installed.
+
     Unlike @lru_cache, this does not permanently cache None on transient
     failures. A process restart will retry model loading.
     """
-    global _reranker_instance, _reranker_attempted
-    if _reranker_instance is not None:
-        return _reranker_instance
-    if _reranker_attempted:
+    enabled = os.getenv("RERANKER_ENABLED", "false").lower() in ("true", "1", "yes")
+    if not enabled or not _HAS_RERANKER:
         return None
-    _reranker_attempted = True
-    try:
-        reranker = Reranker()
-        reranker._load_model_if_needed()
-        _reranker_instance = reranker
-        return reranker
-    except Exception:
-        logger.warning("Reranker unavailable; using retrieval scores only", exc_info=True)
-        return None
+    return _reranker_state.get()

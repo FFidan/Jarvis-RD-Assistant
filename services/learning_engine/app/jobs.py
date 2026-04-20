@@ -1,7 +1,8 @@
 """Simple in-memory job status registry for background tasks."""
 
-from datetime import UTC, datetime
 from typing import Any
+
+from jarvis_common.time_utils import utc_now_iso
 
 _jobs: dict[str, dict[str, Any]] = {}
 
@@ -10,7 +11,7 @@ def create_job(job_id: str) -> dict[str, Any]:
     """Register a new job with *pending* status and return its initial record."""
     _jobs[job_id] = {
         "status": "pending",
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": utc_now_iso(),
         "result": None,
     }
     return _jobs[job_id]

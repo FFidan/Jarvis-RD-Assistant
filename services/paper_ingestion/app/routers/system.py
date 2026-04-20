@@ -30,8 +30,31 @@ _EXPECTED_MODEL_PREFIXES: tuple[str, ...] = (
     "nomic-embed-text",
 )
 
-# TTL cache for Ollama probe: (timestamp, (models_ready, downloading))
-_ollama_probe_cache: tuple[float, tuple[bool, list[str]]] | None = None
+_OLLAMA_DEFAULT_BASE_URL = "http://ollama:11434"
+_OLLAMA_PROBE_TTL = 10  # seconds
+
+
+class _OllamaProbeCache:
+    """TTL cache for Ollama /api/tags probe results.
+
+    Replaces module-level ``global`` mutation with a contained state holder.
+    """
+
+    def __init__(self) -> None:
+        self._ts: float = 0.0
+        self._result: tuple[bool, list[str]] = (False, [])
+
+    def get_cached(self, now: float) -> tuple[bool, list[str]] | None:
+        if self._ts > 0 and now - self._ts < _OLLAMA_PROBE_TTL:
+            return self._result
+        return None
+
+    def set(self, now: float, result: tuple[bool, list[str]]) -> None:
+        self._ts = now
+        self._result = result
+
+
+_ollama_probe_cache = _OllamaProbeCache()
 
 
 class SetupStatus(BaseModel):
@@ -88,18 +111,18 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
     setup-status request. Any failure (network, timeout, non-200) yields
     ``(False, [])``. The caller must never crash on this.
     """
-    global _ollama_probe_cache
     now = time.monotonic()
-    if _ollama_probe_cache is not None and now - _ollama_probe_cache[0] < 10:
-        return _ollama_probe_cache[1]
+    cached = _ollama_probe_cache.get_cached(now)
+    if cached is not None:
+        return cached
 
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", _OLLAMA_DEFAULT_BASE_URL)
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
         if resp.status_code != 200:
             result: tuple[bool, list[str]] = (False, [])
-            _ollama_probe_cache = (now, result)
+            _ollama_probe_cache.set(now, result)
             return result
         data = resp.json()
         installed = [m.get("name", "") for m in data.get("models", [])]
@@ -107,7 +130,7 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
     except Exception:
         logger.warning("setup-status: Ollama probe failed", exc_info=True)
         result = (False, [])
-    _ollama_probe_cache = (now, result)
+    _ollama_probe_cache.set(now, result)
     return result
 
 

@@ -19,7 +19,6 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-sys.modules.setdefault("fitz", MagicMock())
 sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
 if "app.embedder" not in sys.modules:
     fake_embedder = types.ModuleType("app.embedder")
@@ -160,6 +159,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
     embedder = MagicMock()
 
+    pdf_processor = MagicMock()
     with pytest.raises(HTTPException, match="Invalid PDF path") as exc_info:
         await pdf.process_pdf.__wrapped__(
             request,
@@ -167,6 +167,7 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
             force=False,
             sync=True,  # use sync path to exercise path-traversal protection
             db_pool=pool,
+            pdf_processor=pdf_processor,
             embedder=embedder,
         )
 
@@ -205,6 +206,7 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
         force=True,
         sync=True,
         db_pool=pool,
+        pdf_processor=processor,
         embedder=embedder,
     )
 

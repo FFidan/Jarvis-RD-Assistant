@@ -7,10 +7,12 @@ and a check endpoint that matches tracked authors against recent papers.
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update
+from jarvis_common.auth import verify_api_key
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.models import (
     AuthorCheckResponse,
     AutoDetectResponse,
@@ -21,7 +23,11 @@ from app.models import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/authors", tags=["authors"])
+router = APIRouter(
+    prefix="/api/authors",
+    tags=["authors"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 _AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
 
@@ -33,9 +39,12 @@ _AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
 
 @router.get("", response_model=list[TrackedAuthorResponse])
 @limiter.limit("60/minute")
-async def list_tracked_authors(request: Request) -> list[TrackedAuthorResponse]:
+async def list_tracked_authors(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[TrackedAuthorResponse]:
     """List all tracked authors."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM tracked_authors ORDER BY author_name")
     return [TrackedAuthorResponse(**dict(r)) for r in rows]
 
@@ -43,10 +52,12 @@ async def list_tracked_authors(request: Request) -> list[TrackedAuthorResponse]:
 @router.post("", response_model=TrackedAuthorResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_tracked_author(
-    request: Request, body: TrackedAuthorCreate
+    request: Request,
+    body: TrackedAuthorCreate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TrackedAuthorResponse:
     """Add a new tracked author."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Check for duplicates
         existing = await conn.fetchrow(
             """SELECT id FROM tracked_authors
@@ -69,10 +80,13 @@ async def create_tracked_author(
 @router.put("/{author_id}", response_model=TrackedAuthorResponse)
 @limiter.limit("30/minute")
 async def update_tracked_author(
-    request: Request, author_id: int, body: TrackedAuthorUpdate
+    request: Request,
+    author_id: int,
+    body: TrackedAuthorUpdate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TrackedAuthorResponse:
     """Update a tracked author (enable/disable, change S2 ID)."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM tracked_authors WHERE id = $1", author_id)
         if not existing:
             raise HTTPException(404, f"Tracked author {author_id} not found")
@@ -93,9 +107,13 @@ async def update_tracked_author(
 
 @router.delete("/{author_id}", status_code=204)
 @limiter.limit("30/minute")
-async def delete_tracked_author(request: Request, author_id: int) -> None:
+async def delete_tracked_author(
+    request: Request,
+    author_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
     """Remove a tracked author."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         await delete_or_404(
             conn,
             "DELETE FROM tracked_authors WHERE id = $1",
@@ -111,14 +129,17 @@ async def delete_tracked_author(request: Request, author_id: int) -> None:
 
 @router.post("/auto-detect", response_model=AutoDetectResponse)
 @limiter.limit("10/minute")
-async def auto_detect_authors(request: Request) -> AutoDetectResponse:
+async def auto_detect_authors(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> AutoDetectResponse:
     """Auto-detect authors from starred or highly-rated papers.
 
     Scans papers that are starred or have rating >= 4 and adds their
     authors to the tracked_authors table with source ``auto_starred``
     or ``auto_rated``.
     """
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT author_name,
                       bool_or(status = 'starred') AS is_starred,
@@ -177,13 +198,16 @@ async def auto_detect_authors(request: Request) -> AutoDetectResponse:
 
 @router.post("/check", response_model=AuthorCheckResponse)
 @limiter.limit("30/minute")
-async def check_tracked_authors(request: Request) -> AuthorCheckResponse:
+async def check_tracked_authors(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> AuthorCheckResponse:
     """Check tracked authors against recent papers (last 24 hours).
 
     Matches papers by S2 author ID (if available) or normalized name.
     Logs matches in author_alert_log for deduplication.
     """
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
         if not authors:
             return AuthorCheckResponse(new_papers=0, authors_checked=0)

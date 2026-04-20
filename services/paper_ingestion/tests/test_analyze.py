@@ -34,7 +34,11 @@ def _parse_sse_events(raw_events: list[str]) -> list[dict | str]:
 
 
 def _make_mock_request(paper_row, *, update_row=None):
-    """Build a MagicMock Request with a mock db_pool returning paper_row."""
+    """Build a MagicMock Request with a mock db_pool returning paper_row.
+
+    Returns a tuple of (mock_request, mock_pool) so callers can pass db_pool
+    explicitly to _analyze_stream (which now receives it as a parameter).
+    """
     mock_request = MagicMock()
 
     mock_conn = AsyncMock()
@@ -56,10 +60,10 @@ def _make_mock_request(paper_row, *, update_row=None):
     mock_request.app.state.embedder = MagicMock()
     mock_request.app.state.verifier = MagicMock()
 
-    return mock_request
+    return mock_request, mock_pool
 
 
-async def _collect_events(request, paper_id, *, mock_process=None, mock_summarize=None):
+async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock_summarize=None):
     """Run _analyze_stream with fake service modules to avoid heavy imports."""
     _mock_process = mock_process or AsyncMock(
         return_value={"paper_id": paper_id, "chunk_count": 42, "status": "processed"}
@@ -69,7 +73,6 @@ async def _collect_events(request, paper_id, *, mock_process=None, mock_summariz
     # Inject fake modules so deferred imports in _analyze_stream resolve
     # without pulling in qdrant_client/numpy/fitz.
     fake_pdf_workflow = types.ModuleType("app.services.pdf_workflow")
-    fake_pdf_workflow._run_process_pdf = _mock_process  # type: ignore[attr-defined]
     fake_pdf_workflow.run_process_pdf = _mock_process  # type: ignore[attr-defined]
 
     fake_summarization = types.ModuleType("app.services.summarization")
@@ -104,7 +107,7 @@ async def _collect_events(request, paper_id, *, mock_process=None, mock_summariz
             MockPath.return_value = mock_path_instance
 
             events_raw = []
-            async for event in _analyze_stream(request, paper_id):
+            async for event in _analyze_stream(request, paper_id, db_pool):
                 events_raw.append(event)
     finally:
         # Restore original modules
@@ -159,9 +162,9 @@ async def test_analyze_stream_happy_path():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/1.pdf",
     }
-    mock_request = _make_mock_request(paper_row, update_row=updated_row)
+    mock_request, mock_pool = _make_mock_request(paper_row, update_row=updated_row)
 
-    events, _ = await _collect_events(mock_request, 1)
+    events, _ = await _collect_events(mock_request, 1, mock_pool)
 
     assert len(events) == 8
     assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
@@ -185,10 +188,10 @@ async def test_analyze_stream_happy_path():
 @pytest.mark.asyncio
 async def test_analyze_stream_paper_not_found():
     """Stream emits error when paper ID doesn't exist."""
-    mock_request = _make_mock_request(None)
+    mock_request, mock_pool = _make_mock_request(None)
 
     events_raw = []
-    async for event in _analyze_stream(mock_request, 999):
+    async for event in _analyze_stream(mock_request, 999, mock_pool):
         events_raw.append(event)
     events = _parse_sse_events(events_raw)
 
@@ -215,10 +218,10 @@ async def test_analyze_stream_no_pdf_url():
         "pdf_downloaded": False,
         "pdf_local_path": None,
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
     events_raw = []
-    async for event in _analyze_stream(mock_request, 2):
+    async for event in _analyze_stream(mock_request, 2, mock_pool):
         events_raw.append(event)
     events = _parse_sse_events(events_raw)
 
@@ -246,9 +249,9 @@ async def test_analyze_stream_already_downloaded():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/2.pdf",
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 2)
+    events, _ = await _collect_events(mock_request, 2, mock_pool)
 
     assert len(events) == 8
     assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
@@ -276,10 +279,10 @@ async def test_analyze_stream_process_failure():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/3.pdf",
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
     mock_process = AsyncMock(side_effect=RuntimeError("Embedding service error"))
-    events, _ = await _collect_events(mock_request, 3, mock_process=mock_process)
+    events, _ = await _collect_events(mock_request, 3, mock_pool, mock_process=mock_process)
 
     # download started, download completed, process started, error, [DONE]
     assert len(events) == 5
@@ -303,10 +306,10 @@ async def test_analyze_stream_summarize_failure():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/4.pdf",
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
     mock_summarize = AsyncMock(side_effect=RuntimeError("LLM timeout"))
-    events, _ = await _collect_events(mock_request, 4, mock_summarize=mock_summarize)
+    events, _ = await _collect_events(mock_request, 4, mock_pool, mock_summarize=mock_summarize)
 
     # download started/completed, process started/completed, summarize started, error, [DONE]
     assert len(events) == 7
@@ -330,9 +333,9 @@ async def test_analyze_stream_local_paper_skips_download():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/5.pdf",
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 5)
+    events, _ = await _collect_events(mock_request, 5, mock_pool)
 
     # Expect: download started, download skipped, process started, process completed,
     #         summarize started, summarize completed, complete, [DONE] = 8 events
@@ -367,9 +370,9 @@ async def test_analyze_stream_local_paper_with_pdf_local_path():
         "pdf_downloaded": True,
         "pdf_local_path": "/data/pdfs/6.pdf",  # already set → treated as local
     }
-    mock_request = _make_mock_request(paper_row)
+    mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 6)
+    events, _ = await _collect_events(mock_request, 6, mock_pool)
 
     # download step should be skipped (pdf_local_path is already set)
     assert events[1]["type"] == "step"

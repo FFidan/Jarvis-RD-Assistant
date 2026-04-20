@@ -1,7 +1,6 @@
 """Tests for error handling in SSE streaming, embedder, and health checks."""
 
 import json
-import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -243,8 +242,6 @@ async def test_search_chunks_runtime_error_propagates():
 
 async def test_health_check_degraded():
     """health_check_internal returns 'degraded' when one dependency is unavailable."""
-    # Mock fitz before importing app.main (fitz/PyMuPDF not on host)
-    sys.modules.setdefault("fitz", MagicMock())
     from app.main import health_check_internal
 
     # Mock request with app state
@@ -289,7 +286,6 @@ async def test_health_check_degraded():
 
 async def test_health_check_all_ok():
     """health_check_internal returns 'ok' when all dependencies are available."""
-    sys.modules.setdefault("fitz", MagicMock())
     from app.main import health_check_internal
 
     mock_request = MagicMock()

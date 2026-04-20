@@ -128,7 +128,15 @@ class CardGenerator:
         except (json.JSONDecodeError, ValueError):
             logger.error("LLM returned invalid JSON for card generation")
             return None
-        return result.get("cards", [])
+        if isinstance(result, dict):
+            return result.get("cards", [])
+        if isinstance(result, list) and result and isinstance(result[0], dict):
+            return result[0].get("cards", [])
+        logger.warning(
+            "card_generator: LLM returned unexpected type %r — discarding",
+            type(result).__name__,
+        )
+        return None
 
     def _verify_raw_cards(
         self,

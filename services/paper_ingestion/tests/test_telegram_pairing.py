@@ -3,14 +3,8 @@
 from __future__ import annotations
 
 import re
-import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in ("fitz",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -41,7 +35,8 @@ def _make_pool_and_conn():
 
 @pytest.fixture()
 def app_fixture():
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()
@@ -218,7 +213,8 @@ async def test_create_pairing_is_transactional(app_fixture):
 @pytest.mark.asyncio
 async def test_create_pairing_rate_limited():
     """11th request within a minute from the same IP must receive HTTP 429."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
     from jarvis_common.ratelimit import create_limiter
 

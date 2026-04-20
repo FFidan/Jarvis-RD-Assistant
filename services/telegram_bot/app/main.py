@@ -93,11 +93,11 @@ async def post_shutdown(application: Application) -> None:
     import app.internal_api as _iapi  # local import to avoid circular refs
 
     # Gracefully stop the internal uvicorn server (D-01 / H-02)
-    if _iapi._server is not None:
-        _iapi._server.should_exit = True
-    if _iapi._server_task is not None:
+    if _iapi._server_state.server is not None:
+        _iapi._server_state.server.should_exit = True
+    if _iapi._server_state.task is not None:
         try:
-            await asyncio.wait_for(_iapi._server_task, timeout=5.0)
+            await asyncio.wait_for(_iapi._server_state.task, timeout=5.0)
         except TimeoutError:
             logger.warning("Internal API server task did not stop within 5 s — continuing shutdown")
         except asyncio.CancelledError:

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import asyncpg
 from jarvis_common import init_pg_connection
+from jarvis_common.secrets import read_secret
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class BotConfig:
         SystemExit
             If required variables are missing.
         """
-        token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        token = read_secret("TELEGRAM_BOT_TOKEN")
         if not token:
             logger.critical("TELEGRAM_BOT_TOKEN is not set")
             raise SystemExit(1)
@@ -57,7 +58,7 @@ class BotConfig:
             logger.critical("DATABASE_URL is not set — Telegram bot cannot connect to database")
             raise SystemExit(1)
 
-        jarvis_api_key = os.environ.get("JARVIS_API_KEY", "")
+        jarvis_api_key = read_secret("JARVIS_API_KEY")
         if not jarvis_api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
 

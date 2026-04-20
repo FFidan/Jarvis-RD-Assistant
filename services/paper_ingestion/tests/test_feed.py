@@ -1,13 +1,7 @@
 """Tests for the What's New paper feed endpoints."""
 
-import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in ("fitz",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 
 import pytest
 
@@ -18,7 +12,6 @@ import pytest
 
 def _make_paper_record(
     paper_id: int = 1,
-    is_read: bool = False,
     discovered_at: datetime | None = None,
     summary_brief: str | None = "Brief summary",
     confidence: str | None = "HIGH",
@@ -41,7 +34,6 @@ def _make_paper_record(
         "pdf_downloaded": False,
         "citation_count": 0,
         "metadata": {},
-        "is_read": is_read,
         "discovered_at": now,
         "created_at": now,
         "summary_brief": summary_brief,
@@ -82,7 +74,8 @@ def client():
         },
     ):
         # Patch lifespan to avoid real resource init
-        from app.main import app, get_db_pool
+        from app.deps import get_db_pool
+        from app.main import app
         from fastapi.testclient import TestClient
 
         # Override the db_pool dependency — use MagicMock so that
@@ -137,7 +130,6 @@ class TestListFeedPapers:
         assert "title" in paper
         assert "summary_brief" in paper
         assert "confidence" in paper
-        assert "is_read" in paper
         assert "discovered_at" in paper
 
     def test_unread_only_filters_correctly(self, client):
@@ -147,7 +139,7 @@ class TestListFeedPapers:
         mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
         mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        unread_records = [_to_record(_make_paper_record(paper_id=1, is_read=False))]
+        unread_records = [_to_record(_make_paper_record(paper_id=1, user_status="new"))]
         conn.fetch.return_value = unread_records
         conn.fetchval.return_value = 1
 
@@ -157,12 +149,11 @@ class TestListFeedPapers:
         body = resp.json()
         assert body["total"] == 1
         assert len(body["papers"]) == 1
-        assert body["papers"][0]["is_read"] is False
 
-        # Verify SQL contained the WHERE clause for is_read
+        # Verify SQL uses paper_user_state for unread filtering
         fetch_call = conn.fetch.call_args
         sql = fetch_call[0][0]
-        assert "is_read = FALSE" in sql
+        assert "COALESCE(pus.status, 'new') != 'read'" in sql
 
     def test_empty_feed(self, client):
         """Feed returns empty list when no papers exist."""
@@ -201,10 +192,10 @@ class TestMarkPaperRead:
         assert body["status"] == "ok"
         assert body["paper_id"] == 42
 
-        # Verify the UPDATE SQL was called with the right paper_id
+        # Verify the SELECT SQL was called with the right paper_id
         fetchrow_call = conn.fetchrow.call_args
         sql = fetchrow_call[0][0]
-        assert "UPDATE papers SET is_read = TRUE" in sql
+        assert "SELECT id FROM papers WHERE id" in sql
         assert fetchrow_call[0][1] == 42
 
     def test_mark_paper_read_writes_paper_user_state(self, client):

@@ -126,7 +126,7 @@ async def test_generate_cards_core_success():
     with (
         patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
         patch.object(
-            generation, "_insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
+            generation, "insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
         ),
     ):
         result = await generation.generate_cards_core(
@@ -196,7 +196,7 @@ async def test_generate_cards_core_propagates_progress():
 
     with (
         patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
-        patch.object(generation, "_insert_card", AsyncMock(return_value=_make_card_row())),
+        patch.object(generation, "insert_card", AsyncMock(return_value=_make_card_row())),
     ):
         await generation.generate_cards_core(
             pool=pool,

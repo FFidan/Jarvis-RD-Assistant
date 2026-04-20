@@ -11,11 +11,11 @@ import logging
 from datetime import UTC, datetime
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import jobs as jobs_lib
 from starlette.responses import StreamingResponse
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.extraction import extract_fields_for_paper
 from app.models import (
     BatchExtractionRequest,
@@ -41,9 +41,12 @@ router = APIRouter(prefix="/api", tags=["extractions"])
 
 @router.get("/extraction-templates", response_model=list[ExtractionTemplateResponse])
 @limiter.limit("60/minute")
-async def list_templates(request: Request) -> list[ExtractionTemplateResponse]:
+async def list_templates(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[ExtractionTemplateResponse]:
     """List all extraction templates."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         try:
             rows = await conn.fetch(
                 "SELECT * FROM extraction_templates ORDER BY is_default DESC, name"
@@ -69,11 +72,13 @@ async def list_templates(request: Request) -> list[ExtractionTemplateResponse]:
 @router.post("/extraction-templates", response_model=ExtractionTemplateResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_template(
-    request: Request, body: ExtractionTemplateCreate
+    request: Request,
+    body: ExtractionTemplateCreate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ExtractionTemplateResponse:
     """Create a new extraction template."""
     fields_json = [f.model_dump() for f in body.fields]
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         try:
             row = await conn.fetchrow(
                 """INSERT INTO extraction_templates (name, description, fields, is_default)
@@ -103,10 +108,13 @@ async def create_template(
 @router.put("/extraction-templates/{template_id}", response_model=ExtractionTemplateResponse)
 @limiter.limit("30/minute")
 async def update_template(
-    request: Request, template_id: int, body: ExtractionTemplateUpdate
+    request: Request,
+    template_id: int,
+    body: ExtractionTemplateUpdate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ExtractionTemplateResponse:
     """Update an extraction template."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         try:
             existing = await conn.fetchrow(
                 "SELECT * FROM extraction_templates WHERE id = $1", template_id
@@ -213,9 +221,13 @@ async def extract_paper(
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])
 @limiter.limit("60/minute")
-async def get_paper_extractions(request: Request, paper_id: int) -> list[ExtractionResponse]:
+async def get_paper_extractions(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[ExtractionResponse]:
     """Get all extractions for a paper."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         try:
             rows = await conn.fetch(
                 """SELECT id, paper_id, template_id, extractions, extraction_model, created_at
@@ -249,10 +261,14 @@ async def get_paper_extractions(request: Request, paper_id: int) -> list[Extract
 
 @router.post("/extractions/batch")
 @limiter.limit("2/minute")
-async def batch_extract_papers(request: Request, body: BatchExtractionRequest) -> dict[str, object]:
+async def batch_extract_papers(
+    request: Request,
+    body: BatchExtractionRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, object]:
     """Enqueue a background job to batch-extract fields for multiple papers."""
     job_id = await jobs_lib.enqueue(
-        request.app.state.db_pool,
+        db_pool,
         "extraction.batch",
         payload={
             "paper_ids": body.paper_ids,
@@ -269,6 +285,7 @@ async def get_extraction_table(
     template_id: int,
     paper_ids: str | None = None,
     format: str = Query(default="json", pattern="^(json|csv)$"),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Get cross-paper extraction comparison table.
 
@@ -281,7 +298,7 @@ async def get_extraction_table(
     format : str, optional
         Response format: ``json`` (default) or ``csv``.
     """
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Fetch template fields (needed for CSV column headers)
         try:
             template_row = await conn.fetchrow(

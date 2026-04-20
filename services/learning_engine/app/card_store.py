@@ -22,7 +22,7 @@ async def insert_card(
     evidence: dict | None,
     fsrs_state: dict,
     due_at: datetime,
-):
+) -> asyncpg.Record | None:
     """Insert a card row and return the created record."""
     return await conn.fetchrow(
         """INSERT INTO cards (deck_id, paper_id, card_type, front, back,

@@ -27,9 +27,8 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
     If the column is absent from the Record's keys the field defaults to
     ``None``.  This means callers that use ``SELECT *`` on the base ``papers``
     table will get the stored value, while callers that project a subset of
-    columns will silently omit it.  ``is_read`` and ``discovered_at`` use
-    ``.get()`` with safe defaults for the same reason (they may come from
-    joined user-state columns).
+    columns will silently omit it.  ``discovered_at`` uses ``.get()`` with a
+    safe default for the same reason (it may come from a joined expression).
     """
     return PaperResponse(
         id=row["id"],
@@ -46,7 +45,6 @@ def row_to_paper_response(row: asyncpg.Record) -> PaperResponse:
         citation_count=row["citation_count"],
         priority_score=row["priority_score"] if "priority_score" in row.keys() else None,
         metadata=row["metadata"] or {},
-        is_read=row.get("is_read", False),
         discovered_at=row.get("discovered_at"),
         created_at=row["created_at"],
     )
@@ -68,7 +66,6 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         pdf_downloaded=row["pdf_downloaded"],
         citation_count=row["citation_count"],
         metadata=row["metadata"] or {},
-        is_read=row.get("is_read", False),
         discovered_at=row.get("discovered_at"),
         created_at=row["created_at"],
         priority_score=row.get("priority_score"),
@@ -163,19 +160,3 @@ def deduplicate_by_paper_id(results: list[dict]) -> list[dict]:
         if pid not in seen or r.get("score", 0) > seen[pid].get("score", 0):
             seen[pid] = r
     return list(seen.values())
-
-
-# ---------------------------------------------------------------------------
-# Naming note: mark_paper_read (in app/routers/papers.py)
-#
-# Despite its name suggesting a simple read-state toggle, ``mark_paper_read``
-# performs TWO writes:
-#   1. ``UPDATE papers SET is_read = TRUE`` — sets the legacy boolean flag.
-#   2. ``INSERT INTO paper_user_state (paper_id, status) VALUES ($1, 'read')
-#       ON CONFLICT ... DO UPDATE SET status = 'read'`` — upserts the
-#       paper_user_state row, which is the canonical user-state store.
-#
-# Callers should be aware of this dual side-effect.  A future refactor should
-# either rename the function (e.g. ``upsert_paper_read_state``) or split the
-# two operations.
-# ---------------------------------------------------------------------------

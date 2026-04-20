@@ -27,9 +27,6 @@ if "qdrant_client.models" not in sys.modules:
         setattr(_fake_qm, _attr, MagicMock())
     sys.modules["qdrant_client.models"] = _fake_qm
 
-if "fitz" not in sys.modules:
-    sys.modules["fitz"] = MagicMock()
-
 if "tiktoken" not in sys.modules:
     _fake_tiktoken = types.ModuleType("tiktoken")
     setattr(_fake_tiktoken, "get_encoding", MagicMock(return_value=MagicMock()))
@@ -86,7 +83,8 @@ def _make_http_client(*, litellm_healthy: bool = True) -> AsyncMock:
 @pytest.fixture()
 def _app():
     """Yield an app instance with all dependencies mocked — no lifespan startup."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()

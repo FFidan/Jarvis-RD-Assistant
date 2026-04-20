@@ -5,7 +5,7 @@ from datetime import datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.card_store import insert_card as _insert_card
+from app.card_store import insert_card
 from app.converters import row_to_card_response
 from app.deps import get_db_pool, get_fsrs_manager, limiter
 from app.fsrs_manager import FSRSManager
@@ -28,7 +28,7 @@ async def create_card(
         evidence = body.evidence.model_dump() if body.evidence else {}
 
         try:
-            row = await _insert_card(
+            row = await insert_card(
                 conn,
                 body.deck_id,
                 body.paper_id,
@@ -94,9 +94,7 @@ async def update_card(
     """Update a card's content (does not affect FSRS state)."""
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            existing = await conn.fetchrow(
-                "SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id
-            )
+            existing = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
             if not existing:
                 raise HTTPException(status_code=404, detail="Card not found")
 

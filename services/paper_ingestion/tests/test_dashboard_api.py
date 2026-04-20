@@ -16,10 +16,8 @@ from unittest.mock import AsyncMock, MagicMock
 # ---------------------------------------------------------------------------
 # Stub heavy native modules that are unavailable outside Docker.
 # Must happen before any ``import app.*`` that reaches pdf_processor.
+# (fitz is already stubbed by conftest.py)
 # ---------------------------------------------------------------------------
-for _mod_name in ("fitz",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 if "qdrant_client" not in sys.modules:
     fake_qdrant = types.ModuleType("qdrant_client")
     fake_qdrant.AsyncQdrantClient = MagicMock()
@@ -56,7 +54,6 @@ class FakeRecord(dict):
 
 def _make_paper_record(
     paper_id: int = 1,
-    is_read: bool = False,
     source_type: str = "arxiv",
     summary_brief: str | None = "Brief summary",
     tldr: str | None = None,
@@ -79,7 +76,6 @@ def _make_paper_record(
         pdf_downloaded=False,
         citation_count=0,
         metadata={},
-        is_read=is_read,
         discovered_at=_NOW,
         created_at=_NOW,
         priority_score=None,
@@ -107,7 +103,6 @@ def _make_detail_paper_record(paper_id: int = 1) -> FakeRecord:
         pdf_downloaded=False,
         citation_count=0,
         metadata={},
-        is_read=False,
         discovered_at=_NOW,
         created_at=_NOW,
         priority_score=None,
@@ -140,7 +135,8 @@ def _make_pool_and_conn() -> tuple[MagicMock, AsyncMock]:
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()
@@ -259,9 +255,7 @@ async def test_feed_filter_by_source(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get(
-            "/api/papers/feed", params={"source_types": "semantic_scholar"}
-        )
+        resp = await client.get("/api/papers/feed", params={"source_types": "semantic_scholar"})
 
     assert resp.status_code == 200
     fetch_call = conn.fetch.call_args
@@ -343,9 +337,7 @@ async def test_paper_detail_includes_user_state(_app):
     app, conn = _app
 
     paper_row = _make_detail_paper_record(paper_id=1)
-    user_state_row = FakeRecord(
-        status="reading", rating=4, user_notes="Great paper", flagged=False
-    )
+    user_state_row = FakeRecord(status="reading", rating=4, user_notes="Great paper", flagged=False)
 
     # fetchrow calls: paper, summary, user_state
     conn.fetchrow.side_effect = [paper_row, None, user_state_row]

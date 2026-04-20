@@ -7,9 +7,9 @@ SHOWING_FRONT -> SHOWING_BACK -> (loop or END).
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from html import escape as _html_escape
 
+from jarvis_common.time_utils import utc_now_iso
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     CallbackQueryHandler,
@@ -112,7 +112,7 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return ConversationHandler.END
 
     context.user_data["cards_reviewed"] = 0
-    context.user_data["review_start_time"] = datetime.now(UTC).isoformat()
+    context.user_data["review_start_time"] = utc_now_iso()
 
     card = await _fetch_next_card(context)
     if card is None:

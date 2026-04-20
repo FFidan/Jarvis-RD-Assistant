@@ -34,7 +34,7 @@ const makePaper = (id: number, title: string, pdf_downloaded = true) => ({
   id, external_id: `arxiv:00${id}`, source_type: 'arxiv' as const, title,
   authors: [], abstract: null, published_date: null, url: '', pdf_url: null,
   pdf_local_path: null, pdf_downloaded, citation_count: 0,
-  priority_score: null, metadata: {}, is_read: false,
+  priority_score: null, metadata: {},
   discovered_at: null, created_at: '', summary_brief: null, tldr: null,
   confidence: null, user_status: 'new' as const, rating: null,
 });

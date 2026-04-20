@@ -77,7 +77,7 @@ async def test_create_card_success_uses_evidence_payload():
     fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
 
     with patch.object(
-        cards, "_insert_card", AsyncMock(return_value=_make_card_row(id=5, paper_id=7))
+        cards, "insert_card", AsyncMock(return_value=_make_card_row(id=5, paper_id=7))
     ) as mock_insert:
         response = await cards.create_card.__wrapped__(
             MagicMock(),
@@ -191,7 +191,7 @@ async def test_create_card_raises_404_on_fk_violation_deck():
     exc = asyncpg.ForeignKeyViolationError()
     setattr(exc, "constraint_name", "cards_deck_id_fkey")  # type: ignore[attr-defined]
 
-    with patch.object(cards, "_insert_card", AsyncMock(side_effect=exc)):
+    with patch.object(cards, "insert_card", AsyncMock(side_effect=exc)):
         with pytest.raises(HTTPException, match="Deck not found") as exc_info:
             await cards.create_card.__wrapped__(
                 MagicMock(),

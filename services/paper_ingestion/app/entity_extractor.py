@@ -145,7 +145,7 @@ async def _find_similar_entity(
         if results.points:
             return results.points[0].payload.get("entity_id")
     except Exception:
-        logger.debug("Qdrant similarity search failed for type=%s", entity_type, exc_info=True)
+        logger.warning("Qdrant similarity search failed for type=%s", entity_type, exc_info=True)
     return None
 
 

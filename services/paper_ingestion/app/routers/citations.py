@@ -8,10 +8,11 @@ import logging
 from typing import Annotated
 
 import asyncpg
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from jarvis_common.auth import verify_api_key
 
 from app.citations import build_citation_graph, sync_citations_for_paper
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.models import (
     BatchCitationFetchResponse,
     CitationFetchResponse,
@@ -22,7 +23,11 @@ from app.sources.semantic_scholar_source import SemanticScholarSource
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/citations", tags=["citations"])
+router = APIRouter(
+    prefix="/api/citations",
+    tags=["citations"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 def _get_s2_source(request: Request) -> SemanticScholarSource:
@@ -44,17 +49,22 @@ async def get_citation_graph(
     request: Request,
     paper_ids: Annotated[list[int], Query(max_length=100)],
     depth: int = Query(default=1, ge=1, le=2),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> CitationGraphResponse:
     """Build a citation graph for the given paper IDs."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         return await build_citation_graph(conn, paper_ids, depth)
 
 
 @router.post("/batch-fetch", response_model=BatchCitationFetchResponse)
 @limiter.limit("2/minute")
-async def batch_fetch_citations(request: Request, background_tasks: BackgroundTasks):
+async def batch_fetch_citations(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
     """Queue citation fetching for all papers without citations_fetched_at."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT id FROM papers
                WHERE citations_fetched_at IS NULL
@@ -71,7 +81,6 @@ async def batch_fetch_citations(request: Request, background_tasks: BackgroundTa
     # Capture references before creating the closure — after the response is
     # sent the request object becomes invalid (PI-003).
     s2_source = _get_s2_source(request)
-    db_pool = request.app.state.db_pool
 
     async def _fetch_batch(
         pool: asyncpg.Pool, source: SemanticScholarSource, pids: list[int]
@@ -88,10 +97,13 @@ async def batch_fetch_citations(request: Request, background_tasks: BackgroundTa
 
 @router.post("/{paper_id}/fetch", response_model=CitationFetchResponse)
 @limiter.limit("10/minute")
-async def fetch_citations_for_paper(request: Request, paper_id: int) -> CitationFetchResponse:
+async def fetch_citations_for_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> CitationFetchResponse:
     """Trigger citation fetch from S2 for a single paper."""
     s2_source = _get_s2_source(request)
-    db_pool = request.app.state.db_pool
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -102,9 +114,13 @@ async def fetch_citations_for_paper(request: Request, paper_id: int) -> Citation
 
 @router.get("/{paper_id}", response_model=list[CitationRelation])
 @limiter.limit("60/minute")
-async def get_paper_citations(request: Request, paper_id: int) -> list[CitationRelation]:
+async def get_paper_citations(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[CitationRelation]:
     """Get stored citation relationships for a paper."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
             raise HTTPException(404, f"Paper {paper_id} not found")

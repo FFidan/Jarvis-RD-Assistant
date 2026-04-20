@@ -16,9 +16,19 @@ logger = logging.getLogger(__name__)
 
 _internal_app = FastAPI(title="JARVIS Telegram Bot Internal API", docs_url=None, redoc_url=None)
 
-# Module-level handles set by start_internal_server; used by post_shutdown for graceful stop.
-_server: uvicorn.Server | None = None
-_server_task: asyncio.Task | None = None  # type: ignore[type-arg]
+
+class _ServerState:
+    """Holds uvicorn server handles set by :func:`start_internal_server`.
+
+    Replaces module-level ``global`` mutation so callers can access and cancel
+    the server without relying on ``global`` keyword side-effects.
+    """
+
+    server: uvicorn.Server | None = None
+    task: asyncio.Task | None = None  # type: ignore[type-arg]
+
+
+_server_state = _ServerState()
 
 
 @_internal_app.get("/health")
@@ -50,8 +60,6 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
     port:
         TCP port to listen on (default 8002).
     """
-    global _server, _server_task
-
     # F-01: Refuse to start unauthenticated internal API in DEV_MODE
     dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
     api_key = os.getenv("JARVIS_API_KEY", "")
@@ -71,10 +79,10 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         # Reuse the running asyncio event loop managed by PTB
         loop="none",
     )
-    _server = uvicorn.Server(config)
+    _server_state.server = uvicorn.Server(config)
 
     # Capture this task's handle so post_shutdown can cancel/await it
-    _server_task = asyncio.current_task()
+    _server_state.task = asyncio.current_task()
 
     def _on_done(task: asyncio.Task) -> None:  # type: ignore[type-arg]
         if not task.cancelled():
@@ -86,8 +94,8 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
                     exc_info=exc,
                 )
 
-    if _server_task is not None:
-        _server_task.add_done_callback(_on_done)
+    if _server_state.task is not None:
+        _server_state.task.add_done_callback(_on_done)
 
     # serve() blocks until the server shuts down
-    await _server.serve()
+    await _server_state.server.serve()

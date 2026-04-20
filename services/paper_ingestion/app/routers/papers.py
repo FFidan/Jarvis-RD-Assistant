@@ -263,7 +263,7 @@ async def mark_paper_read(
     """
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "UPDATE papers SET is_read = TRUE WHERE id = $1 RETURNING id",
+            "SELECT id FROM papers WHERE id = $1",
             paper_id,
         )
         if not row:

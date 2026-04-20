@@ -33,7 +33,6 @@ export interface Paper {
   citation_count: number;
   priority_score: number | null;
   metadata: Record<string, unknown>;
-  is_read: boolean;
   discovered_at: string | null;
   created_at: string;
 }

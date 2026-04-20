@@ -11,7 +11,6 @@ import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-sys.modules.setdefault("fitz", MagicMock())
 sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
 sys.modules.setdefault("qdrant_client", MagicMock(AsyncQdrantClient=MagicMock()))
 sys.modules.setdefault(

@@ -6,11 +6,11 @@ embedding storage.
 """
 
 import asyncio
+import functools
 import ipaddress
 import logging
 import os
 import socket
-import threading
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -44,20 +44,19 @@ ALLOWED_PDF_DOMAINS: frozenset[str] = frozenset(
 # Marker PDF text extraction (replaces fitz-based text extraction)
 # ---------------------------------------------------------------------------
 
-_marker_lock = threading.Lock()
-_marker_models = None
 
-
+@functools.lru_cache(maxsize=1)
 def _get_marker_models():
-    """Lazy-load Marker models (expensive, cached after first call)."""
-    global _marker_models
-    if _marker_models is None:
-        with _marker_lock:
-            if _marker_models is None:
-                logger.info("Loading Marker PDF models (first call, may take ~30s)...")
-                _marker_models = create_model_dict()
-                logger.info("Marker models loaded.")
-    return _marker_models
+    """Lazy-load Marker models (expensive, cached after first call).
+
+    ``@lru_cache(maxsize=1)`` ensures the expensive ``create_model_dict()``
+    call runs at most once per process. Python's GIL plus lru_cache's internal
+    lock makes this safe under concurrent calls without a separate threading.Lock.
+    """
+    logger.info("Loading Marker PDF models (first call, may take ~30s)...")
+    models = create_model_dict()
+    logger.info("Marker models loaded.")
+    return models
 
 
 def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:

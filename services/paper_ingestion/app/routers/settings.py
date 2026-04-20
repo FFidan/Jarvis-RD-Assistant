@@ -8,13 +8,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import httpx
 from apscheduler.triggers.cron import CronTrigger
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
 from pydantic import BaseModel
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.models import (
     ConfigEntry,
     NudgeResponse,
@@ -128,16 +129,23 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
 
 @router.get("/config", response_model=list[ConfigEntry])
 @limiter.limit("60/minute")
-async def list_config(request: Request) -> list[ConfigEntry]:
-    async with request.app.state.db_pool.acquire() as conn:
+async def list_config(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[ConfigEntry]:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT key, value FROM user_config ORDER BY key")
     return [ConfigEntry(key=r["key"], value=r["value"]) for r in rows]
 
 
 @router.get("/config/{key}")
 @limiter.limit("60/minute")
-async def get_config(request: Request, key: str) -> ConfigEntry:
-    async with request.app.state.db_pool.acquire() as conn:
+async def get_config(
+    request: Request,
+    key: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> ConfigEntry:
+    async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT key, value FROM user_config WHERE key = $1", key)
     if not row:
         raise HTTPException(404, f"Config key '{key}' not found")
@@ -146,7 +154,12 @@ async def get_config(request: Request, key: str) -> ConfigEntry:
 
 @router.put("/config/{key}")
 @limiter.limit("30/minute")
-async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEntry:
+async def set_config(
+    request: Request,
+    key: str,
+    body: ConfigEntry,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> ConfigEntry:
     if key not in _ALLOWED_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
     if key in ROLE_TO_ALIAS:
@@ -164,7 +177,7 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
     # For pulse.cron: read the current value before overwriting so we can roll back.
     old_pulse_cron: str | None = None
     if key == "pulse.cron":
-        async with request.app.state.db_pool.acquire() as conn:
+        async with db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
@@ -172,7 +185,7 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
     # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
     # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
     # storing e.g. '"0 4 * * *"' instead of '"0 4 * * *"' in JSONB. (WEB-C01)
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         await conn.execute(
             """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
             ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
@@ -218,7 +231,7 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
                         "INSERT INTO user_config (key, value) VALUES ('pulse.cron', $1::jsonb)"
                         " ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()"
                     )
-                    async with request.app.state.db_pool.acquire() as conn:
+                    async with db_pool.acquire() as conn:
                         if old_pulse_cron is not None:
                             await conn.execute(_rollback_sql, old_pulse_cron)
                         else:
@@ -263,16 +276,24 @@ async def set_config(request: Request, key: str, body: ConfigEntry) -> ConfigEnt
 
 @router.get("/nudges", response_model=list[NudgeResponse])
 @limiter.limit("60/minute")
-async def list_nudges(request: Request) -> list[NudgeResponse]:
-    async with request.app.state.db_pool.acquire() as conn:
+async def list_nudges(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[NudgeResponse]:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM scheduled_nudges ORDER BY id")
     return [NudgeResponse(**dict(r)) for r in rows]
 
 
 @router.put("/nudges/{nudge_id}", response_model=NudgeResponse)
 @limiter.limit("30/minute")
-async def update_nudge(request: Request, nudge_id: int, body: NudgeUpdate) -> NudgeResponse:
-    async with request.app.state.db_pool.acquire() as conn:
+async def update_nudge(
+    request: Request,
+    nudge_id: int,
+    body: NudgeUpdate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> NudgeResponse:
+    async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM scheduled_nudges WHERE id = $1", nudge_id)
         if not existing:
             raise HTTPException(404, f"Nudge {nudge_id} not found")
@@ -321,23 +342,30 @@ class ReorderRequest(BaseModel):
 
 @router.get("/sources", response_model=list[SourceResponse])
 @limiter.limit("60/minute")
-async def list_sources(request: Request) -> list[SourceResponse]:
-    async with request.app.state.db_pool.acquire() as conn:
+async def list_sources(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[SourceResponse]:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
     return [SourceResponse(**dict(r)) for r in rows]
 
 
 @router.patch("/sources/reorder", response_model=list[SourceResponse])
 @limiter.limit("10/minute")
-async def reorder_sources(request: Request, body: ReorderRequest) -> list[SourceResponse]:
+async def reorder_sources(
+    request: Request,
+    body: ReorderRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[SourceResponse]:
     """Persist UI drag-and-drop order by assigning display_order = position index."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT source_type FROM paper_sources")
     existing = {r["source_type"] for r in rows}
     missing = set(body.source_types) - existing
     if missing:
         raise HTTPException(400, detail=f"Unknown sources: {sorted(missing)}")
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         async with conn.transaction():
             for idx, stype in enumerate(body.source_types, start=1):
                 await conn.execute(
@@ -345,15 +373,20 @@ async def reorder_sources(request: Request, body: ReorderRequest) -> list[Source
                     idx,
                     stype,
                 )
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM paper_sources ORDER BY display_order ASC, id ASC")
     return [SourceResponse(**dict(r)) for r in rows]
 
 
 @router.put("/sources/{source_id}", response_model=SourceResponse)
 @limiter.limit("30/minute")
-async def update_source(request: Request, source_id: int, body: SourceUpdate) -> SourceResponse:
-    async with request.app.state.db_pool.acquire() as conn:
+async def update_source(
+    request: Request,
+    source_id: int,
+    body: SourceUpdate,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> SourceResponse:
+    async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM paper_sources WHERE id = $1", source_id)
         if not existing:
             raise HTTPException(404, f"Source {source_id} not found")
@@ -378,9 +411,12 @@ async def update_source(request: Request, source_id: int, body: SourceUpdate) ->
 
 @router.get("/analytics/papers-by-source", response_model=list[PapersBySourceItem])
 @limiter.limit("60/minute")
-async def papers_by_source(request: Request) -> list[dict]:
+async def papers_by_source(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[dict]:
     """Return paper counts grouped by source type."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT source_type, COUNT(*) AS count"
             " FROM papers GROUP BY source_type ORDER BY count DESC"
@@ -390,9 +426,12 @@ async def papers_by_source(request: Request) -> list[dict]:
 
 @router.get("/analytics/papers-by-status", response_model=list[PapersByStatusItem])
 @limiter.limit("60/minute")
-async def papers_by_status(request: Request) -> list[dict]:
+async def papers_by_status(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[dict]:
     """Return paper counts grouped by user-state status."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT COALESCE(pus.status, 'new') AS status, COUNT(*) AS count

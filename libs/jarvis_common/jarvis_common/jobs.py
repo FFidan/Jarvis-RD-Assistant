@@ -34,6 +34,10 @@ HandlerFn = Callable[
     Awaitable[dict[str, Any]],
 ]
 
+# SSE keepalive / max-stream constants shared across routers
+_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
+_MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+
 _HANDLERS: dict[str, HandlerFn] = {}
 
 # Strip ANSI escape codes and absolute paths from error messages before persisting.
@@ -369,7 +373,10 @@ async def worker_loop(
                 try:
                     await _reap_stale_jobs(pool)
                 except Exception:
-                    logger.exception("jobs.worker_loop stale-job reaper failed — continuing")
+                    logger.warning(
+                        "jobs.worker_loop stale-job reaper failed — continuing",
+                        exc_info=True,
+                    )
 
             if kind_list:
                 rows = await pool.fetch(

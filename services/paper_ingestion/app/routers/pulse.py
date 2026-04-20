@@ -16,7 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import current_user_id, verify_api_key
 from jarvis_common import jobs as jobs_lib
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.models import (
     PulseDeckResponse,
     PulseGenerateResponse,
@@ -41,7 +41,10 @@ router = APIRouter(
 
 @router.post("/generate", response_model=PulseGenerateResponse)
 @limiter.limit("3/hour")
-async def generate_pulse(request: Request) -> PulseGenerateResponse:
+async def generate_pulse(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
 
     Returns immediately with a ``job_id`` so the caller can poll
@@ -49,7 +52,7 @@ async def generate_pulse(request: Request) -> PulseGenerateResponse:
     prevent runaway LLM usage from accidental mass clicks.
     """
     logger.info("pulse.generate: enqueueing job")
-    job_id = await jobs_lib.enqueue(request.app.state.db_pool, "pulse.generate", payload={})
+    job_id = await jobs_lib.enqueue(db_pool, "pulse.generate", payload={})
     return PulseGenerateResponse(job_id=job_id, status="queued")
 
 
@@ -60,9 +63,12 @@ async def generate_pulse(request: Request) -> PulseGenerateResponse:
 
 @router.get("/today", response_model=PulseDeckResponse)
 @limiter.limit("30/minute")
-async def get_today(request: Request) -> PulseDeckResponse:
+async def get_today(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> PulseDeckResponse:
     """Fetch today's Pulse deck (404 if not generated yet)."""
-    deck = await load_today(request.app.state.db_pool)
+    deck = await load_today(db_pool)
     if deck is None:
         raise HTTPException(status_code=404, detail="No Pulse deck for today")
     return deck
@@ -78,9 +84,10 @@ async def get_today(request: Request) -> PulseDeckResponse:
 async def get_history(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PulseDeckResponse]:
     """Return Pulse decks from the last *days* days, newest first."""
-    return await load_history(request.app.state.db_pool, days=days)
+    return await load_history(db_pool, days=days)
 
 
 # ---------------------------------------------------------------------------
@@ -94,6 +101,7 @@ async def rate_card(
     request: Request,
     body: PulseRateRequest,
     user_id: int | None = Depends(current_user_id),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Persist a user rating for a Pulse-shown paper.
 
@@ -104,7 +112,7 @@ async def rate_card(
     Duplicate ratings (double-click) are handled by ON CONFLICT DO UPDATE.
     """
     try:
-        async with request.app.state.db_pool.acquire() as conn:
+        async with db_pool.acquire() as conn:
             # Guard: paper must exist in a pulse deck
             member = await conn.fetchval(
                 """SELECT 1 FROM pulse_cards pc
@@ -138,9 +146,13 @@ async def rate_card(
 
 @router.get("/explain/{card_id}")
 @limiter.limit("30/minute")
-async def explain_card(request: Request, card_id: int) -> dict:
+async def explain_card(
+    request: Request,
+    card_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict:
     """Return the reasoning + signal breakdown for a single Pulse card."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT id, reasoning, signals, llm_relevance, llm_novelty
@@ -170,9 +182,10 @@ async def explain_card(request: Request, card_id: int) -> dict:
 async def get_stats(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseStatsResponse:
     """Aggregate Pulse run stats over the past *days* days."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
             SELECT
@@ -232,7 +245,10 @@ async def get_stats(
 
 @router.get("/debug")
 @limiter.limit("30/minute")
-async def debug_pulse(request: Request) -> dict:
+async def debug_pulse(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict:
     """Return diagnostics for the latest Pulse deck.
 
     Includes:
@@ -240,9 +256,7 @@ async def debug_pulse(request: Request) -> dict:
     * Topic-embedding sanity check (non-null, correct dimension).
     * Top-10 card signal breakdown (paper_id, title, signals, final_score).
     """
-    pool = request.app.state.db_pool
-
-    async with pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Fetch the most recent deck row
         deck_row = await conn.fetchrow(
             """

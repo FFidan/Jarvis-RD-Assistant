@@ -30,9 +30,6 @@ if "qdrant_client.models" not in sys.modules:
         setattr(_fake_qm, _attr, MagicMock())
     sys.modules["qdrant_client.models"] = _fake_qm
 
-if "fitz" not in sys.modules:
-    sys.modules["fitz"] = MagicMock()
-
 if "tiktoken" not in sys.modules:
     _fake_tiktoken = types.ModuleType("tiktoken")
     _fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]

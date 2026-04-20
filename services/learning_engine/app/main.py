@@ -23,6 +23,7 @@ from jarvis_common import (
     http_exception_handler,
     init_pg_connection,
     rate_limit_exceeded_handler,
+    read_secret,
     validate_production_config,
     validation_exception_handler,
     verify_api_key,
@@ -76,7 +77,7 @@ async def lifespan(app: FastAPI):
             if row:
                 desired_retention = float(row["value"])
     except Exception:
-        logger.warning("Could not load fsrs.desired_retention, using default 0.9", exc_info=True)
+        logger.error("Could not load fsrs.desired_retention, using default 0.9", exc_info=True)
 
     litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
     app.state.fsrs_manager = FSRSManager(desired_retention=desired_retention)
@@ -87,7 +88,7 @@ async def lifespan(app: FastAPI):
     app.state.anki_exporter = AnkiExporter()
 
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
-    api_key = os.environ.get("JARVIS_API_KEY", "")
+    api_key = read_secret("JARVIS_API_KEY")
     if api_key:
         logger.info("API key authentication enabled")
     elif dev_mode:

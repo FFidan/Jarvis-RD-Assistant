@@ -30,6 +30,7 @@ from app.models import (
 )
 from app.services.summarization import generate_paper_summary
 from app.streaming import (
+    CrossPaperRagNoResults,
     _prepare_cross_paper_rag,
     _prepare_single_paper_rag,
     _sse_error_stream,
@@ -112,6 +113,7 @@ async def ask_paper(
     request: Request,
     paper_id: int,
     body: AskRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Answer a question about a specific paper using RAG.
 
@@ -137,7 +139,7 @@ async def ask_paper(
     http_client: httpx.AsyncClient = request.app.state.http_client
 
     messages, sources_list = await _prepare_single_paper_rag(
-        embedder, request.app.state.db_pool, paper_id, body, http_client
+        embedder, db_pool, paper_id, body, http_client
     )
 
     smart_model = get_smart_model()
@@ -176,6 +178,7 @@ async def ask_paper_stream(
     request: Request,
     paper_id: int,
     body: AskRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Stream RAG response for a single paper via SSE.
 
@@ -196,7 +199,7 @@ async def ask_paper_stream(
 
     try:
         messages, sources = await _prepare_single_paper_rag(
-            embedder, request.app.state.db_pool, paper_id, body, http_client
+            embedder, db_pool, paper_id, body, http_client
         )
     except HTTPException:
         raise
@@ -227,6 +230,7 @@ async def ask_paper_stream(
 async def ask_cross_paper(
     request: Request,
     body: CrossPaperAskRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Ask a question across ALL embedded papers.
 
@@ -253,13 +257,13 @@ async def ask_cross_paper(
     embedder: Embedder = request.app.state.embedder
     http_client: httpx.AsyncClient = request.app.state.http_client
 
-    result = await _prepare_cross_paper_rag(embedder, request.app.state.db_pool, body, http_client)
+    result = await _prepare_cross_paper_rag(embedder, db_pool, body, http_client)
 
-    # Short-circuit when no chunks were found (helper returns a dict)
-    if isinstance(result, dict):
-        return result
+    # Short-circuit when no chunks were found
+    if isinstance(result, CrossPaperRagNoResults):
+        return {"answer": result.answer, "sources": result.sources}
 
-    messages, sources_list = result
+    messages, sources_list = result.messages, result.sources
 
     smart_model = get_smart_model()
 
@@ -296,6 +300,7 @@ async def ask_cross_paper(
 async def ask_cross_paper_stream(
     request: Request,
     body: CrossPaperAskRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Stream cross-paper RAG response via SSE.
 
@@ -313,9 +318,7 @@ async def ask_cross_paper_stream(
     http_client: httpx.AsyncClient = request.app.state.http_client
 
     try:
-        result = await _prepare_cross_paper_rag(
-            embedder, request.app.state.db_pool, body, http_client
-        )
+        result = await _prepare_cross_paper_rag(embedder, db_pool, body, http_client)
     except HTTPException:
         raise
     except Exception as exc:
@@ -326,12 +329,13 @@ async def ask_cross_paper_stream(
         )
 
     # Short-circuit when no chunks were found -- return canned answer as SSE
-    if isinstance(result, dict):
+    if isinstance(result, CrossPaperRagNoResults):
+        no_result = result
 
         async def _no_results_stream():
-            yield f"data: {json.dumps({'type': 'token', 'content': result['answer']})}\n\n"
-            yield f"data: {json.dumps({'type': 'sources', 'sources': result['sources']})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'full_answer': result['answer']})}\n\n"
+            yield f"data: {json.dumps({'type': 'token', 'content': no_result.answer})}\n\n"
+            yield f"data: {json.dumps({'type': 'sources', 'sources': no_result.sources})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'full_answer': no_result.answer})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -339,7 +343,7 @@ async def ask_cross_paper_stream(
             media_type="text/event-stream",
         )
 
-    messages, sources = result
+    messages, sources = result.messages, result.sources
 
     smart_model = get_smart_model()
 

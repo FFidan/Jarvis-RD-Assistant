@@ -7,6 +7,8 @@ import os
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
+from jarvis_common.secrets import read_secret
+
 logger = logging.getLogger(__name__)
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -19,7 +21,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     SECURITY: DEV_MODE only bypasses auth when JARVIS_API_KEY is *not set*.
     If a key is configured, it is always enforced — even in DEV_MODE.
     """
-    jarvis_api_key = os.environ.get("JARVIS_API_KEY", "")
+    jarvis_api_key = read_secret("JARVIS_API_KEY")
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     if request.url.path in _HEALTH_PATHS:
         return
@@ -63,7 +65,7 @@ def validate_production_config() -> None:
     """
     env = os.environ.get("ENVIRONMENT", "").lower()
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
-    api_key = os.environ.get("JARVIS_API_KEY", "")
+    api_key = read_secret("JARVIS_API_KEY")
 
     if env == "production" and dev_mode:
         raise RuntimeError("DEV_MODE=true is not allowed in ENVIRONMENT=production")

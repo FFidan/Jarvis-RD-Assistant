@@ -18,7 +18,7 @@ from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, JobError, job_handler
 
 from app.card_generator import CardGenerator
-from app.card_store import insert_card as _insert_card
+from app.card_store import insert_card
 from app.converters import row_to_card_response
 from app.deps import get_db_pool, limiter
 from app.fsrs_manager import FSRSManager
@@ -143,7 +143,7 @@ async def generate_cards_core(
             for card_data in verified_cards:
                 fsrs_state, due_at = fsrs_manager.create_new_card()
                 try:
-                    row = await _insert_card(
+                    row = await insert_card(
                         conn,
                         deck_id,
                         paper_id,
@@ -302,7 +302,9 @@ async def batch_generate_cards(
 
 
 @router.get("/api/generate/batch/{job_id}")
+@limiter.limit("10/minute")
 async def get_batch_status(
+    request: Request,
     job_id: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict[str, Any]:

@@ -16,8 +16,6 @@ from fastapi import HTTPException
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
 
-if "fitz" not in sys.modules:
-    sys.modules["fitz"] = MagicMock()
 if "tiktoken" not in sys.modules:
     fake_tiktoken = types.ModuleType("tiktoken")
     fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
@@ -41,6 +39,7 @@ from app.models import (  # noqa: E402
     PaperCreate,
     PaperResponse,
     PaperStatus,
+    SourceType,
     SummaryResponse,
 )
 from app.routers import papers  # noqa: E402
@@ -86,7 +85,6 @@ def _paper_row(id=1):
         metadata={},
         pdf_local_path=None,
         pdf_downloaded=False,
-        is_read=False,
         discovered_at=None,
         priority_score=None,
         created_at=datetime.now(UTC),
@@ -146,7 +144,7 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     paper_model = PaperResponse(
         id=3,
         external_id="paper-3",
-        source_type="arxiv",
+        source_type=SourceType.ARXIV,
         title="Paper 3",
         authors=["Ada"],
         url="https://example.com/papers/3",
@@ -159,14 +157,22 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
         summary_detailed="Detailed",
         key_findings=[KeyFinding(finding="Claim", quote="Quote")],
         confidence=Confidence.HIGH,
-        cross_references=[CrossReference(related_paper_id=4, relationship="extends", explanation="related")],
+        cross_references=[
+            CrossReference(related_paper_id=4, relationship="extends", explanation="related")
+        ],
         created_at=datetime.now(UTC),
     )
 
     with (
         patch.object(papers, "row_to_paper_response", return_value=paper_model) as paper_conv,
         patch.object(papers, "row_to_summary_response", return_value=summary_model) as summary_conv,
-        patch.object(papers, "row_to_chunk_response", return_value=FakeRecord(id=1, paper_id=3, chunk_index=0, content="chunk", created_at=datetime.now(UTC))) as chunk_conv,
+        patch.object(
+            papers,
+            "row_to_chunk_response",
+            return_value=FakeRecord(
+                id=1, paper_id=3, chunk_index=0, content="chunk", created_at=datetime.now(UTC)
+            ),
+        ) as chunk_conv,
     ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
@@ -185,7 +191,7 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
 
 @pytest.mark.asyncio
 async def test_mark_paper_read_updates_both_legacy_and_user_state_tables():
-    """mark_paper_read should update papers.is_read and upsert paper_user_state."""
+    """mark_paper_read should verify paper existence and upsert paper_user_state."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 7}
 
@@ -230,7 +236,7 @@ async def test_batch_save_rejects_oversized_requests():
     papers_payload = [
         PaperCreate(
             external_id=f"paper-{i}",
-            source_type="arxiv",
+            source_type=SourceType.ARXIV,
             title=f"Paper {i}",
             authors=["Ada"],
             url=f"https://example.com/{i}",
@@ -263,7 +269,9 @@ async def test_batch_save_returns_empty_list_for_empty_payload():
 @pytest.mark.asyncio
 async def test_submit_feedback_requires_rating_or_flagged():
     """submit_feedback should reject empty updates instead of writing blank state."""
-    with pytest.raises(HTTPException, match="At least one of 'rating' or 'flagged' must be provided."):
+    with pytest.raises(
+        HTTPException, match="At least one of 'rating' or 'flagged' must be provided."
+    ):
         await papers.submit_feedback.__wrapped__(
             SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=MagicMock()))),
             paper_id=7,

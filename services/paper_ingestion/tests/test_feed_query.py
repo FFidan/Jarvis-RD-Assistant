@@ -41,7 +41,7 @@ def test_build_feed_queries_collects_filters_and_pagination():
         date_to=date(2026, 3, 1),
     )
 
-    assert "p.is_read = FALSE" in query_parts.data_query
+    assert "COALESCE(pus.status, 'new') != 'read'" in query_parts.data_query
     assert "plainto_tsquery" in query_parts.data_query
     assert "COALESCE(pus.status, 'new') IN ($2, $3)" in query_parts.data_query
     assert "p.source_type IN ($4)" in query_parts.data_query

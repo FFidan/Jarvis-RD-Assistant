@@ -24,6 +24,9 @@ build/
 *.p12
 credentials.json
 
+# Docker Secrets — plain-text credential files
+secrets/*.txt
+
 # Docker local overrides
 docker-compose.override.yml
 

@@ -38,6 +38,12 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
 )
+
+
+class ScriptError(RuntimeError):
+    """Script-level error; caught by the __main__ block."""
+
+
 logger = logging.getLogger(__name__)
 
 if __package__:
@@ -197,8 +203,7 @@ async def main() -> None:
 
     pool = await asyncpg.create_pool(get_dsn(), min_size=1, max_size=5)
     if pool is None:
-        logger.error("Failed to create database pool")
-        sys.exit(1)
+        raise ScriptError("Failed to create database pool")
 
     qdrant = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
 
@@ -253,4 +258,8 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except ScriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)

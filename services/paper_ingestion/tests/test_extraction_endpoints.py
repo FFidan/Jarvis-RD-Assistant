@@ -7,14 +7,8 @@ Covers:
 - Paper extractions: GET /api/papers/{id}/extractions
 """
 
-import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in ("fitz",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 
 import asyncpg.exceptions
 import httpx
@@ -50,10 +44,15 @@ def _now():
 
 def _template_row(id=1, name="Default Template", description=None, is_default=True):
     return FakeRecord(
-        id=id, name=name, description=description,
-        fields=[{"name": "method", "label": "Method", "description": "Method used", "type": "text"}],
+        id=id,
+        name=name,
+        description=description,
+        fields=[
+            {"name": "method", "label": "Method", "description": "Method used", "type": "text"}
+        ],
         is_default=is_default,
-        created_at=_now(), updated_at=_now(),
+        created_at=_now(),
+        updated_at=_now(),
     )
 
 
@@ -65,7 +64,8 @@ def _template_row(id=1, name="Default Template", description=None, is_default=Tr
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()
@@ -114,10 +114,20 @@ async def test_create_template(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/extraction-templates", json={
-            "name": "New Template",
-            "fields": [{"name": "method", "label": "Method", "description": "Method used", "type": "text"}],
-        })
+        resp = await client.post(
+            "/api/extraction-templates",
+            json={
+                "name": "New Template",
+                "fields": [
+                    {
+                        "name": "method",
+                        "label": "Method",
+                        "description": "Method used",
+                        "type": "text",
+                    }
+                ],
+            },
+        )
 
     assert resp.status_code == 201
     body = resp.json()
@@ -133,9 +143,12 @@ async def test_update_template_not_found(_app):
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.put("/api/extraction-templates/999", json={
-            "name": "Updated Name",
-        })
+        resp = await client.put(
+            "/api/extraction-templates/999",
+            json={
+                "name": "Updated Name",
+            },
+        )
 
     assert resp.status_code == 404
 
@@ -164,16 +177,19 @@ async def test_create_template_table_missing_503(_app):
     """POST /api/extraction-templates returns 503 when table is missing."""
     app, conn, _ = _app
     conn.fetchrow.side_effect = asyncpg.exceptions.UndefinedTableError(
-        "relation \"extraction_templates\" does not exist"
+        'relation "extraction_templates" does not exist'
     )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.post("/api/extraction-templates", json={
-            "name": "Template",
-            "fields": [{"name": "f", "label": "F", "description": "d", "type": "text"}],
-        })
+        resp = await client.post(
+            "/api/extraction-templates",
+            json={
+                "name": "Template",
+                "fields": [{"name": "f", "label": "F", "description": "d", "type": "text"}],
+            },
+        )
 
     assert resp.status_code == 503
 
@@ -194,8 +210,18 @@ async def test_extraction_table_json(_app):
     # extraction rows
     conn.fetch.return_value = [
         FakeRecord(
-            paper_id=1, paper_title="Paper A",
-            extractions={"method": {"value": "GAN", "verified": True, "confidence": 0.9, "quote": None, "chunk_id": None, "page_number": None}},
+            paper_id=1,
+            paper_title="Paper A",
+            extractions={
+                "method": {
+                    "value": "GAN",
+                    "verified": True,
+                    "confidence": 0.9,
+                    "quote": None,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
         ),
     ]
 
@@ -219,15 +245,27 @@ async def test_extraction_table_csv(_app):
     )
     conn.fetch.return_value = [
         FakeRecord(
-            paper_id=1, paper_title="Paper A",
-            extractions={"method": {"value": "GAN", "verified": True, "confidence": 0.9, "quote": None, "chunk_id": None, "page_number": None}},
+            paper_id=1,
+            paper_title="Paper A",
+            extractions={
+                "method": {
+                    "value": "GAN",
+                    "verified": True,
+                    "confidence": 0.9,
+                    "quote": None,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
         ),
     ]
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        resp = await client.get("/api/extractions/table", params={"template_id": 1, "format": "csv"})
+        resp = await client.get(
+            "/api/extractions/table", params={"template_id": 1, "format": "csv"}
+        )
 
     assert resp.status_code == 200
     assert "text/csv" in resp.headers.get("content-type", "")
@@ -247,8 +285,19 @@ async def test_get_paper_extractions_found(_app):
     app, conn, _ = _app
     conn.fetch.return_value = [
         FakeRecord(
-            id=1, paper_id=42, template_id=1,
-            extractions={"method": {"value": "CNN", "verified": True, "confidence": 0.85, "quote": None, "chunk_id": None, "page_number": None}},
+            id=1,
+            paper_id=42,
+            template_id=1,
+            extractions={
+                "method": {
+                    "value": "CNN",
+                    "verified": True,
+                    "confidence": 0.85,
+                    "quote": None,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
             extraction_model="smart",
             created_at=_now(),
         ),

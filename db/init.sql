@@ -101,7 +101,6 @@ CREATE TABLE papers (
     citation_count  INTEGER DEFAULT 0,
     priority_score  FLOAT,
     metadata        JSONB DEFAULT '{}',
-    is_read         BOOLEAN DEFAULT FALSE,
     discovered_at   TIMESTAMPTZ DEFAULT NOW(),
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     citations_fetched_at TIMESTAMPTZ,
@@ -287,7 +286,6 @@ CREATE INDEX IF NOT EXISTS idx_cards_paper ON cards(paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_chunks_paper ON paper_chunks(paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_topics_topic ON paper_topics(topic_id);
 CREATE INDEX IF NOT EXISTS idx_papers_created ON papers(created_at);
-CREATE INDEX IF NOT EXISTS idx_papers_unread ON papers(is_read) WHERE is_read = FALSE;
 CREATE INDEX IF NOT EXISTS idx_papers_priority ON papers(priority_score DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_llm_usage_created ON llm_usage_log(created_at);
 
@@ -439,6 +437,13 @@ COMMENT ON TABLE tracked_authors IS 'Authors to track for new-publication alerts
 
 CREATE INDEX IF NOT EXISTS idx_tracked_authors_enabled
     ON tracked_authors(enabled) WHERE enabled = TRUE;
+
+-- Companion partial index for IS NULL author-name lookups (migration 029).
+-- The UNIQUE NULLS NOT DISTINCT constraint covers uniqueness; this index
+-- speeds up the IS NULL half of author-alert / author-tracking queries.
+CREATE INDEX IF NOT EXISTS idx_tracked_authors_name_null_s2
+    ON tracked_authors (author_name)
+    WHERE s2_author_id IS NULL;
 
 CREATE TABLE author_alert_log (
     id                SERIAL PRIMARY KEY,
@@ -640,6 +645,10 @@ CREATE TABLE IF NOT EXISTS jobs (
 CREATE INDEX IF NOT EXISTS idx_jobs_status_kind ON jobs(status, kind);
 CREATE INDEX IF NOT EXISTS idx_jobs_created_desc ON jobs(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_user_id ON jobs(user_id) WHERE user_id IS NOT NULL;
+-- Partial index for the worker poll loop and stale-job reaper (migration 029).
+CREATE INDEX IF NOT EXISTS idx_jobs_active
+    ON jobs (created_at)
+    WHERE status IN ('queued', 'running');
 
 -- Register new source types for Discovery & Pulse
 INSERT INTO paper_sources (source_type, enabled, config)

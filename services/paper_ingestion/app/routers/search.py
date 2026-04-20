@@ -181,8 +181,8 @@ async def search_papers(
                 author=body.author,
             )
             return source_name, papers
-        except Exception as exc:
-            logger.warning("Source %s search failed: %s", source_name, exc)
+        except Exception as exc:  # broad: heterogeneous plugins raise different exception types
+            logger.warning("Source %s search failed: %s", source_name, exc, exc_info=True)
             return source_name, []
 
     raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
@@ -286,8 +286,8 @@ async def search_papers_preview(
                 author=body.author,
             )
             return source_name, papers
-        except Exception as exc:
-            logger.warning("Source %s preview search failed: %s", source_name, exc)
+        except Exception as exc:  # broad: heterogeneous plugins raise different exception types
+            logger.warning("Source %s preview search failed: %s", source_name, exc, exc_info=True)
             degraded_sources.append(source_name)
             return source_name, []
 

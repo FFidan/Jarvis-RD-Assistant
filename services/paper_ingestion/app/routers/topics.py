@@ -5,12 +5,17 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update
+from jarvis_common.auth import verify_api_key
 
 from app.deps import get_db_pool, limiter
 from app.models import TopicCreate, TopicResponse, TopicUpdate
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/api/topics", tags=["topics"])
+router = APIRouter(
+    prefix="/api/topics",
+    tags=["topics"],
+    dependencies=[Depends(verify_api_key)],
+)
 
 _TOPIC_ALLOWED_COLUMNS: set[str] = {"name", "query_terms", "enabled", "category", "description"}
 

@@ -126,7 +126,7 @@ async def stage1_embedding_filter(
         topic_texts = [f"{t.name} {t.description or ''}".strip() for t in profile.topics]
         try:
             topic_embeddings = await embedder.embed_texts(topic_texts)
-        except Exception:
+        except RuntimeError:
             logger.warning("stage1: failed to embed topics, topic_sim=0.0", exc_info=True)
             topic_embeddings = []
 
@@ -134,7 +134,7 @@ async def stage1_embedding_filter(
     abstracts = [f"{c.title}. {c.abstract or ''}".strip() for c in candidates]
     try:
         candidate_embeddings = await embedder.embed_texts(abstracts)
-    except Exception:
+    except RuntimeError:
         logger.warning("stage1: failed to embed candidates", exc_info=True)
         # Return all with zero signals if embedding fails
         return [

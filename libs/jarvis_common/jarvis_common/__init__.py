@@ -40,6 +40,7 @@ from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_d
 from jarvis_common.rate_limiter import SourceRateLimiter
 from jarvis_common.ratelimit import create_limiter, rate_limit_exceeded_handler
 from jarvis_common.request_id import RequestIDMiddleware
+from jarvis_common.secrets import read_secret
 from jarvis_common.text_utils import author_matches, normalize_author_name
 
 __all__ = [
@@ -84,4 +85,5 @@ __all__ = [
     "LLM_TIMEOUT_LONG",
     "LLM_TIMEOUT_SHORT",
     "LITELLM_FALLBACK_ENV_NAMES",
+    "read_secret",
 ]

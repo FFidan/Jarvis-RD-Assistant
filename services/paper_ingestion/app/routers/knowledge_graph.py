@@ -5,9 +5,10 @@ Entity extraction, graph queries, and entity management.
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Request
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from app.deps import limiter
+from app.deps import get_db_pool, limiter
 from app.entity_extractor import (
     extract_entities_for_paper,
     get_knowledge_graph,
@@ -33,7 +34,9 @@ VALID_ENTITY_TYPES = {"method", "dataset", "metric", "author", "institution", "c
 @router.post("/extract-entities/{paper_id}", response_model=EntityExtractionResponse)
 @limiter.limit("5/minute")
 async def extract_entities(
-    request: Request, paper_id: int
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> EntityExtractionResponse:
     """Trigger entity extraction for a single paper."""
     embedder = getattr(request.app.state, "embedder", None)
@@ -42,7 +45,7 @@ async def extract_entities(
     try:
         return await extract_entities_for_paper(
             request.app.state.http_client,
-            request.app.state.db_pool,
+            db_pool,
             paper_id,
             embedder=embedder,
             qdrant_client=qdrant,
@@ -57,12 +60,15 @@ async def extract_entities(
 
 @router.post("/extract-entities/batch", response_model=BatchEntityExtractResponse)
 @limiter.limit("2/minute")
-async def batch_extract_entities(request: Request):
+async def batch_extract_entities(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
     """Backfill entity extraction for all summarized papers."""
     embedder = getattr(request.app.state, "embedder", None)
     qdrant = getattr(request.app.state, "qdrant_client", None)
 
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Get papers with summaries but no entities
         rows = await conn.fetch(
             """SELECT p.id FROM papers p
@@ -78,7 +84,7 @@ async def batch_extract_entities(request: Request):
         try:
             await extract_entities_for_paper(
                 request.app.state.http_client,
-                request.app.state.db_pool,
+                db_pool,
                 row["id"],
                 embedder=embedder,
                 qdrant_client=qdrant,
@@ -97,6 +103,7 @@ async def get_graph(
     request: Request,
     entity_type: str | None = None,
     min_paper_count: int = Query(default=1, ge=1),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> KnowledgeGraphResponse:
     """Get the full knowledge graph or filtered subset."""
     if entity_type is not None and entity_type not in VALID_ENTITY_TYPES:
@@ -105,7 +112,7 @@ async def get_graph(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         data = await get_knowledge_graph(conn, entity_type, min_paper_count)
 
     entities = [
@@ -151,6 +158,7 @@ async def list_entities(
     entity_type: str | None = None,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[EntityResponse]:
     """List entities with pagination and filtering."""
     if entity_type is not None and entity_type not in VALID_ENTITY_TYPES:
@@ -159,17 +167,20 @@ async def list_entities(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         if entity_type:
             rows = await conn.fetch(
                 """SELECT * FROM entities WHERE entity_type = $1
                    ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
-                entity_type, limit, offset,
+                entity_type,
+                limit,
+                offset,
             )
         else:
             rows = await conn.fetch(
                 "SELECT * FROM entities ORDER BY paper_count DESC LIMIT $1 OFFSET $2",
-                limit, offset,
+                limit,
+                offset,
             )
 
     return [
@@ -190,13 +201,13 @@ async def list_entities(
 @router.get("/knowledge-graph/entity/{entity_id}", response_model=EntityDetailResponse)
 @limiter.limit("60/minute")
 async def get_entity_detail(
-    request: Request, entity_id: int
+    request: Request,
+    entity_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
-    async with request.app.state.db_pool.acquire() as conn:
-        entity = await conn.fetchrow(
-            "SELECT * FROM entities WHERE id = $1", entity_id
-        )
+    async with db_pool.acquire() as conn:
+        entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
         if not entity:
             raise HTTPException(404, f"Entity {entity_id} not found")
 
@@ -249,8 +260,9 @@ async def get_entity_detail(
 async def kg_query(
     request: Request,
     q: str = Query(..., min_length=1),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> KGQueryResponse:
     """Query the knowledge graph with natural language."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         results = await query_knowledge_graph(conn, q)
     return KGQueryResponse(results=results, query=q)

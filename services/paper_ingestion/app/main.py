@@ -27,6 +27,7 @@ from jarvis_common import (
     http_exception_handler,
     init_pg_connection,
     rate_limit_exceeded_handler,
+    read_secret,
     validate_production_config,
     validation_exception_handler,
     verify_api_key,
@@ -40,17 +41,9 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 # Trigger source registration via imports
 import app.sources  # noqa: F401
-
-# Re-export dependency helpers so existing tests can `from app.main import get_db_pool`
-from app.deps import (  # noqa: F401
-    get_db_pool,
-    get_http_client,
-    get_pdf_processor,
-    get_verifier,
-    limiter,
-)
+from app.deps import limiter
 from app.embedder import Embedder
-from app.models import PaperSourceConfig, SystemModelsResponse
+from app.models import PaperSourceConfig, SourceType, SystemModelsResponse
 from app.pdf_processor import PDFProcessor
 from app.sources.registry import get_source_class
 from app.verification import QuoteVerifier
@@ -137,7 +130,7 @@ async def _refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient
     """
     from datetime import datetime, timedelta
 
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    token = read_secret("TELEGRAM_BOT_TOKEN")
     if not token:
         return
 
@@ -265,7 +258,14 @@ async def lifespan(app: FastAPI):
 
     # C-8: Initialize source singletons so the rate limiter persists across requests.
     app.state.sources = {}
-    for _source_type_val in ["arxiv", "semantic_scholar", "pubmed", "openalex"]:
+    _preloaded_sources = [
+        SourceType.ARXIV,
+        SourceType.SEMANTIC_SCHOLAR,
+        SourceType.PUBMED,
+        SourceType.OPENALEX,
+    ]
+    for _source_type in _preloaded_sources:
+        _source_type_val = _source_type.value
         try:
             _source_cls = get_source_class(_source_type_val)
             if not _source_cls:
@@ -296,7 +296,7 @@ async def lifespan(app: FastAPI):
     await _refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
 
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
-    api_key = os.environ.get("JARVIS_API_KEY", "")
+    api_key = read_secret("JARVIS_API_KEY")
     if api_key:
         logger.info("API key authentication enabled")
     elif dev_mode:

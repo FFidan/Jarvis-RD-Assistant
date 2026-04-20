@@ -29,6 +29,7 @@ router = APIRouter(
 )
 
 _PAIRING_TTL = timedelta(minutes=10)
+_TELEGRAM_BASE_URL = "https://t.me"
 
 
 class PairingResponse(BaseModel):
@@ -93,9 +94,9 @@ async def create_pairing(
     bot_username = _extract_bot_username(row["value"]) if row else None
     bot_username_missing = bot_username is None
     if bot_username:
-        deep_link = f"https://t.me/{bot_username}?start=PAIR_{code}"
+        deep_link = f"{_TELEGRAM_BASE_URL}/{bot_username}?start=PAIR_{code}"
     else:
-        deep_link = f"https://t.me/?start=PAIR_{code}"
+        deep_link = f"{_TELEGRAM_BASE_URL}/?start=PAIR_{code}"
 
     return PairingResponse(
         code=code,

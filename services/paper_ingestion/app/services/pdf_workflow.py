@@ -203,8 +203,3 @@ async def run_process_pdf(
     await _maybe_progress(1.0, "Done")
 
     return {"paper_id": paper_id, "chunk_count": len(chunks), "status": "processed"}
-
-
-# Backward-compatible aliases while internal imports are migrated.
-_upsert_paper = upsert_paper
-_run_process_pdf = run_process_pdf

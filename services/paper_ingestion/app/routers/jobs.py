@@ -17,15 +17,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from jarvis_common import current_user_id, verify_api_key
 from jarvis_common import jobs as jobs_lib
+from jarvis_common.jobs import (
+    _KEEPALIVE_INTERVAL,
+    _MAX_STREAM_SECONDS,
+)
 from pydantic import BaseModel, field_validator
 
 from app.deps import get_db_pool, limiter
 
 logger = logging.getLogger(__name__)
 
-# SSE keepalive / max-stream constants
-_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
-_MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+# SSE keepalive / max-stream constants (imported from jarvis_common)
 
 # ---------------------------------------------------------------------------
 # Allowlist of job kinds that clients may create via POST /api/jobs.

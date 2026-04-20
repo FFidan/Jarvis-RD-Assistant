@@ -9,10 +9,6 @@ import sys
 import types
 from unittest.mock import AsyncMock, MagicMock
 
-# Stub heavy/optional modules unavailable outside Docker.
-if "fitz" not in sys.modules:
-    sys.modules["fitz"] = MagicMock()
-
 if "tiktoken" not in sys.modules:
     fake_tiktoken = types.ModuleType("tiktoken")
     fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
@@ -105,7 +101,8 @@ def _make_request(mock_pool, mock_http):
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool, HTTP client, and disabled auth."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()

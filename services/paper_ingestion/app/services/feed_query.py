@@ -74,7 +74,7 @@ def build_feed_queries(
     param_idx = 1
 
     if unread_only:
-        conditions.append("p.is_read = FALSE")
+        conditions.append("COALESCE(pus.status, 'new') != 'read'")
 
     if q:
         conditions.append(f"p.search_vector @@ plainto_tsquery('english', ${param_idx})")

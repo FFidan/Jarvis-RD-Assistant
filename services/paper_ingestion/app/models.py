@@ -98,7 +98,6 @@ class PaperResponse(PaperBase):
     id: int
     pdf_local_path: str | None = None
     pdf_downloaded: bool = False
-    is_read: bool = False
     discovered_at: datetime | None = None
     priority_score: float | None = None
     created_at: datetime
@@ -193,7 +192,7 @@ class DashboardMetrics(BaseModel):
     active_projects: int
     topic_count: int
     nudge_count: int
-    onboarding_stage: str = "needs_topics"
+    onboarding_stage: Literal["needs_topics", "needs_papers", "active", "complete"] = "needs_topics"
 
 
 class PaperDetailResponse(BaseModel):

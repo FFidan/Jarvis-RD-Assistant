@@ -41,15 +41,15 @@ _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
 # app.main – heavy; stub it to avoid importing FastAPI app initialization.
 _main_stub = _ensure_stub("app.main")
 
-# app.services.pdf_workflow – provides _upsert_paper and _run_process_pdf to the scheduler.
+# app.services.pdf_workflow – provides upsert_paper and run_process_pdf to the scheduler.
 _ensure_stub("app.services")
 _workflow_stub = _ensure_stub("app.services.pdf_workflow")
-_workflow_stub._upsert_paper = AsyncMock()
-_workflow_stub._run_process_pdf = AsyncMock()
+_workflow_stub.upsert_paper = AsyncMock()
+_workflow_stub.run_process_pdf = AsyncMock()
 
-# Keep a reference under _main_stub for backward-compat with assertion helpers below.
-_main_stub._upsert_paper = _workflow_stub._upsert_paper
-_main_stub._run_process_pdf = _workflow_stub._run_process_pdf
+# Keep a reference under _main_stub for assertion helpers below.
+_main_stub.upsert_paper = _workflow_stub.upsert_paper
+_main_stub.run_process_pdf = _workflow_stub.run_process_pdf
 
 # Now safe to import
 from app.scheduler import run_auto_pipeline  # noqa: E402, I001
@@ -177,7 +177,7 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
     app = _make_app_state(to_process=[traversal_row])
 
     # Reset the shared mock so we can assert it was NOT called
-    _main_stub._run_process_pdf.reset_mock()
+    _main_stub.run_process_pdf.reset_mock()
 
     with (
         patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
@@ -186,7 +186,7 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
         await run_auto_pipeline(app)
 
     # _run_process_pdf must NOT have been called for the traversal path
-    _main_stub._run_process_pdf.assert_not_called()
+    _main_stub.run_process_pdf.assert_not_called()
 
     # The warning must have been logged
     assert any(
@@ -204,14 +204,14 @@ async def test_valid_pdf_path_is_processed() -> None:
     app = _make_app_state(to_process=[valid_row])
 
     # Reset the shared mock
-    _main_stub._run_process_pdf.reset_mock()
+    _main_stub.run_process_pdf.reset_mock()
 
     with patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}):
         await run_auto_pipeline(app)
 
     # _run_process_pdf should have been called for the valid path
-    _main_stub._run_process_pdf.assert_called_once()
-    call_args = _main_stub._run_process_pdf.call_args
+    _main_stub.run_process_pdf.assert_called_once()
+    call_args = _main_stub.run_process_pdf.call_args
     assert call_args.args[0] == 7
     assert call_args.args[1] == Path("/data/pdfs/paper_7.pdf")
 

@@ -38,6 +38,12 @@ from unittest.mock import AsyncMock, MagicMock
 # Bootstrap import path so `app.*` resolves regardless of where the script
 # is invoked from. We add services/paper_ingestion to sys.path.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+class ScriptError(RuntimeError):
+    """Script-level error; caught by the __main__ block."""
+
+
 _SERVICE_ROOT = _REPO_ROOT / "services" / "paper_ingestion"
 if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
@@ -285,12 +291,11 @@ async def run_eval() -> tuple[float, float, float]:
     return precision_at_10, yes_recall, no_leakage
 
 
-async def main() -> int:
+async def main() -> None:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(message)s")
 
     if not FIXTURE_PATH.exists():
-        print(f"FAIL: fixture not found at {FIXTURE_PATH}", file=sys.stderr)
-        return 2
+        raise ScriptError(f"fixture not found at {FIXTURE_PATH}")
 
     precision_at_10, yes_recall, no_leakage = await run_eval()
 
@@ -300,8 +305,13 @@ async def main() -> int:
 
     ok = precision_at_10 >= PRECISION_TARGET and no_leakage <= NO_LEAKAGE_MAX
     print("PASS" if ok else "FAIL")
-    return 0 if ok else 1
+    if not ok:
+        raise ScriptError("Pulse evaluation targets not met")
 
 
 if __name__ == "__main__":
-    sys.exit(asyncio.run(main()))
+    try:
+        asyncio.run(main())
+    except ScriptError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)

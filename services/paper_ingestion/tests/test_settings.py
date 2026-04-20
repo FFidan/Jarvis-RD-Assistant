@@ -7,14 +7,8 @@ Covers:
 - Analytics: GET /api/analytics/papers-by-source, GET /api/analytics/papers-by-status
 """
 
-import sys
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in ("fitz",):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
@@ -40,6 +34,12 @@ def _make_pool_and_conn():
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool = MagicMock()
     pool.acquire.return_value = ctx
+    # conn.transaction() must return a synchronous async context manager object
+    # (AsyncMock attributes are coroutines when called, so use MagicMock here)
+    txn_ctx = MagicMock()
+    txn_ctx.__aenter__ = AsyncMock(return_value=None)
+    txn_ctx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_ctx)
     return pool, conn
 
 
@@ -55,7 +55,8 @@ def _now():
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from app.main import app, get_db_pool
+    from app.deps import get_db_pool
+    from app.main import app
     from jarvis_common import verify_api_key
 
     mock_pool, conn = _make_pool_and_conn()

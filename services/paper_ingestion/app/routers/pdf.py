@@ -115,6 +115,7 @@ async def process_pdf(
         ),
     ),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    pdf_processor: PDFProcessor = Depends(get_pdf_processor),
     embedder=Depends(get_embedder),
 ):
     """Extract text, chunk, embed, and generate snapshots for a paper's PDF.
@@ -158,7 +159,6 @@ async def process_pdf(
     if not pdf_path.exists():
         raise HTTPException(status_code=404, detail="PDF file missing from disk")
 
-    pdf_processor = request.app.state.pdf_processor
     try:
         return await run_process_pdf(
             paper_id,

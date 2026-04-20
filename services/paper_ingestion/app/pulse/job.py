@@ -24,6 +24,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext, job_handler
 
@@ -108,7 +109,7 @@ async def run_pulse(
             raise asyncio.CancelledError()
     try:
         profile = await load_profile(db_pool, embedder=embedder)
-    except Exception as exc:
+    except Exception as exc:  # broad: touches DB + embedder; any failure is fatal for this run
         stats["last_error"] = f"load_profile: {exc}"
         logger.exception("pulse.load_profile failed")
         stats["duration_s"] = time.monotonic() - start
@@ -135,7 +136,7 @@ async def run_pulse(
             since=now - timedelta(days=7),
             source_cache=source_cache,
         )
-    except Exception as exc:
+    except Exception as exc:  # broad: fan-out over heterogeneous source plugins; degrade to []
         stats["last_error"] = f"discover_candidates: {exc}"
         logger.exception("pulse.discover failed")
         candidates = []
@@ -151,7 +152,7 @@ async def run_pulse(
         stage1_out = await stage1_embedding_filter(
             candidates, profile, embedder, top_k=profile.stage2_top_k, now=now.date()
         )
-    except Exception as exc:
+    except Exception as exc:  # broad: stage1 calls embedder; degrade to empty list
         stats["last_error"] = f"stage1: {exc}"
         logger.exception("pulse.stage1 failed")
         stage1_out = []
@@ -185,7 +186,7 @@ async def run_pulse(
             )
             logger.warning("pulse.stage2 timed out — falling back to stage1")
             stage2_out = _fallback_stage2(stage1_out)
-        except Exception as exc:
+        except Exception as exc:  # broad: stage2 calls LLM over HTTP; fallback keeps deck viable
             # B4: stage2 exception with fallback is degraded (deck still produced)
             degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
             logger.exception("pulse.stage2 failed — falling back to stage1")
@@ -200,7 +201,7 @@ async def run_pulse(
             raise asyncio.CancelledError()
     try:
         stage3_out = await stage3_combine(stage2_out, profile.weights)
-    except Exception as exc:
+    except Exception as exc:  # broad: pure computation but must not crash the pipeline
         stats["last_error"] = f"stage3: {exc}"
         logger.exception("pulse.stage3 failed")
         stage3_out = stage2_out
@@ -213,7 +214,7 @@ async def run_pulse(
             raise asyncio.CancelledError()
     try:
         deck = await assemble_deck(stage3_out, size=profile.deck_size)
-    except Exception as exc:
+    except Exception as exc:  # broad: may call DB/services; must not crash pipeline
         stats["last_error"] = f"assemble_deck: {exc}"
         logger.exception("pulse.assemble failed")
         deck = []
@@ -231,7 +232,7 @@ async def run_pulse(
                 for card in deck:
                     try:
                         await upsert_paper(conn, card.paper)
-                    except Exception as exc:
+                    except asyncpg.PostgresError as exc:
                         logger.warning(
                             "pulse.upsert_paper failed for %s: %s",
                             card.paper.external_id,
@@ -247,7 +248,7 @@ async def run_pulse(
                     conn=conn,
                 )
         logger.info("pulse.persisted", extra={"deck_id": deck_id, "cards": len(deck)})
-    except Exception as exc:
+    except Exception as exc:  # broad: outer txn failure (DB unreachable); stats already captured
         stats["last_error"] = f"persist: {exc}"
         logger.exception("pulse.persist failed")
 

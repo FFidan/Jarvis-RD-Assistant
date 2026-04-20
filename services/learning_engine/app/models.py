@@ -136,7 +136,7 @@ class CardResponse(BaseModel):
     id: int
     deck_id: int
     paper_id: int | None = None
-    card_type: str
+    card_type: CardType
     front: str
     back: str
     evidence: Evidence | None = None

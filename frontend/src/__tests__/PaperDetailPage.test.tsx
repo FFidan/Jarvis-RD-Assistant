@@ -75,7 +75,6 @@ const MOCK_PAPER = {
   citation_count: 95000,
   priority_score: 0.95,
   metadata: {},
-  is_read: false,
   discovered_at: '2026-01-01T00:00:00Z',
   created_at: '2026-01-01T00:00:00Z',
 };

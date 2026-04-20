@@ -7,6 +7,7 @@ these functions without triggering the ``fitz`` (PyMuPDF) import chain.
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import asyncpg
@@ -29,6 +30,27 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SEARCH_SCORE_THRESHOLD = 0.05
+
+
+# ---------------------------------------------------------------------------
+# Return-type dataclasses for _prepare_cross_paper_rag
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class CrossPaperRagPrep:
+    """Successful preparation result: LLM messages + source metadata."""
+
+    messages: list[dict[str, str]]
+    sources: list[dict]
+
+
+@dataclass(frozen=True, slots=True)
+class CrossPaperRagNoResults:
+    """Short-circuit result when no relevant chunks were found."""
+
+    answer: str
+    sources: list[dict] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -114,11 +136,12 @@ async def _prepare_cross_paper_rag(
     db_pool: asyncpg.Pool,
     body: CrossPaperAskRequest,
     http_client: httpx.AsyncClient,
-) -> tuple[list[dict], list[dict]] | dict:
+) -> "CrossPaperRagPrep | CrossPaperRagNoResults":
     """Retrieve chunks across papers, rerank, and build LLM messages.
 
-    Returns ``(messages, sources_list)`` on success, or a dict short-circuit
-    response when no relevant chunks are found.
+    Returns a :class:`CrossPaperRagPrep` on success, or a
+    :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are
+    found.
     """
     # 1. Search all chunks — optionally via query decomposition
     if body.decompose:
@@ -158,10 +181,10 @@ async def _prepare_cross_paper_rag(
             body.question,
             body.decompose,
         )
-        return {
-            "answer": "No relevant information found in the paper collection.",
-            "sources": [],
-        }
+        return CrossPaperRagNoResults(
+            answer="No relevant information found in the paper collection.",
+            sources=[],
+        )
 
     # 1b. Cross-encoder rerank merged results using original question
     all_chunks = await embedder.rerank_chunks(body.question, all_chunks, top_k=body.max_chunks * 2)
@@ -250,7 +273,7 @@ async def _prepare_cross_paper_rag(
         }
         for c in selected_chunks
     ]
-    return messages, sources_list
+    return CrossPaperRagPrep(messages=messages, sources=sources_list)
 
 
 # ---------------------------------------------------------------------------

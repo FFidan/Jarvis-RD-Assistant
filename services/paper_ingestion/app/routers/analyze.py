@@ -35,14 +35,13 @@ def _sse_event(data: dict | str) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _analyze_stream(request: Request, paper_id: int):
+async def _analyze_stream(request: Request, paper_id: int, db_pool: asyncpg.Pool):
     """Async generator: download → process → summarize with SSE progress events.
 
     B6 fix: local papers (``source_type='local'`` or ``pdf_local_path`` already
     set) skip the download step entirely — they never have a ``pdf_url`` and
     that is expected, not an error.
     """
-    db_pool = request.app.state.db_pool
     http_client = request.app.state.http_client
     pdf_processor = request.app.state.pdf_processor
     embedder = request.app.state.embedder
@@ -205,7 +204,7 @@ async def analyze_paper(
         return {"job_id": job_id, "status": "queued"}
 
     return StreamingResponse(
-        _analyze_stream(request, paper_id),
+        _analyze_stream(request, paper_id, db_pool),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

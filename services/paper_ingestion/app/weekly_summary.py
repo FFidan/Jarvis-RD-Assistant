@@ -26,6 +26,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
 )
 from jarvis_common.prompt_safety import escape_llm_text
+from jarvis_common.time_utils import utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +124,7 @@ async def generate_weekly_summary(
             "topics": [],
             "total_papers": 0,
             "period_start": cutoff.isoformat(),
-            "period_end": datetime.now(UTC).isoformat(),
+            "period_end": utc_now_iso(),
             "message": (
                 "No engaged papers in the last 7 days. "
                 "Read or save some papers to see your weekly summary."
@@ -203,5 +204,5 @@ async def generate_weekly_summary(
         "topics": result_topics,
         "total_papers": len(total_papers),
         "period_start": cutoff.isoformat(),
-        "period_end": datetime.now(UTC).isoformat(),
+        "period_end": utc_now_iso(),
     }
