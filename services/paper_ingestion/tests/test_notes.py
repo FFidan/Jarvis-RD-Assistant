@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from app.models import NoteCreate, NoteResponse, NoteUpdate
 from httpx import ASGITransport
+from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
 
 # ---------------------------------------------------------------------------
 # Pydantic model tests
@@ -98,7 +98,7 @@ def _mock_pool() -> AsyncMock:
 def _app():
     """Create a minimal app instance with mocked state for testing notes endpoints."""
     # Defer import so env vars / mocks apply
-    from app.main import app
+    from paper_ingestion.main import app
 
     pool, conn = _mock_pool()
     app.state.db_pool = pool
@@ -168,7 +168,7 @@ async def test_update_note(_app):
     app, conn = _app
 
     with patch(
-        "app.main.dynamic_update",
+        "paper_ingestion.main.dynamic_update",
         new_callable=AsyncMock,
         return_value=_make_note_record(user_note="updated"),
     ):
@@ -188,7 +188,7 @@ async def test_delete_note_returns_204(_app):
     """DELETE /api/notes/{id} returns 204 on success."""
     app, conn = _app
 
-    with patch("app.main.delete_or_404", new_callable=AsyncMock):
+    with patch("paper_ingestion.main.delete_or_404", new_callable=AsyncMock):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -222,7 +222,7 @@ async def test_delete_note_not_found(_app):
     async def _raise_404(*args, **kwargs):
         raise HTTPException(status_code=404, detail="Not found")
 
-    with patch("app.main.delete_or_404", side_effect=_raise_404):
+    with patch("paper_ingestion.main.delete_or_404", side_effect=_raise_404):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

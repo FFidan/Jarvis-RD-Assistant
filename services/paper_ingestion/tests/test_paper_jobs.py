@@ -14,7 +14,7 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Module-level stubs for packages unavailable on the host (fitz, marker, etc.)
-# Must happen before ``import app.paper_jobs``.
+# Must happen before ``import paper_ingestion.paper_jobs``.
 # ---------------------------------------------------------------------------
 _STUBS: dict[str, MagicMock] = {}
 
@@ -28,18 +28,18 @@ def _ensure_stub(name: str) -> MagicMock:
 
 
 # app.pdf_processor is imported at module level in paper_jobs.py for PDF_STORAGE_PATH.
-_pdf_proc_stub = _ensure_stub("app.pdf_processor")
+_pdf_proc_stub = _ensure_stub("paper_ingestion.pdf_processor")
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
 
 # app.main is lazily imported inside the handlers; stub it to avoid FastAPI init.
-_main_stub = _ensure_stub("app.main")
+_main_stub = _ensure_stub("paper_ingestion.main")
 
 # app.services.pdf_workflow — the actual target function imported lazily.
-_ensure_stub("app.services")
-_workflow_stub = _ensure_stub("app.services.pdf_workflow")
+_ensure_stub("paper_ingestion.services")
+_workflow_stub = _ensure_stub("paper_ingestion.services.pdf_workflow")
 
 # Now safe to import the module under test.
-from app.paper_jobs import _paper_process_job, _SubCtx  # noqa: E402, PLC0415
+from paper_ingestion.paper_jobs import _paper_process_job, _SubCtx  # noqa: E402, PLC0415
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,7 +73,7 @@ def _make_pool(row: dict) -> MagicMock:
 @pytest.mark.asyncio
 async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
     """_paper_process_job must forward a _SubCtx to run_process_pdf as ctx= kwarg."""
-    import app.paper_jobs as pj
+    import paper_ingestion.paper_jobs as pj
 
     # Create a PDF stub file so exists() passes.
     pdf_file = tmp_path / "paper.pdf"
@@ -122,7 +122,7 @@ async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
 @pytest.mark.asyncio
 async def test_paper_process_job_sub_ctx_scales_progress(tmp_path):
     """_SubCtx(ctx, 0.1, 1.0): inner=0.5 must produce outer=0.55 on the real ctx."""
-    import app.paper_jobs as pj
+    import paper_ingestion.paper_jobs as pj
 
     pdf_file = tmp_path / "paper.pdf"
     pdf_file.write_bytes(b"%PDF-1.4 stub")

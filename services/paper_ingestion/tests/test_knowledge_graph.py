@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
-from app.models import (
+from paper_ingestion.models import (
     EntityCreate,
     EntityDetailResponse,
     EntityExtractionResponse,
@@ -156,7 +156,7 @@ def test_canonical_name_preserves_hyphens():
 @pytest.mark.asyncio
 async def test_find_or_create_entity_new():
     """Creates a new entity when none exists."""
-    from app.entity_extractor import _find_or_create_entity
+    from paper_ingestion.entity_extractor import _find_or_create_entity
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.side_effect = [
@@ -175,7 +175,7 @@ async def test_find_or_create_entity_new():
 @pytest.mark.asyncio
 async def test_find_or_create_entity_existing():
     """Returns existing entity when canonical name matches."""
-    from app.entity_extractor import _find_or_create_entity
+    from paper_ingestion.entity_extractor import _find_or_create_entity
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 99}
@@ -191,7 +191,7 @@ async def test_find_or_create_entity_existing():
 @pytest.mark.asyncio
 async def test_find_or_create_entity_merges_by_precomputed_similarity():
     """Pre-computed embedding similarity dedup merges into an existing entity id."""
-    from app.entity_extractor import _find_or_create_entity
+    from paper_ingestion.entity_extractor import _find_or_create_entity
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None  # exact canonical match not found
@@ -214,7 +214,7 @@ async def test_find_or_create_entity_merges_by_precomputed_similarity():
 @pytest.mark.asyncio
 async def test_find_or_create_entity_falls_back_to_insert_when_no_similarity():
     """Without a pre-computed similar entity, entity is inserted fresh."""
-    from app.entity_extractor import _find_or_create_entity
+    from paper_ingestion.entity_extractor import _find_or_create_entity
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.side_effect = [
@@ -241,7 +241,7 @@ async def test_find_or_create_entity_falls_back_to_insert_when_no_similarity():
 @pytest.mark.asyncio
 async def test_embed_entity_text_returns_vector():
     """_embed_entity_text returns the first embedding vector."""
-    from app.entity_extractor import _embed_entity_text
+    from paper_ingestion.entity_extractor import _embed_entity_text
 
     embedder = AsyncMock()
     embedder.embed_texts.return_value = [[0.1, 0.2, 0.3]]
@@ -253,7 +253,7 @@ async def test_embed_entity_text_returns_vector():
 @pytest.mark.asyncio
 async def test_embed_entity_text_returns_none_on_failure():
     """_embed_entity_text returns None when the embedder fails."""
-    from app.entity_extractor import _embed_entity_text
+    from paper_ingestion.entity_extractor import _embed_entity_text
 
     embedder = AsyncMock()
     embedder.embed_texts.side_effect = RuntimeError("embedder offline")
@@ -265,7 +265,7 @@ async def test_embed_entity_text_returns_none_on_failure():
 @pytest.mark.asyncio
 async def test_find_similar_entity_returns_matched_id():
     """_find_similar_entity returns entity_id from Qdrant match."""
-    from app.entity_extractor import _find_similar_entity
+    from paper_ingestion.entity_extractor import _find_similar_entity
 
     qdrant = AsyncMock()
     qdrant.query_points.return_value = MagicMock(points=[MagicMock(payload={"entity_id": 77})])
@@ -276,7 +276,9 @@ async def test_find_similar_entity_returns_matched_id():
     fake_models.MatchValue = MagicMock()
 
     with (
-        patch("app.entity_extractor._ensure_kg_collection", AsyncMock(return_value=None)),
+        patch(
+            "paper_ingestion.entity_extractor._ensure_kg_collection", AsyncMock(return_value=None)
+        ),
         patch.dict(sys.modules, {"qdrant_client.models": fake_models}),
     ):
         result = await _find_similar_entity(qdrant, "method", [0.1, 0.2, 0.3])
@@ -287,7 +289,7 @@ async def test_find_similar_entity_returns_matched_id():
 @pytest.mark.asyncio
 async def test_find_similar_entity_returns_none_on_failure():
     """_find_similar_entity returns None on Qdrant failure."""
-    from app.entity_extractor import _find_similar_entity
+    from paper_ingestion.entity_extractor import _find_similar_entity
 
     qdrant = AsyncMock()
     qdrant.get_collections.side_effect = RuntimeError("qdrant offline")
@@ -308,7 +310,7 @@ async def test_find_similar_entity_returns_none_on_failure():
 @pytest.mark.asyncio
 async def test_build_entity_prompt():
     """build_entity_prompt generates valid prompt."""
-    from app.entity_extractor import build_entity_prompt
+    from paper_ingestion.entity_extractor import build_entity_prompt
 
     prompt = build_entity_prompt("Test Paper", "Some research text about BERT and GPT.")
     assert "Test Paper" in prompt
@@ -321,7 +323,7 @@ async def test_build_entity_prompt():
 @pytest.mark.asyncio
 async def test_get_knowledge_graph_empty():
     """get_knowledge_graph returns empty when no entities match."""
-    from app.entity_extractor import get_knowledge_graph
+    from paper_ingestion.entity_extractor import get_knowledge_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.return_value = []
@@ -334,7 +336,7 @@ async def test_get_knowledge_graph_empty():
 @pytest.mark.asyncio
 async def test_get_knowledge_graph_returns_display_sizes_and_type_counts():
     """get_knowledge_graph computes frontend display fields from raw DB rows."""
-    from app.entity_extractor import get_knowledge_graph
+    from paper_ingestion.entity_extractor import get_knowledge_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.side_effect = [
@@ -363,8 +365,8 @@ async def test_get_knowledge_graph_returns_display_sizes_and_type_counts():
 @pytest.mark.asyncio
 async def test_extract_entities_for_paper_returns_counts():
     """extract_entities_for_paper persists valid entities and relationships."""
-    from app.entity_extractor import extract_entities_for_paper
-    from app.models import VerificationResult
+    from paper_ingestion.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.models import VerificationResult
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
@@ -412,12 +414,15 @@ async def test_extract_entities_for_paper_returns_counts():
     )
 
     with (
-        patch("app.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
         patch(
-            "app.entity_extractor._find_or_create_entity",
+            "paper_ingestion.entity_extractor._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, True)]),
         ),
-        patch("app.entity_extractor.QuoteVerifier.verify_quote", return_value=verified_result),
+        patch(
+            "paper_ingestion.entity_extractor.QuoteVerifier.verify_quote",
+            return_value=verified_result,
+        ),
     ):
         result = await extract_entities_for_paper(http_client, pool, paper_id=1)
 
@@ -432,7 +437,7 @@ async def test_extract_entities_for_paper_returns_counts():
 @pytest.mark.asyncio
 async def test_extract_entities_for_paper_requires_existing_chunks():
     """extract_entities_for_paper should fail early when a paper has not been processed."""
-    from app.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.entity_extractor import extract_entities_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
@@ -446,7 +451,7 @@ async def test_extract_entities_for_paper_requires_existing_chunks():
 @pytest.mark.asyncio
 async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
     """Malformed entities and unlinked relationships should be ignored, not persisted."""
-    from app.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.entity_extractor import extract_entities_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
@@ -480,8 +485,11 @@ async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
     }
 
     with (
-        patch("app.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
-        patch("app.entity_extractor._find_or_create_entity", AsyncMock(return_value=(1, False))),
+        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.entity_extractor._find_or_create_entity",
+            AsyncMock(return_value=(1, False)),
+        ),
     ):
         result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
 
@@ -494,7 +502,7 @@ async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
 @pytest.mark.asyncio
 async def test_extract_entities_for_paper_requires_existing_paper():
     """extract_entities_for_paper raises a ValueError when the paper row is missing."""
-    from app.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.entity_extractor import extract_entities_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None
@@ -507,7 +515,7 @@ async def test_extract_entities_for_paper_requires_existing_paper():
 @pytest.mark.asyncio
 async def test_query_knowledge_graph_used_on_pattern():
     """query_knowledge_graph uses the relationship query path for used-on questions."""
-    from app.entity_extractor import query_knowledge_graph
+    from paper_ingestion.entity_extractor import query_knowledge_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.return_value = [
@@ -526,7 +534,7 @@ async def test_query_knowledge_graph_used_on_pattern():
 @pytest.mark.asyncio
 async def test_query_knowledge_graph_generic_pattern_trims_trailing_punctuation():
     """Generic queries should strip punctuation before building the SQL LIKE filter."""
-    from app.entity_extractor import query_knowledge_graph
+    from paper_ingestion.entity_extractor import query_knowledge_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.return_value = [{"name": "BERT", "paper_id": 1}]
@@ -540,7 +548,7 @@ async def test_query_knowledge_graph_generic_pattern_trims_trailing_punctuation(
 @pytest.mark.asyncio
 async def test_query_knowledge_graph_returns_empty_on_missing_tables():
     """Undefined-table failures should degrade to an empty result set."""
-    from app.entity_extractor import query_knowledge_graph
+    from paper_ingestion.entity_extractor import query_knowledge_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.side_effect = asyncpg.exceptions.UndefinedTableError("missing")

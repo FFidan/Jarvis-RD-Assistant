@@ -3,8 +3,8 @@
 TDD: tests written before implementation.
 """
 
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.prompts import PULSE_SCORING_SYSTEM_PROMPT, build_scoring_prompt
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.prompts import PULSE_SCORING_SYSTEM_PROMPT, build_scoring_prompt
 
 # ---------------------------------------------------------------------------
 # Helpers

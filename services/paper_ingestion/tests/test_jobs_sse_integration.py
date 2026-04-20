@@ -93,8 +93,8 @@ async def db_pool():
 @pytest.fixture()
 def app_with_pool(db_pool):
     """Wire the real db_pool into the FastAPI app and bypass auth / rate-limit."""
-    from app.main import app
     from jarvis_common import current_user_id, verify_api_key
+    from paper_ingestion.main import app
 
     app.state.db_pool = db_pool
     try:

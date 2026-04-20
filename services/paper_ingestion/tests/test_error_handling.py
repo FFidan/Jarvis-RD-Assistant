@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from app.embedder import Embedder
 from fastapi.responses import JSONResponse
+from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -36,8 +36,8 @@ class FakeStreamResponseError:
 
 async def test_stream_cross_paper_rag_preparation_error():
     """When _prepare_cross_paper_rag raises, _sse_error_stream yields SSE error events."""
-    from app.models import CrossPaperAskRequest
-    from app.streaming import _prepare_cross_paper_rag, _sse_error_stream
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.streaming import _prepare_cross_paper_rag, _sse_error_stream
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -77,7 +77,7 @@ async def test_stream_cross_paper_rag_preparation_error():
 
 async def test_stream_rag_sanitized_error():
     """SSE error events contain user-friendly messages, not raw exception text."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     # Test with a generic exception -- should get sanitized message
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -104,7 +104,7 @@ async def test_stream_rag_sanitized_error():
 
 async def test_stream_rag_timeout_error_sanitized():
     """SSE error for TimeoutException shows user-friendly timeout message."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -123,7 +123,7 @@ async def test_stream_rag_timeout_error_sanitized():
 
 async def test_stream_rag_connect_error_sanitized():
     """SSE error for ConnectError shows user-friendly connection message."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -242,7 +242,7 @@ async def test_search_chunks_runtime_error_propagates():
 
 async def test_health_check_degraded():
     """health_check_internal returns 'degraded' when one dependency is unavailable."""
-    from app.main import health_check_internal
+    from paper_ingestion.main import health_check_internal
 
     # Mock request with app state
     mock_request = MagicMock()
@@ -286,7 +286,7 @@ async def test_health_check_degraded():
 
 async def test_health_check_all_ok():
     """health_check_internal returns 'ok' when all dependencies are available."""
-    from app.main import health_check_internal
+    from paper_ingestion.main import health_check_internal
 
     mock_request = MagicMock()
 

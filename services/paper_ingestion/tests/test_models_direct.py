@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models import (  # noqa: E402
+from paper_ingestion.models import (  # noqa: E402
     AskRequest,
     AskResponse,
     AskSourceItem,

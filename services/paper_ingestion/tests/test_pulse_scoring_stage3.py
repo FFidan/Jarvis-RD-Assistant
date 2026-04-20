@@ -7,8 +7,8 @@ Pure arithmetic — no I/O mocking needed.
 from datetime import date
 
 import pytest
-from app.models import PaperCreate, SourceType
-from app.pulse.scoring import ScoredCandidate, stage3_combine
+from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.pulse.scoring import ScoredCandidate, stage3_combine
 
 # ---------------------------------------------------------------------------
 # Helpers

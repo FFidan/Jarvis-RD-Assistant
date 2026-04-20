@@ -15,7 +15,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 # ---------------------------------------------------------------------------
 # Stub heavy native modules that are unavailable outside Docker.
-# Must happen before any ``import app.*`` that reaches pdf_processor.
+# Must happen before any ``import paper_ingestion.*`` that reaches pdf_processor.
 # (fitz is already stubbed by conftest.py)
 # ---------------------------------------------------------------------------
 if "qdrant_client" not in sys.modules:
@@ -135,15 +135,15 @@ def _make_pool_and_conn() -> tuple[MagicMock, AsyncMock]:
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
     app.state.limiter.enabled = False
 
-    # Dashboard routes now use the shared dependency from app.main/app.deps.
+    # Dashboard routes now use the shared dependency from paper_ingestion.main/app.deps.
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn
@@ -194,8 +194,8 @@ async def test_dashboard_metrics_shape(_app):
 
 def test_dashboard_metrics_uses_shared_pool_dependency() -> None:
     """Dashboard metrics should declare get_db_pool as its injected DB dependency."""
-    from app.deps import get_db_pool
-    from app.routers.dashboard_api import router as dashboard_router
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.routers.dashboard_api import router as dashboard_router
 
     route = next(
         route
@@ -209,7 +209,7 @@ def test_dashboard_metrics_uses_shared_pool_dependency() -> None:
 
 def test_feed_route_precedes_dynamic_paper_detail_route() -> None:
     """Static feed route must be registered before /api/papers/{paper_id}."""
-    from app.main import app
+    from paper_ingestion.main import app
 
     paths = [route.path for route in app.router.routes if hasattr(route, "path")]
 
@@ -425,8 +425,8 @@ async def test_user_state_update(_app):
 
 def test_user_state_uses_shared_pool_dependency() -> None:
     """User-state writes should declare get_db_pool as their injected DB dependency."""
-    from app.deps import get_db_pool
-    from app.routers.dashboard_api import router as dashboard_router
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.routers.dashboard_api import router as dashboard_router
 
     route = next(
         route

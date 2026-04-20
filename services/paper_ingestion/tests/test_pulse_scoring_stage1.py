@@ -7,9 +7,9 @@ from datetime import date, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.profile import UserProfile
-from app.pulse.scoring import stage1_embedding_filter
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.profile import UserProfile
+from paper_ingestion.pulse.scoring import stage1_embedding_filter
 
 # ---------------------------------------------------------------------------
 # Helpers

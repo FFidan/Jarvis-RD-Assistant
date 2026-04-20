@@ -48,8 +48,8 @@ if "rapidfuzz" not in sys.modules:
     fake_rapidfuzz.fuzz = MagicMock()
     sys.modules["rapidfuzz"] = fake_rapidfuzz
 
-from app.models import Confidence
-from app.services import summarization
+from paper_ingestion.models import Confidence
+from paper_ingestion.services import summarization
 
 
 @asynccontextmanager
@@ -149,7 +149,9 @@ async def test_generate_paper_summary_returns_existing_summary():
 
     with (
         patch.object(summarization, "advisory_lock", _noop_lock),
-        patch.object(summarization, "row_to_summary_response", return_value="existing-summary") as convert,
+        patch.object(
+            summarization, "row_to_summary_response", return_value="existing-summary"
+        ) as convert,
     ):
         result = await summarization.generate_paper_summary(
             paper_id=7,

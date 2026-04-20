@@ -20,12 +20,12 @@ if str(_SERVICE_ROOT) not in sys.path:
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
 sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
-if "app.embedder" not in sys.modules:
-    fake_embedder = types.ModuleType("app.embedder")
+if "paper_ingestion.embedder" not in sys.modules:
+    fake_embedder = types.ModuleType("paper_ingestion.embedder")
     fake_embedder.Embedder = MagicMock()
     fake_embedder.COLLECTION_NAME = "paper_chunks"
     fake_embedder.EMBEDDING_MODEL_NAME = "embed-model"
-    sys.modules["app.embedder"] = fake_embedder
+    sys.modules["paper_ingestion.embedder"] = fake_embedder
 sys.modules.setdefault("qdrant_client", MagicMock(AsyncQdrantClient=MagicMock()))
 sys.modules.setdefault(
     "qdrant_client.models",
@@ -54,23 +54,23 @@ class _FakeCtx:
 
 def _install_fake_app(monkeypatch, *, verifier, embedder) -> None:
     """Install a stub app.main module exposing app.state.{verifier, embedder}."""
-    fake_main = types.ModuleType("app.main")
+    fake_main = types.ModuleType("paper_ingestion.main")
     fake_app = SimpleNamespace(state=SimpleNamespace(verifier=verifier, embedder=embedder))
     fake_main.app = fake_app  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "app.main", fake_main)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.main", fake_main)
 
 
 def _install_fake_summarization(monkeypatch, mock_fn) -> None:
     """Install a stub app.services.summarization module with generate_paper_summary."""
-    fake_mod = types.ModuleType("app.services.summarization")
+    fake_mod = types.ModuleType("paper_ingestion.services.summarization")
     fake_mod.generate_paper_summary = mock_fn  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "app.services.summarization", fake_mod)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", fake_mod)
 
 
 @pytest.mark.asyncio
 async def test_batch_summarize_happy_path(monkeypatch):
     """All papers succeed: summarized count matches paper_ids length."""
-    from app.paper_jobs import _papers_batch_summarize_job
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     verifier = MagicMock()
     embedder = MagicMock()
@@ -103,7 +103,7 @@ async def test_batch_summarize_happy_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_batch_summarize_partial_failure(monkeypatch):
     """If one paper raises, it is counted as failed; others succeed."""
-    from app.paper_jobs import _papers_batch_summarize_job
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     _install_fake_app(monkeypatch, verifier=MagicMock(), embedder=MagicMock())
 
@@ -129,7 +129,7 @@ async def test_batch_summarize_partial_failure(monkeypatch):
 @pytest.mark.asyncio
 async def test_batch_summarize_respects_cancellation(monkeypatch):
     """If ctx.is_cancelled() is true, loop exits without processing any paper."""
-    from app.paper_jobs import _papers_batch_summarize_job
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     _install_fake_app(monkeypatch, verifier=MagicMock(), embedder=MagicMock())
     mock_gen = AsyncMock()
@@ -148,7 +148,7 @@ async def test_batch_summarize_respects_cancellation(monkeypatch):
 @pytest.mark.asyncio
 async def test_batch_summarize_empty_payload(monkeypatch):
     """Empty paper_ids list: handler completes cleanly with zero counts."""
-    from app.paper_jobs import _papers_batch_summarize_job
+    from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     _install_fake_app(monkeypatch, verifier=MagicMock(), embedder=MagicMock())
     mock_gen = AsyncMock()

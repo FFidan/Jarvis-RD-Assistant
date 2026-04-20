@@ -16,8 +16,8 @@ from pathlib import Path
 
 import httpx
 import respx
-from app.models import PaperSourceConfig, SourceType, TopicRef
-from app.sources.openalex_source import (
+from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources.openalex_source import (
     OPENALEX_API_URL,
     OpenAlexSource,
     _reconstruct_abstract,
@@ -244,7 +244,7 @@ async def test_search_missing_api_key_returns_empty(caplog):
     """Missing API key returns [] and logs at INFO level (exactly once)."""
     source = _make_source(api_key=None)
 
-    with caplog.at_level(logging.INFO, logger="app.sources.openalex_source"):
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
         papers = await source.search("neural networks")
 
     assert papers == []
@@ -270,7 +270,7 @@ async def test_missing_key_logged_only_once(caplog):
     """The missing-key INFO log is only emitted once per source instance."""
     source = _make_source(api_key=None)
 
-    with caplog.at_level(logging.INFO, logger="app.sources.openalex_source"):
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
         await source.search("a")
         await source.search("b")
         await source.fetch_new_since(since=datetime(2026, 1, 1, tzinfo=UTC), topics=[], limit=5)

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
-from app.models import PaperSourceConfig, SourceType
-from app.sources.semantic_scholar_source import SemanticScholarSource
+from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 
 @respx.mock
@@ -111,8 +111,8 @@ async def test_discovery_fetch_sources_uses_display_order_ordering():
     """
     from datetime import datetime
 
-    from app.pulse.discovery import discover_candidates
-    from app.pulse.profile import UserProfile
+    from paper_ingestion.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.profile import UserProfile
 
     conn = AsyncMock()
     conn.fetch.return_value = []

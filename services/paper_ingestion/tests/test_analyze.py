@@ -12,7 +12,7 @@ import types
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.routers.analyze import _analyze_stream, _sse_event
+from paper_ingestion.routers.analyze import _analyze_stream, _sse_event
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -72,22 +72,22 @@ async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock
 
     # Inject fake modules so deferred imports in _analyze_stream resolve
     # without pulling in qdrant_client/numpy/fitz.
-    fake_pdf_workflow = types.ModuleType("app.services.pdf_workflow")
+    fake_pdf_workflow = types.ModuleType("paper_ingestion.services.pdf_workflow")
     fake_pdf_workflow.run_process_pdf = _mock_process  # type: ignore[attr-defined]
 
-    fake_summarization = types.ModuleType("app.services.summarization")
+    fake_summarization = types.ModuleType("paper_ingestion.services.summarization")
     fake_summarization.generate_paper_summary = _mock_summarize  # type: ignore[attr-defined]
 
     # Ensure the parent packages exist in sys.modules
-    if "app.services" not in sys.modules:
-        fake_services = types.ModuleType("app.services")
+    if "paper_ingestion.services" not in sys.modules:
+        fake_services = types.ModuleType("paper_ingestion.services")
         fake_services.__path__ = []  # type: ignore[attr-defined]
-        sys.modules["app.services"] = fake_services
+        sys.modules["paper_ingestion.services"] = fake_services
 
-    saved_pw = sys.modules.get("app.services.pdf_workflow")
-    saved_sm = sys.modules.get("app.services.summarization")
-    sys.modules["app.services.pdf_workflow"] = fake_pdf_workflow
-    sys.modules["app.services.summarization"] = fake_summarization
+    saved_pw = sys.modules.get("paper_ingestion.services.pdf_workflow")
+    saved_sm = sys.modules.get("paper_ingestion.services.summarization")
+    sys.modules["paper_ingestion.services.pdf_workflow"] = fake_pdf_workflow
+    sys.modules["paper_ingestion.services.summarization"] = fake_summarization
 
     _real_env_get = os.environ.get
 
@@ -98,8 +98,8 @@ async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock
 
     try:
         with (
-            patch("app.routers.analyze.Path") as MockPath,  # noqa: N806
-            patch("app.routers.analyze.os.environ.get", side_effect=_selective_env_get),
+            patch("paper_ingestion.routers.analyze.Path") as MockPath,  # noqa: N806
+            patch("paper_ingestion.routers.analyze.os.environ.get", side_effect=_selective_env_get),
         ):
             mock_path_instance = MagicMock()
             mock_path_instance.resolve.return_value.is_relative_to.return_value = True
@@ -112,13 +112,13 @@ async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock
     finally:
         # Restore original modules
         if saved_pw is not None:
-            sys.modules["app.services.pdf_workflow"] = saved_pw
+            sys.modules["paper_ingestion.services.pdf_workflow"] = saved_pw
         else:
-            sys.modules.pop("app.services.pdf_workflow", None)
+            sys.modules.pop("paper_ingestion.services.pdf_workflow", None)
         if saved_sm is not None:
-            sys.modules["app.services.summarization"] = saved_sm
+            sys.modules["paper_ingestion.services.summarization"] = saved_sm
         else:
-            sys.modules.pop("app.services.summarization", None)
+            sys.modules.pop("paper_ingestion.services.summarization", None)
 
     return _parse_sse_events(events_raw), _mock_process
 

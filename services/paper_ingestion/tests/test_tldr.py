@@ -12,8 +12,8 @@ from datetime import UTC, datetime
 
 import httpx
 import respx
-from app.models import PaperSourceConfig
-from app.sources.semantic_scholar_source import SemanticScholarSource
+from paper_ingestion.models import PaperSourceConfig
+from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 # ---------------------------------------------------------------------------
 # Part A: S2 source tests
@@ -161,7 +161,7 @@ def test_tldr_short_unchanged():
 
 def test_feed_paper_model_includes_tldr():
     """FeedPaper model accepts and serializes a tldr field."""
-    from app.models import FeedPaper
+    from paper_ingestion.models import FeedPaper
 
     now = datetime.now(UTC)
     paper = FeedPaper(
@@ -182,7 +182,7 @@ def test_feed_paper_model_includes_tldr():
 
 def test_feed_paper_model_tldr_none_by_default():
     """FeedPaper model defaults tldr to None."""
-    from app.models import FeedPaper
+    from paper_ingestion.models import FeedPaper
 
     now = datetime.now(UTC)
     paper = FeedPaper(
@@ -199,7 +199,7 @@ def test_feed_paper_model_tldr_none_by_default():
 
 def test_summary_response_model_includes_tldr():
     """SummaryResponse model accepts and serializes a tldr field."""
-    from app.models import SummaryResponse
+    from paper_ingestion.models import SummaryResponse
 
     now = datetime.now(UTC)
     summary = SummaryResponse(

@@ -64,9 +64,9 @@ def _template_row(id=1, name="Default Template", description=None, is_default=Tr
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool

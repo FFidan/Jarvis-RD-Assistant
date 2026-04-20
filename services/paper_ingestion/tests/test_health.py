@@ -83,9 +83,9 @@ def _make_http_client(*, litellm_healthy: bool = True) -> AsyncMock:
 @pytest.fixture()
 def _app():
     """Yield an app instance with all dependencies mocked — no lifespan startup."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     # Healthy defaults

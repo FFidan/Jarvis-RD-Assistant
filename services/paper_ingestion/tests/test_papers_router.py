@@ -32,7 +32,7 @@ if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models.VectorParams = MagicMock()
     sys.modules["qdrant_client.models"] = fake_qdrant_models
 
-from app.models import (  # noqa: E402
+from paper_ingestion.models import (  # noqa: E402
     Confidence,
     CrossReference,
     KeyFinding,
@@ -42,7 +42,7 @@ from app.models import (  # noqa: E402
     SourceType,
     SummaryResponse,
 )
-from app.routers import papers  # noqa: E402
+from paper_ingestion.routers import papers  # noqa: E402
 
 
 class FakeRecord(dict):

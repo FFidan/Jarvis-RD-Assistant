@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.profile import UserProfile
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.profile import UserProfile
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -97,7 +97,7 @@ def _make_source_class(stub: _StubSource):
 
 @pytest.mark.asyncio
 async def test_fan_out_calls_every_enabled_source():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -118,7 +118,7 @@ async def test_fan_out_calls_every_enabled_source():
     http_client = MagicMock()
     profile = _make_profile()
 
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, http_client, profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -131,7 +131,7 @@ async def test_fan_out_calls_every_enabled_source():
 
 @pytest.mark.asyncio
 async def test_graceful_source_failure():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -150,7 +150,7 @@ async def test_graceful_source_failure():
         return _make_source_class(stubs[name])
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -163,7 +163,7 @@ async def test_graceful_source_failure():
 
 @pytest.mark.asyncio
 async def test_dedup_by_doi():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -185,7 +185,7 @@ async def test_dedup_by_doi():
         return _make_source_class(stubs[name])
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -195,7 +195,7 @@ async def test_dedup_by_doi():
 
 @pytest.mark.asyncio
 async def test_dedup_by_arxiv_id():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -221,7 +221,7 @@ async def test_dedup_by_arxiv_id():
         return _make_source_class(stubs[name])
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -233,7 +233,7 @@ async def test_dedup_by_arxiv_id():
 
 @pytest.mark.asyncio
 async def test_dedup_by_title_hash():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -252,7 +252,7 @@ async def test_dedup_by_title_hash():
         return _make_source_class(stubs[name])
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -263,13 +263,13 @@ async def test_dedup_by_title_hash():
 
 @pytest.mark.asyncio
 async def test_empty_when_no_enabled_sources():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class") as m:
+    with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -280,7 +280,7 @@ async def test_empty_when_no_enabled_sources():
 
 @pytest.mark.asyncio
 async def test_unknown_source_class_is_skipped():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -296,7 +296,7 @@ async def test_unknown_source_class_is_skipped():
         return _make_source_class(stubs[name])
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -365,7 +365,7 @@ async def test_source_cache_used_when_provided():
     is already populated, discover_candidates uses it instead of instantiating
     a new object (so rate-limiter state carries over between Pulse runs).
     """
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_source_row("arxiv", 1)]
@@ -374,7 +374,7 @@ async def test_source_cache_used_when_provided():
     source_cache = {"arxiv": cached_stub}
 
     profile = _make_profile()
-    with patch("app.pulse.discovery.get_source_class") as m:
+    with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
         result = await discover_candidates(
             pool,
             MagicMock(),

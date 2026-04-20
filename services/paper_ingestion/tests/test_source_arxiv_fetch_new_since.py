@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 import respx
-from app.models import PaperSourceConfig, SourceType, TopicRef
-from app.sources.arxiv_source import ARXIV_API_URL, ArxivSource
+from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources.arxiv_source import ARXIV_API_URL, ArxivSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

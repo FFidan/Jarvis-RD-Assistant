@@ -1,7 +1,7 @@
 """Tests for config key whitelist and settings validation."""
 
 import pytest
-from app.routers.settings import _ALLOWED_CONFIG_KEYS
+from paper_ingestion.routers.settings import _ALLOWED_CONFIG_KEYS
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -60,7 +60,7 @@ def test_whitelist_is_frozenset():
 
 def test_llm_role_keys_subset_of_whitelist():
     """All LLM model role keys used by ROLE_TO_ALIAS must be in the whitelist."""
-    from app.services.litellm_config import ROLE_TO_ALIAS
+    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS
 
     missing = set(ROLE_TO_ALIAS.keys()) - _ALLOWED_CONFIG_KEYS
     assert not missing, f"ROLE_TO_ALIAS keys not in whitelist: {missing}"

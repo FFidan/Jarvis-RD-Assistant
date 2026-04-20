@@ -30,7 +30,7 @@ from tests.conftest import FakeRecord, _make_pool_and_conn  # noqa: E402
 
 @pytest.fixture
 def scheduler_module():
-    import app.scheduler as scheduler
+    import paper_ingestion.scheduler as scheduler
 
     return scheduler
 
@@ -92,7 +92,7 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module, monkeypat
         return {}
 
     # Ensure app.pulse.job exists and its run_pulse is the one we stub
-    import app.pulse.job as job_mod
+    import paper_ingestion.pulse.job as job_mod
 
     monkeypatch.setattr(job_mod, "run_pulse", fake_run_pulse)
 
@@ -119,7 +119,7 @@ async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module, monkeypatch
         called["n"] += 1
         return {"duration_s": 1.0}
 
-    import app.pulse.job as job_mod
+    import paper_ingestion.pulse.job as job_mod
 
     monkeypatch.setattr(job_mod, "run_pulse", fake_run_pulse)
 
@@ -143,7 +143,7 @@ async def test_run_pulse_wrapper_swallows_errors(scheduler_module, monkeypatch):
     async def boom(**kwargs):
         raise RuntimeError("kaboom")
 
-    import app.pulse.job as job_mod
+    import paper_ingestion.pulse.job as job_mod
 
     monkeypatch.setattr(job_mod, "run_pulse", boom)
 

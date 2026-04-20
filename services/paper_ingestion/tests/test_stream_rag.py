@@ -4,7 +4,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-from app.embedder import Embedder
+from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,9 +51,7 @@ class FakeStreamResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise httpx.HTTPStatusError(
-                "error", request=MagicMock(), response=MagicMock()
-            )
+            raise httpx.HTTPStatusError("error", request=MagicMock(), response=MagicMock())
 
     def aiter_lines(self):
         return FakeSSELine(self._lines).__aiter__()
@@ -88,7 +86,7 @@ class FakeStreamResponseError:
 
 async def test_stream_rag_events_format():
     """_stream_rag_events yields token, sources, done, and [DONE] events."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     # Build fake SSE lines as LiteLLM would emit
     sse_lines = [
@@ -141,7 +139,7 @@ async def test_stream_rag_events_format():
 
 async def test_stream_rag_events_token_parsing():
     """Tokens are correctly extracted from LiteLLM delta chunks."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     # Simulate chunks with empty deltas (e.g. role-only first chunk)
     sse_lines = [
@@ -182,7 +180,7 @@ async def test_stream_rag_events_token_parsing():
 
 async def test_stream_rag_events_error_handling():
     """An error event is yielded when the LiteLLM stream fails."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -208,7 +206,7 @@ async def test_stream_rag_events_error_handling():
 
 async def test_stream_rag_events_uses_shared_litellm_config_fallback(monkeypatch):
     """Streaming RAG should reuse the shared LiteLLM base URL and key fallback."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
@@ -252,8 +250,8 @@ async def test_stream_rag_events_uses_shared_litellm_config_fallback(monkeypatch
 
 async def test_prepare_single_paper_rag_returns_messages_and_sources():
     """_prepare_single_paper_rag returns (messages, sources_list) tuple."""
-    from app.models import AskRequest
-    from app.streaming import _prepare_single_paper_rag
+    from paper_ingestion.models import AskRequest
+    from paper_ingestion.streaming import _prepare_single_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -269,9 +267,7 @@ async def test_prepare_single_paper_rag_returns_messages_and_sources():
     mock_qdrant.query_points.return_value = _make_query_response(hits)
 
     # Stub rerank to pass through
-    embedder.rerank_chunks = AsyncMock(
-        side_effect=lambda q, chunks, top_k: chunks[:top_k]
-    )
+    embedder.rerank_chunks = AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k])
 
     # Mock db_pool with proper async context manager for acquire()
     mock_conn = AsyncMock()
@@ -312,8 +308,8 @@ async def test_prepare_single_paper_rag_returns_messages_and_sources():
 
 async def test_prepare_cross_paper_rag_returns_messages_and_sources():
     """_prepare_cross_paper_rag returns (messages, sources) with paper attribution."""
-    from app.models import CrossPaperAskRequest
-    from app.streaming import _prepare_cross_paper_rag
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.streaming import _prepare_cross_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -338,9 +334,7 @@ async def test_prepare_cross_paper_rag_returns_messages_and_sources():
             },
         ]
     )
-    embedder.rerank_chunks = AsyncMock(
-        side_effect=lambda q, chunks, top_k: chunks[:top_k]
-    )
+    embedder.rerank_chunks = AsyncMock(side_effect=lambda q, chunks, top_k: chunks[:top_k])
 
     # Mock db_pool with proper async context manager for acquire()
     mock_conn = AsyncMock()
@@ -356,13 +350,9 @@ async def test_prepare_cross_paper_rag_returns_messages_and_sources():
     mock_pool = MagicMock()
     mock_pool.acquire.return_value = mock_cm
 
-    body = CrossPaperAskRequest(
-        question="How do transformers work?", decompose=False
-    )
+    body = CrossPaperAskRequest(question="How do transformers work?", decompose=False)
 
-    result = await _prepare_cross_paper_rag(
-        embedder, mock_pool, body, mock_http
-    )
+    result = await _prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
     # Should return a tuple, not a dict (since chunks were found)
     assert isinstance(result, tuple)
@@ -386,8 +376,8 @@ async def test_prepare_cross_paper_rag_returns_messages_and_sources():
 
 async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
     """When no chunks match, _prepare_cross_paper_rag returns a canned dict."""
-    from app.models import CrossPaperAskRequest
-    from app.streaming import _prepare_cross_paper_rag
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.streaming import _prepare_cross_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -398,13 +388,9 @@ async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
 
     mock_pool = AsyncMock()
 
-    body = CrossPaperAskRequest(
-        question="Something irrelevant", decompose=False
-    )
+    body = CrossPaperAskRequest(question="Something irrelevant", decompose=False)
 
-    result = await _prepare_cross_paper_rag(
-        embedder, mock_pool, body, mock_http
-    )
+    result = await _prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
     assert isinstance(result, dict)
     assert "answer" in result
@@ -419,7 +405,7 @@ async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
 
 async def test_stream_rag_events_sse_termination():
     """Each SSE event line ends with double newline for proper SSE format."""
-    from app.streaming import _stream_rag_events
+    from paper_ingestion.streaming import _stream_rag_events
 
     sse_lines = [
         'data: {"choices": [{"delta": {"content": "ok"}}]}',

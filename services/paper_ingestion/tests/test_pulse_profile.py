@@ -7,11 +7,11 @@ All DB interaction is mocked via the asyncpg pool helpers from conftest.
 from unittest.mock import AsyncMock
 
 import pytest
-from app.models import TopicRef
+from paper_ingestion.models import TopicRef
 
 # Path setup handled by conftest.py (already loaded by pytest).
 # Import the module under test AFTER conftest stubs are installed.
-from app.pulse.profile import UserProfile, load_profile
+from paper_ingestion.pulse.profile import UserProfile, load_profile
 
 from tests.conftest import FakeRecord, _make_pool_and_conn, fake_embedding_vector
 

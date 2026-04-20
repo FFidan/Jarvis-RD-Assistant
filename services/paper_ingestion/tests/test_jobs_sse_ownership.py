@@ -94,8 +94,8 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
 @pytest.fixture()
 def _app_with_pool():
     """Yield a factory that creates a ready-to-test app for a given job user_id."""
-    from app.main import app
     from jarvis_common import current_user_id, verify_api_key
+    from paper_ingestion.main import app
 
     def _make(job_user_id: int | None, caller_user_id: int | None = None):
         pool = _make_pool_with_job(job_user_id)

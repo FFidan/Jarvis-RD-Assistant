@@ -14,9 +14,9 @@ def _app(monkeypatch):
     """App fixture with db pool mocked and rate limiter ENABLED."""
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
 
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     # Build a mock pool that returns an empty rows list for fetch().
     conn = AsyncMock()

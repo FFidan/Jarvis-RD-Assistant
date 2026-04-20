@@ -18,9 +18,9 @@ try:
 except Exception:
     _HAS_RESPX = False
 
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.profile import UserProfile
-from app.pulse.scoring import ScoredCandidate, stage2_llm_rerank
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.profile import UserProfile
+from paper_ingestion.pulse.scoring import ScoredCandidate, stage2_llm_rerank
 
 from tests.conftest import fake_llm_score_response
 
@@ -277,7 +277,7 @@ async def test_stage2_falls_back_on_llm_error():
     http_client = AsyncMock(spec=httpx.AsyncClient)
 
     with patch(
-        "app.pulse.scoring.call_llm",
+        "paper_ingestion.pulse.scoring.call_llm",
         new_callable=AsyncMock,
         side_effect=RuntimeError("LiteLLM unavailable"),
     ):
@@ -308,7 +308,7 @@ async def test_stage2_valid_json_missing_keys_graceful_fallback():
 
     # call_llm returns a valid JSON object but without required scoring keys
     with patch(
-        "app.pulse.scoring.call_llm",
+        "paper_ingestion.pulse.scoring.call_llm",
         new_callable=AsyncMock,
         return_value={"explanation": "interesting paper", "summary": "..."},
     ):
@@ -329,7 +329,7 @@ async def test_stage2_clamps_out_of_range_scores():
 
     # LLM returns scores outside [1, 10]
     with patch(
-        "app.pulse.scoring.call_llm",
+        "paper_ingestion.pulse.scoring.call_llm",
         new_callable=AsyncMock,
         return_value={"relevance": 15, "novelty": -3, "reasoning": "out of range"},
     ):

@@ -42,9 +42,9 @@ def _app(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama-mock:11434")
 
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -67,7 +67,7 @@ def _patch_probe(monkeypatch, *, models_ready: bool, downloading=None):
     async def _fake_probe():
         return models_ready, list(downloading or [])
 
-    monkeypatch.setattr("app.routers.system._probe_ollama", _fake_probe)
+    monkeypatch.setattr("paper_ingestion.routers.system._probe_ollama", _fake_probe)
 
 
 def _install_user_config(
@@ -223,19 +223,19 @@ async def test_setup_status_telegram_paired_false_when_null(_app, monkeypatch):
 
 
 def test_models_match_true_when_all_prefixes_present():
-    from app.routers.system import _models_match
+    from paper_ingestion.routers.system import _models_match
 
     assert _models_match(["mistral-nemo:latest", "qwen3.5:4b", "nomic-embed-text:latest"]) is True
 
 
 def test_models_match_false_when_missing_prefix():
-    from app.routers.system import _models_match
+    from paper_ingestion.routers.system import _models_match
 
     assert _models_match(["mistral-nemo:latest"]) is False
 
 
 def test_models_match_false_on_empty():
-    from app.routers.system import _models_match
+    from paper_ingestion.routers.system import _models_match
 
     assert _models_match([]) is False
 
@@ -243,7 +243,7 @@ def test_models_match_false_on_empty():
 @pytest.mark.asyncio
 async def test_probe_ollama_returns_false_when_unreachable(monkeypatch):
     """_probe_ollama must not raise when Ollama is down."""
-    from app.routers import system as system_module
+    from paper_ingestion.routers import system as system_module
 
     class _BoomClient:
         async def __aenter__(self):

@@ -10,7 +10,7 @@ import pytest
 
 # ---------------------------------------------------------------------------
 # Module-level stubs for packages unavailable outside Docker.
-# Must happen before ``import app.scheduler``.
+# Must happen before ``import paper_ingestion.scheduler``.
 # ---------------------------------------------------------------------------
 _STUBS: dict[str, MagicMock] = {}
 
@@ -35,15 +35,15 @@ for _mod in (
     _ensure_stub(_mod)
 
 # pdf_processor needs fitz, litellm, etc.  We only need PDF_STORAGE_PATH.
-_pdf_proc_stub = _ensure_stub("app.pdf_processor")
+_pdf_proc_stub = _ensure_stub("paper_ingestion.pdf_processor")
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
 
 # app.main – heavy; stub it to avoid importing FastAPI app initialization.
-_main_stub = _ensure_stub("app.main")
+_main_stub = _ensure_stub("paper_ingestion.main")
 
 # app.services.pdf_workflow – provides upsert_paper and run_process_pdf to the scheduler.
-_ensure_stub("app.services")
-_workflow_stub = _ensure_stub("app.services.pdf_workflow")
+_ensure_stub("paper_ingestion.services")
+_workflow_stub = _ensure_stub("paper_ingestion.services.pdf_workflow")
 _workflow_stub.upsert_paper = AsyncMock()
 _workflow_stub.run_process_pdf = AsyncMock()
 
@@ -52,7 +52,7 @@ _main_stub.upsert_paper = _workflow_stub.upsert_paper
 _main_stub.run_process_pdf = _workflow_stub.run_process_pdf
 
 # Now safe to import
-from app.scheduler import run_auto_pipeline  # noqa: E402, I001
+from paper_ingestion.scheduler import run_auto_pipeline  # noqa: E402, I001
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ async def test_source_instantiated_with_http_client() -> None:
     with (
         patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
         patch(
-            "app.sources.registry.get_source_class",
+            "paper_ingestion.sources.registry.get_source_class",
             return_value=fake_source_class,
         ),
     ):
@@ -181,7 +181,7 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
 
     with (
         patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
-        caplog.at_level(logging.WARNING, logger="app.scheduler"),
+        caplog.at_level(logging.WARNING, logger="paper_ingestion.scheduler"),
     ):
         await run_auto_pipeline(app)
 
@@ -228,7 +228,7 @@ async def test_scheduler_always_starts() -> None:
     or pulse enabled.  With the fix, the scheduler is always started so that
     live-toggles (Settings UI) take effect without a restart.
     """
-    from app.scheduler import start_scheduler
+    from paper_ingestion.scheduler import start_scheduler
 
     # Minimal app with a db_pool that returns a cron value for _get_pulse_cron
     conn = AsyncMock()
@@ -243,7 +243,7 @@ async def test_scheduler_always_starts() -> None:
         )
     )
 
-    with patch("app.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
+    with patch("paper_ingestion.scheduler.refresh_recommendations", new=AsyncMock(return_value=0)):
         scheduler = await start_scheduler(fake_app, interval_hours=0)
 
     try:

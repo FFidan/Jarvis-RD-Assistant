@@ -11,11 +11,11 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # Avoid importing the heavy real embedder module in these focused unit tests.
-if "app.embedder" not in sys.modules:
-    fake_embedder = types.ModuleType("app.embedder")
+if "paper_ingestion.embedder" not in sys.modules:
+    fake_embedder = types.ModuleType("paper_ingestion.embedder")
     fake_embedder.COLLECTION_NAME = "paper_chunks"
     fake_embedder.EMBEDDING_MODEL_NAME = "embed-model"
-    sys.modules["app.embedder"] = fake_embedder
+    sys.modules["paper_ingestion.embedder"] = fake_embedder
 
 if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models = types.ModuleType("qdrant_client.models")
@@ -27,7 +27,7 @@ if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models.PointIdsList = _PointIdsList
     sys.modules["qdrant_client.models"] = fake_qdrant_models
 
-from app.services.pdf_workflow import advisory_lock, run_process_pdf
+from paper_ingestion.services.pdf_workflow import advisory_lock, run_process_pdf
 
 
 def _make_pool(conn: AsyncMock) -> MagicMock:
@@ -124,10 +124,12 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
     """Successful processing writes chunks and returns processed status."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
-    conn.transaction = MagicMock(return_value=MagicMock(
-        __aenter__=AsyncMock(return_value=None),
-        __aexit__=AsyncMock(return_value=False),
-    ))
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
     pool = _make_pool(conn)
 
     chunks = [

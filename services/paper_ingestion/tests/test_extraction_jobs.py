@@ -32,24 +32,24 @@ class _FakeCtx:
 
 def _install_fake_batch_extract(monkeypatch, result) -> None:
     """Stub app.extraction so batch_extract returns a controlled result."""
-    fake_mod = types.ModuleType("app.extraction")
+    fake_mod = types.ModuleType("paper_ingestion.extraction")
     fake_mod.batch_extract = AsyncMock(return_value=result)  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "app.extraction", fake_mod)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.extraction", fake_mod)
 
 
 def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
     """Stub app.main so _app.state resolves without importing FastAPI."""
-    fake_main = types.ModuleType("app.main")
+    fake_main = types.ModuleType("paper_ingestion.main")
     fake_main.app = SimpleNamespace(  # type: ignore[attr-defined]
         state=SimpleNamespace(embedder=embedder, verifier=verifier)
     )
-    monkeypatch.setitem(sys.modules, "app.main", fake_main)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.main", fake_main)
 
 
 @pytest.mark.asyncio
 async def test_extraction_batch_happy_path(monkeypatch):
     """Handler returns extracted/failed/skipped/total from batch_extract result."""
-    from app.extraction_jobs import _extraction_batch_job
+    from paper_ingestion.extraction_jobs import _extraction_batch_job
 
     fake_result = SimpleNamespace(extracted=5, failed=1, skipped=2)
     _install_fake_batch_extract(monkeypatch, fake_result)
@@ -70,7 +70,7 @@ async def test_extraction_batch_happy_path(monkeypatch):
     assert result["total"] == 8
 
     # batch_extract should have been called once with pool, http_client, ids, template_id
-    import app.extraction as extraction_mod  # already stub
+    import paper_ingestion.extraction as extraction_mod  # already stub
 
     extraction_mod.batch_extract.assert_awaited_once()
     call_args = extraction_mod.batch_extract.await_args
@@ -83,12 +83,12 @@ async def test_extraction_batch_happy_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_extraction_batch_missing_template_id(monkeypatch):
     """Handler raises KeyError immediately when template_id is absent from payload."""
-    from app.extraction_jobs import _extraction_batch_job
+    from paper_ingestion.extraction_jobs import _extraction_batch_job
 
     # batch_extract should never be called
-    fake_mod = types.ModuleType("app.extraction")
+    fake_mod = types.ModuleType("paper_ingestion.extraction")
     fake_mod.batch_extract = AsyncMock()  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "app.extraction", fake_mod)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.extraction", fake_mod)
     _install_fake_app(monkeypatch)
 
     with pytest.raises(KeyError):

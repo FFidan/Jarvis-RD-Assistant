@@ -9,10 +9,10 @@ from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.models import PulseCardResponse, PulseDeckResponse
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import verify_api_key
+from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -46,8 +46,8 @@ def _make_deck_response(cards: int = 2) -> PulseDeckResponse:
 @pytest.fixture
 def client():
     """Minimal FastAPI app mounting only the pulse router."""
-    from app.deps import limiter
-    from app.routers import pulse as pulse_router
+    from paper_ingestion.deps import limiter
+    from paper_ingestion.routers import pulse as pulse_router
 
     app = FastAPI()
     app.state.limiter = limiter
@@ -73,7 +73,7 @@ def test_generate_returns_job_id(client):
     tc, pool, conn = client
 
     with patch(
-        "app.routers.pulse.jobs_lib.enqueue",
+        "paper_ingestion.routers.pulse.jobs_lib.enqueue",
         AsyncMock(return_value="test-job-uuid-1234"),
     ) as mp:
         resp = tc.post("/api/pulse/generate")
@@ -87,7 +87,7 @@ def test_generate_returns_job_id(client):
 
 def test_today_404_when_no_deck(client):
     tc, _pool, _conn = client
-    with patch("app.routers.pulse.load_today", AsyncMock(return_value=None)):
+    with patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=None)):
         resp = tc.get("/api/pulse/today")
     assert resp.status_code == 404
 
@@ -95,7 +95,7 @@ def test_today_404_when_no_deck(client):
 def test_today_returns_deck(client):
     tc, _pool, _conn = client
     deck = _make_deck_response(cards=3)
-    with patch("app.routers.pulse.load_today", AsyncMock(return_value=deck)):
+    with patch("paper_ingestion.routers.pulse.load_today", AsyncMock(return_value=deck)):
         resp = tc.get("/api/pulse/today")
     assert resp.status_code == 200
     body = resp.json()
@@ -106,7 +106,7 @@ def test_today_returns_deck(client):
 def test_history_returns_list(client):
     tc, _pool, _conn = client
     decks = [_make_deck_response(), _make_deck_response(cards=1)]
-    with patch("app.routers.pulse.load_history", AsyncMock(return_value=decks)) as m:
+    with patch("paper_ingestion.routers.pulse.load_history", AsyncMock(return_value=decks)) as m:
         resp = tc.get("/api/pulse/history?days=14")
     assert resp.status_code == 200
     body = resp.json()

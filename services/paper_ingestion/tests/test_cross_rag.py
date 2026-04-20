@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import respx
-from app.embedder import Embedder
-from app.models import CrossPaperAskRequest
+from paper_ingestion.embedder import Embedder
+from paper_ingestion.models import CrossPaperAskRequest
 
 # ---------------------------------------------------------------------------
 # Helpers

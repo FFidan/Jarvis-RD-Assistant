@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import respx
-from app.weekly_summary import generate_weekly_summary
+from paper_ingestion.weekly_summary import generate_weekly_summary
 
 
 def _make_paper_row(

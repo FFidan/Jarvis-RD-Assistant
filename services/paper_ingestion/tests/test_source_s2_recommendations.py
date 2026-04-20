@@ -12,8 +12,8 @@ from pathlib import Path
 
 import httpx
 import respx
-from app.models import PaperSourceConfig, SourceType
-from app.sources.semantic_scholar_source import (
+from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.sources.semantic_scholar_source import (
     S2_RECOMMENDATIONS_URL,
     SemanticScholarSource,
 )

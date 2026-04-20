@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, call
 
 import asyncpg
 import pytest
-from app.models import (
+from paper_ingestion.models import (
     CitationFetchResponse,
     CitationGraphResponse,
     CitationRelation,
@@ -108,7 +108,7 @@ def test_citation_graph_response_empty():
 @pytest.mark.asyncio
 async def test_get_or_create_stub_new():
     """Creates a new stub paper from S2 data."""
-    from app.citations import get_or_create_stub_paper
+    from paper_ingestion.citations import get_or_create_stub_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.side_effect = [
@@ -132,7 +132,7 @@ async def test_get_or_create_stub_new():
 @pytest.mark.asyncio
 async def test_get_or_create_stub_existing():
     """Returns existing paper if external_id matches."""
-    from app.citations import get_or_create_stub_paper
+    from paper_ingestion.citations import get_or_create_stub_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 99}
@@ -151,7 +151,7 @@ async def test_get_or_create_stub_existing():
 @pytest.mark.asyncio
 async def test_get_or_create_stub_minimal_data():
     """Returns None when S2 data lacks paperId or title."""
-    from app.citations import get_or_create_stub_paper
+    from paper_ingestion.citations import get_or_create_stub_paper
 
     mock_conn = AsyncMock()
 
@@ -175,7 +175,7 @@ async def test_get_or_create_stub_minimal_data():
 @pytest.mark.asyncio
 async def test_sync_citations_for_paper_raises_for_missing_paper():
     """sync_citations_for_paper raises ValueError when the seed paper is missing."""
-    from app.citations import sync_citations_for_paper
+    from paper_ingestion.citations import sync_citations_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = None
@@ -188,7 +188,7 @@ async def test_sync_citations_for_paper_raises_for_missing_paper():
 @pytest.mark.asyncio
 async def test_sync_citations_for_paper_returns_zeroes_when_table_missing():
     """UndefinedTableError degrades to an empty CitationFetchResponse."""
-    from app.citations import sync_citations_for_paper
+    from paper_ingestion.citations import sync_citations_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {
@@ -230,7 +230,7 @@ async def test_sync_citations_for_paper_returns_zeroes_when_table_missing():
 @pytest.mark.asyncio
 async def test_sync_citations_for_paper_processes_references_when_citations_fail():
     """Reference ingestion still proceeds when citation fetching fails."""
-    from app.citations import sync_citations_for_paper
+    from paper_ingestion.citations import sync_citations_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {
@@ -276,7 +276,7 @@ async def test_sync_citations_for_paper_processes_both_directions_with_expected_
     monkeypatch: pytest.MonkeyPatch,
 ):
     """Citation sync preserves edge orientation for citing and referenced papers."""
-    import app.citations as citations_module
+    import paper_ingestion.citations as citations_module
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {
@@ -349,7 +349,7 @@ async def test_sync_citations_for_paper_processes_both_directions_with_expected_
 @pytest.mark.asyncio
 async def test_build_graph_empty():
     """Empty paper_ids returns empty graph."""
-    from app.citations import build_citation_graph
+    from paper_ingestion.citations import build_citation_graph
 
     mock_conn = AsyncMock()
     result = await build_citation_graph(mock_conn, [])
@@ -360,7 +360,7 @@ async def test_build_graph_empty():
 @pytest.mark.asyncio
 async def test_build_graph_single_paper():
     """Graph with a single paper and its citations."""
-    from app.citations import build_citation_graph
+    from paper_ingestion.citations import build_citation_graph
 
     mock_conn = AsyncMock()
     # First fetch: expansion query
@@ -419,7 +419,7 @@ async def test_build_graph_single_paper():
 @pytest.mark.asyncio
 async def test_build_graph_depth_2():
     """Graph expands to depth 2."""
-    from app.citations import build_citation_graph
+    from paper_ingestion.citations import build_citation_graph
 
     mock_conn = AsyncMock()
     mock_conn.fetch.side_effect = [

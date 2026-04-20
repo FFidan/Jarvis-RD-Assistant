@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.feed_query import (
+from paper_ingestion.services.feed_query import (
     build_feed_queries,
     derive_feed_search_mode,
     fetch_feed_rows,

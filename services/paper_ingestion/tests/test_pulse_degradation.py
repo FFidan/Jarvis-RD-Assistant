@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.profile import UserProfile
-from app.pulse.scoring import ScoredCandidate
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.profile import UserProfile
+from paper_ingestion.pulse.scoring import ScoredCandidate
 
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
@@ -83,7 +83,7 @@ def _cls(src):
 @pytest.mark.asyncio
 async def test_no_openalex_key_baseline_arxiv_only():
     """paper_sources only returns enabled rows, so disabled openalex is excluded."""
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_source_row("arxiv", 1)]  # openalex NOT present
@@ -93,7 +93,7 @@ async def test_no_openalex_key_baseline_arxiv_only():
     def fake_get(name):
         return _cls(arxiv_stub) if name == "arxiv" else None
 
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -105,7 +105,7 @@ async def test_no_openalex_key_baseline_arxiv_only():
 @pytest.mark.asyncio
 async def test_s2_rate_limited_skipped():
     """HTTP 429 from Semantic Scholar must not break discovery."""
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -125,7 +125,7 @@ async def test_s2_rate_limited_skipped():
     def fake_get(name):
         return _cls(stubs[name])
 
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -137,7 +137,7 @@ async def test_s2_rate_limited_skipped():
 
 @pytest.mark.asyncio
 async def test_openalex_5xx_skipped():
-    from app.pulse.discovery import discover_candidates
+    from paper_ingestion.pulse.discovery import discover_candidates
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [
@@ -152,7 +152,7 @@ async def test_openalex_5xx_skipped():
     def fake_get(name):
         return _cls(stubs[name])
 
-    with patch("app.pulse.discovery.get_source_class", side_effect=fake_get):
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
         result = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
@@ -166,7 +166,7 @@ async def test_openalex_5xx_skipped():
 
 @pytest.mark.asyncio
 async def test_llm_timeout_deck_still_produced():
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     pool, _conn = _make_pool_and_conn()
 
@@ -177,26 +177,26 @@ async def test_llm_timeout_deck_still_produced():
     stage3_out = [_scored(i) for i in range(3)]
 
     with (
-        patch("app.pulse.job.load_profile", AsyncMock(return_value=_profile())),
+        patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
         patch(
-            "app.pulse.job.discover_candidates",
+            "paper_ingestion.pulse.job.discover_candidates",
             AsyncMock(return_value=[_paper(i) for i in range(3)]),
         ),
         patch(
-            "app.pulse.job.stage1_embedding_filter",
+            "paper_ingestion.pulse.job.stage1_embedding_filter",
             AsyncMock(return_value=stage1_out),
         ),
-        patch("app.pulse.job.stage2_llm_rerank", side_effect=timeout),
+        patch("paper_ingestion.pulse.job.stage2_llm_rerank", side_effect=timeout),
         patch(
-            "app.pulse.job.stage3_combine",
+            "paper_ingestion.pulse.job.stage3_combine",
             AsyncMock(return_value=stage3_out),
         ),
         patch(
-            "app.pulse.job.assemble_deck",
+            "paper_ingestion.pulse.job.assemble_deck",
             AsyncMock(return_value=stage3_out),
         ),
-        patch("app.pulse.job.upsert_paper", AsyncMock()),
-        patch("app.pulse.job.persist_deck", AsyncMock(return_value=77)) as p_persist,
+        patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
+        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=77)) as p_persist,
     ):
         stats = await run_pulse(pool, MagicMock(), MagicMock())
 
@@ -207,19 +207,19 @@ async def test_llm_timeout_deck_still_produced():
 
 @pytest.mark.asyncio
 async def test_empty_discovery_empty_deck_not_error():
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     pool, _conn = _make_pool_and_conn()
 
     with (
-        patch("app.pulse.job.load_profile", AsyncMock(return_value=_profile())),
-        patch("app.pulse.job.discover_candidates", AsyncMock(return_value=[])),
-        patch("app.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
-        patch("app.pulse.job.stage2_llm_rerank", AsyncMock(return_value=[])),
-        patch("app.pulse.job.stage3_combine", AsyncMock(return_value=[])),
-        patch("app.pulse.job.assemble_deck", AsyncMock(return_value=[])),
-        patch("app.pulse.job.upsert_paper", AsyncMock()),
-        patch("app.pulse.job.persist_deck", AsyncMock(return_value=1)) as p_persist,
+        patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
+        patch("paper_ingestion.pulse.job.discover_candidates", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.stage2_llm_rerank", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.stage3_combine", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.assemble_deck", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
+        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=1)) as p_persist,
     ):
         stats = await run_pulse(pool, MagicMock(), MagicMock())
 

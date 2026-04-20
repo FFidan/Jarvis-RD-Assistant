@@ -41,7 +41,7 @@ if "qdrant_client.models" not in sys.modules:
     fake_qdrant_models.VectorParams = object  # type: ignore[attr-defined]
     sys.modules["qdrant_client.models"] = fake_qdrant_models
 
-from app.embedder import Embedder  # noqa: E402
+from paper_ingestion.embedder import Embedder  # noqa: E402
 
 
 async def test_chunk_text_basic():

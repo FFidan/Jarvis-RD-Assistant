@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.embedder import Embedder
+from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
 # Pure RRF formula tests (no I/O)

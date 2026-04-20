@@ -15,15 +15,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.models import PaperCreate, SearchRequest, SourceType
-from app.routers import search
-from app.routers.search import (
+from fastapi import HTTPException
+from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
+from paper_ingestion.routers import search
+from paper_ingestion.routers.search import (
     MultiSourceSearchResponse,
     _dedup_papers,
     _normalize_title,
     _round_robin_merge,
 )
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------

@@ -12,8 +12,9 @@ from pathlib import Path
 
 import httpx
 import respx
-from app.models import PaperSourceConfig, SourceType, TopicRef
-from app.sources.pubmed_source import (
+from lxml import etree
+from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources.pubmed_source import (
     EFETCH_URL,
     ESEARCH_URL,
     PubMedSource,
@@ -22,7 +23,6 @@ from app.sources.pubmed_source import (
     _parse_doi,
     _parse_pub_date,
 )
-from lxml import etree
 
 FIXTURES = Path(__file__).parent / "fixtures"
 ESEARCH_XML = (FIXTURES / "pubmed_esearch.xml").read_bytes()

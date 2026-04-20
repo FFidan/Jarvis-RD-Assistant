@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
-from app.embedder import COLLECTION_NAME, Embedder
+from paper_ingestion.embedder import COLLECTION_NAME, Embedder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -202,9 +202,11 @@ async def test_discover_fallback_embeds_title_abstract():
     qp_response.points = []
     embedder.qdrant.query_points = AsyncMock(return_value=qp_response)
 
-    pool = _make_pool_with_fetchrow([
-        {"title": "My Paper Title", "abstract": "The abstract text"},
-    ])
+    pool = _make_pool_with_fetchrow(
+        [
+            {"title": "My Paper Title", "abstract": "The abstract text"},
+        ]
+    )
 
     await embedder.discover_from_seeds(seed_ids, pool, limit=5)
 
@@ -232,9 +234,11 @@ async def test_discover_empty_seeds_no_content():
     embedder.qdrant.scroll = AsyncMock(return_value=([], None))
 
     # DB returns paper with no title and no abstract
-    pool = _make_pool_with_fetchrow([
-        {"title": "", "abstract": ""},
-    ])
+    pool = _make_pool_with_fetchrow(
+        [
+            {"title": "", "abstract": ""},
+        ]
+    )
 
     results = await embedder.discover_from_seeds(seed_ids, pool, limit=5)
 
@@ -294,9 +298,7 @@ async def test_discover_forwards_params():
 
     pool = _make_pool_with_fetchrow([])
 
-    await embedder.discover_from_seeds(
-        seed_ids, pool, limit=7, score_threshold=0.8
-    )
+    await embedder.discover_from_seeds(seed_ids, pool, limit=7, score_threshold=0.8)
 
     qp_call = embedder.qdrant.query_points.call_args
     assert qp_call.kwargs["score_threshold"] == 0.8

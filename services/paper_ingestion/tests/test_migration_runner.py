@@ -48,7 +48,7 @@ def _count_real_migrations() -> int:
 
 def _import_run_migrations():
     """Lazy import to avoid module-level import chain issues with Docker deps."""
-    from app.main import run_migrations
+    from paper_ingestion.main import run_migrations
 
     return run_migrations
 

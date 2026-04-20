@@ -17,10 +17,10 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 # conftest.py stubs fitz + marker + tiktoken + qdrant_client at module level
-# so we can safely import app.pdf_processor here.
-import app.pdf_processor as pdf_processor
+# so we can safely import paper_ingestion.pdf_processor here.
+import paper_ingestion.pdf_processor as pdf_processor
 import pytest
-from app.pdf_processor import (
+from paper_ingestion.pdf_processor import (
     ALLOWED_PDF_DOMAINS,
     MAX_PDF_PAGES,
     MAX_PDF_SIZE,

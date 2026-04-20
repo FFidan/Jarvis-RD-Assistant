@@ -26,8 +26,8 @@ RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     mkdir -p "$SITE_PKGS/static" && \
     chown -R appuser:appuser "$SITE_PKGS/static"
 
-COPY services/paper_ingestion/app/ ./app/
+COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
 
 USER appuser
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "paper_ingestion.main:app", "--host", "0.0.0.0", "--port", "8000"]

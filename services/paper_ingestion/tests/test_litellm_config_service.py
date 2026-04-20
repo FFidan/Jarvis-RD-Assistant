@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import yaml
-from app.services.litellm_config import ROLE_TO_ALIAS, update_litellm_model
+from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS, update_litellm_model
 
 
 def _write_config(path: Path, model_list: list[dict]) -> None:
@@ -27,7 +27,7 @@ def test_update_known_role_rewrites_yaml(tmp_path, monkeypatch):
             {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.smart_model", "qwen3:4b")
     assert result is True
@@ -40,14 +40,16 @@ def test_update_unknown_role_returns_false(tmp_path, monkeypatch):
     """A config key not in ROLE_TO_ALIAS should return False without touching the file."""
     config_path = tmp_path / "config.yaml"
     _write_config(config_path, [])
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     assert update_litellm_model("ui.page_size", "10") is False
 
 
 def test_update_missing_config_returns_false(tmp_path, monkeypatch):
     """If the config file does not exist, return False gracefully."""
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", tmp_path / "nope.yaml")
+    monkeypatch.setattr(
+        "paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", tmp_path / "nope.yaml"
+    )
     assert update_litellm_model("llm.smart_model", "test") is False
 
 
@@ -60,7 +62,7 @@ def test_update_preserves_provider_prefix(tmp_path, monkeypatch):
             {"model_name": "smart", "litellm_params": {"model": "openai/gpt-4"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     update_litellm_model("llm.smart_model", "gpt-4-turbo")
     updated = yaml.safe_load(config_path.read_text())
@@ -76,7 +78,7 @@ def test_update_null_litellm_params(tmp_path, monkeypatch):
             {"model_name": "smart", "litellm_params": None},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.smart_model", "mistral-nemo")
     assert result is True
@@ -93,7 +95,7 @@ def test_same_model_no_update(tmp_path, monkeypatch):
             {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
     mtime_before = config_path.stat().st_mtime
 
     result = update_litellm_model("llm.smart_model", "mistral-nemo")
@@ -111,7 +113,7 @@ def test_update_no_provider_prefix_defaults_to_ollama(tmp_path, monkeypatch):
             {"model_name": "fast", "litellm_params": {"model": "qwen3:4b"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.fast_model", "phi3:mini")
     assert result is True
@@ -128,7 +130,7 @@ def test_update_embed_model(tmp_path, monkeypatch):
             {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     result = update_litellm_model("llm.embed_model", "mxbai-embed-large")
     assert result is True
@@ -147,7 +149,7 @@ def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
             {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
         ],
     )
-    monkeypatch.setattr("app.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
 
     update_litellm_model("llm.fast_model", "phi3:mini")
     updated = yaml.safe_load(config_path.read_text())

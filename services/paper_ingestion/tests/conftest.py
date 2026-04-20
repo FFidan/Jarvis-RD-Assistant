@@ -2,7 +2,7 @@
 
 Loaded automatically by pytest before any test file in this directory.
 Module stubs MUST be at module level (not in fixtures) because they need
-to be installed before any ``import app.*`` triggers transitive imports
+to be installed before any ``import paper_ingestion.*`` triggers transitive imports
 of heavy dependencies that are only available inside Docker.
 """
 
@@ -16,11 +16,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# 1. Path setup (replaces per-file sys.path.insert boilerplate)
+# 1. Path setup
 # ---------------------------------------------------------------------------
+# Repo-root pytest configures pythonpath in pyproject.toml; when running
+# per-service (cd services/paper_ingestion && pytest) we still need to add
+# the service root + jarvis_common to sys.path so ``paper_ingestion.*`` and
+# ``jarvis_common.*`` imports resolve.
 _SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-# In Docker the service is mounted at /app (only 2 parents above conftest.py).
-# On the host the path has more components.  Use try/except to stay portable.
 try:
     _JARVIS_COMMON = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
 except IndexError:

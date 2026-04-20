@@ -5,15 +5,15 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from app.models import (
+from httpx import ASGITransport
+from jarvis_common import normalize_author_name
+from paper_ingestion.models import (
     AutoDetectResponse,
     TrackedAuthorCreate,
     TrackedAuthorResponse,
     TrackedAuthorUpdate,
 )
-from app.routers.authors import author_matches
-from httpx import ASGITransport
-from jarvis_common import normalize_author_name
+from paper_ingestion.routers.authors import author_matches
 
 # ---------------------------------------------------------------------------
 # Unit tests: normalize_author_name
@@ -211,7 +211,7 @@ def _mock_pool() -> tuple[AsyncMock, AsyncMock]:
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked state."""
-    from app.main import app
+    from paper_ingestion.main import app
 
     pool, conn = _mock_pool()
     app.state.db_pool = pool
@@ -316,7 +316,7 @@ async def test_update_author(_app):
     app, conn = _app
 
     with patch(
-        "app.routers.authors.dynamic_update",
+        "paper_ingestion.routers.authors.dynamic_update",
         new_callable=AsyncMock,
         return_value=_make_author_record(enabled=False),
     ):
@@ -354,7 +354,7 @@ async def test_delete_author_returns_204(_app):
     """DELETE /api/authors/{id} returns 204 on success."""
     app, conn = _app
 
-    with patch("app.routers.authors.delete_or_404", new_callable=AsyncMock):
+    with patch("paper_ingestion.routers.authors.delete_or_404", new_callable=AsyncMock):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -372,7 +372,7 @@ async def test_delete_author_not_found(_app):
     async def _raise_404(*args, **kwargs):
         raise HTTPException(status_code=404, detail="Not found")
 
-    with patch("app.routers.authors.delete_or_404", side_effect=_raise_404):
+    with patch("paper_ingestion.routers.authors.delete_or_404", side_effect=_raise_404):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

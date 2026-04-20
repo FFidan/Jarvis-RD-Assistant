@@ -6,9 +6,9 @@ TDD: tests written before implementation.
 from datetime import date
 
 import pytest
-from app.models import PaperCreate, SourceType
-from app.pulse.deck import assemble_deck, load_history, load_today, persist_deck
-from app.pulse.scoring import ScoredCandidate
+from paper_ingestion.models import PaperCreate, SourceType
+from paper_ingestion.pulse.deck import assemble_deck, load_history, load_today, persist_deck
+from paper_ingestion.pulse.scoring import ScoredCandidate
 
 from tests.conftest import (
     FakeRecord,
@@ -170,7 +170,7 @@ async def test_load_today_returns_none_when_no_deck():
 @pytest.mark.asyncio
 async def test_load_today_returns_deck_response():
     """load_today returns PulseDeckResponse when deck exists."""
-    from app.models import PulseDeckResponse
+    from paper_ingestion.models import PulseDeckResponse
 
     pool, conn = _make_pool_and_conn()
     deck_row = make_pulse_deck_row(deck_date="2024-01-15", card_count=2)
@@ -240,7 +240,7 @@ async def test_load_history_returns_empty_when_no_decks():
 @pytest.mark.asyncio
 async def test_load_history_returns_sorted_newest_first():
     """load_history returns decks sorted newest first."""
-    from app.models import PulseDeckResponse
+    from paper_ingestion.models import PulseDeckResponse
 
     pool, conn = _make_pool_and_conn()
     deck_rows = [
@@ -317,7 +317,7 @@ async def test_persist_deck_counts_actual_inserts_when_paper_missing():
     papers = [_make_paper(i) for i in range(3)]
     cards = [_make_scored(p, score=float(i + 1) / 3.0) for i, p in enumerate(papers)]
 
-    with patch("app.pulse.deck.logger") as mock_logger:
+    with patch("paper_ingestion.pulse.deck.logger") as mock_logger:
         deck_id = await persist_deck(pool, deck_date, cards, stats={"candidate_count": 50})
 
     # deck_id must be whatever the upsert returned

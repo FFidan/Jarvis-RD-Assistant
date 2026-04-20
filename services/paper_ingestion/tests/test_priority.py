@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 
-from app.models import compute_priority, priority_level
+from paper_ingestion.models import compute_priority, priority_level
 
 # ---------------------------------------------------------------------------
 # compute_priority tests

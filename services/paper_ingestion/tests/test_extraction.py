@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.models import (
+from paper_ingestion.models import (
     BatchExtractionResponse,
     ExtractedField,
     ExtractionField,
@@ -150,7 +150,7 @@ def test_extraction_table_row():
 
 def test_build_extraction_prompt_valid():
     """build_extraction_prompt generates valid prompt."""
-    from app.extraction import build_extraction_prompt
+    from paper_ingestion.extraction import build_extraction_prompt
 
     fields = [
         {
@@ -175,7 +175,7 @@ def test_build_extraction_prompt_valid():
 
 def test_build_extraction_prompt_empty_fields():
     """build_extraction_prompt handles empty fields list."""
-    from app.extraction import build_extraction_prompt
+    from paper_ingestion.extraction import build_extraction_prompt
 
     prompt = build_extraction_prompt([], "Test Paper", "Some text.")
     assert "Test Paper" in prompt
@@ -183,7 +183,7 @@ def test_build_extraction_prompt_empty_fields():
 
 def test_build_extraction_prompt_long_text():
     """build_extraction_prompt truncates long text to 15K chars."""
-    from app.extraction import build_extraction_prompt
+    from paper_ingestion.extraction import build_extraction_prompt
 
     long_text = "x" * 20000
     fields = [{"name": "m", "label": "M", "description": "d", "type": "text"}]
@@ -200,7 +200,7 @@ def test_build_extraction_prompt_long_text():
 @pytest.mark.asyncio
 async def test_extract_fields_happy_path():
     """extract_fields_for_paper works end-to-end with mocks."""
-    from app.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction import extract_fields_for_paper
 
     mock_conn = AsyncMock()
 
@@ -269,7 +269,7 @@ async def test_extract_fields_happy_path():
 @pytest.mark.asyncio
 async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fails():
     """Mixed chunk-search outcomes should use full paper context for all fields."""
-    from app.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction import extract_fields_for_paper
 
     mock_conn = AsyncMock()
 
@@ -352,7 +352,7 @@ async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fail
 @pytest.mark.asyncio
 async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncates():
     """Fallback prompts should keep already-matched chunks ahead of truncation."""
-    from app.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction import extract_fields_for_paper
 
     mock_conn = AsyncMock()
 
@@ -432,7 +432,7 @@ async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncate
 @pytest.mark.asyncio
 async def test_batch_extract_skips_existing():
     """batch_extract skips papers with existing extractions."""
-    from app.extraction import batch_extract
+    from paper_ingestion.extraction import batch_extract
 
     mock_conn = AsyncMock()
     mock_conn.fetchval.return_value = 1  # Already exists
@@ -454,7 +454,7 @@ async def test_batch_extract_skips_existing():
 @pytest.mark.asyncio
 async def test_batch_extract_reports_progress_with_ctx():
     """batch_extract calls ctx.update_progress and ctx.is_cancelled between papers."""
-    from app.extraction import batch_extract
+    from paper_ingestion.extraction import batch_extract
 
     mock_conn = AsyncMock()
     mock_conn.fetchval.return_value = 1  # all skipped -> no extraction calls
@@ -483,7 +483,7 @@ async def test_batch_extract_reports_progress_with_ctx():
 @pytest.mark.asyncio
 async def test_batch_extract_job_handler(monkeypatch):
     """extraction.batch job handler delegates to batch_extract and shapes result."""
-    import app.extraction_jobs as extraction_jobs_mod
+    import paper_ingestion.extraction_jobs as extraction_jobs_mod
 
     # Create a stand-in for app.main.app.state
     class _State:
@@ -495,7 +495,7 @@ async def test_batch_extract_job_handler(monkeypatch):
 
     fake_main = MagicMock()
     fake_main.app = _App()
-    monkeypatch.setitem(__import__("sys").modules, "app.main", fake_main)
+    monkeypatch.setitem(__import__("sys").modules, "paper_ingestion.main", fake_main)
 
     called = {}
 
@@ -517,7 +517,7 @@ async def test_batch_extract_job_handler(monkeypatch):
         called["ctx"] = ctx
         return BatchExtractionResponse(extracted=2, failed=0, skipped=1)
 
-    monkeypatch.setattr("app.extraction.batch_extract", fake_batch_extract)
+    monkeypatch.setattr("paper_ingestion.extraction.batch_extract", fake_batch_extract)
 
     mock_pool = MagicMock()
     mock_http = AsyncMock()

@@ -21,18 +21,28 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "libs/jarvis_common/tests/*" = ["E501"]
 "scripts/*" = ["E402"]
 # Long SQL / prompt template strings in app code.
-"services/paper_ingestion/app/extraction.py" = ["E501"]
-"services/paper_ingestion/app/routers/extractions.py" = ["E501"]
-"services/paper_ingestion/app/routers/priority.py" = ["E501"]
-"services/paper_ingestion/app/pdf_processor.py" = ["E501", "N806"]
-"services/paper_ingestion/app/verification.py" = ["E501", "N806"]
-"services/paper_ingestion/app/models.py" = ["UP042"]
-"services/paper_ingestion/app/sources/registry.py" = ["UP047"]
+"services/paper_ingestion/paper_ingestion/extraction.py" = ["E501"]
+"services/paper_ingestion/paper_ingestion/routers/extractions.py" = ["E501"]
+"services/paper_ingestion/paper_ingestion/routers/priority.py" = ["E501"]
+"services/paper_ingestion/paper_ingestion/pdf_processor.py" = ["E501", "N806"]
+"services/paper_ingestion/paper_ingestion/verification.py" = ["E501", "N806"]
+"services/paper_ingestion/paper_ingestion/models.py" = ["UP042"]
+"services/paper_ingestion/paper_ingestion/sources/registry.py" = ["UP047"]
 "services/learning_engine/app/converters.py" = ["E501"]
 "libs/jarvis_common/jarvis_common/error_handlers.py" = ["E501"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Service + library roots on sys.path so each package resolves by its unique
+# name (paper_ingestion, learning_engine, telegram_bot, jarvis_common).
+# After the R12 rename, these no longer collide — each service's top-level
+# package name matches its service directory.
+pythonpath = [
+    "services/paper_ingestion",
+    "services/learning_engine",
+    "services/telegram_bot",
+    "libs/jarvis_common",
+]
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",

@@ -67,8 +67,8 @@ if "tiktoken" not in sys.modules:
     fake_tiktoken.get_encoding.return_value = fake_encoding
     sys.modules["tiktoken"] = fake_tiktoken
 
-if getattr(sys.modules.get("app.embedder"), "Embedder", None) is object:
-    del sys.modules["app.embedder"]
+if getattr(sys.modules.get("paper_ingestion.embedder"), "Embedder", None) is object:
+    del sys.modules["paper_ingestion.embedder"]
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +396,11 @@ async def test_reembed_partial_failure_preserves_old_points():
 
 async def test_embedder_payload_includes_model_name():
     """embed_and_store includes embedding_model in Qdrant point payloads."""
-    if getattr(sys.modules.get("app.embedder"), "Embedder", None) is object:
-        del sys.modules["app.embedder"]
+    if getattr(sys.modules.get("paper_ingestion.embedder"), "Embedder", None) is object:
+        del sys.modules["paper_ingestion.embedder"]
 
-    from app.embedder import EMBEDDING_MODEL_NAME, Embedder
-    from app.models import ChunkForEmbedding
+    from paper_ingestion.embedder import EMBEDDING_MODEL_NAME, Embedder
+    from paper_ingestion.models import ChunkForEmbedding
 
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()

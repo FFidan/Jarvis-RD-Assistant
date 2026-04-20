@@ -8,8 +8,8 @@ breaking early on a perfect (100) match for performance.
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-from app.models import ChunkResponse
-from app.verification import QuoteVerifier
+from paper_ingestion.models import ChunkResponse
+from paper_ingestion.verification import QuoteVerifier
 
 _NOW = datetime.now(tz=UTC)
 
@@ -98,7 +98,9 @@ class TestFuzzyBestMatch:
             call_count += 1
             return original_partial_ratio(*args, **kwargs)
 
-        with patch("app.verification.fuzz.partial_ratio", side_effect=counting_partial_ratio):
+        with patch(
+            "paper_ingestion.verification.fuzz.partial_ratio", side_effect=counting_partial_ratio
+        ):
             result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
 
         assert result.verified is True

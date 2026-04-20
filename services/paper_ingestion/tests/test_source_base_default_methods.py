@@ -9,8 +9,8 @@ from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
-from app.models import TopicRef
-from app.sources.base import PaperSource
+from paper_ingestion.models import TopicRef
+from paper_ingestion.sources.base import PaperSource
 
 
 class DummySource(PaperSource):

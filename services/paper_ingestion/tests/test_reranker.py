@@ -2,8 +2,8 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.embedder import Embedder
-from app.reranker import Reranker, get_reranker
+from paper_ingestion.embedder import Embedder
+from paper_ingestion.reranker import Reranker, get_reranker
 
 
 def test_rerank_empty_passages():
@@ -59,7 +59,7 @@ async def test_rerank_chunks_fallback_when_unavailable():
     embedder = Embedder(AsyncMock(), AsyncMock())
     chunks = [{"content": f"chunk {i}"} for i in range(10)]
 
-    with patch("app.reranker.get_reranker", return_value=None):
+    with patch("paper_ingestion.reranker.get_reranker", return_value=None):
         result = await embedder.rerank_chunks("query", chunks, top_k=5)
     assert len(result) == 5
     assert result == chunks[:5]
@@ -77,7 +77,7 @@ async def test_rerank_chunks_applies_reranking():
     mock_reranker = MagicMock()
     mock_reranker.rerank.return_value = [(1, 0.9), (2, 0.5)]
 
-    with patch("app.reranker.get_reranker", return_value=mock_reranker):
+    with patch("paper_ingestion.reranker.get_reranker", return_value=mock_reranker):
         result = await embedder.rerank_chunks("query", chunks, top_k=2)
     assert len(result) == 2
     assert result[0] == chunks[1]  # "high relevance" first
@@ -90,7 +90,7 @@ async def test_rerank_chunks_skips_when_fewer_than_top_k():
     chunks = [{"content": "only one"}]
 
     mock_reranker = MagicMock()
-    with patch("app.reranker.get_reranker", return_value=mock_reranker):
+    with patch("paper_ingestion.reranker.get_reranker", return_value=mock_reranker):
         result = await embedder.rerank_chunks("query", chunks, top_k=5)
     assert result == chunks
     mock_reranker.rerank.assert_not_called()
@@ -104,7 +104,7 @@ async def test_rerank_chunks_fallback_on_exception():
     mock_reranker = MagicMock()
     mock_reranker.rerank.side_effect = RuntimeError("model crashed")
 
-    with patch("app.reranker.get_reranker", return_value=mock_reranker):
+    with patch("paper_ingestion.reranker.get_reranker", return_value=mock_reranker):
         result = await embedder.rerank_chunks("query", chunks, top_k=5)
     assert len(result) == 5
     assert result == chunks[:5]

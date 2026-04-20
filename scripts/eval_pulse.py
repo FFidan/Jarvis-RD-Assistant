@@ -16,11 +16,9 @@ Acceptance targets (Phase 1 Goal §2):
 
 Exit 0 if both targets are met, non-zero otherwise.
 
-Run from the paper_ingestion service directory so the `app` package
-imports resolve, e.g.::
+Run from the repo root so the ``paper_ingestion`` package imports resolve::
 
-    cd services/paper_ingestion
-    PYTHONPATH=. python ../../scripts/eval_pulse.py
+    uv run python scripts/eval_pulse.py
 """
 
 from __future__ import annotations
@@ -35,8 +33,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-# Bootstrap import path so `app.*` resolves regardless of where the script
-# is invoked from. We add services/paper_ingestion to sys.path.
+# Bootstrap import path so the ``paper_ingestion`` package resolves regardless
+# of where the script is invoked from. We add services/paper_ingestion to sys.path.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -49,10 +47,10 @@ if str(_SERVICE_ROOT) not in sys.path:
     sys.path.insert(0, str(_SERVICE_ROOT))
 
 import httpx  # noqa: E402
-from app.models import PaperCreate, SourceType, TopicRef  # noqa: E402
-from app.pulse.deck import assemble_deck  # noqa: E402
-from app.pulse.profile import UserProfile  # noqa: E402
-from app.pulse.scoring import (  # noqa: E402
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef  # noqa: E402
+from paper_ingestion.pulse.deck import assemble_deck  # noqa: E402
+from paper_ingestion.pulse.profile import UserProfile  # noqa: E402
+from paper_ingestion.pulse.scoring import (  # noqa: E402
     stage1_embedding_filter,
     stage2_llm_rerank,
     stage3_combine,

@@ -48,9 +48,9 @@ def _make_nudge_record(**kwargs) -> dict:
 @pytest.fixture()
 def _app():
     """Create a minimal paper_ingestion app with mocked DB and auth disabled."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     # The conftest.py provides _make_pool_and_conn as a shared helper but we
     # inline it here to keep the fixture self-contained.

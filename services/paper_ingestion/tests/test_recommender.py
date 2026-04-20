@@ -32,7 +32,7 @@ for _p in (_SERVICE_ROOT, _JARVIS_COMMON):
 # ---------------------------------------------------------------------------
 # Import the module under test (recommender has no heavy transitive imports)
 # ---------------------------------------------------------------------------
-from app.recommender import (  # noqa: E402
+from paper_ingestion.recommender import (  # noqa: E402
     _DEFAULT_LIKED_WEIGHT,
     _DEFAULT_PROJECT_WEIGHT,
     _aggregate_to_papers,

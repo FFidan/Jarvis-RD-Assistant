@@ -23,9 +23,9 @@ sys.modules.setdefault(
     ),
 )
 
-from app.models import PaperCreate, SearchRequest, SourceType  # noqa: E402
-from app.routers import search  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
+from paper_ingestion.models import PaperCreate, SearchRequest, SourceType  # noqa: E402
+from paper_ingestion.routers import search  # noqa: E402
 
 
 def _make_source(*, api_key: str | None = None, side_effect=None):

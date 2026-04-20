@@ -35,9 +35,9 @@ def _make_pool_and_conn():
 
 @pytest.fixture()
 def app_fixture():
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -213,10 +213,10 @@ async def test_create_pairing_is_transactional(app_fixture):
 @pytest.mark.asyncio
 async def test_create_pairing_rate_limited():
     """11th request within a minute from the same IP must receive HTTP 429."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
     from jarvis_common.ratelimit import create_limiter
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(

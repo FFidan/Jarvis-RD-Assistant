@@ -74,9 +74,9 @@ def client():
         },
     ):
         # Patch lifespan to avoid real resource init
-        from app.deps import get_db_pool
-        from app.main import app
         from fastapi.testclient import TestClient
+        from paper_ingestion.deps import get_db_pool
+        from paper_ingestion.main import app
 
         # Override the db_pool dependency — use MagicMock so that
         # pool.acquire() returns a synchronous context-manager stub

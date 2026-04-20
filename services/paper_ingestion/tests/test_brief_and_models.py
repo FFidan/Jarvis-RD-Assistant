@@ -101,9 +101,9 @@ def _make_request(mock_pool, mock_http):
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked DB pool, HTTP client, and disabled auth."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -231,7 +231,7 @@ async def test_papers_brief_empty(_app):
 async def test_system_models_full_response(_app):
     """GET /api/system/models returns installed, hardware, and current keys."""
     app, conn, mock_http = _app
-    from app.main import get_system_models
+    from paper_ingestion.main import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -293,7 +293,7 @@ async def test_system_models_full_response(_app):
 async def test_system_models_ollama_unreachable(_app):
     """GET /api/system/models returns empty installed list when Ollama is down."""
     app, conn, mock_http = _app
-    from app.main import get_system_models
+    from paper_ingestion.main import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -314,7 +314,7 @@ async def test_system_models_ollama_unreachable(_app):
 async def test_system_models_no_config(_app):
     """GET /api/system/models returns empty current dict when no config exists."""
     app, conn, mock_http = _app
-    from app.main import get_system_models
+    from paper_ingestion.main import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -357,7 +357,7 @@ async def test_system_models_no_config(_app):
 async def test_system_models_db_failure_still_returns_ollama_data(_app):
     """GET /api/system/models degrades when config loading fails but still returns Ollama data."""
     app, conn, mock_http = _app
-    from app.main import get_system_models
+    from paper_ingestion.main import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 
@@ -386,7 +386,7 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
 async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     """GET /api/system/models keeps installed models even when runtime probe fails."""
     app, conn, mock_http = _app
-    from app.main import get_system_models
+    from paper_ingestion.main import get_system_models
 
     request = _make_request(app.state.db_pool, mock_http)
 

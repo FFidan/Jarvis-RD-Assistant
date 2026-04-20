@@ -8,9 +8,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from app.models import PaperCreate, SourceType, TopicRef
-from app.pulse.profile import UserProfile
-from app.pulse.scoring import ScoredCandidate
+from paper_ingestion.models import PaperCreate, SourceType, TopicRef
+from paper_ingestion.pulse.profile import UserProfile
+from paper_ingestion.pulse.scoring import ScoredCandidate
 
 from tests.conftest import _make_pool_and_conn
 
@@ -83,21 +83,23 @@ def patch_pipeline():
     }
 
     with (
-        patch("app.pulse.job.load_profile", patches["load_profile"]),
-        patch("app.pulse.job.discover_candidates", patches["discover_candidates"]),
-        patch("app.pulse.job.stage1_embedding_filter", patches["stage1_embedding_filter"]),
-        patch("app.pulse.job.stage2_llm_rerank", patches["stage2_llm_rerank"]),
-        patch("app.pulse.job.stage3_combine", patches["stage3_combine"]),
-        patch("app.pulse.job.assemble_deck", patches["assemble_deck"]),
-        patch("app.pulse.job.upsert_paper", patches["upsert_paper"]),
-        patch("app.pulse.job.persist_deck", patches["persist_deck"]),
+        patch("paper_ingestion.pulse.job.load_profile", patches["load_profile"]),
+        patch("paper_ingestion.pulse.job.discover_candidates", patches["discover_candidates"]),
+        patch(
+            "paper_ingestion.pulse.job.stage1_embedding_filter", patches["stage1_embedding_filter"]
+        ),
+        patch("paper_ingestion.pulse.job.stage2_llm_rerank", patches["stage2_llm_rerank"]),
+        patch("paper_ingestion.pulse.job.stage3_combine", patches["stage3_combine"]),
+        patch("paper_ingestion.pulse.job.assemble_deck", patches["assemble_deck"]),
+        patch("paper_ingestion.pulse.job.upsert_paper", patches["upsert_paper"]),
+        patch("paper_ingestion.pulse.job.persist_deck", patches["persist_deck"]),
     ):
         yield context
 
 
 @pytest.mark.asyncio
 async def test_happy_path_end_to_end(patch_pipeline):
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     pool, _conn = _make_pool_and_conn()
     http_client = MagicMock()
@@ -130,7 +132,7 @@ async def test_happy_path_end_to_end(patch_pipeline):
 
 @pytest.mark.asyncio
 async def test_empty_discovery_produces_empty_deck(patch_pipeline):
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     patch_pipeline["mocks"]["discover_candidates"].return_value = []
     patch_pipeline["mocks"]["stage1_embedding_filter"].return_value = []
@@ -150,7 +152,7 @@ async def test_empty_discovery_produces_empty_deck(patch_pipeline):
 
 @pytest.mark.asyncio
 async def test_llm_timeout_falls_back_to_stage1(patch_pipeline):
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     async def raise_timeout(*_a, **_kw):
         raise TimeoutError()
@@ -192,7 +194,7 @@ async def _echo(x):
 
 @pytest.mark.asyncio
 async def test_upsert_happens_before_persist_deck(patch_pipeline):
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     order: list[str] = []
 
@@ -219,7 +221,7 @@ async def test_upsert_happens_before_persist_deck(patch_pipeline):
 
 @pytest.mark.asyncio
 async def test_stats_includes_last_error_on_partial_failure(patch_pipeline):
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     async def boom(*_a, **_kw):
         raise RuntimeError("stage2 exploded")
@@ -249,7 +251,7 @@ async def test_upsert_persist_atomic_on_failure(patch_pipeline):
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     # Build a pool whose acquire() yields a controlled connection so we can
     # assert exactly which connection is handed to each collaborator.
@@ -314,7 +316,7 @@ async def test_upsert_persist_atomic_on_failure(patch_pipeline):
 @pytest.mark.asyncio
 async def test_stage2_timeout_sets_degraded_reason_not_last_error(patch_pipeline):
     """LLM timeout → degraded_reason populated, last_error stays None, deck produced."""
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     async def raise_timeout(*_a, **_kw):
         raise TimeoutError()
@@ -353,7 +355,7 @@ async def test_stage2_timeout_sets_degraded_reason_not_last_error(patch_pipeline
 @pytest.mark.asyncio
 async def test_stage2_exception_sets_degraded_reason_not_last_error(patch_pipeline):
     """Stage2 exception with fallback → degraded_reason set, last_error is None."""
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     async def boom(*_a, **_kw):
         raise RuntimeError("model overloaded")
@@ -375,7 +377,7 @@ async def test_stage2_exception_sets_degraded_reason_not_last_error(patch_pipeli
 @pytest.mark.asyncio
 async def test_stage1_exception_sets_last_error_not_degraded(patch_pipeline):
     """Stage1 failure with empty output → last_error set, degraded_reason stays None."""
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     async def boom(*_a, **_kw):
         raise RuntimeError("embedding service down")
@@ -395,7 +397,7 @@ async def test_stage1_exception_sets_last_error_not_degraded(patch_pipeline):
 @pytest.mark.asyncio
 async def test_happy_path_both_null(patch_pipeline):
     """A clean run has last_error=None and no degraded_reason."""
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     pool, _conn = _make_pool_and_conn()
     stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
@@ -414,7 +416,7 @@ async def test_ctx_progress_reported_in_happy_path(patch_pipeline):
     """When a JobContext is supplied, progress checkpoints are reported."""
     from unittest.mock import AsyncMock
 
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     ctx = MagicMock()
     ctx.update_progress = AsyncMock()
@@ -435,7 +437,7 @@ async def test_ctx_cancellation_is_respected(patch_pipeline):
     """When is_cancelled() returns True, CancelledError is raised."""
     from unittest.mock import AsyncMock
 
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     # Cancel after profile loaded (is_cancelled called at 0.20 boundary)
     call_count = 0
@@ -486,7 +488,7 @@ async def test_fatal_stage_errors_set_last_error_not_degraded(
     records to stats['last_error'] is FATAL — degraded_reason must stay None
     so that the pulse_decks.degraded_reason column is not falsely populated.
     """
-    from app.pulse.job import run_pulse
+    from paper_ingestion.pulse.job import run_pulse
 
     patch_pipeline["mocks"][stage_mock].side_effect = RuntimeError("boom")
 
@@ -519,7 +521,7 @@ async def test_fatal_stage_errors_set_last_error_not_degraded(
 @pytest.mark.asyncio
 async def test_pulse_generate_job_happy_path():
     """_pulse_generate_job calls run_pulse and returns deck_date + card_count."""
-    from app.pulse.job import _pulse_generate_job
+    from paper_ingestion.pulse.job import _pulse_generate_job
 
     pool, _conn = _make_pool_and_conn()
     http_client = MagicMock()
@@ -547,8 +549,8 @@ async def test_pulse_generate_job_happy_path():
         }
     )
 
-    with patch("app.pulse.job.run_pulse", mock_run):
-        with patch("app.main.app", fake_app, create=True):
+    with patch("paper_ingestion.pulse.job.run_pulse", mock_run):
+        with patch("paper_ingestion.main.app", fake_app, create=True):
             result = await _pulse_generate_job(pool, http_client, payload, ctx)
 
     assert result["deck_date"] == "2026-04-10"
@@ -559,7 +561,7 @@ async def test_pulse_generate_job_happy_path():
 @pytest.mark.asyncio
 async def test_pulse_generate_job_now_param_forwarded():
     """_pulse_generate_job forwards the `now` ISO string to run_pulse as a datetime."""
-    from app.pulse.job import _pulse_generate_job
+    from paper_ingestion.pulse.job import _pulse_generate_job
 
     pool, _conn = _make_pool_and_conn()
     http_client = MagicMock()
@@ -591,8 +593,8 @@ async def test_pulse_generate_job_now_param_forwarded():
             "last_error": None,
         }
 
-    with patch("app.pulse.job.run_pulse", side_effect=recording_run_pulse):
-        with patch("app.main.app", fake_app, create=True):
+    with patch("paper_ingestion.pulse.job.run_pulse", side_effect=recording_run_pulse):
+        with patch("paper_ingestion.main.app", fake_app, create=True):
             await _pulse_generate_job(pool, http_client, {"now": now_iso}, ctx)
 
     assert len(captured) == 1
