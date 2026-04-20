@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import author_matches, delete_or_404, dynamic_update
+from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
 from jarvis_common.auth import verify_api_key
 
 from app.deps import get_db_pool, limiter
@@ -120,6 +120,11 @@ async def delete_tracked_author(
             author_id,
             detail=f"Tracked author {author_id} not found",
         )
+    await log_audit(
+        db_pool,
+        action="delete_tracked_author",
+        resource=f"author:{author_id}",
+    )
 
 
 # ---------------------------------------------------------------------------

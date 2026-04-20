@@ -1,5 +1,6 @@
 """Shared utilities for JARVIS microservices."""
 
+from jarvis_common.audit import log_audit
 from jarvis_common.auth import current_user_id, validate_production_config, verify_api_key
 from jarvis_common.db_helpers import (
     delete_or_404,
@@ -44,6 +45,7 @@ from jarvis_common.secrets import read_secret
 from jarvis_common.text_utils import author_matches, normalize_author_name
 
 __all__ = [
+    "log_audit",
     "verify_api_key",
     "validate_production_config",
     "current_user_id",

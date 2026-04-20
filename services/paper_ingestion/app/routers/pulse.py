@@ -13,7 +13,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import current_user_id, verify_api_key
+from jarvis_common import current_user_id, log_audit, verify_api_key
 from jarvis_common import jobs as jobs_lib
 
 from app.deps import get_db_pool, limiter
@@ -53,6 +53,12 @@ async def generate_pulse(
     """
     logger.info("pulse.generate: enqueueing job")
     job_id = await jobs_lib.enqueue(db_pool, "pulse.generate", payload={})
+    await log_audit(
+        db_pool,
+        action="pulse_generate_enqueued",
+        resource="pulse:deck",
+        metadata={"job_id": job_id},
+    )
     return PulseGenerateResponse(job_id=job_id, status="queued")
 
 

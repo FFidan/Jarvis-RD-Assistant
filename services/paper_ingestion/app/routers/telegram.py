@@ -15,7 +15,7 @@ from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from jarvis_common import verify_api_key
+from jarvis_common import log_audit, verify_api_key
 from pydantic import BaseModel
 
 from app.deps import get_db_pool, limiter
@@ -97,6 +97,16 @@ async def create_pairing(
         deep_link = f"{_TELEGRAM_BASE_URL}/{bot_username}?start=PAIR_{code}"
     else:
         deep_link = f"{_TELEGRAM_BASE_URL}/?start=PAIR_{code}"
+
+    await log_audit(
+        db_pool,
+        action="telegram_pairing_created",
+        resource="telegram:pairing",
+        metadata={
+            "expires_at": expires_at.isoformat(),
+            "bot_username_missing": bot_username_missing,
+        },
+    )
 
     return PairingResponse(
         code=code,

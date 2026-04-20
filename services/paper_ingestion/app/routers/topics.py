@@ -4,7 +4,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import delete_or_404, dynamic_update
+from jarvis_common import delete_or_404, dynamic_update, log_audit
 from jarvis_common.auth import verify_api_key
 
 from app.deps import get_db_pool, limiter
@@ -92,3 +92,8 @@ async def delete_topic(
             topic_id,
             detail=f"Topic {topic_id} not found",
         )
+    await log_audit(
+        db_pool,
+        action="delete_topic",
+        resource=f"topic:{topic_id}",
+    )
