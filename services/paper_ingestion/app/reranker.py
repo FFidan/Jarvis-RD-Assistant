@@ -40,6 +40,8 @@ class Reranker:
         """Lazy-load the cross-encoder model on first use."""
         if self._model is not None:
             return
+        if CrossEncoder is None:  # sentence-transformers not installed
+            raise RuntimeError("sentence-transformers is not installed; cannot load reranker")
         try:
             self._model = CrossEncoder(self._model_name, device="cuda")
             logger.info("Cross-encoder loaded on CUDA: %s", self._model_name)

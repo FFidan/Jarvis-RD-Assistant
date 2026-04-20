@@ -1,15 +1,20 @@
 FROM python:3.12.9-slim
 
-WORKDIR /app
+# Set to "true" to install sentence-transformers + PyTorch (adds ~2 GB).
+# Required only when RERANKER_ENABLED=true at runtime.
+ARG INSTALL_OPTIONAL=false
 
-# Install PyTorch with CUDA support first (before other deps that might pull CPU-only torch)
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124
+WORKDIR /app
 
 COPY libs/jarvis_common/ ./libs/jarvis_common/
 RUN pip install --no-cache-dir ./libs/jarvis_common/
 
-COPY services/paper_ingestion/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/paper_ingestion/requirements.txt services/paper_ingestion/requirements-optional.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
+         pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
+         && pip install --no-cache-dir -r requirements-optional.txt; \
+       fi
 
 RUN adduser --disabled-password --no-create-home appuser
 

@@ -13,5 +13,4 @@ lxml>=5.0.0
 slowapi>=0.1.9
 python-multipart>=0.0.9
 apscheduler>=3.10.0
-sentence-transformers>=3.0.0   # Cross-encoder reranking
 pyyaml>=6.0

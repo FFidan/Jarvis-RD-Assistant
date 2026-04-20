@@ -1,0 +1,5 @@
+# Optional heavy dependencies — install only when INSTALL_OPTIONAL=true (see Dockerfile)
+# Enable via RERANKER_ENABLED=true env var once installed.
+sentence-transformers>=3.0.0  # Cross-encoder reranking (~2 GB with PyTorch)
+# torch is pulled in transitively by sentence-transformers; pin here if you need a specific build:
+# torch>=2.0.0 --index-url https://download.pytorch.org/whl/cu124
