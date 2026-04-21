@@ -32,12 +32,11 @@ def _install_fake_batch_extract(monkeypatch, result) -> None:
 
 
 def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
-    """Stub app.main so _app.state resolves without importing FastAPI."""
-    fake_main = types.ModuleType("paper_ingestion.main")
-    fake_main.app = SimpleNamespace(  # type: ignore[attr-defined]
-        state=SimpleNamespace(embedder=embedder, verifier=verifier)
-    )
-    monkeypatch.setitem(sys.modules, "paper_ingestion.main", fake_main)
+    """Populate svc so job handlers can resolve embedder/verifier."""
+    import paper_ingestion._state as _state_mod  # noqa: PLC0415
+
+    _state_mod.svc.embedder = embedder
+    _state_mod.svc.verifier = verifier
 
 
 @pytest.mark.asyncio

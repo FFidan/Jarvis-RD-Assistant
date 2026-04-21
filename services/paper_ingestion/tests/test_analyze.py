@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import types
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,7 +20,7 @@ from paper_ingestion.routers.analyze import _analyze_stream, _sse_event
 # ---------------------------------------------------------------------------
 
 
-def _parse_sse_events(raw_events: list[str]) -> list[dict | str]:
+def _parse_sse_events(raw_events: list[str]) -> list[Any]:
     """Parse raw SSE frame strings into dicts (or raw strings for [DONE])."""
     results: list[dict | str] = []
     for raw in raw_events:

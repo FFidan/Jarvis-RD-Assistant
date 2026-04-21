@@ -50,11 +50,11 @@ _BASE_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
 def _get_public_job_kinds() -> set[str]:
     """Return the set of allowed job kinds, evaluated at request time.
 
-    DEV_MODE is read on each call so that it can be toggled without a restart
-    (e.g. in integration tests that set os.environ["DEV_MODE"] at runtime).
+    JARVIS_ENABLE_TEST_JOBS is read on each call so that it can be toggled
+    without a restart (e.g. in integration tests that set the env var at runtime).
     """
     kinds = set(_BASE_PUBLIC_JOB_KINDS)
-    if os.getenv("DEV_MODE", "false").lower() == "true":
+    if os.getenv("JARVIS_ENABLE_TEST_JOBS") == "1":
         kinds.add("noop.test")
     return kinds
 

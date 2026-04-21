@@ -27,7 +27,7 @@ from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_summary_response,
 )
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     Confidence,
     CrossReference,

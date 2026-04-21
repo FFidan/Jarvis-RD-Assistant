@@ -25,6 +25,8 @@ from paper_ingestion.models import (
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["QuoteVerifier", "FUZZY_THRESHOLD"]
+
 FUZZY_THRESHOLD = 97  # Minimum fuzz.partial_ratio score (tightened for anti-hallucination)
 
 

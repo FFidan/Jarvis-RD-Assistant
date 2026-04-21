@@ -16,10 +16,10 @@ import asyncpg
 import httpx
 from qdrant_client.models import PointIdsList
 
-from paper_ingestion.embedder import COLLECTION_NAME, EMBEDDING_MODEL_NAME
+from paper_ingestion.ingestion.embedder import COLLECTION_NAME, EMBEDDING_MODEL_NAME
 
 if TYPE_CHECKING:
-    from paper_ingestion.embedder import Embedder
+    from paper_ingestion.ingestion.embedder import Embedder
     from paper_ingestion.models import PaperCreate
     from paper_ingestion.pdf_processor import PDFProcessor
 
@@ -153,7 +153,7 @@ async def run_process_pdf(
         try:
             await embedder.qdrant.delete(
                 collection_name=COLLECTION_NAME,
-                points_selector=PointIdsList(points=point_ids_to_delete),
+                points_selector=PointIdsList(points=point_ids_to_delete),  # type: ignore[arg-type]
             )
         except Exception as e:
             logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e)

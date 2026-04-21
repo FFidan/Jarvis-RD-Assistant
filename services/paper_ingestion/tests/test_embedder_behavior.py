@@ -520,7 +520,7 @@ async def test_rerank_chunks_returns_top_k_when_no_reranker():
     e = _make_embedder()
     chunks = [{"content": f"chunk {i}", "score": 1.0 - i * 0.1} for i in range(10)]
 
-    with patch("paper_ingestion.reranker.get_reranker", return_value=None):
+    with patch("paper_ingestion.ingestion.reranker.get_reranker", return_value=None):
         result = await e.rerank_chunks("query", chunks, top_k=3)
 
     assert result == chunks[:3]
@@ -548,7 +548,7 @@ async def test_rerank_chunks_uses_reranker_when_available():
     # Reranker returns index 2 first, then index 0
     mock_reranker.rerank.return_value = [(2, 0.95), (0, 0.7)]
 
-    with patch("paper_ingestion.reranker.get_reranker", return_value=mock_reranker):
+    with patch("paper_ingestion.ingestion.reranker.get_reranker", return_value=mock_reranker):
         result = await e.rerank_chunks("query", chunks, top_k=2)
 
     assert len(result) == 2
@@ -564,7 +564,7 @@ async def test_rerank_chunks_falls_back_on_exception():
     mock_reranker = MagicMock()
     mock_reranker.rerank.side_effect = RuntimeError("model load failed")
 
-    with patch("paper_ingestion.reranker.get_reranker", return_value=mock_reranker):
+    with patch("paper_ingestion.ingestion.reranker.get_reranker", return_value=mock_reranker):
         result = await e.rerank_chunks("q", chunks, top_k=2)
 
     assert result == chunks[:2]

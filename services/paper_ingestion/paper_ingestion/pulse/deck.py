@@ -14,7 +14,7 @@ from paper_ingestion.pulse.scoring import ScoredCandidate
 logger = logging.getLogger(__name__)
 
 
-async def assemble_deck(
+def assemble_deck(
     scored: list[ScoredCandidate],
     size: int = 10,
 ) -> list[ScoredCandidate]:

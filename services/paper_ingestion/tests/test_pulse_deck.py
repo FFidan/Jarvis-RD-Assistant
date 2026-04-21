@@ -48,13 +48,12 @@ def _make_scored(paper: PaperCreate, score: float = 0.5) -> ScoredCandidate:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_assemble_deck_picks_top_n():
+def test_assemble_deck_picks_top_n():
     """assemble_deck returns the top `size` candidates sorted by final_score desc."""
     papers = [_make_paper(i) for i in range(10)]
     candidates = [_make_scored(p, score=float(i) / 10.0) for i, p in enumerate(papers)]
 
-    result = await assemble_deck(candidates, size=5)
+    result = assemble_deck(candidates, size=5)
 
     assert len(result) == 5
     # Highest scores are from papers 9,8,7,6,5
@@ -63,31 +62,28 @@ async def test_assemble_deck_picks_top_n():
     assert result[0].final_score == pytest.approx(0.9)
 
 
-@pytest.mark.asyncio
-async def test_assemble_deck_fewer_than_size():
+def test_assemble_deck_fewer_than_size():
     """assemble_deck returns all candidates when fewer than size."""
     papers = [_make_paper(i) for i in range(3)]
     candidates = [_make_scored(p) for p in papers]
 
-    result = await assemble_deck(candidates, size=10)
+    result = assemble_deck(candidates, size=10)
 
     assert len(result) == 3
 
 
-@pytest.mark.asyncio
-async def test_assemble_deck_empty_input():
+def test_assemble_deck_empty_input():
     """assemble_deck returns [] for empty input."""
-    result = await assemble_deck([], size=10)
+    result = assemble_deck([], size=10)
     assert result == []
 
 
-@pytest.mark.asyncio
-async def test_assemble_deck_enforces_rank_ordering():
+def test_assemble_deck_enforces_rank_ordering():
     """Rank ordering (1-based) is implied by sort position."""
     papers = [_make_paper(i) for i in range(5)]
     candidates = [_make_scored(p, score=float(i) / 5.0) for i, p in enumerate(papers)]
 
-    result = await assemble_deck(candidates, size=5)
+    result = assemble_deck(candidates, size=5)
 
     # Best paper has highest score and is first
     assert result[0].final_score is not None and result[-1].final_score is not None

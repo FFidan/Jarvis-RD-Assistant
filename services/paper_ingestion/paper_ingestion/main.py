@@ -1,17 +1,21 @@
 """Paper Ingestion Service - FastAPI application.
 
 Thin entrypoint: lifespan, middleware, error handlers, health check,
-system/models, and router registration.  Endpoint logic lives in
+and router registration.  Endpoint logic lives in
 ``paper_ingestion.routers.*`` modules.
+
+Extracted modules
+-----------------
+* ``paper_ingestion.migrations_runner`` — ``run_migrations()``
+* ``paper_ingestion.services.telegram_bootstrap`` — ``refresh_telegram_bot_username()``
+* ``paper_ingestion.routers.system`` — ``GET /api/system/models``
 """
 
 import asyncio
 import logging
 import os
-import re
 from contextlib import asynccontextmanager
-from datetime import UTC
-from pathlib import Path
+from typing import Any
 
 import asyncpg
 import httpx
@@ -42,182 +46,16 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.deps import limiter
-from paper_ingestion.embedder import Embedder
-from paper_ingestion.models import PaperSourceConfig, SourceType, SystemModelsResponse
+from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.migrations_runner import run_migrations
+from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
+from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 from paper_ingestion.verification import QuoteVerifier
 
 configure_logging("paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Migrations
-# ---------------------------------------------------------------------------
-
-
-async def run_migrations(pool: asyncpg.Pool) -> None:
-    """Apply unapplied SQL migrations from db/migrations/ on startup."""
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Bound the advisory-lock wait so a crashed holder never stalls startup.
-            await conn.execute("SET LOCAL lock_timeout = '60s'")
-            try:
-                await conn.execute("SELECT pg_advisory_xact_lock(42)")
-            except asyncpg.LockNotAvailableError:
-                logger.warning(
-                    "migration lock contended — another instance is running migrations; skipping"
-                )
-                return  # Other instance handles migrations; treat as success
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            applied = {
-                r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
-            }
-
-            migrations_dir = Path("/app/db/migrations")
-            if not migrations_dir.exists():
-                # Fallback for local dev
-                migrations_dir = Path(__file__).resolve().parents[3] / "db" / "migrations"
-            if not migrations_dir.exists():
-                logger.warning("Migrations directory not found, skipping migrations")
-                return
-
-            for sql_file in sorted(migrations_dir.glob("*.sql")):
-                try:
-                    version = int(sql_file.name.split("_")[0])
-                except (ValueError, IndexError):
-                    logger.warning("Skipping non-migration file: %s", sql_file.name)
-                    continue
-                if version in applied:
-                    continue
-                logger.info("Applying migration %s: %s", version, sql_file.name)
-                sql = sql_file.read_text()
-                # Strip standalone BEGIN/COMMIT/ROLLBACK lines so they don't
-                # conflict with the outer asyncpg transaction (savepoint) wrapper.
-                # asyncpg runs each migration inside a savepoint; nested explicit
-                # transaction commands cause "can't run BEGIN inside a transaction".
-                cleaned_sql = re.sub(
-                    r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
-                    "",
-                    sql,
-                    flags=re.IGNORECASE | re.MULTILINE,
-                )
-                async with conn.transaction():
-                    await conn.execute(cleaned_sql)
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                    )
-                logger.info("Migration %s applied successfully", version)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-async def _refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient) -> None:
-    """Call Telegram ``getMe`` and cache the bot username in ``user_config``.
-
-    No-op if ``TELEGRAM_BOT_TOKEN`` is unset, if the cached entry is fresh
-    (<24h old), or if the API call fails. Never raises: the lifespan hook
-    must stay resilient to network/token errors.
-    """
-    from datetime import datetime, timedelta
-
-    token = read_secret("TELEGRAM_BOT_TOKEN")
-    if not token:
-        return
-
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = 'telegram.bot_username'"
-            )
-    except Exception:
-        logger.warning("telegram.bot_username lookup failed", exc_info=True)
-        return
-
-    now = datetime.now(UTC)
-    if row is not None:
-        value = row["value"]
-        if isinstance(value, dict):
-            set_at_raw = value.get("set_at")
-            try:
-                if isinstance(set_at_raw, str):
-                    set_at = datetime.fromisoformat(set_at_raw.replace("Z", "+00:00"))
-                    if set_at.tzinfo is None:
-                        set_at = set_at.replace(tzinfo=UTC)
-                    if now - set_at < timedelta(hours=24) and value.get("username"):
-                        return
-            except ValueError as _exc:
-                logger.debug("set_at parse failed (stale/malformed) — refreshing", exc_info=_exc)
-                pass  # stale or malformed -> refresh
-
-    try:
-        resp = await http_client.get(
-            f"https://api.telegram.org/bot{token}/getMe",
-            timeout=5.0,
-        )
-    except Exception:
-        logger.warning("Telegram getMe request failed", exc_info=True)
-        return
-
-    if resp.status_code != 200:
-        logger.warning("Telegram getMe returned HTTP %s", resp.status_code)
-        return
-
-    try:
-        payload = resp.json()
-    except Exception:
-        logger.warning("Telegram getMe returned non-JSON payload", exc_info=True)
-        return
-
-    if not payload.get("ok"):
-        logger.warning("Telegram getMe ok=false: %s", payload.get("description"))
-        return
-    username = payload.get("result", {}).get("username")
-    if not isinstance(username, str) or not username:
-        logger.warning("Telegram getMe result missing username")
-        return
-
-    # Pass the dict directly — asyncpg's JSONB codec handles serialisation.
-    # json.dumps() here would double-encode the value. (WEB-C01)
-    cache_value = {"username": username, "set_at": now.isoformat()}
-    try:
-        async with db_pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
-                ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
-                "telegram.bot_username",
-                cache_value,
-            )
-        logger.info("Telegram bot username cached as @%s", username)
-    except Exception:
-        logger.warning("Failed to persist telegram.bot_username", exc_info=True)
-
-
-async def _check_pulse_enabled(db_pool) -> bool:
-    """Return True if pulse.enabled is set to true in user_config."""
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.enabled'")
-        if row is None:
-            return False
-        value = row["value"]
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.lower() in ("true", "1", "yes")
-        return bool(value)
-    except Exception as exc:
-        logger.warning("_check_pulse_enabled: DB lookup failed — assuming disabled", exc_info=exc)
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +95,14 @@ async def lifespan(app: FastAPI):
     app.state.pdf_processor = PDFProcessor(app.state.http_client, app.state.embedder)
     app.state.verifier = QuoteVerifier()
 
+    # Populate module-level service state so job handlers can access these
+    # objects without importing paper_ingestion.main (which would be circular).
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = app.state.pdf_processor
+    svc.embedder = app.state.embedder
+    svc.verifier = app.state.verifier
+
     # C-8: Initialize source singletons so the rate limiter persists across requests.
     app.state.sources = {}
     _preloaded_sources = [
@@ -292,9 +138,12 @@ async def lifespan(app: FastAPI):
                 exc_info=True,
             )
 
+    # Expose sources through the module-level state so pulse job can reach it.
+    svc.sources = app.state.sources
+
     # Refresh the cached Telegram bot username (used by the setup wizard
     # to build pairing deep-links). Never raises on failure.
-    await _refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
+    await refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
 
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     api_key = read_secret("JARVIS_API_KEY")
@@ -510,7 +359,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
 
 
 @app.get("/health", dependencies=[], response_model=None)
-async def health_check(request: Request) -> dict[str, str]:
+async def health_check(request: Request) -> dict[str, Any]:
     """Public health probe — returns only ``{"status": "ok"|"degraded"|"down"}``.
 
     No dependency details are exposed to unauthenticated callers.
@@ -522,7 +371,7 @@ async def health_check(request: Request) -> dict[str, str]:
     content = {"status": status}
     if status == "degraded":
         return JSONResponse(status_code=503, content=content)  # type: ignore[return-value]
-    return content  # type: ignore[return-value]
+    return content
 
 
 @app.get("/health/internal", response_model=HealthCheckResponse)
@@ -544,62 +393,13 @@ async def health_check_internal(
 
 
 # ---------------------------------------------------------------------------
-# GET /api/system/models
+# Back-compat shims (imported by tests and internal lazy imports)
 # ---------------------------------------------------------------------------
 
+# run_migrations is imported directly from paper_ingestion.migrations_runner;
+# re-export here so existing `from paper_ingestion.main import run_migrations` still works.
+# (already imported at top of file)
 
-@app.get("/api/system/models", response_model=SystemModelsResponse)
-async def get_system_models(request: Request) -> SystemModelsResponse:
-    """Return installed Ollama models + hardware info + current assignments."""
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-    http = request.app.state.http_client
-    result: dict = {
-        "status": "ok",
-        "installed": [],
-        "hardware": {},
-        "current": {},
-        "issues": {},
-    }
-
-    try:
-        async with request.app.state.db_pool.acquire() as conn:
-            rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'llm.%'")
-        for r in rows:
-            short_key = r["key"].replace("llm.", "")
-            val = r["value"]
-            # Strip wrapping quotes from JSONB-encoded strings
-            if isinstance(val, str):
-                val = val.strip('"')
-            result["current"][short_key] = val
-    except Exception:
-        logger.warning("Could not load current model assignments", exc_info=True)
-        result["issues"]["current"] = "Could not load current model assignments."
-
-    try:
-        resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            for m in data.get("models", []):
-                result["installed"].append(
-                    {
-                        "name": m.get("name", ""),
-                        "size": m.get("size", 0),
-                        "parameter_size": m.get("details", {}).get("parameter_size", ""),
-                        "quantization": m.get("details", {}).get("quantization_level", ""),
-                    }
-                )
-    except Exception:
-        logger.warning("Could not load installed Ollama models", exc_info=True)
-        result["issues"]["installed"] = "Could not load installed Ollama models."
-
-    try:
-        resp = await http.get(f"{ollama_url}/api/ps", timeout=5.0)
-        if resp.status_code == 200:
-            data = resp.json()
-            result["hardware"]["ollama_running"] = len(data.get("models", []))
-    except Exception:
-        logger.warning("Could not load Ollama runtime status", exc_info=True)
-        result["issues"]["runtime"] = "Could not load Ollama runtime status."
-
-    result["status"] = "ok" if not result["issues"] else "degraded"
-    return SystemModelsResponse.model_validate(result)
+# get_system_models is now served by paper_ingestion.routers.system;
+# re-export the router function for test_brief_and_models.py back-compat.
+from paper_ingestion.routers.system import get_system_models  # noqa: E402,F401

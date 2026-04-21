@@ -25,9 +25,19 @@ from paper_ingestion.decomposition import decompose_query
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 
 if TYPE_CHECKING:
-    from paper_ingestion.embedder import Embedder
+    from paper_ingestion.ingestion.embedder import Embedder
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "CrossPaperRagNoResults",
+    "CrossPaperRagPrep",
+    "prepare_single_paper_rag",
+    "prepare_cross_paper_rag",
+    "sse_error_stream",
+    "stream_rag_events",
+    "_SEARCH_SCORE_THRESHOLD",
+]
 
 _SEARCH_SCORE_THRESHOLD = 0.05
 

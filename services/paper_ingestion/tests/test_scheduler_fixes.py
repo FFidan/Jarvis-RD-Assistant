@@ -47,8 +47,9 @@ def _install_stubs(monkeypatch):
     monkeypatch.setitem(sys.modules, "paper_ingestion.main", _main_stub)
     monkeypatch.setitem(sys.modules, "paper_ingestion.services", MagicMock())
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
-    # Force re-import of scheduler so it resolves against the freshly installed stubs.
+    # Force re-import of scheduler + auto_fetch so they resolve against the freshly installed stubs.
     monkeypatch.delitem(sys.modules, "paper_ingestion.scheduler", raising=False)
+    monkeypatch.delitem(sys.modules, "paper_ingestion.pipelines.auto_fetch", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +146,7 @@ async def test_source_instantiated_with_http_client() -> None:
     with (
         patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
         patch(
-            "paper_ingestion.sources.registry.get_source_class",
+            "paper_ingestion.pipelines.auto_fetch.get_source_class",
             return_value=fake_source_class,
         ),
     ):
@@ -181,7 +182,7 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
 
     with (
         patch.dict("os.environ", {"AUTO_FETCH_INTERVAL_HOURS": "1"}),
-        caplog.at_level(logging.WARNING, logger="paper_ingestion.scheduler"),
+        caplog.at_level(logging.WARNING, logger="paper_ingestion.pipelines.auto_fetch"),
     ):
         await run_auto_pipeline(app)
 

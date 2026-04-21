@@ -18,7 +18,7 @@ import os
 
 # NOTE: Must be set BEFORE importing jarvis_common.jobs so the gated
 # ``noop.test`` handler registers at module import time.
-os.environ.setdefault("DEV_MODE", "true")
+os.environ.setdefault("JARVIS_ENABLE_TEST_JOBS", "1")
 
 import asyncio
 import json

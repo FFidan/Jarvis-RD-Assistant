@@ -376,7 +376,7 @@ class Embedder:
                 try:
                     await self.qdrant.delete(
                         collection_name=COLLECTION_NAME,
-                        points_selector=PointIdsList(points=successfully_upserted),
+                        points_selector=PointIdsList(points=successfully_upserted),  # type: ignore[arg-type]
                     )
                     logger.info(
                         "Cleaned up %d orphaned Qdrant points after batch failure",
@@ -558,7 +558,7 @@ class Embedder:
         list[dict]
             Reranked chunks, limited to top_k.
         """
-        from paper_ingestion.reranker import get_reranker
+        from paper_ingestion.ingestion.reranker import get_reranker
 
         reranker = get_reranker()
         if reranker is None or len(chunks) <= top_k:

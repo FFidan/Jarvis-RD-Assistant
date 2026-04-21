@@ -483,19 +483,12 @@ async def test_batch_extract_reports_progress_with_ctx():
 @pytest.mark.asyncio
 async def test_batch_extract_job_handler(monkeypatch):
     """extraction.batch job handler delegates to batch_extract and shapes result."""
-    import paper_ingestion.extraction_jobs as extraction_jobs_mod
+    import paper_ingestion._state as _state_mod  # noqa: PLC0415
+    import paper_ingestion.extraction_jobs as extraction_jobs_mod  # noqa: PLC0415
 
-    # Create a stand-in for app.main.app.state
-    class _State:
-        embedder = "sentinel-embedder"
-        verifier = "sentinel-verifier"
-
-    class _App:
-        state = _State()
-
-    fake_main = MagicMock()
-    fake_main.app = _App()
-    monkeypatch.setitem(__import__("sys").modules, "paper_ingestion.main", fake_main)
+    # Populate svc so the handler resolves embedder/verifier.
+    _state_mod.svc.embedder = "sentinel-embedder"
+    _state_mod.svc.verifier = "sentinel-verifier"
 
     called = {}
 

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import sys
 import types
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -28,6 +27,12 @@ def _stub_embedder(monkeypatch):
     monkeypatch.setitem(sys.modules, "paper_ingestion.embedder", _fake_embedder_mod)
     # Force paper_jobs to re-import with the scoped embedder stub.
     monkeypatch.delitem(sys.modules, "paper_ingestion.paper_jobs", raising=False)
+    # Reset svc after each test to avoid cross-test pollution.
+    yield
+    import paper_ingestion._state as _state_mod  # noqa: PLC0415
+
+    _state_mod.svc.verifier = None
+    _state_mod.svc.embedder = None
 
 
 class _FakeCtx:
@@ -45,11 +50,11 @@ class _FakeCtx:
 
 
 def _install_fake_app(monkeypatch, *, verifier, embedder) -> None:
-    """Install a stub app.main module exposing app.state.{verifier, embedder}."""
-    fake_main = types.ModuleType("paper_ingestion.main")
-    fake_app = SimpleNamespace(state=SimpleNamespace(verifier=verifier, embedder=embedder))
-    fake_main.app = fake_app  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "paper_ingestion.main", fake_main)
+    """Populate svc with stub objects so job handlers can resolve verifier/embedder."""
+    import paper_ingestion._state as _state_mod  # noqa: PLC0415
+
+    _state_mod.svc.verifier = verifier
+    _state_mod.svc.embedder = embedder
 
 
 def _install_fake_summarization(monkeypatch, mock_fn) -> None:

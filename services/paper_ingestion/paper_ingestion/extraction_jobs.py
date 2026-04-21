@@ -11,15 +11,22 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext, job_handler
 
+from paper_ingestion._state import svc
+
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "_extraction_batch_job",
+]
 
 
 @job_handler("extraction.batch")
 async def _extraction_batch_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -31,13 +38,12 @@ async def _extraction_batch_job(
         template_id (int): Extraction template to apply.
     """
     from paper_ingestion.extraction import batch_extract
-    from paper_ingestion.main import app as _app  # lazy import avoids circular at module load
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     template_id: int = int(payload["template_id"])
 
-    embedder = getattr(_app.state, "embedder", None)
-    verifier = getattr(_app.state, "verifier", None)
+    embedder = svc.embedder
+    verifier = svc.verifier
 
     result = await batch_extract(
         http_client,

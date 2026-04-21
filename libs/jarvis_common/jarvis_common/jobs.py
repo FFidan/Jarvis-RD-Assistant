@@ -18,12 +18,24 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import asyncpg
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Protocols
+# ---------------------------------------------------------------------------
+
+
+@runtime_checkable
+class ProgressContext(Protocol):
+    """Minimum interface a job handler receives as its execution context."""
+
+    async def report_progress(self, percent: float, message: str = "") -> None: ...
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -413,12 +425,12 @@ async def worker_loop(
 
 
 # ---------------------------------------------------------------------------
-# Dev-only noop handler — only registered when DEV_MODE is enabled so that
-# production workers cannot accidentally claim/execute it.
+# Test-only noop handler — only registered when JARVIS_ENABLE_TEST_JOBS=1 so
+# that production workers cannot accidentally claim/execute it.
 # ---------------------------------------------------------------------------
 
 
-if os.environ.get("DEV_MODE", "").lower() in ("1", "true", "yes"):
+if os.environ.get("JARVIS_ENABLE_TEST_JOBS") == "1":
 
     @job_handler("noop.test")
     async def _noop_test(  # noqa: RUF029 — registered via @job_handler

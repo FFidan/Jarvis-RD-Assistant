@@ -1,4 +1,4 @@
-"""System status endpoints used by the setup wizard."""
+"""System status endpoints: setup wizard readiness + Ollama model info."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.models import SystemModelsResponse
 
 logger = logging.getLogger(__name__)
 
@@ -161,3 +162,65 @@ async def get_setup_status(
         telegram_configured=telegram_configured,
         telegram_paired=telegram_paired,
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/system/models
+# ---------------------------------------------------------------------------
+
+
+@router.get("/models", response_model=SystemModelsResponse)
+async def get_system_models(request: Request) -> SystemModelsResponse:
+    """Return installed Ollama models + hardware info + current assignments."""
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    http = request.app.state.http_client
+    result: dict[str, Any] = {
+        "status": "ok",
+        "installed": [],
+        "hardware": {},
+        "current": {},
+        "issues": {},
+    }
+
+    try:
+        async with request.app.state.db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'llm.%'")
+        for r in rows:
+            short_key = r["key"].replace("llm.", "")
+            val = r["value"]
+            # Strip wrapping quotes from JSONB-encoded strings
+            if isinstance(val, str):
+                val = val.strip('"')
+            result["current"][short_key] = val
+    except Exception:
+        logger.warning("Could not load current model assignments", exc_info=True)
+        result["issues"]["current"] = "Could not load current model assignments."
+
+    try:
+        resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            for m in data.get("models", []):
+                result["installed"].append(
+                    {
+                        "name": m.get("name", ""),
+                        "size": m.get("size", 0),
+                        "parameter_size": m.get("details", {}).get("parameter_size", ""),
+                        "quantization": m.get("details", {}).get("quantization_level", ""),
+                    }
+                )
+    except Exception:
+        logger.warning("Could not load installed Ollama models", exc_info=True)
+        result["issues"]["installed"] = "Could not load installed Ollama models."
+
+    try:
+        resp = await http.get(f"{ollama_url}/api/ps", timeout=5.0)
+        if resp.status_code == 200:
+            data = resp.json()
+            result["hardware"]["ollama_running"] = len(data.get("models", []))
+    except Exception:
+        logger.warning("Could not load Ollama runtime status", exc_info=True)
+        result["issues"]["runtime"] = "Could not load Ollama runtime status."
+
+    result["status"] = "ok" if not result["issues"] else "degraded"
+    return SystemModelsResponse.model_validate(result)

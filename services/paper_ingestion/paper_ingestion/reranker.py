@@ -5,9 +5,16 @@ to work unchanged.  New code should import from the canonical location:
     from paper_ingestion.ingestion.reranker import get_reranker
 """
 
-from paper_ingestion.ingestion.reranker import (  # noqa: F401
+from paper_ingestion.ingestion.reranker import (
     Reranker,
     _reranker_state,
     _RerankerState,
     get_reranker,
 )
+
+__all__ = [
+    "Reranker",
+    "_reranker_state",
+    "_RerankerState",
+    "get_reranker",
+]

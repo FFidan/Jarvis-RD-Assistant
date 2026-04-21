@@ -192,7 +192,7 @@ async def test_llm_timeout_deck_still_produced():
         ),
         patch(
             "paper_ingestion.pulse.job.assemble_deck",
-            AsyncMock(return_value=stage3_out),
+            MagicMock(return_value=stage3_out),
         ),
         patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
         patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=77)) as p_persist,
@@ -216,7 +216,7 @@ async def test_empty_discovery_empty_deck_not_error():
         patch("paper_ingestion.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
         patch("paper_ingestion.pulse.job.stage2_llm_rerank", AsyncMock(return_value=[])),
         patch("paper_ingestion.pulse.job.stage3_combine", AsyncMock(return_value=[])),
-        patch("paper_ingestion.pulse.job.assemble_deck", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.assemble_deck", MagicMock(return_value=[])),
         patch("paper_ingestion.pulse.job.upsert_paper", AsyncMock()),
         patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=1)) as p_persist,
     ):

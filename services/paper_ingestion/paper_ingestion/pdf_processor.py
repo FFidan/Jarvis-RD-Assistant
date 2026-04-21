@@ -19,10 +19,24 @@ import httpx
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "PDFProcessor",
+    "PDF_STORAGE_PATH",
+    "ALLOWED_PDF_DOMAINS",
+    "MAX_PDF_PAGES",
+    "MAX_PDF_SIZE",
+    "SNAPSHOT_DPI",
+    "SNAPSHOT_STORAGE_PATH",
+    "extract_text",
+    "_extract_text_sync",
+    "_get_marker_models",
+    "_validate_pdf_url",
+]
 
 PDF_STORAGE_PATH = os.environ.get("PDF_STORAGE_PATH", "/data/pdfs")
 SNAPSHOT_STORAGE_PATH = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")

@@ -48,6 +48,8 @@ def _install_stubs(monkeypatch):
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
     # Force re-import of paper_jobs so it resolves against the freshly installed stubs.
     monkeypatch.delitem(sys.modules, "paper_ingestion.paper_jobs", raising=False)
+    # Also clear _state module so svc starts fresh each test.
+    monkeypatch.delitem(sys.modules, "paper_ingestion._state", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -99,10 +101,11 @@ async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
     original_storage = pj.PDF_STORAGE_PATH
     pj.PDF_STORAGE_PATH = str(tmp_path)
 
-    # app.main.app.state needs pdf_processor and embedder attributes.
-    _main_stub.app = MagicMock()
-    _main_stub.app.state.pdf_processor = MagicMock()
-    _main_stub.app.state.embedder = MagicMock()
+    # Populate svc so the handler resolves pdf_processor and embedder.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
 
     # Inject our mock into both namespaces the handler might resolve.
     _workflow_stub.run_process_pdf = mock_run
@@ -153,9 +156,11 @@ async def test_paper_process_job_sub_ctx_scales_progress(tmp_path):
 
     original_storage = pj.PDF_STORAGE_PATH
     pj.PDF_STORAGE_PATH = str(tmp_path)
-    _main_stub.app = MagicMock()
-    _main_stub.app.state.pdf_processor = MagicMock()
-    _main_stub.app.state.embedder = MagicMock()
+    # Populate svc so the handler resolves pdf_processor and embedder.
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    svc.pdf_processor = MagicMock()
+    svc.embedder = MagicMock()
     _workflow_stub.run_process_pdf = _capturing_run
     pj.run_process_pdf = _capturing_run  # type: ignore[attr-defined]
 

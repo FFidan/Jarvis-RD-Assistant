@@ -2,8 +2,8 @@
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
   "include": [
-    "services/paper_ingestion/app",
-    "services/learning_engine/app",
+    "services/paper_ingestion/paper_ingestion",
+    "services/learning_engine/learning_engine",
     "libs/jarvis_common/jarvis_common"
   ],
   "exclude": [

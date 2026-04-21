@@ -13,12 +13,23 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext, JobError, job_handler
 
+from paper_ingestion._state import svc
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "_SubCtx",
+    "PDF_STORAGE_PATH",
+    "_paper_process_job",
+    "_paper_analyze_job",
+    "_papers_batch_process_job",
+    "_papers_batch_summarize_job",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -52,7 +63,7 @@ class _SubCtx:
 
 @job_handler("paper.process")
 async def _paper_process_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -63,7 +74,6 @@ async def _paper_process_job(
         paper_id (int): DB paper ID — PDF must already be downloaded.
         force (bool): re-process even if chunks already exist.
     """
-    from paper_ingestion.main import app as _app  # lazy import avoids circular at module load
     from paper_ingestion.services.pdf_workflow import run_process_pdf
 
     paper_id: int = payload["paper_id"]
@@ -89,8 +99,8 @@ async def _paper_process_job(
 
     await ctx.update_progress(0.1, "Downloaded")
 
-    pdf_processor = _app.state.pdf_processor
-    embedder = _app.state.embedder
+    pdf_processor = svc.pdf_processor
+    embedder = svc.embedder
 
     result = await run_process_pdf(
         paper_id,
@@ -111,7 +121,7 @@ async def _paper_process_job(
 
 @job_handler("paper.analyze")
 async def _paper_analyze_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -124,7 +134,6 @@ async def _paper_analyze_job(
     B6 fix: local papers (source_type='local' or pdf_local_path IS NOT NULL)
     skip the download step.
     """
-    from paper_ingestion.main import app as _app  # lazy import avoids circular at module load
     from paper_ingestion.services.pdf_workflow import run_process_pdf
     from paper_ingestion.services.summarization import generate_paper_summary
 
@@ -146,9 +155,9 @@ async def _paper_analyze_job(
     if not is_local and not row["pdf_url"]:
         raise JobError(f"Paper {paper_id} has no PDF URL")
 
-    pdf_processor = _app.state.pdf_processor
-    embedder = _app.state.embedder
-    verifier = _app.state.verifier
+    pdf_processor = svc.pdf_processor
+    embedder = svc.embedder
+    verifier = svc.verifier
 
     # ---- Step 1: Download (skip for local) ----
     if not is_local and not row["pdf_downloaded"]:
@@ -213,7 +222,7 @@ async def _paper_analyze_job(
 
 @job_handler("papers.batch_process")
 async def _papers_batch_process_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -223,14 +232,13 @@ async def _papers_batch_process_job(
     Payload keys:
         paper_ids (list[int]): DB paper IDs whose PDFs should be processed.
     """
-    from paper_ingestion.main import app as _app  # lazy import avoids circular at module load
     from paper_ingestion.services.pdf_workflow import run_process_pdf
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     total = len(paper_ids)
 
-    pdf_processor = _app.state.pdf_processor
-    embedder = _app.state.embedder
+    pdf_processor = svc.pdf_processor
+    embedder = svc.embedder
 
     processed = 0
     skipped = 0
@@ -278,7 +286,7 @@ async def _papers_batch_process_job(
 
 @job_handler("papers.batch_summarize")
 async def _papers_batch_summarize_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -288,14 +296,13 @@ async def _papers_batch_summarize_job(
     Payload keys:
         paper_ids (list[int]): DB paper IDs to summarize.
     """
-    from paper_ingestion.main import app as _app  # lazy import avoids circular at module load
     from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     total = len(paper_ids)
 
-    verifier = _app.state.verifier
-    embedder = _app.state.embedder
+    verifier = svc.verifier
+    embedder = svc.embedder
 
     summarized = 0
     failed = 0

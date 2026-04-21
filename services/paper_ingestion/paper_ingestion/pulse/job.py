@@ -24,9 +24,11 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext, job_handler
 
+from paper_ingestion._state import svc
 from paper_ingestion.pulse.deck import assemble_deck, persist_deck
 from paper_ingestion.pulse.discovery import discover_candidates
 from paper_ingestion.pulse.profile import load_profile
@@ -212,7 +214,7 @@ async def run_pulse(
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
     try:
-        deck = await assemble_deck(stage3_out, size=profile.deck_size)
+        deck = assemble_deck(stage3_out, size=profile.deck_size)
     except Exception as exc:  # broad: may call DB/services; must not crash pipeline
         stats["last_error"] = f"assemble_deck: {exc}"
         logger.exception("pulse.assemble failed")
@@ -261,7 +263,7 @@ async def run_pulse(
 
 @job_handler("pulse.generate")
 async def _pulse_generate_job(
-    pool: Any,
+    pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     payload: dict[str, Any],
     ctx: JobContext,
@@ -270,24 +272,22 @@ async def _pulse_generate_job(
 
     Registered as handler for kind ``"pulse.generate"``.  Accepts an optional
     ``now`` ISO string in ``payload`` for deterministic testing; all other
-    pipeline parameters come from app state.
+    pipeline parameters come from the module-level service state (``svc``).
 
     Note: ``embedder`` and ``source_cache`` are not serialisable as job payload —
-    the handler retrieves them from the worker context by importing app state.
-    Since the worker runs inside the same process, ``app.state`` is available
-    via the FastAPI application singleton.
+    the handler retrieves them from ``paper_ingestion._state.svc`` which is
+    populated during FastAPI lifespan startup.  The worker runs inside the same
+    process so ``svc`` is always initialised before any job executes.
     """
-    from paper_ingestion.main import app as _app  # lazy import to avoid circular at module load
-
     now_str = payload.get("now")
     now = datetime.fromisoformat(now_str) if now_str else None
 
     stats = await run_pulse(
         db_pool=pool,
         http_client=http_client,
-        embedder=_app.state.embedder,
+        embedder=svc.embedder,
         now=now,
-        source_cache=getattr(_app.state, "sources", None),
+        source_cache=svc.sources,
         ctx=ctx,
     )
     return {

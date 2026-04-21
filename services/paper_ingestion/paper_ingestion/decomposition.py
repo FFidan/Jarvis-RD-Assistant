@@ -16,6 +16,8 @@ from jarvis_common.prompt_safety import wrap_delimited
 
 logger = logging.getLogger(__name__)
 
+__all__ = ["decompose_query"]
+
 
 async def decompose_query(
     question: str, http_client: httpx.AsyncClient, *, model: str = "fast"

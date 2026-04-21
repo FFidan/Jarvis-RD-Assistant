@@ -66,7 +66,7 @@ def patch_pipeline():
         "stage1_embedding_filter": AsyncMock(return_value=stage1_out),
         "stage2_llm_rerank": AsyncMock(return_value=stage2_out),
         "stage3_combine": AsyncMock(return_value=stage3_out),
-        "assemble_deck": AsyncMock(return_value=deck),
+        "assemble_deck": MagicMock(return_value=deck),
         "upsert_paper": AsyncMock(return_value={"id": 1, "is_insert": True}),
         "persist_deck": AsyncMock(return_value=42),
     }
@@ -113,7 +113,7 @@ async def test_happy_path_end_to_end(patch_pipeline):
     mocks["stage1_embedding_filter"].assert_awaited_once()
     mocks["stage2_llm_rerank"].assert_awaited_once()
     mocks["stage3_combine"].assert_awaited_once()
-    mocks["assemble_deck"].assert_awaited_once()
+    mocks["assemble_deck"].assert_called_once()
     assert mocks["upsert_paper"].await_count == len(patch_pipeline["deck"])
     mocks["persist_deck"].assert_awaited_once()
 
@@ -166,7 +166,7 @@ async def test_llm_timeout_falls_back_to_stage1(patch_pipeline):
 
     patch_pipeline["mocks"]["stage3_combine"].side_effect = stage3_impl
 
-    async def assemble_impl(scored, size):
+    def assemble_impl(scored, size):
         return scored[:size]
 
     patch_pipeline["mocks"]["assemble_deck"].side_effect = assemble_impl
@@ -329,7 +329,7 @@ async def test_stage2_timeout_sets_degraded_reason_not_last_error(patch_pipeline
 
     patch_pipeline["mocks"]["stage3_combine"].side_effect = stage3_impl
 
-    async def assemble_impl(scored, size):
+    def assemble_impl(scored, size):
         return scored[:size]
 
     patch_pipeline["mocks"]["assemble_deck"].side_effect = assemble_impl
