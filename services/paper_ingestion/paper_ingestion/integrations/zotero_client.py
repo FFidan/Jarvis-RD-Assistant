@@ -103,6 +103,22 @@ class ZoteroClient:
             pass
         return None
 
+    async def fetch_items_since(self, version: int) -> tuple[list[dict], int]:
+        """GET /items?since={version} — fetch items modified after the given library version.
+
+        Returns a tuple of (items, new_library_version). The new version is read from
+        the ``Zotero-Last-Modified-Version`` response header.
+        """
+        resp = await self._http.get(
+            f"{self._base}/items",
+            params={"since": version, "format": "json", "limit": 100},
+            headers=self._headers(),
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        new_version = int(resp.headers.get("Zotero-Last-Modified-Version", version))
+        return resp.json(), new_version
+
     async def test_connection(self) -> bool:
         """Verify API key and user ID are valid. Returns True on success."""
         try:

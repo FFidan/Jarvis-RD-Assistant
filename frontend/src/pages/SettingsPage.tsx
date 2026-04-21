@@ -8,6 +8,7 @@ import { ExtractionTemplateSection } from '@/components/settings/ExtractionTempl
 import { PulseSection } from '@/components/settings/PulseSection';
 import { TimerSection } from '@/components/settings/TimerSection';
 import { PairTelegram } from '@/components/setup/PairTelegram';
+import { ZoteroSection } from '@/components/settings/ZoteroSection';
 
 export function SettingsPage() {
   return (
@@ -60,14 +61,17 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="integrations">
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold">Telegram</h2>
-              <p className="text-sm text-muted-foreground">
-                Pair a Telegram chat to receive briefings and interact with JARVIS from your phone.
-              </p>
+          <div className="space-y-8">
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold">Telegram</h2>
+                <p className="text-sm text-muted-foreground">
+                  Pair a Telegram chat to receive briefings and interact with JARVIS from your phone.
+                </p>
+              </div>
+              <PairTelegram />
             </div>
-            <PairTelegram />
+            <ZoteroSection />
           </div>
         </TabsContent>
       </Tabs>

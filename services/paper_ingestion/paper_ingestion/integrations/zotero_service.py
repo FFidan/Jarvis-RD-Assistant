@@ -7,6 +7,7 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, job_handler
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def push_paper_to_zotero(
     5. Store zotero_item_key + zotero_last_pushed_at in papers table.
     6. Best-effort fetch of Better BibTeX citation key.
     """
-    from paper_ingestion.integrations.zotero_client import ZoteroClient
+    from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
     cfg = await _get_zotero_config(db_pool)
     if not cfg.get("enabled"):
@@ -229,6 +230,157 @@ async def resync_paper_to_zotero(
     await push_paper_to_zotero(paper_id, db_pool, http_client)
 
 
+async def poll_zotero_library(
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+) -> dict[str, Any]:
+    """Incremental poll of Zotero library since last known version.
+
+    For each new item:
+    - If Extra field contains 'jarvis_paper_id=' → skip (originated in JARVIS)
+    - If DOI matches existing JARVIS paper → link zotero_item_key (skip ingestion)
+    - Else → enqueue paper.process job with Zotero metadata as seed
+
+    Persists last library version in user_config as 'zotero.last_library_version'.
+    """
+    from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
+
+    cfg = await _get_zotero_config(db_pool)
+
+    if not cfg.get("enabled"):
+        logger.debug("Zotero poll: integration disabled")
+        return {"status": "disabled"}
+
+    if not cfg.get("poll_enabled", False):
+        logger.debug("Zotero poll: poll_enabled is false")
+        return {"status": "poll_disabled"}
+
+    api_key = cfg.get("api_key", "")
+    user_id = cfg.get("user_id", "")
+    library_type = cfg.get("library_type", "user")
+    if not api_key or not user_id:
+        logger.warning("Zotero poll: api_key or user_id not configured")
+        return {"status": "disabled"}
+
+    # Read last known library version (persisted as a JSON number in user_config).
+    last_version: int = 0
+    raw_version = cfg.get("last_library_version")
+    if isinstance(raw_version, int | float):
+        last_version = int(raw_version)
+
+    client = ZoteroClient(
+        api_key=str(api_key),
+        user_id=str(user_id),
+        library_type=str(library_type),
+        http_client=http_client,
+    )
+
+    try:
+        items, new_version = await client.fetch_items_since(last_version)
+    except Exception:
+        logger.error("Zotero poll: fetch_items_since failed", exc_info=True)
+        return {"status": "error", "message": "fetch failed"}
+
+    new_count = 0
+    linked_count = 0
+    enqueued_count = 0
+
+    for item in items:
+        data: dict[str, Any] = item.get("data", {})
+        item_key: str = data.get("key", item.get("key", ""))
+
+        # Skip items that originated in JARVIS.
+        extra: str = data.get("extra", "") or ""
+        if "jarvis_paper_id=" in extra:
+            continue
+
+        new_count += 1
+        doi: str = data.get("DOI", "") or ""
+
+        # DOI deduplication — link to existing JARVIS paper if found.
+        if doi:
+            try:
+                async with db_pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        "SELECT id, zotero_item_key FROM papers WHERE doi = $1",
+                        doi,
+                    )
+                if row:
+                    if not row["zotero_item_key"] and item_key:
+                        async with db_pool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE papers SET zotero_item_key = $1 WHERE id = $2",
+                                item_key,
+                                row["id"],
+                            )
+                    linked_count += 1
+                    continue
+            except Exception:
+                logger.warning("Zotero poll: DOI lookup failed for key %s", item_key, exc_info=True)
+
+        # Build author list from Zotero creators.
+        creators: list[dict[str, str]] = data.get("creators", []) or []
+        authors: list[str] = []
+        for c in creators:
+            first = c.get("firstName", "")
+            last = c.get("lastName", "")
+            name = f"{first} {last}".strip() if first else last
+            if name:
+                authors.append(name)
+
+        # Enqueue paper.process job with Zotero metadata.
+        payload: dict[str, Any] = {
+            "source_override": "zotero",
+            "title": data.get("title", ""),
+            "authors": authors,
+            "abstract": data.get("abstractNote", "") or "",
+            "url": data.get("url", "") or "",
+            "zotero_item_key": item_key,
+        }
+        if doi:
+            payload["doi"] = doi
+
+        try:
+            await jobs_lib.enqueue(db_pool, "paper.process", payload)
+            enqueued_count += 1
+        except Exception:
+            logger.error(
+                "Zotero poll: failed to enqueue paper.process for key %s", item_key, exc_info=True
+            )
+
+    # Persist updated library version.
+    if new_version != last_version:
+        try:
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO user_config (key, value)
+                    VALUES ('zotero.last_library_version', $1::jsonb)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                    """,
+                    str(new_version),
+                )
+        except Exception:
+            logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)
+
+    logger.info(
+        "Zotero poll complete: new=%d linked=%d enqueued=%d version=%d→%d",
+        new_count,
+        linked_count,
+        enqueued_count,
+        last_version,
+        new_version,
+    )
+    return {
+        "status": "ok",
+        "new_items": new_count,
+        "linked": linked_count,
+        "enqueued": enqueued_count,
+        "version_from": last_version,
+        "version_to": new_version,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Job handlers
 # ---------------------------------------------------------------------------
@@ -270,3 +422,21 @@ async def _zotero_resync_job(
     await resync_paper_to_zotero(paper_id, pool, http_client)
     await ctx.update_progress(1.0, "Done")
     return {"paper_id": paper_id, "status": "resynced"}
+
+
+@job_handler("zotero.sync_from_zotero")
+async def _zotero_sync_from_zotero_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Job handler for zotero.sync_from_zotero — incremental library poll.
+
+    Polls the Zotero library for items added since the last known version and
+    enqueues paper.process jobs for any new items not originating in JARVIS.
+    """
+    await ctx.update_progress(0.1, "Starting Zotero library poll")
+    result = await poll_zotero_library(pool, http_client)
+    await ctx.update_progress(1.0, "Done")
+    return result

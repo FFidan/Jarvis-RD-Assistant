@@ -675,8 +675,6 @@ export const fetchPulseStats = (days = 30) =>
 export const fetchPulseDebug = () =>
   apiFetch<PulseDebugInfo>('/api/pulse/debug');
 
-// --- Jobs ---
-
 import type { Job } from '@/stores/job-store';
 
 export const createJob = (kind: string, payload: unknown): Promise<{ job_id: string; status: string }> =>
@@ -706,6 +704,34 @@ export const cancelJob = (jobId: string): Promise<void> =>
  * Calls `onEvent` for each progress update until the job reaches a terminal
  * status or the signal is aborted.
  */
+// --- Zotero ---
+
+export async function zoteroTest(): Promise<{ success: boolean; error?: string }> {
+  return apiFetch('/api/zotero/test', { method: 'POST' });
+}
+
+export async function zoteroPushPaper(paperId: number): Promise<{ job_id: string; status: string }> {
+  return apiFetch(`/api/papers/${paperId}/zotero`, { method: 'POST' });
+}
+
+export async function zoteroGetLinkage(paperId: number): Promise<{
+  zotero_item_key: string | null;
+  zotero_citation_key: string | null;
+  zotero_last_pushed_at: string | null;
+}> {
+  return apiFetch(`/api/papers/${paperId}/zotero`);
+}
+
+export async function zoteroResync(paperId: number): Promise<{ job_id: string; status: string }> {
+  return apiFetch(`/api/zotero/resync/${paperId}`, { method: 'POST' });
+}
+
+export async function zoteroPollNow(): Promise<{ job_id: number; status: string }> {
+  return apiFetch('/api/zotero/poll', { method: 'POST' });
+}
+
+// --- Jobs (streaming) ---
+
 export async function streamJob(
   jobId: string,
   onEvent: (ev: {

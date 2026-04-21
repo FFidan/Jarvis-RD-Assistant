@@ -8,6 +8,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import DashboardMetrics, UserStateResponse, UserStateUpsert
@@ -130,6 +131,25 @@ async def upsert_user_state(
 
     if not row:  # pragma: no cover — defensive
         raise HTTPException(status_code=500, detail="Upsert returned no row")
+
+    # Trigger Zotero push when a paper is newly starred and has project links.
+    # The job handler checks Zotero config at runtime and returns early if disabled.
+    if body.status == "starred":
+        try:
+            async with pool.acquire() as conn:
+                project_count = await conn.fetchval(
+                    "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
+                    paper_id,
+                )
+            if project_count:
+                await jobs_lib.enqueue(pool, "zotero.push", {"paper_id": paper_id})
+                logger.debug("Enqueued zotero.push for starred paper %d", paper_id)
+        except Exception:
+            logger.warning(
+                "Failed to enqueue zotero.push after star for paper %d",
+                paper_id,
+                exc_info=True,
+            )
 
     return UserStateResponse(
         status=row["status"],

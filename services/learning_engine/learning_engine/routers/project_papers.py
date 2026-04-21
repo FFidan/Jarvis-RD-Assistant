@@ -1,11 +1,16 @@
 """Project ↔ Papers linking endpoints."""
 
+import logging
+
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from jarvis_common import jobs as jobs_lib
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/projects", tags=["project-papers"])
 
@@ -75,6 +80,36 @@ async def link_paper(
             },
             status_code=200,
         )
+
+    # Trigger Zotero push when a paper is linked to a project if it is starred
+    # or was previously pushed to Zotero.  The job handler checks config at runtime
+    # and returns early if Zotero is disabled.
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT pus.status, p.zotero_item_key
+                FROM papers p
+                LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+                WHERE p.id = $1
+                """,
+                paper_id,
+            )
+        if row and (row["status"] == "starred" or row["zotero_item_key"]):
+            await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
+            logger.debug(
+                "Enqueued zotero.push for paper %d linked to project %d",
+                paper_id,
+                project_id,
+            )
+    except Exception:
+        logger.warning(
+            "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
+            paper_id,
+            project_id,
+            exc_info=True,
+        )
+
     return {"project_id": project_id, "paper_id": paper_id}
 
 

@@ -190,6 +190,7 @@ async def lifespan(app: FastAPI):
         "digest.weekly",
         "zotero.push",
         "zotero.resync",
+        "zotero.sync_from_zotero",
     }
     _jobs_stop = asyncio.Event()
     app.state.jobs_worker_stop = _jobs_stop
@@ -296,6 +297,7 @@ from paper_ingestion.routers import (  # noqa: E402
     topics,
 )
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
+from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(topics.router)
 app.include_router(settings.router)
@@ -314,6 +316,7 @@ app.include_router(papers.router)
 app.include_router(pdf.router)
 app.include_router(rag.router)
 app.include_router(pulse_router.router)
+app.include_router(zotero_router.router)
 app.include_router(telegram.router)
 app.include_router(system.router)
 app.include_router(jobs.router)
