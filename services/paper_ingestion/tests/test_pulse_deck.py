@@ -9,7 +9,6 @@ import pytest
 from paper_ingestion.models import PaperCreate, SourceType
 from paper_ingestion.pulse.deck import assemble_deck, load_history, load_today, persist_deck
 from paper_ingestion.pulse.scoring import ScoredCandidate
-
 from tests.conftest import (
     FakeRecord,
     _make_pool_and_conn,

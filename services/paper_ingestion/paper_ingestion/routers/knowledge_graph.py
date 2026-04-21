@@ -4,6 +4,7 @@ Entity extraction, graph queries, and entity management.
 """
 
 import logging
+import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -55,7 +56,17 @@ async def extract_entities(
         # "Paper X not found" is a genuine 404; other ValueErrors (e.g.
         # "no chunks found") indicate bad input → 400.
         status = 404 if "not found" in msg.lower() else 400
-        raise HTTPException(status, msg)
+        request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+        logger.exception(
+            "Entity extraction failed for paper %d", paper_id, extra={"request_id": request_id}
+        )
+        raise HTTPException(
+            status,
+            detail=(
+                f"Entity extraction failed (request_id={request_id})."
+                " Please retry or contact support."
+            ),
+        ) from e
 
 
 @router.post("/extract-entities/batch", response_model=BatchEntityExtractResponse)

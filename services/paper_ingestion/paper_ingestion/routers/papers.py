@@ -337,8 +337,8 @@ async def submit_feedback(
                 rating,
                 flagged,
             )
-        except asyncpg.ForeignKeyViolationError:
-            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
+        except asyncpg.ForeignKeyViolationError as e:
+            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
 
         # Fetch the current state to return accurate values
         row = await conn.fetchrow(

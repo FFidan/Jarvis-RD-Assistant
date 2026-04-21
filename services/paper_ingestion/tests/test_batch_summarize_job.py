@@ -8,34 +8,26 @@ from __future__ import annotations
 
 import sys
 import types
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-_SERVICE_ROOT = Path(__file__).resolve().parents[1]
-if str(_SERVICE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SERVICE_ROOT))
+# We build the embedder fake here but scope its installation to each test via the
+# autouse fixture below — this prevents polluting test_embedder.py which needs its
+# own precise qdrant_client.models stubs.
+_fake_embedder_mod = types.ModuleType("paper_ingestion.embedder")
+_fake_embedder_mod.Embedder = MagicMock()  # type: ignore[attr-defined]
+_fake_embedder_mod.COLLECTION_NAME = "paper_chunks"  # type: ignore[attr-defined]
+_fake_embedder_mod.EMBEDDING_MODEL_NAME = "embed-model"  # type: ignore[attr-defined]
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
-if "paper_ingestion.embedder" not in sys.modules:
-    fake_embedder = types.ModuleType("paper_ingestion.embedder")
-    fake_embedder.Embedder = MagicMock()
-    fake_embedder.COLLECTION_NAME = "paper_chunks"
-    fake_embedder.EMBEDDING_MODEL_NAME = "embed-model"
-    sys.modules["paper_ingestion.embedder"] = fake_embedder
-sys.modules.setdefault("qdrant_client", MagicMock(AsyncQdrantClient=MagicMock()))
-sys.modules.setdefault(
-    "qdrant_client.models",
-    MagicMock(
-        Distance=MagicMock(),
-        PointIdsList=MagicMock(),
-        PointStruct=MagicMock(),
-        VectorParams=MagicMock(),
-    ),
-)
+
+@pytest.fixture(autouse=True)
+def _stub_embedder(monkeypatch):
+    """Scope the paper_ingestion.embedder fake to each test only."""
+    monkeypatch.setitem(sys.modules, "paper_ingestion.embedder", _fake_embedder_mod)
+    # Force paper_jobs to re-import with the scoped embedder stub.
+    monkeypatch.delitem(sys.modules, "paper_ingestion.paper_jobs", raising=False)
 
 
 class _FakeCtx:

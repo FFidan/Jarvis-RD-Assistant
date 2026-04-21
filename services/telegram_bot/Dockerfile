@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir ./libs/jarvis_common/ \
 
 RUN adduser --disabled-password --no-create-home appuser
 
-COPY services/telegram_bot/app ./app
+COPY services/telegram_bot/telegram_bot ./telegram_bot
 
 USER appuser
 
-CMD ["python", "-m", "app.main"]
+CMD ["python", "-m", "telegram_bot.main"]

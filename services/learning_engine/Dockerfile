@@ -10,8 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 RUN adduser --disabled-password --no-create-home appuser
 
-COPY services/learning_engine/app/ ./app/
+COPY services/learning_engine/learning_engine/ ./learning_engine/
 
 USER appuser
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["uvicorn", "learning_engine.main:app", "--host", "0.0.0.0", "--port", "8001"]

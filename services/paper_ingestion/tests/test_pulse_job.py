@@ -11,7 +11,6 @@ import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import ScoredCandidate
-
 from tests.conftest import _make_pool_and_conn
 
 

@@ -125,8 +125,8 @@ async def upsert_user_state(
                 body.user_notes,
                 body.flagged,
             )
-        except asyncpg.ForeignKeyViolationError:
-            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
+        except asyncpg.ForeignKeyViolationError as e:
+            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
 
     if not row:  # pragma: no cover — defensive
         raise HTTPException(status_code=500, detail="Upsert returned no row")

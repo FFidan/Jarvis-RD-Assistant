@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.project_manager import ProjectManager
+from telegram_bot.project_manager import ProjectManager
 
 
 def _row(**values):

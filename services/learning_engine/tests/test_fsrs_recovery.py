@@ -7,8 +7,8 @@ by falling back to a new Card instead of crashing.
 from __future__ import annotations
 
 import pytest
-from app.fsrs_manager import FSRSManager
 from fsrs import Rating
+from learning_engine.fsrs_manager import FSRSManager
 
 
 @pytest.fixture

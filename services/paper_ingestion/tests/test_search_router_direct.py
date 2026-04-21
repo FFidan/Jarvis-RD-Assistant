@@ -2,30 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
-sys.modules.setdefault("qdrant_client", MagicMock(AsyncQdrantClient=MagicMock()))
-sys.modules.setdefault(
-    "qdrant_client.models",
-    MagicMock(
-        Distance=MagicMock(),
-        PointIdsList=MagicMock(),
-        PointStruct=MagicMock(),
-        VectorParams=MagicMock(),
-    ),
-)
-
-from fastapi import HTTPException  # noqa: E402
-from paper_ingestion.models import PaperCreate, SearchRequest, SourceType  # noqa: E402
-from paper_ingestion.routers import search  # noqa: E402
+from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
+from paper_ingestion.routers import search
 
 
 def _make_source(*, api_key: str | None = None, side_effect=None):
@@ -73,7 +56,7 @@ async def test_search_preview_returns_results_without_db_writes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_search_preview_maps_semantic_scholar_rate_limit_without_api_key(monkeypatch):
-    """Preview search should preserve S2 rate limits as actionable 429s."""
+    """Preview search degrades gracefully on S2 rate limit, reporting the source as degraded."""
     request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search")
     response = httpx.Response(429, request=request)
     source = _make_source(
@@ -81,24 +64,21 @@ async def test_search_preview_maps_semantic_scholar_rate_limit_without_api_key(m
     )
     monkeypatch.setattr(search, "get_source_for_type", AsyncMock(return_value=source))
 
-    with pytest.raises(HTTPException) as exc_info:
-        await search.search_papers_preview.__wrapped__(
-            MagicMock(),
-            body=SearchRequest(
-                query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10
-            ),
-            db_pool=MagicMock(),
-            http_client=MagicMock(),
-        )
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(),
+        body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
+        db_pool=MagicMock(),
+        http_client=MagicMock(),
+    )
 
-    assert exc_info.value.status_code == 429
-    assert "Semantic Scholar rate limit reached" in exc_info.value.detail
-    assert "configure an API key" in exc_info.value.detail
+    # Source failed — reported as degraded, not raised as HTTP exception
+    assert result.results == []
+    assert "semantic_scholar" in result.degraded_sources
 
 
 @pytest.mark.asyncio
 async def test_search_preview_maps_semantic_scholar_rate_limit_with_api_key(monkeypatch):
-    """Preview search should omit the config hint when an S2 API key exists."""
+    """Preview search degrades gracefully on S2 rate limit even when an API key is configured."""
     request = httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search")
     response = httpx.Response(429, request=request)
     source = _make_source(
@@ -107,16 +87,13 @@ async def test_search_preview_maps_semantic_scholar_rate_limit_with_api_key(monk
     )
     monkeypatch.setattr(search, "get_source_for_type", AsyncMock(return_value=source))
 
-    with pytest.raises(HTTPException) as exc_info:
-        await search.search_papers_preview.__wrapped__(
-            MagicMock(),
-            body=SearchRequest(
-                query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10
-            ),
-            db_pool=MagicMock(),
-            http_client=MagicMock(),
-        )
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(),
+        body=SearchRequest(query="Neural ODE", source=SourceType.SEMANTIC_SCHOLAR, max_results=10),
+        db_pool=MagicMock(),
+        http_client=MagicMock(),
+    )
 
-    assert exc_info.value.status_code == 429
-    assert "Semantic Scholar rate limit reached" in exc_info.value.detail
-    assert "configure an API key" not in exc_info.value.detail
+    # Source failed — reported as degraded, not raised as HTTP exception
+    assert result.results == []
+    assert "semantic_scholar" in result.degraded_sources

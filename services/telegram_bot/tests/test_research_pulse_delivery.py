@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from app.config import BotConfig
-from app.orchestration import research_pulse
+from telegram_bot.config import BotConfig
+from telegram_bot.orchestration import research_pulse
 
 
 def _make_config(api_key: str = "secret") -> BotConfig:

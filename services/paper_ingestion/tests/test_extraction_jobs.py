@@ -8,16 +8,10 @@ from __future__ import annotations
 
 import sys
 import types
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Path setup is handled by conftest.py; explicit insert for portability.
-_SERVICE_ROOT = Path(__file__).resolve().parents[1]
-if str(_SERVICE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SERVICE_ROOT))
 
 
 class _FakeCtx:
@@ -70,7 +64,11 @@ async def test_extraction_batch_happy_path(monkeypatch):
     assert result["total"] == 8
 
     # batch_extract should have been called once with pool, http_client, ids, template_id
-    import paper_ingestion.extraction as extraction_mod  # already stub
+    # Use sys.modules directly: `import pkg.mod` after the real module was already loaded
+    # returns the real module via package attribute lookup, bypassing the sys.modules stub.
+    import sys as _sys
+
+    extraction_mod = _sys.modules["paper_ingestion.extraction"]  # always the stub
 
     extraction_mod.batch_extract.assert_awaited_once()
     call_args = extraction_mod.batch_extract.await_args

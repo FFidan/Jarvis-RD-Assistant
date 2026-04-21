@@ -95,6 +95,7 @@ def client():
         yield TestClient(app, raise_server_exceptions=False), mock_pool
 
         app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

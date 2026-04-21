@@ -2,15 +2,9 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from paper_ingestion.models import (  # noqa: E402
     AskRequest,
     AskResponse,
@@ -40,6 +34,7 @@ from paper_ingestion.models import (  # noqa: E402
     compute_priority,
     priority_level,
 )
+from pydantic import ValidationError
 
 
 def test_paper_response_accepts_local_urls():
@@ -248,11 +243,11 @@ def test_topic_models_strip_surrounding_whitespace():
 
 
 def test_search_request_rejects_invalid_bounds():
-    """SearchRequest enforces the query and max_results bounds."""
+    """SearchRequest enforces the query and max_results bounds (le=200)."""
     with pytest.raises(ValidationError):
         SearchRequest(query="")
     with pytest.raises(ValidationError):
-        SearchRequest(query="x", max_results=101)
+        SearchRequest(query="x", max_results=201)
 
 
 def test_cross_paper_ask_request_rejects_invalid_bounds():

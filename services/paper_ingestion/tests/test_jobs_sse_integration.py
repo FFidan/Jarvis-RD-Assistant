@@ -109,6 +109,7 @@ def app_with_pool(db_pool):
     yield app
 
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 @pytest_asyncio.fixture()

@@ -2,20 +2,14 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-from app.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
-from app.routers import generation  # noqa: E402
 from jarvis_common.db_helpers import get_smart_model  # noqa: E402
 from jarvis_common.jobs import JobContext, JobError  # noqa: E402
+from learning_engine.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
+from learning_engine.routers import generation  # noqa: E402
 
 
 class FakeRecord(dict):

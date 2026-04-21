@@ -112,10 +112,18 @@ async def test_rerank_chunks_fallback_on_exception():
 
 def test_get_reranker_returns_none_without_sentence_transformers():
     """get_reranker returns None when model loading fails."""
-    get_reranker.cache_clear()
+    import paper_ingestion.reranker as reranker_mod
 
-    with patch.object(Reranker, "_load_model_if_needed", side_effect=ImportError("no module")):
-        result = get_reranker()
+    # Reset singleton state so the load attempt runs fresh.
+    original_state = reranker_mod._reranker_state
+    reranker_mod._reranker_state = reranker_mod._RerankerState()
+    try:
+        with (
+            patch.dict("os.environ", {"RERANKER_ENABLED": "true"}),
+            patch.object(Reranker, "_load_model_if_needed", side_effect=ImportError("no module")),
+        ):
+            result = get_reranker()
+    finally:
+        reranker_mod._reranker_state = original_state
+
     assert result is None
-
-    get_reranker.cache_clear()

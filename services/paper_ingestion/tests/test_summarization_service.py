@@ -3,51 +3,16 @@
 from __future__ import annotations
 
 import json
-import sys
-import types
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-# Stub heavy/optional modules before importing the service module.
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = types.ModuleType("tiktoken")
-
-    class _FakeEncoding:
-        def encode(self, text):
-            return list(text)
-
-        def decode(self, tokens):
-            return "".join(tokens)
-
-    fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
-    sys.modules["tiktoken"] = fake_tiktoken
-
-if "qdrant_client" not in sys.modules:
-    fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = object
-    sys.modules["qdrant_client"] = fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = types.SimpleNamespace(COSINE="cosine")
-    fake_qdrant_models.PointIdsList = MagicMock()
-    fake_qdrant_models.PointStruct = object
-    fake_qdrant_models.VectorParams = object
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-
-if "rapidfuzz" not in sys.modules:
-    fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    fake_rapidfuzz.fuzz = MagicMock()
-    sys.modules["rapidfuzz"] = fake_rapidfuzz
-
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models /
+# rapidfuzz stubs.
 from paper_ingestion.models import Confidence
 from paper_ingestion.services import summarization
 

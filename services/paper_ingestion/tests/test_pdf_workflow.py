@@ -2,31 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-# Avoid importing the heavy real embedder module in these focused unit tests.
-if "paper_ingestion.embedder" not in sys.modules:
-    fake_embedder = types.ModuleType("paper_ingestion.embedder")
-    fake_embedder.COLLECTION_NAME = "paper_chunks"
-    fake_embedder.EMBEDDING_MODEL_NAME = "embed-model"
-    sys.modules["paper_ingestion.embedder"] = fake_embedder
-
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-
-    class _PointIdsList:
-        def __init__(self, points):
-            self.points = points
-
-    fake_qdrant_models.PointIdsList = _PointIdsList
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 from paper_ingestion.services.pdf_workflow import advisory_lock, run_process_pdf
 
 

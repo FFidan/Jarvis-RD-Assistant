@@ -54,6 +54,7 @@ def _app(monkeypatch):
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

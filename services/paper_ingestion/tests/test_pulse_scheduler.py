@@ -5,27 +5,11 @@ Ensures ``_is_pulse_enabled`` / ``_get_pulse_cron`` behave correctly and that
 integration is exercised by ``test_scheduler_fixes``.
 """
 
-import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
-
-# Stub the apscheduler scheduler modules before importing scheduler.
-# NOTE: apscheduler.triggers.cron is intentionally NOT stubbed here so that
-# CronTrigger.from_crontab() remains functional in tests that run after this
-# module is collected (e.g. test_settings.py::test_set_config_invalid_cron_*).
-for _mod in (
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.interval",
-):
-    if _mod not in sys.modules:
-        sys.modules[_mod] = MagicMock()
-
-from tests.conftest import FakeRecord, _make_pool_and_conn  # noqa: E402
+from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
 @pytest.fixture

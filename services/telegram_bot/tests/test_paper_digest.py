@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from app.config import BotConfig
-from app.orchestration import paper_digest
+from telegram_bot.config import BotConfig
+from telegram_bot.orchestration import paper_digest
 
 
 def _make_config(api_key: str = "secret") -> BotConfig:

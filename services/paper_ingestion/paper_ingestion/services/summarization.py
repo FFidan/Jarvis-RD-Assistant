@@ -233,12 +233,13 @@ async def generate_paper_summary(
             ),
             config=litellm_config,
         )
-    except httpx.ReadTimeout:
-        raise HTTPException(
-            status_code=504,
-            detail="LLM request timed out. Local models may need more time on first run.",
-        ) from None
-    except httpx.HTTPStatusError:
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "timed out" in msg:
+            raise HTTPException(
+                status_code=504,
+                detail="LLM request timed out. Local models may need more time on first run.",
+            ) from None
         raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
     except ValueError:
         raise HTTPException(status_code=502, detail="Malformed LLM response") from None

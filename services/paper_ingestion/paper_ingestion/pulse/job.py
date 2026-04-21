@@ -24,7 +24,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext, job_handler
 
@@ -232,7 +231,7 @@ async def run_pulse(
                 for card in deck:
                     try:
                         await upsert_paper(conn, card.paper)
-                    except asyncpg.PostgresError as exc:
+                    except Exception as exc:  # per-card: skip failed card, not whole deck
                         logger.warning(
                             "pulse.upsert_paper failed for %s: %s",
                             card.paper.external_id,

@@ -13,7 +13,6 @@ import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import ScoredCandidate
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -200,8 +199,8 @@ async def test_llm_timeout_deck_still_produced():
     ):
         stats = await run_pulse(pool, MagicMock(), MagicMock())
 
-    assert stats["last_error"] is not None
-    assert "timeout" in str(stats["last_error"]).lower()
+    assert stats.get("degraded_reason") is not None
+    assert "timed out" in str(stats["degraded_reason"]).lower()
     p_persist.assert_awaited_once()
 
 

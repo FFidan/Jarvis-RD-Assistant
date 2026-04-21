@@ -113,9 +113,14 @@ def _make_card_row(
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked dependencies and disabled auth."""
-    from app.deps import get_anki_exporter, get_card_generator, get_db_pool, get_fsrs_manager
-    from app.main import app
     from jarvis_common import verify_api_key
+    from learning_engine.deps import (
+        get_anki_exporter,
+        get_card_generator,
+        get_db_pool,
+        get_fsrs_manager,
+    )
+    from learning_engine.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -277,7 +282,7 @@ async def test_list_decks_empty(_app):
 )
 async def test_analytics_handlers_return_expected_shapes(handler_name, rows, expected):
     """Analytics handlers preserve the row shape expected by their response models."""
-    from app.routers import analytics
+    from learning_engine.routers import analytics
 
     db_pool = AsyncMock()
     db_pool.fetch.return_value = rows
@@ -287,13 +292,18 @@ async def test_analytics_handlers_return_expected_shapes(handler_name, rows, exp
 
     assert len(result) == 1
     for key, value in expected.items():
-        assert result[0][key] == value
+        assert getattr(result[0], key) == value
 
 
 def test_analytics_handlers_declare_model_aligned_return_types():
     """Analytics handlers declare the same collection shapes as their response models."""
-    from app.models import ActivityItem, LLMCostItem, RetentionItem, ReviewDistributionItem
-    from app.routers import analytics
+    from learning_engine.models import (
+        ActivityItem,
+        LLMCostItem,
+        RetentionItem,
+        ReviewDistributionItem,
+    )
+    from learning_engine.routers import analytics
 
     expected = {
         "get_activity": list[ActivityItem],
@@ -576,7 +586,7 @@ async def test_get_stats_success(_app):
 @pytest.mark.asyncio
 async def test_generate_enqueues_job_and_returns_202(_app):
     """POST /api/generate now enqueues a DB job and returns 202 with job_id."""
-    from app.routers import generation
+    from learning_engine.routers import generation
 
     app, conn, _, mock_fsrs, mock_generator, _ = _app
 
@@ -605,9 +615,9 @@ async def test_generate_enqueues_job_and_returns_202(_app):
 @pytest.mark.asyncio
 async def test_batch_generate_deck_not_found(_app):
     """batch_generate_cards returns 404 when the target deck does not exist."""
-    from app.models import BatchGenerateRequest
-    from app.routers import generation
     from fastapi import HTTPException
+    from learning_engine.models import BatchGenerateRequest
+    from learning_engine.routers import generation
 
     _, conn, _, mock_fsrs, mock_generator, _ = _app
     conn.fetchval.return_value = None
@@ -633,8 +643,8 @@ async def test_batch_generate_deck_not_found(_app):
 @pytest.mark.asyncio
 async def test_batch_generate_success_returns_202_accepted(_app):
     """batch_generate_cards enqueues a DB job and returns 202 with job_id."""
-    from app.models import BatchGenerateRequest
-    from app.routers import generation
+    from learning_engine.models import BatchGenerateRequest
+    from learning_engine.routers import generation
 
     _, conn, _, mock_fsrs, mock_generator, _ = _app
     pool, _ = _make_pool_and_conn()
@@ -660,11 +670,11 @@ def test_batch_generate_declares_accepted_response_type():
     """batch_generate_cards is typed as returning BatchAcceptedResponse (202)."""
     import typing
 
-    from app.routers import generation
+    from learning_engine.routers import generation
 
     handler = generation.batch_generate_cards.__wrapped__
     hints = typing.get_type_hints(handler)
-    from app.models import BatchAcceptedResponse
+    from learning_engine.models import BatchAcceptedResponse
 
     assert hints.get("return") is BatchAcceptedResponse
 

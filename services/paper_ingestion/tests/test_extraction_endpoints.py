@@ -78,6 +78,7 @@ def _app():
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn, mock_http
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

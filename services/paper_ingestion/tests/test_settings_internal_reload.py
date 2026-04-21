@@ -73,6 +73,7 @@ def _app():
 
     yield app, conn
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

@@ -6,45 +6,11 @@ Each handler function is tested directly with mocked Update + Context objects.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in (
-    "telegram",
-    "telegram.ext",
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.cron",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
-# Now create stubs for specific objects used at import time
-_tg = sys.modules["telegram"]
-_tg.Update = MagicMock
-_tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
-_tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
-
-_tg_ext = sys.modules["telegram.ext"]
-_tg_ext.Application = MagicMock
-_tg_ext.CommandHandler = MagicMock
-_tg_ext.CallbackQueryHandler = MagicMock
-_tg_ext.ContextTypes = MagicMock()
-_tg_ext.ContextTypes.DEFAULT_TYPE = MagicMock
-_tg_ext.ConversationHandler = MagicMock()
-_tg_ext.ConversationHandler.END = -1
-
-from app.config import BotConfig  # noqa: E402
-from app.handlers.command_handler import (  # noqa: E402
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
     done_command,
     help_command,
@@ -364,7 +330,7 @@ async def test_done_nonexistent_error():
     """/done with nonexistent task_id sends error."""
     update, context, mock_db, _ = _make_update_and_context(args=["999"])
 
-    with patch("app.handlers.commands.task_commands.ProjectManager") as mock_pm:
+    with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {}
         mock_pm.return_value = pm_instance
@@ -380,7 +346,7 @@ async def test_done_success():
     """/done <task_id> marks a task as done."""
     update, context, mock_db, _ = _make_update_and_context(args=["5"])
 
-    with patch("app.handlers.commands.task_commands.ProjectManager") as mock_pm:
+    with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {"id": 5, "status": "done"}
         mock_pm.return_value = pm_instance
@@ -424,7 +390,7 @@ async def test_newproject_success():
 
 def test_format_help_contains_all_commands():
     """format_help() must include all 13 bot commands."""
-    from app.formatters import format_help
+    from telegram_bot.formatters import format_help
 
     text = format_help()
     expected_commands = [
@@ -455,10 +421,9 @@ def test_format_help_contains_all_commands():
 @pytest.mark.asyncio
 async def test_post_init_calls_set_my_commands():
     """post_init must register at least 12 commands via set_my_commands."""
-    # Ensure BotCommand is set in the stub (conftest may already do this).
-    sys.modules["telegram"].BotCommand = lambda cmd, desc: (cmd, desc)
+    # BotCommand is now the real class from the installed telegram package.
 
-    from app.main import post_init  # noqa: PLC0415
+    from telegram_bot.main import post_init  # noqa: PLC0415
 
     bot_mock = MagicMock()
     bot_mock.set_my_commands = AsyncMock()
@@ -474,8 +439,8 @@ async def test_post_init_calls_set_my_commands():
 
     # Stub create_db_pool and JarvisScheduler so post_init doesn't blow up.
     with (
-        patch("app.main.create_db_pool", return_value=db_pool_mock),
-        patch("app.main.JarvisScheduler") as mock_sched_cls,
+        patch("telegram_bot.main.create_db_pool", return_value=db_pool_mock),
+        patch("telegram_bot.main.JarvisScheduler") as mock_sched_cls,
     ):
         sched_instance = AsyncMock()
         sched_instance.load_and_start = AsyncMock()

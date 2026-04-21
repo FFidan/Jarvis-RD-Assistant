@@ -41,11 +41,13 @@ def app_fixture():
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
+    original_limiter_enabled = app.state.limiter.enabled
     app.state.limiter.enabled = False
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn
+    app.state.limiter.enabled = original_limiter_enabled
     app.dependency_overrides.clear()
 
 

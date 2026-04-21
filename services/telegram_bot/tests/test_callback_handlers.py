@@ -6,57 +6,12 @@ Each handler is tested directly with mocked Update + Context objects.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in (
-    "telegram",
-    "telegram.ext",
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.cron",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
-_tg = sys.modules["telegram"]
-_tg.Update = MagicMock
-_tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
-_tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
-
-# Ensure Message and BotCommand stubs are set (conftest may already set them, but guard here too).
-if not isinstance(getattr(_tg, "Message", None), type):
-
-    class _FakeMessage:
-        """Minimal stub for telegram.Message."""
-
-    _tg.Message = _FakeMessage
-
-if not callable(getattr(_tg, "BotCommand", None)):
-    _tg.BotCommand = lambda cmd, desc: (cmd, desc)
-
-_FakeMessage = _tg.Message  # local alias for use in helpers below
-
-_tg_ext = sys.modules["telegram.ext"]
-_tg_ext.Application = MagicMock
-_tg_ext.CommandHandler = MagicMock
-_tg_ext.CallbackQueryHandler = MagicMock
-_tg_ext.ContextTypes = MagicMock()
-_tg_ext.ContextTypes.DEFAULT_TYPE = MagicMock
-_tg_ext.ConversationHandler = MagicMock()
-_tg_ext.ConversationHandler.END = -1
-
-from app.config import BotConfig  # noqa: E402
-from app.handlers.callback_handler import (  # noqa: E402
+import telegram
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.callback_handler import (  # noqa: E402
     paper_bookmark_callback,
     paper_detail_callback,
     project_detail_callback,
@@ -91,9 +46,9 @@ def _make_callback_update_and_context(callback_data: str, chat_id=_TEST_CHAT_ID)
     query = MagicMock()
     query.data = callback_data
     query.answer = AsyncMock()
-    # Use _FakeMessage so isinstance(query.message, Message) passes in handlers.
-    fake_msg = _FakeMessage()
-    fake_msg.reply_text = AsyncMock()  # type: ignore[attr-defined]
+    # Use spec=telegram.Message so isinstance(query.message, Message) passes in handlers.
+    fake_msg = MagicMock(spec=telegram.Message)
+    fake_msg.reply_text = AsyncMock()
     query.message = fake_msg
     query.edit_message_text = AsyncMock()
     update.callback_query = query
@@ -227,7 +182,7 @@ async def test_task_done_success():
     """task_done callback marks a task as done."""
     update, context, mock_db, _ = _make_callback_update_and_context("task_done_10")
 
-    with patch("app.handlers.callback_handler.ProjectManager") as mock_pm:
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {"id": 10, "status": "done"}
         mock_pm.return_value = pm_instance
@@ -244,7 +199,7 @@ async def test_task_done_not_found():
     """task_done callback sends 'not found' when task does not exist."""
     update, context, mock_db, _ = _make_callback_update_and_context("task_done_999")
 
-    with patch("app.handlers.callback_handler.ProjectManager") as mock_pm:
+    with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
         pm_instance.complete_task.return_value = {}
         mock_pm.return_value = pm_instance
@@ -266,7 +221,7 @@ async def test_start_review_callback_delegates_to_review_start():
     update, context, _, _ = _make_callback_update_and_context("start_review")
 
     with patch(
-        "app.handlers.callback_handler.review_start", new_callable=AsyncMock
+        "telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock
     ) as mock_review_start:
         await start_review_callback(update, context)
 

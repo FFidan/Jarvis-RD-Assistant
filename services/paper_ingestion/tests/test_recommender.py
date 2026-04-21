@@ -8,26 +8,10 @@ Coverage targets:
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# ---------------------------------------------------------------------------
-# Path setup (mirrors conftest.py pattern)
-# ---------------------------------------------------------------------------
-_SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-# In Docker the service is mounted at /app (only 2 parents above test files).
-# On the host the path has more components — use try/except to stay portable.
-try:
-    _JARVIS_COMMON: str | None = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
-except IndexError:
-    _JARVIS_COMMON = None
-for _p in (_SERVICE_ROOT, _JARVIS_COMMON):
-    if _p is not None and _p not in sys.path:
-        sys.path.insert(0, _p)
 
 # ---------------------------------------------------------------------------
 # Import the module under test (recommender has no heavy transitive imports)

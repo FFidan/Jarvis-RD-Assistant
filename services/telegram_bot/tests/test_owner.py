@@ -5,8 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from app.config import BotConfig
-from app.owner import resolve_owner_chat_id
+from telegram_bot.config import BotConfig
+from telegram_bot.owner import resolve_owner_chat_id
 
 
 def _make_config(chat_id: int | None) -> BotConfig:

@@ -9,34 +9,10 @@ Authenticated /health/internal:
 - Requires valid API key.
 """
 
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
-# ---------------------------------------------------------------------------
-# Stubs for Docker-only dependencies (must precede any app.* import)
-# ---------------------------------------------------------------------------
-if "qdrant_client" not in sys.modules:
-    _fake_qdrant = types.ModuleType("qdrant_client")
-    setattr(_fake_qdrant, "AsyncQdrantClient", MagicMock())
-    sys.modules["qdrant_client"] = _fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    _fake_qm = types.ModuleType("qdrant_client.models")
-    for _attr in ("Distance", "PointIdsList", "PointStruct", "VectorParams"):
-        setattr(_fake_qm, _attr, MagicMock())
-    sys.modules["qdrant_client.models"] = _fake_qm
-
-if "tiktoken" not in sys.modules:
-    _fake_tiktoken = types.ModuleType("tiktoken")
-    setattr(_fake_tiktoken, "get_encoding", MagicMock(return_value=MagicMock()))
-    sys.modules["tiktoken"] = _fake_tiktoken
-
-if "rapidfuzz" not in sys.modules:
-    _fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    setattr(_fake_rapidfuzz, "fuzz", MagicMock())
-    sys.modules["rapidfuzz"] = _fake_rapidfuzz
-
+# conftest.py has already installed qdrant_client / qdrant_client.models / tiktoken /
+# rapidfuzz stubs.
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -105,6 +81,7 @@ def _app():
 
     yield app, conn
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

@@ -3,15 +3,10 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 from fastapi import HTTPException
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
 from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,

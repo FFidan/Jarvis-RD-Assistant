@@ -277,10 +277,11 @@ async def run_job(
             pool,
             job_id,
             status="failed",
-            error={"message": f"no handler for {kind}"},
+            error={"message": f"no handler registered for job kind {kind!r}"},
         )
-        logger.warning("job %s failed: no handler for kind %s", job_id, kind)
-        return
+        msg = f"no handler registered for job kind {kind!r}"
+        logger.error("job %s failed: %s", job_id, msg)
+        raise ValueError(msg)
 
     ctx = JobContext(job_id=job_id, _pool=pool)
     try:

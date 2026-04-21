@@ -1,7 +1,7 @@
 """Tests for paper notes CRUD endpoints and models."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -83,11 +83,11 @@ def _make_note_record(
     }
 
 
-def _mock_pool() -> AsyncMock:
+def _mock_pool() -> tuple[MagicMock, AsyncMock]:
     """Create a mock asyncpg pool with context-managed connection."""
-    pool = AsyncMock()
+    pool = MagicMock()
     conn = AsyncMock()
-    ctx = AsyncMock()
+    ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = ctx
@@ -98,13 +98,20 @@ def _mock_pool() -> AsyncMock:
 def _app():
     """Create a minimal app instance with mocked state for testing notes endpoints."""
     # Defer import so env vars / mocks apply
+    from jarvis_common.auth import verify_api_key
+    from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
     pool, conn = _mock_pool()
     app.state.db_pool = pool
     # Disable rate limiting for tests
     app.state.limiter.enabled = False
-    return app, conn
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    yield app, conn
+    app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 async def test_list_notes_empty(_app):
@@ -168,7 +175,7 @@ async def test_update_note(_app):
     app, conn = _app
 
     with patch(
-        "paper_ingestion.main.dynamic_update",
+        "paper_ingestion.routers.notes.dynamic_update",
         new_callable=AsyncMock,
         return_value=_make_note_record(user_note="updated"),
     ):
@@ -188,7 +195,7 @@ async def test_delete_note_returns_204(_app):
     """DELETE /api/notes/{id} returns 204 on success."""
     app, conn = _app
 
-    with patch("paper_ingestion.main.delete_or_404", new_callable=AsyncMock):
+    with patch("paper_ingestion.routers.notes.delete_or_404", new_callable=AsyncMock):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -222,7 +229,7 @@ async def test_delete_note_not_found(_app):
     async def _raise_404(*args, **kwargs):
         raise HTTPException(status_code=404, detail="Not found")
 
-    with patch("paper_ingestion.main.delete_or_404", side_effect=_raise_404):
+    with patch("paper_ingestion.routers.notes.delete_or_404", side_effect=_raise_404):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

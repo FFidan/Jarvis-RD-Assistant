@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 import types
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -14,28 +13,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 from fastapi.dependencies import utils as fastapi_dependency_utils
 
-_SERVICE_ROOT = Path(__file__).resolve().parents[1]
-if str(_SERVICE_ROOT) not in sys.path:
-    sys.path.insert(0, str(_SERVICE_ROOT))
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-sys.modules.setdefault("tiktoken", MagicMock(get_encoding=MagicMock(return_value=MagicMock())))
-if "paper_ingestion.embedder" not in sys.modules:
-    fake_embedder = types.ModuleType("paper_ingestion.embedder")
-    fake_embedder.Embedder = MagicMock()
-    fake_embedder.COLLECTION_NAME = "paper_chunks"
-    fake_embedder.EMBEDDING_MODEL_NAME = "embed-model"
-    sys.modules["paper_ingestion.embedder"] = fake_embedder
-sys.modules.setdefault("qdrant_client", MagicMock(AsyncQdrantClient=MagicMock()))
-sys.modules.setdefault(
-    "qdrant_client.models",
-    MagicMock(
-        Distance=MagicMock(),
-        PointIdsList=MagicMock(),
-        PointStruct=MagicMock(),
-        VectorParams=MagicMock(),
-    ),
-)
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from paper_ingestion.routers import pdf  # noqa: E402

@@ -1,9 +1,10 @@
 """Tests for the Embedder text chunking logic."""
 
-import sys
-import types
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
+
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
+from paper_ingestion.embedder import Embedder
 
 
 class _FakeEncoding:
@@ -14,34 +15,6 @@ class _FakeEncoding:
 
     def decode(self, tokens):
         return "".join(tokens)
-
-
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = types.ModuleType("tiktoken")
-    fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()  # type: ignore[attr-defined]
-    sys.modules["tiktoken"] = fake_tiktoken
-
-if "qdrant_client" not in sys.modules:
-    fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = object  # type: ignore[attr-defined]
-    sys.modules["qdrant_client"] = fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = types.SimpleNamespace(COSINE="cosine")  # type: ignore[attr-defined]
-    fake_qdrant_models.FieldCondition = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.Filter = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.MatchAny = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.MatchValue = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.PointIdsList = object  # type: ignore[attr-defined]
-    fake_qdrant_models.PointStruct = object  # type: ignore[attr-defined]
-    fake_qdrant_models.RecommendInput = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.RecommendQuery = MagicMock()  # type: ignore[attr-defined]
-    fake_qdrant_models.RecommendStrategy = types.SimpleNamespace(AVERAGE_VECTOR="average")  # type: ignore[attr-defined]
-    fake_qdrant_models.VectorParams = object  # type: ignore[attr-defined]
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-
-from paper_ingestion.embedder import Embedder  # noqa: E402
 
 
 async def test_chunk_text_basic():

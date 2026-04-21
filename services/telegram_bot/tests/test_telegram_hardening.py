@@ -1,12 +1,6 @@
 """Tests for telegram_bot hardening fixes (H-3, M-5, M-6)."""
 
-import sys
-from pathlib import Path
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.formatters import confidence_badge, safe_url
+from telegram_bot.formatters import confidence_badge, safe_url
 
 
 class TestSafeUrl:

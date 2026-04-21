@@ -28,7 +28,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "services/paper_ingestion/paper_ingestion/verification.py" = ["E501", "N806"]
 "services/paper_ingestion/paper_ingestion/models.py" = ["UP042"]
 "services/paper_ingestion/paper_ingestion/sources/registry.py" = ["UP047"]
-"services/learning_engine/app/converters.py" = ["E501"]
+"services/learning_engine/learning_engine/converters.py" = ["E501"]
 "libs/jarvis_common/jarvis_common/error_handlers.py" = ["E501"]
 
 [tool.pytest.ini_options]
@@ -43,6 +43,12 @@ pythonpath = [
     "services/telegram_bot",
     "libs/jarvis_common",
 ]
+# importlib import mode gives each test module a unique synthetic name,
+# which resolves test-file basename collisions across services
+# (e.g. paper_ingestion/tests/test_health.py and
+# learning_engine/tests/test_health.py). Safe to use here because after
+# the R12 package rename no two services share a top-level package name.
+addopts = "--import-mode=importlib"
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",

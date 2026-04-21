@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import io
-import sys
 import zipfile
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 from fsrs import Card, Rating
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from app.anki_exporter import AnkiExporter
-from app.fsrs_manager import FSRSManager
+from learning_engine.anki_exporter import AnkiExporter
+from learning_engine.fsrs_manager import FSRSManager
 
 
 def test_create_new_card_returns_state_and_due_at() -> None:
@@ -57,7 +52,7 @@ def test_schedule_review_recovers_from_invalid_state(monkeypatch: pytest.MonkeyP
         return fallback_card, fake_log
 
     monkeypatch.setattr(
-        "app.fsrs_manager.Card.from_dict", MagicMock(side_effect=KeyError("missing"))
+        "learning_engine.fsrs_manager.Card.from_dict", MagicMock(side_effect=KeyError("missing"))
     )
     monkeypatch.setattr(manager.scheduler, "review_card", fake_review_card)
 

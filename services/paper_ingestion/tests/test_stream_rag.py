@@ -239,7 +239,7 @@ async def test_stream_rag_events_uses_shared_litellm_config_fallback(monkeypatch
             "max_tokens": 700,
         },
         headers={"Authorization": "Bearer master-secret"},
-        timeout=120.0,
+        timeout=300.0,
     )
 
 
@@ -354,9 +354,12 @@ async def test_prepare_cross_paper_rag_returns_messages_and_sources():
 
     result = await _prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
-    # Should return a tuple, not a dict (since chunks were found)
-    assert isinstance(result, tuple)
-    messages, sources = result
+    # Should return a CrossPaperRagPrep dataclass (since chunks were found)
+    from paper_ingestion.streaming import CrossPaperRagPrep
+
+    assert isinstance(result, CrossPaperRagPrep)
+    messages = result.messages
+    sources = result.sources
 
     assert isinstance(messages, list)
     assert len(messages) == 1
@@ -392,10 +395,12 @@ async def test_prepare_cross_paper_rag_no_chunks_returns_dict():
 
     result = await _prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
-    assert isinstance(result, dict)
-    assert "answer" in result
-    assert "No relevant information" in result["answer"]
-    assert result["sources"] == []
+    # Returns CrossPaperRagNoResults dataclass when no chunks found
+    from paper_ingestion.streaming import CrossPaperRagNoResults
+
+    assert isinstance(result, CrossPaperRagNoResults)
+    assert "No relevant information" in result.answer
+    assert result.sources == []
 
 
 # ---------------------------------------------------------------------------

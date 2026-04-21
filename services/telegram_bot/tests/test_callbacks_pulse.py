@@ -7,45 +7,11 @@ card message: they must POST to ``/api/pulse/rate`` with the correct
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in (
-    "telegram",
-    "telegram.ext",
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.cron",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
-_tg = sys.modules["telegram"]
-_tg.Update = MagicMock
-_tg.Message = MagicMock
-_tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
-_tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
-
-_tg_ext = sys.modules["telegram.ext"]
-_tg_ext.Application = MagicMock
-_tg_ext.CommandHandler = MagicMock
-_tg_ext.CallbackQueryHandler = MagicMock
-_tg_ext.ContextTypes = MagicMock()
-_tg_ext.ContextTypes.DEFAULT_TYPE = MagicMock
-_tg_ext.ConversationHandler = MagicMock()
-_tg_ext.ConversationHandler.END = -1
-
-from app.config import BotConfig  # noqa: E402
-from app.handlers.callback_handler import (  # noqa: E402
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.callback_handler import (  # noqa: E402
     pulse_rating_callback,
 )
 

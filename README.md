@@ -267,7 +267,7 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-023)
+│   └── migrations/             # Versioned schema changes (001-030)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services

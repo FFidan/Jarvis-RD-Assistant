@@ -13,47 +13,13 @@ Covers:
 from __future__ import annotations
 
 import json
-import sys
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in (
-    "telegram",
-    "telegram.ext",
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.cron",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
-_tg = cast(Any, sys.modules["telegram"])
-_tg.Update = MagicMock
-_tg.InlineKeyboardButton = MagicMock
-_tg.InlineKeyboardMarkup = MagicMock
-
-_tg_ext = cast(Any, sys.modules["telegram.ext"])
-_tg_ext.Application = MagicMock
-_tg_ext.CommandHandler = MagicMock
-_tg_ext.CallbackQueryHandler = MagicMock
-_tg_ext.ContextTypes = MagicMock()
-_tg_ext.ContextTypes.DEFAULT_TYPE = MagicMock
-_tg_ext.ConversationHandler = MagicMock()
-_tg_ext.ConversationHandler.END = -1
-
-from app.config import BotConfig  # noqa: E402
-from app.handlers.command_handler import start_command  # noqa: E402
-from app.handlers.helpers import _auth_check  # noqa: E402
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.commands import start_command  # noqa: E402
+from telegram_bot.handlers.helpers import _auth_check  # noqa: E402
 
 _OWNER_CHAT_ID = 777
 

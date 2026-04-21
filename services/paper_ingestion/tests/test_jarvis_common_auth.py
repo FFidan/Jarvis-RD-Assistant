@@ -2,15 +2,10 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
 from jarvis_common.auth import validate_production_config, verify_api_key
 
 

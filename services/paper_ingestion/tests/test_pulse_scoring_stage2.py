@@ -21,7 +21,6 @@ except Exception:
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import ScoredCandidate, stage2_llm_rerank
-
 from tests.conftest import fake_llm_score_response
 
 # ---------------------------------------------------------------------------

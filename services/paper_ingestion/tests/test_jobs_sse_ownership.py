@@ -7,40 +7,12 @@ doesn't match the caller's user_id, and allows access when user_id is NULL
 
 from __future__ import annotations
 
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# Stubs for Docker-only dependencies (must precede any app.* import)
-# Conftest already stubs most, but we ensure idempotent guards here for
-# clarity and standalone-run safety.
-# ---------------------------------------------------------------------------
-
-if "qdrant_client" not in sys.modules:
-    _fake_qdrant = types.ModuleType("qdrant_client")
-    _fake_qdrant.AsyncQdrantClient = MagicMock()  # type: ignore[attr-defined]
-    sys.modules["qdrant_client"] = _fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    _fake_qm = types.ModuleType("qdrant_client.models")
-    for _attr in ("Distance", "PointIdsList", "PointStruct", "VectorParams"):
-        setattr(_fake_qm, _attr, MagicMock())
-    sys.modules["qdrant_client.models"] = _fake_qm
-
-if "tiktoken" not in sys.modules:
-    _fake_tiktoken = types.ModuleType("tiktoken")
-    _fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())  # type: ignore[attr-defined]
-    sys.modules["tiktoken"] = _fake_tiktoken
-
-if "rapidfuzz" not in sys.modules:
-    _fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    _fake_rapidfuzz.fuzz = MagicMock()  # type: ignore[attr-defined]
-    sys.modules["rapidfuzz"] = _fake_rapidfuzz
-
+# conftest.py has already installed qdrant_client / qdrant_client.models / tiktoken /
+# rapidfuzz stubs.
 import httpx
+import pytest
 from httpx import ASGITransport
 
 # ---------------------------------------------------------------------------
@@ -115,6 +87,7 @@ def _app_with_pool():
 
     yield _make
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------

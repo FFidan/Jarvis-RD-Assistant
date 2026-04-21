@@ -1,27 +1,16 @@
 """Shared test fixtures for learning_engine tests.
 
 Loaded automatically by pytest before any test file in this directory.
-Learning engine does not import fitz/tiktoken/qdrant, so no module stubs
-are needed here — only path setup and shared DB fixtures.
+All runtime dependencies are installed on the host venv — no stubs or
+path manipulation needed here.
 """
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 # ---------------------------------------------------------------------------
-# 1. Path setup
-# ---------------------------------------------------------------------------
-_SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-_JARVIS_COMMON = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
-for p in (_SERVICE_ROOT, _JARVIS_COMMON):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-# ---------------------------------------------------------------------------
-# 2. FakeRecord + shared fixtures
+# FakeRecord + shared fixtures
 # ---------------------------------------------------------------------------
 
 

@@ -44,8 +44,8 @@ def _make_mock_pool(raise_on_acquire: bool = False) -> MagicMock:
 @pytest.fixture()
 def app_with_deps():
     """Yield app with overridable state; clears overrides on teardown."""
-    from app.main import app
     from jarvis_common import verify_api_key
+    from learning_engine.main import app
 
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app

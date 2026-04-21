@@ -13,33 +13,42 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# Module-level stubs for packages unavailable on the host (fitz, marker, etc.)
-# Must happen before ``import paper_ingestion.paper_jobs``.
+# Stub objects — created at module scope so tests can mutate their attributes,
+# but NOT installed into sys.modules here (that would pollute collection).
 # ---------------------------------------------------------------------------
-_STUBS: dict[str, MagicMock] = {}
 
-
-def _ensure_stub(name: str) -> MagicMock:
-    if name not in sys.modules:
-        mock = MagicMock()
-        sys.modules[name] = mock
-        _STUBS[name] = mock
-    return sys.modules[name]  # type: ignore[return-value]
-
-
-# app.pdf_processor is imported at module level in paper_jobs.py for PDF_STORAGE_PATH.
-_pdf_proc_stub = _ensure_stub("paper_ingestion.pdf_processor")
+_pdf_proc_stub = MagicMock()
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
 
-# app.main is lazily imported inside the handlers; stub it to avoid FastAPI init.
-_main_stub = _ensure_stub("paper_ingestion.main")
+_main_stub = MagicMock()
+_workflow_stub = MagicMock()
 
-# app.services.pdf_workflow — the actual target function imported lazily.
-_ensure_stub("paper_ingestion.services")
-_workflow_stub = _ensure_stub("paper_ingestion.services.pdf_workflow")
 
-# Now safe to import the module under test.
-from paper_ingestion.paper_jobs import _paper_process_job, _SubCtx  # noqa: E402, PLC0415
+# ---------------------------------------------------------------------------
+# Autouse fixture: install stubs + re-import stubbed module each test
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _install_stubs(monkeypatch):
+    """Install heavy-module stubs into sys.modules for the duration of each test.
+
+    monkeypatch.setitem auto-reverses on teardown, so sys.modules stays clean
+    for test files collected/run after this one.
+    """
+    # Reset shared stubs so mutations from previous tests don't bleed through.
+    _pdf_proc_stub.reset_mock()
+    _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
+    _main_stub.reset_mock()
+    _workflow_stub.reset_mock()
+
+    monkeypatch.setitem(sys.modules, "paper_ingestion.pdf_processor", _pdf_proc_stub)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.main", _main_stub)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services", MagicMock())
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    # Force re-import of paper_jobs so it resolves against the freshly installed stubs.
+    monkeypatch.delitem(sys.modules, "paper_ingestion.paper_jobs", raising=False)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -73,7 +82,8 @@ def _make_pool(row: dict) -> MagicMock:
 @pytest.mark.asyncio
 async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
     """_paper_process_job must forward a _SubCtx to run_process_pdf as ctx= kwarg."""
-    import paper_ingestion.paper_jobs as pj
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job, _SubCtx  # noqa: PLC0415
 
     # Create a PDF stub file so exists() passes.
     pdf_file = tmp_path / "paper.pdf"
@@ -122,7 +132,8 @@ async def test_paper_process_job_passes_sub_ctx_to_run_process_pdf(tmp_path):
 @pytest.mark.asyncio
 async def test_paper_process_job_sub_ctx_scales_progress(tmp_path):
     """_SubCtx(ctx, 0.1, 1.0): inner=0.5 must produce outer=0.55 on the real ctx."""
-    import paper_ingestion.paper_jobs as pj
+    import paper_ingestion.paper_jobs as pj  # noqa: PLC0415
+    from paper_ingestion.paper_jobs import _paper_process_job, _SubCtx  # noqa: PLC0415
 
     pdf_file = tmp_path / "paper.pdf"
     pdf_file.write_bytes(b"%PDF-1.4 stub")
@@ -169,6 +180,8 @@ async def test_paper_process_job_sub_ctx_scales_progress(tmp_path):
 @pytest.mark.asyncio
 async def test_sub_ctx_scaling_math():
     """Unit-test _SubCtx.update_progress arithmetic in isolation."""
+    from paper_ingestion.paper_jobs import _SubCtx  # noqa: PLC0415
+
     outer_ctx = _make_ctx()
     sub = _SubCtx(outer_ctx, 0.1, 1.0)
 

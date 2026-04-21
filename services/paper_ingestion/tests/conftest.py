@@ -1,106 +1,23 @@
 """Shared test fixtures for paper_ingestion tests.
 
 Loaded automatically by pytest before any test file in this directory.
-Module stubs MUST be at module level (not in fixtures) because they need
-to be installed before any ``import paper_ingestion.*`` triggers transitive imports
-of heavy dependencies that are only available inside Docker.
+All runtime dependencies (fitz, tiktoken, qdrant_client, rapidfuzz, marker,
+sentence_transformers, apscheduler) are installed on the host venv — no
+module stubs are needed.
 """
 
 import json
 import math
-import sys
-import types
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
-
-# ---------------------------------------------------------------------------
-# 1. Path setup
-# ---------------------------------------------------------------------------
-# Repo-root pytest configures pythonpath in pyproject.toml; when running
-# per-service (cd services/paper_ingestion && pytest) we still need to add
-# the service root + jarvis_common to sys.path so ``paper_ingestion.*`` and
-# ``jarvis_common.*`` imports resolve.
-_SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-try:
-    _JARVIS_COMMON = str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common")
-except IndexError:
-    _JARVIS_COMMON = None  # type: ignore[assignment]
-for p in (_SERVICE_ROOT, _JARVIS_COMMON):
-    if p is not None and p not in sys.path:
-        sys.path.insert(0, p)
-
-# ---------------------------------------------------------------------------
-# 2. Module stubs for Docker-only dependencies
-#    Guards ensure existing per-file stubs are not overwritten.
-# ---------------------------------------------------------------------------
 # Pre-import apscheduler.triggers.cron so that per-file stubs in
 # test_pulse_scheduler.py cannot replace the real CronTrigger (needed by
 # the _validate_cron validator in app.routers.settings).
-import apscheduler.triggers.cron  # noqa: F401, E402
-
-if "fitz" not in sys.modules:
-    sys.modules["fitz"] = MagicMock()
-
-for _marker_mod in ("marker", "marker.converters", "marker.converters.pdf", "marker.models"):
-    if _marker_mod not in sys.modules:
-        sys.modules[_marker_mod] = MagicMock()
-
-if "tiktoken" not in sys.modules:
-    _fake_tiktoken = types.ModuleType("tiktoken")
-
-    class _FakeEncoding:
-        def encode(self, text):
-            return list(text)
-
-        def decode(self, tokens):
-            return "".join(tokens)
-
-    _fake_tiktoken.get_encoding = lambda _name: _FakeEncoding()
-    sys.modules["tiktoken"] = _fake_tiktoken
-
-if "qdrant_client" not in sys.modules:
-    _fake_qdrant = types.ModuleType("qdrant_client")
-    _fake_qdrant.AsyncQdrantClient = MagicMock()
-    sys.modules["qdrant_client"] = _fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    from types import SimpleNamespace
-
-    _fake_qm = types.ModuleType("qdrant_client.models")
-    for _attr in (
-        "Distance",
-        "FieldCondition",
-        "Filter",
-        "MatchAny",
-        "MatchValue",
-        "PointIdsList",
-        "PointStruct",
-        "VectorParams",
-        "RecommendInput",
-        "RecommendQuery",
-        "RecommendStrategy",
-    ):
-        setattr(_fake_qm, _attr, MagicMock())
-    _fake_qm.Distance = SimpleNamespace(COSINE="cosine")
-    _fake_qm.RecommendStrategy = SimpleNamespace(AVERAGE_VECTOR="average")
-    sys.modules["qdrant_client.models"] = _fake_qm
-
-if "rapidfuzz" not in sys.modules:
-    _fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    _fake_rapidfuzz.fuzz = MagicMock()
-    sys.modules["rapidfuzz"] = _fake_rapidfuzz
-
-try:
-    import python_multipart  # noqa: F401
-except ImportError:
-    for _mod in ("python_multipart", "multipart", "multipart.multipart"):
-        if _mod not in sys.modules:
-            sys.modules[_mod] = MagicMock()
+import apscheduler.triggers.cron  # noqa: F401
+import pytest
 
 # ---------------------------------------------------------------------------
-# 3. FakeRecord + shared fixtures
+# FakeRecord + shared fixtures
 # ---------------------------------------------------------------------------
 
 

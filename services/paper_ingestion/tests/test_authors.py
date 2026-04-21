@@ -1,7 +1,7 @@
 """Tests for author tracking CRUD endpoints and matching utilities."""
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -197,11 +197,16 @@ def _make_author_record(
     }
 
 
-def _mock_pool() -> tuple[AsyncMock, AsyncMock]:
+def _mock_pool() -> tuple[MagicMock, AsyncMock]:
     """Create a mock asyncpg pool with context-managed connection."""
-    pool = AsyncMock()
+    pool = MagicMock()
     conn = AsyncMock()
-    ctx = AsyncMock()
+    # Transaction context manager (needed by auto_detect and check endpoints).
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+    ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool.acquire.return_value = ctx
@@ -211,12 +216,19 @@ def _mock_pool() -> tuple[AsyncMock, AsyncMock]:
 @pytest.fixture()
 def _app():
     """Create a minimal app instance with mocked state."""
+    from jarvis_common.auth import verify_api_key
+    from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
     pool, conn = _mock_pool()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
-    return app, conn
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    yield app, conn
+    app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 async def test_list_authors_empty(_app):

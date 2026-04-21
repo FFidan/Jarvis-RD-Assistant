@@ -5,48 +5,10 @@ Covers:
 - GET /api/system/models — installed Ollama models + config assignments
 """
 
-import sys
-import types
 from unittest.mock import AsyncMock, MagicMock
 
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = types.ModuleType("tiktoken")
-    fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
-    sys.modules["tiktoken"] = fake_tiktoken
-
-if "qdrant_client" not in sys.modules:
-    fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = MagicMock()
-    sys.modules["qdrant_client"] = fake_qdrant
-
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = MagicMock()
-    fake_qdrant_models.PointIdsList = MagicMock()
-    fake_qdrant_models.PointStruct = MagicMock()
-    fake_qdrant_models.VectorParams = MagicMock()
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-
-if "rapidfuzz" not in sys.modules:
-    fake_rapidfuzz = types.ModuleType("rapidfuzz")
-    fake_rapidfuzz.fuzz = MagicMock()
-    sys.modules["rapidfuzz"] = fake_rapidfuzz
-
-if "python_multipart" not in sys.modules:
-    fake_python_multipart = types.ModuleType("python_multipart")
-    fake_python_multipart.__version__ = "0.0.20"
-    sys.modules["python_multipart"] = fake_python_multipart
-
-if "multipart" not in sys.modules:
-    fake_multipart = types.ModuleType("multipart")
-    fake_multipart.__version__ = "0.0.20"
-    sys.modules["multipart"] = fake_multipart
-
-if "multipart.multipart" not in sys.modules:
-    fake_multipart_multipart = types.ModuleType("multipart.multipart")
-    fake_multipart_multipart.parse_options_header = MagicMock()
-    sys.modules["multipart.multipart"] = fake_multipart_multipart
-
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models /
+# rapidfuzz / python_multipart stubs.
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -115,6 +77,7 @@ def _app():
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn, mock_http
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------
@@ -267,26 +230,26 @@ async def test_system_models_full_response(_app):
 
     body = await get_system_models(request)
 
-    # Top-level keys
-    assert body["status"] == "ok"
-    assert "installed" in body
-    assert "hardware" in body
-    assert "current" in body
-    assert body["issues"] == {}
+    # Top-level keys (SystemModelsResponse is a Pydantic model — use attribute access)
+    assert body.status == "ok"
+    assert body.installed is not None
+    assert body.hardware is not None
+    assert body.current is not None
+    assert body.issues == {}
 
     # Installed models
-    assert len(body["installed"]) == 1
-    assert body["installed"][0]["name"] == "mistral-nemo"
-    assert body["installed"][0]["parameter_size"] == "7B"
-    assert body["installed"][0]["quantization"] == "Q4_0"
+    assert len(body.installed) == 1
+    assert body.installed[0]["name"] == "mistral-nemo"
+    assert body.installed[0]["parameter_size"] == "7B"
+    assert body.installed[0]["quantization"] == "Q4_0"
 
     # Hardware info
-    assert body["hardware"]["ollama_running"] == 1
+    assert body.hardware["ollama_running"] == 1
 
     # Current config assignments (key stripped of 'llm.' prefix)
-    assert body["current"]["smart_model"] == "mistral-nemo"
-    assert body["current"]["fast_model"] == "qwen3.5:4b"
-    assert body["current"]["embed_model"] == "nomic-embed-text"
+    assert body.current["smart_model"] == "mistral-nemo"
+    assert body.current["fast_model"] == "qwen3.5:4b"
+    assert body.current["embed_model"] == "nomic-embed-text"
 
 
 @pytest.mark.asyncio
@@ -301,10 +264,10 @@ async def test_system_models_ollama_unreachable(_app):
     mock_http.get.side_effect = httpx.ConnectError("Connection refused")
 
     body = await get_system_models(request)
-    assert body["status"] == "degraded"
-    assert body["installed"] == []
-    assert body["hardware"] == {}
-    assert body["issues"] == {
+    assert body.status == "degraded"
+    assert body.installed == []
+    assert body.hardware == {}
+    assert body.issues == {
         "installed": "Could not load installed Ollama models.",
         "runtime": "Could not load Ollama runtime status.",
     }
@@ -346,11 +309,11 @@ async def test_system_models_no_config(_app):
     mock_http.get.side_effect = mock_get_side_effect
 
     body = await get_system_models(request)
-    assert body["status"] == "ok"
-    assert body["current"] == {}
-    assert len(body["installed"]) == 1
-    assert body["hardware"]["ollama_running"] == 0
-    assert body["issues"] == {}
+    assert body.status == "ok"
+    assert body.current == {}
+    assert len(body.installed) == 1
+    assert body.hardware["ollama_running"] == 0
+    assert body.issues == {}
 
 
 @pytest.mark.asyncio
@@ -373,11 +336,11 @@ async def test_system_models_db_failure_still_returns_ollama_data(_app):
     mock_http.get.side_effect = mock_get_side_effect
 
     body = await get_system_models(request)
-    assert body["status"] == "degraded"
-    assert body["current"] == {}
-    assert len(body["installed"]) == 1
-    assert body["hardware"]["ollama_running"] == 1
-    assert body["issues"] == {
+    assert body.status == "degraded"
+    assert body.current == {}
+    assert len(body.installed) == 1
+    assert body.hardware["ollama_running"] == 1
+    assert body.issues == {
         "current": "Could not load current model assignments.",
     }
 
@@ -402,9 +365,9 @@ async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     mock_http.get.side_effect = mock_get_side_effect
 
     body = await get_system_models(request)
-    assert body["status"] == "degraded"
-    assert len(body["installed"]) == 1
-    assert body["hardware"] == {}
-    assert body["issues"] == {
+    assert body.status == "degraded"
+    assert len(body.installed) == 1
+    assert body.hardware == {}
+    assert body.issues == {
         "runtime": "Could not load Ollama runtime status.",
     }

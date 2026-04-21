@@ -2,16 +2,8 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-from pydantic import ValidationError
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-from app.models import (  # noqa: E402
+from learning_engine.models import (  # noqa: E402
     CardCreate,
     CardType,
     DeckCreate,
@@ -20,6 +12,7 @@ from app.models import (  # noqa: E402
     Rating,
     ReviewRequest,
 )
+from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
 # Evidence — _migrate_snapshot model_validator

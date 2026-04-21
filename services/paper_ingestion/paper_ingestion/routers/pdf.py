@@ -78,7 +78,12 @@ async def download_pdf(
     try:
         pdf_path = await pdf_processor.download_pdf(row["pdf_url"], paper_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        request_id = getattr(request.state, "request_id", None) or str(paper_id)
+        logger.exception("PDF download validation failed", extra={"request_id": request_id})
+        raise HTTPException(
+            status_code=400,
+            detail=f"PDF download failed (request_id={request_id}). Please check the paper URL.",
+        ) from e
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="PDF download failed")
 
@@ -169,7 +174,14 @@ async def process_pdf(
             force=force,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        request_id = getattr(request.state, "request_id", None) or str(paper_id)
+        logger.exception("PDF processing failed", extra={"request_id": request_id})
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                f"PDF processing failed (request_id={request_id}). Please retry or contact support."
+            ),
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

@@ -60,7 +60,13 @@ class TestFuzzyBestMatch:
         # strategy is skipped and fuzzy matching kicks in.
         full_text = "unrelated text that does not contain the quote"
 
-        result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
+        # Provide realistic scores: chunk_0 near-match (97), chunk_1 exact (100).
+        # The conftest rapidfuzz stub returns a flat 80, so we override here.
+        with patch(
+            "paper_ingestion.verification.fuzz.partial_ratio",
+            side_effect=[97, 100],
+        ):
+            result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
 
         assert result.verified is True
         assert result.match_type == "fuzzy"
@@ -89,14 +95,15 @@ class TestFuzzyBestMatch:
 
         full_text = "unrelated text without the target quote"
 
-        # Patch fuzz.partial_ratio to track how many times it's called
+        # Patch fuzz.partial_ratio to track how many times it's called.
+        # Always return 100 (perfect match) — the conftest stub is flat-80, so
+        # we substitute a real counting wrapper that returns 100 instead.
         call_count = 0
-        original_partial_ratio = __import__("rapidfuzz").fuzz.partial_ratio
 
         def counting_partial_ratio(*args: object, **kwargs: object) -> float:
             nonlocal call_count
             call_count += 1
-            return original_partial_ratio(*args, **kwargs)
+            return 100.0
 
         with patch(
             "paper_ingestion.verification.fuzz.partial_ratio", side_effect=counting_partial_ratio

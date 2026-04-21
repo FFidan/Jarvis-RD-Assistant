@@ -64,9 +64,9 @@ def _make_pool_and_conn():
 @pytest.fixture()
 def exec_app():
     """Minimal app with mocked dependencies and disabled auth + rate limiting."""
-    from app.deps import get_db_pool
-    from app.main import app
     from jarvis_common import verify_api_key
+    from learning_engine.deps import get_db_pool
+    from learning_engine.main import app
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool

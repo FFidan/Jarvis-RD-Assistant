@@ -5,11 +5,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[3]
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+# scripts/ lives at the repo root, which is not in pytest's pythonpath.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
-from scripts._db import get_dsn  # noqa: E402
+from scripts._db import get_dsn
 
 
 def test_get_dsn_prefers_database_url(monkeypatch):

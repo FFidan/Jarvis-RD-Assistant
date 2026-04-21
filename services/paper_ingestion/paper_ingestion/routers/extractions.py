@@ -216,7 +216,7 @@ async def extract_paper(
             verifier=verifier,
         )
     except ValueError as e:
-        raise HTTPException(404, str(e))
+        raise HTTPException(404, str(e)) from e
 
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])

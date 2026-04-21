@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import UTC, datetime
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-from app.models import CardCreate, CardType, CardUpdate, Evidence  # noqa: E402
-from app.routers import cards  # noqa: E402
+from learning_engine.models import CardCreate, CardType, CardUpdate, Evidence  # noqa: E402
+from learning_engine.routers import cards  # noqa: E402
 
 
 class FakeRecord(dict):

@@ -8,32 +8,10 @@ Covers:
 - CORS middleware headers
 """
 
-import sys
-import types
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
-# ---------------------------------------------------------------------------
-# Stub heavy native modules that are unavailable outside Docker.
-# Must happen before any ``import paper_ingestion.*`` that reaches pdf_processor.
-# (fitz is already stubbed by conftest.py)
-# ---------------------------------------------------------------------------
-if "qdrant_client" not in sys.modules:
-    fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = MagicMock()
-    sys.modules["qdrant_client"] = fake_qdrant
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = MagicMock()
-    fake_qdrant_models.PointIdsList = MagicMock()
-    fake_qdrant_models.PointStruct = MagicMock()
-    fake_qdrant_models.VectorParams = MagicMock()
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = types.ModuleType("tiktoken")
-    fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
-    sys.modules["tiktoken"] = fake_tiktoken
-
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 import httpx
 import pytest
 from httpx import ASGITransport
@@ -148,6 +126,7 @@ def _app():
     app.dependency_overrides[verify_api_key] = lambda: None
     yield app, conn
     app.dependency_overrides.clear()
+    app.state.limiter.enabled = True
 
 
 # ---------------------------------------------------------------------------
@@ -456,13 +435,17 @@ async def test_cors_headers_present(_app):
         nudge_count=0,
     )
 
+    # CORSMiddleware is configured at app import time from CORS_ORIGINS env,
+    # defaulting to ``https://localhost:3001``. Use that allowed origin and
+    # assert the middleware echoes it back (not ``*``).
+    allowed_origin = "https://localhost:3001"
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.get(
             "/api/dashboard/metrics",
-            headers={"Origin": "http://localhost:3000"},
+            headers={"Origin": allowed_origin},
         )
 
     assert resp.status_code == 200
-    assert resp.headers.get("access-control-allow-origin") == "*"
+    assert resp.headers.get("access-control-allow-origin") == allowed_origin

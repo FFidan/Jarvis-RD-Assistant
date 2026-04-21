@@ -47,18 +47,14 @@ class ScriptError(RuntimeError):
 logger = logging.getLogger(__name__)
 if __package__:
     from scripts._db import get_dsn
-    from scripts._paper_ingestion_imports import (
-        LiteLLMConfig,
-        embed_texts,
-        get_litellm_config,
-    )
 else:
     from _db import get_dsn
-    from _paper_ingestion_imports import (
-        LiteLLMConfig,
-        embed_texts,
-        get_litellm_config,
-    )
+
+from jarvis_common.llm_client import (
+    LiteLLMConfig,
+    embed_texts,
+    get_litellm_config,
+)
 
 # ---------------------------------------------------------------------------
 # Configuration

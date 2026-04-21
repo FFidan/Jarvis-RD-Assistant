@@ -2,9 +2,45 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from paper_ingestion.embedder import COLLECTION_NAME, Embedder
+
+# ---------------------------------------------------------------------------
+# Per-test stub for qdrant_client.models
+# ---------------------------------------------------------------------------
+# The discover_from_seeds tests inspect call_args on RecommendInput, FieldCondition,
+# and MatchAny, which requires those to be MagicMock callables, not real Pydantic models.
+
+
+@pytest.fixture(autouse=True)
+def _stub_qdrant_models(monkeypatch):
+    """Scope MagicMock stubs for qdrant_client.models to each individual test."""
+    import types
+
+    fake_qm = types.ModuleType("qdrant_client.models")
+    for _attr in (
+        "Distance",
+        "FieldCondition",
+        "Filter",
+        "MatchAny",
+        "MatchValue",
+        "PointIdsList",
+        "PointStruct",
+        "VectorParams",
+        "RecommendInput",
+        "RecommendQuery",
+        "RecommendStrategy",
+    ):
+        setattr(fake_qm, _attr, MagicMock())
+    from types import SimpleNamespace
+
+    fake_qm.Distance = SimpleNamespace(COSINE="cosine")
+    fake_qm.RecommendStrategy = SimpleNamespace(AVERAGE_VECTOR="average")
+    monkeypatch.setitem(sys.modules, "qdrant_client.models", fake_qm)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,10 +136,10 @@ async def test_discover_correct_positive_ids():
 
     await embedder.discover_from_seeds(seed_ids, pool, limit=5)
 
-    # Check that query_points was called with the right positive IDs
-    qp_call = embedder.qdrant.query_points.call_args
-    query_obj = qp_call.kwargs["query"]
-    positive_ids = query_obj.recommend.positive
+    # qdrant_client.models classes are MagicMocks in tests — inspect call args directly.
+    # RecommendInput(positive=all_positive) records the positional list.
+    recommend_input_mock = sys.modules["qdrant_client.models"].RecommendInput
+    positive_ids = recommend_input_mock.call_args.kwargs["positive"]
 
     # All 5 point IDs should be present (3 from seed 1 + 2 from seed 2)
     expected = [f"uuid-1-{i}" for i in range(3)] + [f"uuid-2-{i}" for i in range(2)]
@@ -132,14 +168,18 @@ async def test_discover_excludes_seed_papers():
 
     await embedder.discover_from_seeds(seed_ids, pool, limit=5)
 
-    qp_call = embedder.qdrant.query_points.call_args
-    query_filter = qp_call.kwargs["query_filter"]
+    # qdrant_client.models classes are MagicMocks — inspect call args directly.
+    # Filter(must_not=[FieldCondition(key=..., match=MatchAny(any=seed_ids))])
+    field_condition_mock = sys.modules["qdrant_client.models"].FieldCondition
+    match_any_mock = sys.modules["qdrant_client.models"].MatchAny
 
-    # Check must_not contains a FieldCondition excluding seed paper_ids
-    assert len(query_filter.must_not) == 1
-    fc = query_filter.must_not[0]
-    assert fc.key == "paper_id"
-    assert set(fc.match.any) == {10, 20}
+    # FieldCondition is called once for the must_not exclusion filter
+    fc_call = field_condition_mock.call_args
+    assert fc_call.kwargs["key"] == "paper_id"
+
+    # MatchAny is called with any=seed_paper_ids
+    ma_call = match_any_mock.call_args
+    assert set(ma_call.kwargs["any"]) == {10, 20}
 
 
 # ---------------------------------------------------------------------------
@@ -213,9 +253,10 @@ async def test_discover_fallback_embeds_title_abstract():
     # embed_texts should have been called with title + abstract
     embedder.embed_texts.assert_awaited_once_with(["My Paper Title. The abstract text"])
 
-    # The raw vector should be passed as a positive example
-    qp_call = embedder.qdrant.query_points.call_args
-    positive = qp_call.kwargs["query"].recommend.positive
+    # The raw vector should be passed as a positive example.
+    # RecommendInput is a MagicMock — inspect its call args directly.
+    recommend_input_mock = sys.modules["qdrant_client.models"].RecommendInput
+    positive = recommend_input_mock.call_args.kwargs["positive"]
     assert len(positive) == 1
     assert positive[0] == fake_vector
 
@@ -268,8 +309,9 @@ async def test_discover_samples_evenly():
 
     await embedder.discover_from_seeds(seed_ids, pool, limit=5, max_points_per_seed=5)
 
-    qp_call = embedder.qdrant.query_points.call_args
-    positive_ids = qp_call.kwargs["query"].recommend.positive
+    # RecommendInput is a MagicMock — inspect call args directly.
+    recommend_input_mock = sys.modules["qdrant_client.models"].RecommendInput
+    positive_ids = recommend_input_mock.call_args.kwargs["positive"]
 
     # Should have exactly 5 sampled IDs (not all 20)
     assert len(positive_ids) == 5

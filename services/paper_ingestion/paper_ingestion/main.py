@@ -155,7 +155,8 @@ async def _refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient
                         set_at = set_at.replace(tzinfo=UTC)
                     if now - set_at < timedelta(hours=24) and value.get("username"):
                         return
-            except ValueError:
+            except ValueError as _exc:
+                logger.debug("set_at parse failed (stale/malformed) — refreshing", exc_info=_exc)
                 pass  # stale or malformed -> refresh
 
     try:

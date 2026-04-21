@@ -6,43 +6,11 @@ Each handler is tested directly with mocked Update + Context objects.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
-# Ensure the telegram_bot app package is importable.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-# Stub heavy native modules unavailable outside Docker.
-for _mod_name in (
-    "telegram", "telegram.ext",
-    "apscheduler", "apscheduler.schedulers", "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers", "apscheduler.triggers.cron",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
-
-_tg = sys.modules["telegram"]
-_tg.Update = MagicMock
-_tg.InlineKeyboardButton = lambda *a, **kw: MagicMock()
-_tg.InlineKeyboardMarkup = lambda *a, **kw: MagicMock()
-
-_tg_ext = sys.modules["telegram.ext"]
-_tg_ext.Application = MagicMock
-_tg_ext.CommandHandler = MagicMock
-_tg_ext.CallbackQueryHandler = MagicMock
-_tg_ext.ContextTypes = MagicMock()
-_tg_ext.ContextTypes.DEFAULT_TYPE = MagicMock
-
-# ConversationHandler needs END = -1 as a real int (used in comparisons)
-_conv_handler = MagicMock()
-_conv_handler.END = -1
-_tg_ext.ConversationHandler = _conv_handler
-
-from app.config import BotConfig  # noqa: E402
-from app.handlers.review_handler import (  # noqa: E402
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.review_handler import (  # noqa: E402
     SHOWING_BACK,
     SHOWING_FRONT,
     cancel_review,
@@ -127,10 +95,17 @@ def _make_callback_update_and_context(callback_data: str, user_data=None, chat_i
 
 def _sample_card():
     return {
-        "id": 1, "deck_id": 1, "paper_id": None,
-        "card_type": "concept", "front": "What is ML?", "back": "Machine Learning",
-        "evidence": {}, "fsrs_state": {}, "due_at": "2026-03-01T00:00:00Z",
-        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+        "id": 1,
+        "deck_id": 1,
+        "paper_id": None,
+        "card_type": "concept",
+        "front": "What is ML?",
+        "back": "Machine Learning",
+        "evidence": {},
+        "fsrs_state": {},
+        "due_at": "2026-03-01T00:00:00Z",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
     }
 
 

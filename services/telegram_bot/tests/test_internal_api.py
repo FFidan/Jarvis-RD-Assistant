@@ -9,30 +9,19 @@ Covers:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-# ---------------------------------------------------------------------------
-# Path + module stubs (same pattern as conftest.py)
-# ---------------------------------------------------------------------------
-_SERVICE_ROOT = str(Path(__file__).resolve().parents[1])
-if _SERVICE_ROOT not in sys.path:
-    sys.path.insert(0, _SERVICE_ROOT)
+import httpx
+import pytest
+from httpx import ASGITransport
 
-for _mod_name in (
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.cron",
-    "uvicorn",
-):
-    if _mod_name not in sys.modules:
-        sys.modules[_mod_name] = MagicMock()
 
-import httpx  # noqa: E402
-import pytest  # noqa: E402
-from httpx import ASGITransport  # noqa: E402
+@pytest.fixture(autouse=True)
+def _reload_internal_api(monkeypatch):
+    # Force re-import of telegram_bot.internal_api each test to ensure a clean state.
+    monkeypatch.delitem(sys.modules, "telegram_bot.internal_api", raising=False)
+    yield
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -45,7 +34,7 @@ def _app(monkeypatch):
     monkeypatch.setenv("JARVIS_API_KEY", "testkey")
     monkeypatch.setenv("DEV_MODE", "false")
 
-    from app.internal_api import _internal_app
+    from telegram_bot.internal_api import _internal_app
 
     mock_scheduler = MagicMock()
     mock_scheduler.reload_nudges = AsyncMock(return_value=None)

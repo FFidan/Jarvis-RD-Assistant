@@ -9,50 +9,46 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # ---------------------------------------------------------------------------
-# Module-level stubs for packages unavailable outside Docker.
-# Must happen before ``import paper_ingestion.scheduler``.
+# Stub objects — created at module scope so tests can mutate their attributes,
+# but NOT installed into sys.modules here (that would pollute collection).
 # ---------------------------------------------------------------------------
-_STUBS: dict[str, MagicMock] = {}
 
-
-def _ensure_stub(name: str) -> MagicMock:
-    if name not in sys.modules:
-        mock = MagicMock()
-        sys.modules[name] = mock
-        _STUBS[name] = mock
-    return sys.modules[name]
-
-
-# apscheduler (top-level import in scheduler.py)
-for _mod in (
-    "apscheduler",
-    "apscheduler.schedulers",
-    "apscheduler.schedulers.asyncio",
-    "apscheduler.triggers",
-    "apscheduler.triggers.interval",
-    "apscheduler.triggers.cron",
-):
-    _ensure_stub(_mod)
-
-# pdf_processor needs fitz, litellm, etc.  We only need PDF_STORAGE_PATH.
-_pdf_proc_stub = _ensure_stub("paper_ingestion.pdf_processor")
+_pdf_proc_stub = MagicMock()
 _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
 
-# app.main – heavy; stub it to avoid importing FastAPI app initialization.
-_main_stub = _ensure_stub("paper_ingestion.main")
+_main_stub = MagicMock()
+_workflow_stub = MagicMock()
 
-# app.services.pdf_workflow – provides upsert_paper and run_process_pdf to the scheduler.
-_ensure_stub("paper_ingestion.services")
-_workflow_stub = _ensure_stub("paper_ingestion.services.pdf_workflow")
-_workflow_stub.upsert_paper = AsyncMock()
-_workflow_stub.run_process_pdf = AsyncMock()
+# ---------------------------------------------------------------------------
+# Autouse fixture: install internal-module stubs + re-import stubbed module each test
+# ---------------------------------------------------------------------------
 
-# Keep a reference under _main_stub for assertion helpers below.
-_main_stub.upsert_paper = _workflow_stub.upsert_paper
-_main_stub.run_process_pdf = _workflow_stub.run_process_pdf
 
-# Now safe to import
-from paper_ingestion.scheduler import run_auto_pipeline  # noqa: E402, I001
+@pytest.fixture(autouse=True)
+def _install_stubs(monkeypatch):
+    """Install project-module stubs into sys.modules for the duration of each test.
+
+    monkeypatch.setitem auto-reverses on teardown, so sys.modules stays clean
+    for test files collected/run after this one.
+    """
+    # Reset shared stubs so mutations from previous tests don't bleed through.
+    _pdf_proc_stub.reset_mock()
+    _pdf_proc_stub.PDF_STORAGE_PATH = "/data/pdfs"
+    _main_stub.reset_mock()
+    _workflow_stub.reset_mock()
+    _workflow_stub.upsert_paper = AsyncMock()
+    _workflow_stub.run_process_pdf = AsyncMock()
+
+    # Keep a reference under _main_stub for assertion helpers.
+    _main_stub.upsert_paper = _workflow_stub.upsert_paper
+    _main_stub.run_process_pdf = _workflow_stub.run_process_pdf
+
+    monkeypatch.setitem(sys.modules, "paper_ingestion.pdf_processor", _pdf_proc_stub)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.main", _main_stub)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services", MagicMock())
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", _workflow_stub)
+    # Force re-import of scheduler so it resolves against the freshly installed stubs.
+    monkeypatch.delitem(sys.modules, "paper_ingestion.scheduler", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +122,8 @@ def _make_app_state(
 
 async def test_source_instantiated_with_http_client() -> None:
     """Source class must be called with (config, http_client), not just (config)."""
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
     fake_source_instance = AsyncMock()
     fake_source_instance.search = AsyncMock(return_value=[])
 
@@ -169,6 +167,8 @@ async def test_source_instantiated_with_http_client() -> None:
 
 async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> None:
     """Papers whose pdf_local_path escapes the storage dir must be skipped."""
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
     traversal_row = {
         "id": 42,
         "pdf_local_path": "/data/pdfs/../../etc/passwd",
@@ -196,6 +196,8 @@ async def test_path_traversal_pdf_skipped(caplog: pytest.LogCaptureFixture) -> N
 
 async def test_valid_pdf_path_is_processed() -> None:
     """Papers with a pdf_local_path inside the storage dir should be processed."""
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
     valid_row = {
         "id": 7,
         "pdf_local_path": "/data/pdfs/paper_7.pdf",
@@ -228,7 +230,7 @@ async def test_scheduler_always_starts() -> None:
     or pulse enabled.  With the fix, the scheduler is always started so that
     live-toggles (Settings UI) take effect without a restart.
     """
-    from paper_ingestion.scheduler import start_scheduler
+    from paper_ingestion.scheduler import start_scheduler  # noqa: PLC0415
 
     # Minimal app with a db_pool that returns a cron value for _get_pulse_cron
     conn = AsyncMock()
@@ -257,6 +259,8 @@ async def test_scheduler_always_starts() -> None:
 
 async def test_auto_pipeline_self_gates_on_zero_interval(monkeypatch: pytest.MonkeyPatch) -> None:
     """run_auto_pipeline must return early without touching the DB when interval=0."""
+    from paper_ingestion.scheduler import run_auto_pipeline  # noqa: PLC0415
+
     monkeypatch.setenv("AUTO_FETCH_INTERVAL_HOURS", "0")
 
     # Track whether the DB pool was accessed

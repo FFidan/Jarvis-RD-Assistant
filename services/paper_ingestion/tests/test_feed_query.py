@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 from datetime import date
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import asyncpg
 import pytest
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
 from paper_ingestion.services.feed_query import (
     build_feed_queries,
     derive_feed_search_mode,

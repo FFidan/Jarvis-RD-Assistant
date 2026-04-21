@@ -1,10 +1,13 @@
 """Shared database helper functions for dynamic UPDATE and DELETE operations."""
 
 import json
+import logging
 from typing import Any
 
 import asyncpg
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 _ALLOWED_TABLES = frozenset(
     {
@@ -77,6 +80,7 @@ def validated_model(model: str) -> str:
     """
     if model in _ALIAS_MODELS:
         return model
+    logger.warning("Ignoring invalid model %r; falling back to 'smart'", model)
     return "smart"
 
 

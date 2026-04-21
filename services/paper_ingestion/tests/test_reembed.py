@@ -10,24 +10,18 @@ Covers:
 
 from __future__ import annotations
 
-import os
 import sys
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-# Add project root to path so we can import scripts.reembed
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+# scripts/ lives at the repo root, which is not in pytest's pythonpath.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
-_SERVICE_ROOT = os.path.join(_PROJECT_ROOT, "services", "paper_ingestion")
-if _SERVICE_ROOT not in sys.path:
-    sys.path.insert(0, _SERVICE_ROOT)
-_SCRIPTS_ROOT = os.path.join(_PROJECT_ROOT, "scripts")
-if _SCRIPTS_ROOT not in sys.path:
-    sys.path.insert(0, _SCRIPTS_ROOT)
 
 
 class _FakePointIdsList:
@@ -48,27 +42,28 @@ class _FakeVectorParams:
         self.distance = distance
 
 
-if "qdrant_client" not in sys.modules:
-    sys.modules["qdrant_client"] = SimpleNamespace(AsyncQdrantClient=MagicMock())
+# We need precise qdrant_client.models stubs (real classes with .points attribute)
+# so the embedder code behaves predictably. Override per-test via autouse fixture.
 
-if "qdrant_client.models" not in sys.modules:
-    sys.modules["qdrant_client.models"] = SimpleNamespace(
-        Distance=SimpleNamespace(COSINE="cosine"),
-        PointIdsList=_FakePointIdsList,
-        PointStruct=_FakePointStruct,
-        VectorParams=_FakeVectorParams,
-    )
+_fake_qdrant_client_mod = SimpleNamespace(AsyncQdrantClient=MagicMock())
+_fake_qdrant_models_mod = SimpleNamespace(
+    Distance=SimpleNamespace(COSINE="cosine"),
+    PointIdsList=_FakePointIdsList,
+    PointStruct=_FakePointStruct,
+    VectorParams=_FakeVectorParams,
+)
 
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = MagicMock()
-    fake_encoding = MagicMock()
-    fake_encoding.encode.return_value = [1, 2, 3]
-    fake_encoding.decode.return_value = "chunk text"
-    fake_tiktoken.get_encoding.return_value = fake_encoding
-    sys.modules["tiktoken"] = fake_tiktoken
 
-if getattr(sys.modules.get("paper_ingestion.embedder"), "Embedder", None) is object:
-    del sys.modules["paper_ingestion.embedder"]
+@pytest.fixture(autouse=True)
+def _install_reembed_stubs(monkeypatch):
+    """Scope precise qdrant_client stubs to each test only.
+
+    Also evicts paper_ingestion.embedder so test_embedder_payload_includes_model_name
+    always re-imports the real Embedder class (not a MagicMock from another test file).
+    """
+    monkeypatch.setitem(sys.modules, "qdrant_client", _fake_qdrant_client_mod)
+    monkeypatch.setitem(sys.modules, "qdrant_client.models", _fake_qdrant_models_mod)
+    monkeypatch.delitem(sys.modules, "paper_ingestion.embedder", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -328,10 +323,8 @@ async def test_main_exits_when_pool_creation_fails():
         importlib.reload(reembed_mod)
 
     with patch.object(reembed_mod.asyncpg, "create_pool", AsyncMock(return_value=None)):
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(reembed_mod.ScriptError, match="Failed to create database pool"):
             await reembed_mod.main()
-
-    assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------
@@ -396,9 +389,7 @@ async def test_reembed_partial_failure_preserves_old_points():
 
 async def test_embedder_payload_includes_model_name():
     """embed_and_store includes embedding_model in Qdrant point payloads."""
-    if getattr(sys.modules.get("paper_ingestion.embedder"), "Embedder", None) is object:
-        del sys.modules["paper_ingestion.embedder"]
-
+    # _install_reembed_stubs autouse fixture already evicted paper_ingestion.embedder.
     from paper_ingestion.embedder import EMBEDDING_MODEL_NAME, Embedder
     from paper_ingestion.models import ChunkForEmbedding
 

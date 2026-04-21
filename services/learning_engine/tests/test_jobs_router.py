@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
+from learning_engine.routers import jobs as jobs_router  # noqa: E402
+from learning_engine.routers.jobs import CreateJobRequest  # noqa: E402
 from pydantic import ValidationError
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-from app.routers import jobs as jobs_router  # noqa: E402
-from app.routers.jobs import CreateJobRequest  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # CreateJobRequest validator

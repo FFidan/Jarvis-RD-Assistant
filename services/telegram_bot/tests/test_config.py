@@ -6,7 +6,7 @@ import os
 from unittest.mock import patch
 
 import pytest
-from app.config import BotConfig
+from telegram_bot.config import BotConfig
 
 
 def _minimal_env(*, chat_id: str | None = "12345") -> dict[str, str]:

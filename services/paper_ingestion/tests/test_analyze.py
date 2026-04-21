@@ -63,8 +63,14 @@ def _make_mock_request(paper_row, *, update_row=None):
     return mock_request, mock_pool
 
 
-async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock_summarize=None):
-    """Run _analyze_stream with fake service modules to avoid heavy imports."""
+async def _collect_events(
+    monkeypatch, request, paper_id, db_pool, *, mock_process=None, mock_summarize=None
+):
+    """Run _analyze_stream with fake service modules to avoid heavy imports.
+
+    Uses monkeypatch.setitem so stubs are scoped to the current test and
+    automatically reversed on teardown — no manual save/restore needed.
+    """
     _mock_process = mock_process or AsyncMock(
         return_value={"paper_id": paper_id, "chunk_count": 42, "status": "processed"}
     )
@@ -82,12 +88,10 @@ async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock
     if "paper_ingestion.services" not in sys.modules:
         fake_services = types.ModuleType("paper_ingestion.services")
         fake_services.__path__ = []  # type: ignore[attr-defined]
-        sys.modules["paper_ingestion.services"] = fake_services
+        monkeypatch.setitem(sys.modules, "paper_ingestion.services", fake_services)
 
-    saved_pw = sys.modules.get("paper_ingestion.services.pdf_workflow")
-    saved_sm = sys.modules.get("paper_ingestion.services.summarization")
-    sys.modules["paper_ingestion.services.pdf_workflow"] = fake_pdf_workflow
-    sys.modules["paper_ingestion.services.summarization"] = fake_summarization
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", fake_pdf_workflow)
+    monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", fake_summarization)
 
     _real_env_get = os.environ.get
 
@@ -96,29 +100,18 @@ async def _collect_events(request, paper_id, db_pool, *, mock_process=None, mock
             return "/data/pdfs"
         return _real_env_get(key, default)
 
-    try:
-        with (
-            patch("paper_ingestion.routers.analyze.Path") as MockPath,  # noqa: N806
-            patch("paper_ingestion.routers.analyze.os.environ.get", side_effect=_selective_env_get),
-        ):
-            mock_path_instance = MagicMock()
-            mock_path_instance.resolve.return_value.is_relative_to.return_value = True
-            mock_path_instance.exists.return_value = True
-            MockPath.return_value = mock_path_instance
+    with (
+        patch("paper_ingestion.routers.analyze.Path") as MockPath,  # noqa: N806
+        patch("paper_ingestion.routers.analyze.os.environ.get", side_effect=_selective_env_get),
+    ):
+        mock_path_instance = MagicMock()
+        mock_path_instance.resolve.return_value.is_relative_to.return_value = True
+        mock_path_instance.exists.return_value = True
+        MockPath.return_value = mock_path_instance
 
-            events_raw = []
-            async for event in _analyze_stream(request, paper_id, db_pool):
-                events_raw.append(event)
-    finally:
-        # Restore original modules
-        if saved_pw is not None:
-            sys.modules["paper_ingestion.services.pdf_workflow"] = saved_pw
-        else:
-            sys.modules.pop("paper_ingestion.services.pdf_workflow", None)
-        if saved_sm is not None:
-            sys.modules["paper_ingestion.services.summarization"] = saved_sm
-        else:
-            sys.modules.pop("paper_ingestion.services.summarization", None)
+        events_raw = []
+        async for event in _analyze_stream(request, paper_id, db_pool):
+            events_raw.append(event)
 
     return _parse_sse_events(events_raw), _mock_process
 
@@ -148,7 +141,7 @@ def test_sse_event_string():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_happy_path():
+async def test_analyze_stream_happy_path(monkeypatch):
     """Full chain yields download->process->summarize step events + complete + [DONE]."""
     paper_row = {
         "id": 1,
@@ -164,7 +157,7 @@ async def test_analyze_stream_happy_path():
     }
     mock_request, mock_pool = _make_mock_request(paper_row, update_row=updated_row)
 
-    events, _ = await _collect_events(mock_request, 1, mock_pool)
+    events, _ = await _collect_events(monkeypatch, mock_request, 1, mock_pool)
 
     assert len(events) == 8
     assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
@@ -236,7 +229,7 @@ async def test_analyze_stream_no_pdf_url():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_already_downloaded():
+async def test_analyze_stream_already_downloaded(monkeypatch):
     """If paper already has PDF downloaded (pdf_local_path set), skips download.
 
     B6 note: when pdf_local_path is already set, is_local=True, so the step
@@ -251,7 +244,7 @@ async def test_analyze_stream_already_downloaded():
     }
     mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 2, mock_pool)
+    events, _ = await _collect_events(monkeypatch, mock_request, 2, mock_pool)
 
     assert len(events) == 8
     assert events[0] == {"type": "step", "step": "downloading", "status": "started"}
@@ -270,7 +263,7 @@ async def test_analyze_stream_already_downloaded():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_process_failure():
+async def test_analyze_stream_process_failure(monkeypatch):
     """Stream emits error event when processing fails."""
     paper_row = {
         "id": 3,
@@ -282,7 +275,9 @@ async def test_analyze_stream_process_failure():
     mock_request, mock_pool = _make_mock_request(paper_row)
 
     mock_process = AsyncMock(side_effect=RuntimeError("Embedding service error"))
-    events, _ = await _collect_events(mock_request, 3, mock_pool, mock_process=mock_process)
+    events, _ = await _collect_events(
+        monkeypatch, mock_request, 3, mock_pool, mock_process=mock_process
+    )
 
     # download started, download completed, process started, error, [DONE]
     assert len(events) == 5
@@ -297,7 +292,7 @@ async def test_analyze_stream_process_failure():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_summarize_failure():
+async def test_analyze_stream_summarize_failure(monkeypatch):
     """Stream emits error event when summarization fails."""
     paper_row = {
         "id": 4,
@@ -309,7 +304,9 @@ async def test_analyze_stream_summarize_failure():
     mock_request, mock_pool = _make_mock_request(paper_row)
 
     mock_summarize = AsyncMock(side_effect=RuntimeError("LLM timeout"))
-    events, _ = await _collect_events(mock_request, 4, mock_pool, mock_summarize=mock_summarize)
+    events, _ = await _collect_events(
+        monkeypatch, mock_request, 4, mock_pool, mock_summarize=mock_summarize
+    )
 
     # download started/completed, process started/completed, summarize started, error, [DONE]
     assert len(events) == 7
@@ -324,7 +321,7 @@ async def test_analyze_stream_summarize_failure():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_local_paper_skips_download():
+async def test_analyze_stream_local_paper_skips_download(monkeypatch):
     """B6: local paper (source_type='local') skips download step, processes to completion."""
     paper_row = {
         "id": 5,
@@ -335,7 +332,7 @@ async def test_analyze_stream_local_paper_skips_download():
     }
     mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 5, mock_pool)
+    events, _ = await _collect_events(monkeypatch, mock_request, 5, mock_pool)
 
     # Expect: download started, download skipped, process started, process completed,
     #         summarize started, summarize completed, complete, [DONE] = 8 events
@@ -361,7 +358,7 @@ async def test_analyze_stream_local_paper_skips_download():
 
 
 @pytest.mark.asyncio
-async def test_analyze_stream_local_paper_with_pdf_local_path():
+async def test_analyze_stream_local_paper_with_pdf_local_path(monkeypatch):
     """B6: paper with pdf_local_path already set (any source_type) skips download."""
     paper_row = {
         "id": 6,
@@ -372,7 +369,7 @@ async def test_analyze_stream_local_paper_with_pdf_local_path():
     }
     mock_request, mock_pool = _make_mock_request(paper_row)
 
-    events, _ = await _collect_events(mock_request, 6, mock_pool)
+    events, _ = await _collect_events(monkeypatch, mock_request, 6, mock_pool)
 
     # download step should be skipped (pdf_local_path is already set)
     assert events[1]["type"] == "step"

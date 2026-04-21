@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from datetime import UTC, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,25 +10,7 @@ import asyncpg
 import pytest
 from fastapi import HTTPException
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "jarvis_common"))
-
-if "tiktoken" not in sys.modules:
-    fake_tiktoken = types.ModuleType("tiktoken")
-    fake_tiktoken.get_encoding = MagicMock(return_value=MagicMock())
-    sys.modules["tiktoken"] = fake_tiktoken
-if "qdrant_client" not in sys.modules:
-    fake_qdrant = types.ModuleType("qdrant_client")
-    fake_qdrant.AsyncQdrantClient = MagicMock()
-    sys.modules["qdrant_client"] = fake_qdrant
-if "qdrant_client.models" not in sys.modules:
-    fake_qdrant_models = types.ModuleType("qdrant_client.models")
-    fake_qdrant_models.Distance = MagicMock()
-    fake_qdrant_models.PointIdsList = MagicMock()
-    fake_qdrant_models.PointStruct = MagicMock()
-    fake_qdrant_models.VectorParams = MagicMock()
-    sys.modules["qdrant_client.models"] = fake_qdrant_models
-
+# conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 from paper_ingestion.models import (  # noqa: E402
     Confidence,
     CrossReference,

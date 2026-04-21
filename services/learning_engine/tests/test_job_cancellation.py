@@ -86,12 +86,17 @@ def _register_handler():
 
 @pytest.mark.asyncio
 async def test_cancelled_job_status_transitions_to_cancelled() -> None:
-    """Handler that raises CancelledError causes job status to become 'cancelled'."""
+    """Handler that raises CancelledError causes job status to become 'cancelled'.
+
+    run_job re-raises CancelledError after updating the DB row so that asyncio
+    task cancellation propagates correctly (audit finding A-06).
+    """
     job_id = str(uuid.uuid4())
     pool, calls = _make_pool(cancel_after=1)
     http_mock = AsyncMock()
 
-    await run_job(pool, http_mock, job_id)
+    with pytest.raises(asyncio.CancelledError):
+        await run_job(pool, http_mock, job_id)
 
     cancelled_updates = [
         c for c in calls if "SET status" in c["sql"] and c["args"] and c["args"][0] == "cancelled"
@@ -103,12 +108,18 @@ async def test_cancelled_job_status_transitions_to_cancelled() -> None:
 
 @pytest.mark.asyncio
 async def test_run_job_does_not_raise_on_cancellation() -> None:
-    """run_job completes without propagating CancelledError to the caller."""
+    """run_job re-raises CancelledError after persisting 'cancelled' status.
+
+    This preserves asyncio task-cancellation semantics (audit finding A-06).
+    Callers that invoke run_job in a worker loop should catch CancelledError
+    and treat it as a graceful exit signal.
+    """
     job_id = str(uuid.uuid4())
     pool, _ = _make_pool(cancel_after=1)
     http_mock = AsyncMock()
 
-    await run_job(pool, http_mock, job_id)  # must not raise
+    with pytest.raises(asyncio.CancelledError):
+        await run_job(pool, http_mock, job_id)
 
 
 @pytest.mark.asyncio

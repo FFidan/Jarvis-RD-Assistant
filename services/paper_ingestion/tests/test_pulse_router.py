@@ -13,7 +13,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -66,6 +65,7 @@ def client():
         yield tc, pool, conn
 
     app.dependency_overrides.clear()
+    limiter.enabled = True  # restore global limiter state for subsequent tests
 
 
 def test_generate_returns_job_id(client):

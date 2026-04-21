@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-for _path in (_PROJECT_ROOT,):
-    if _path not in sys.path:
-        sys.path.insert(0, _path)
+# scripts/ lives at the repo root, which is not in pytest's pythonpath.
+_PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 
 def _load_module():
@@ -201,10 +201,8 @@ async def test_main_exits_when_pool_creation_fails():
     eval_mod = _load_module()
 
     with patch.object(eval_mod.asyncpg, "create_pool", AsyncMock(return_value=None)):
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(eval_mod.ScriptError, match="Failed to create database pool"):
             await eval_mod.main()
-
-    assert exc_info.value.code == 1
 
 
 @pytest.mark.asyncio
