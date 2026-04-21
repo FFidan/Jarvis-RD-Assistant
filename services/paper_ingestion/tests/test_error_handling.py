@@ -37,7 +37,7 @@ class FakeStreamResponseError:
 async def test_stream_cross_paper_rag_preparation_error():
     """When _prepare_cross_paper_rag raises, _sse_error_stream yields SSE error events."""
     from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.streaming import _prepare_cross_paper_rag, _sse_error_stream
+    from paper_ingestion.streaming import prepare_cross_paper_rag, sse_error_stream
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -52,13 +52,13 @@ async def test_stream_cross_paper_rag_preparation_error():
 
     body = CrossPaperAskRequest(question="What is attention?", decompose=False)
 
-    # The _prepare_cross_paper_rag should raise when search fails
+    # The prepare_cross_paper_rag should raise when search fails
     with pytest.raises(RuntimeError):
-        await _prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
+        await prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
-    # Verify the _sse_error_stream helper yields correct SSE events
+    # Verify the sse_error_stream helper yields correct SSE events
     events = []
-    async for event in _sse_error_stream(
+    async for event in sse_error_stream(
         "An error occurred while preparing the response. Please try again."
     ):
         events.append(event)
@@ -77,7 +77,7 @@ async def test_stream_cross_paper_rag_preparation_error():
 
 async def test_stream_rag_sanitized_error():
     """SSE error events contain user-friendly messages, not raw exception text."""
-    from paper_ingestion.streaming import _stream_rag_events
+    from paper_ingestion.streaming import stream_rag_events
 
     # Test with a generic exception -- should get sanitized message
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -89,7 +89,7 @@ async def test_stream_rag_sanitized_error():
     sources = [{"content": "c1", "page_number": 1, "score": 0.8}]
 
     events = []
-    async for event in _stream_rag_events(mock_client, messages, sources):
+    async for event in stream_rag_events(mock_client, messages, sources):
         events.append(event)
 
     assert len(events) == 2
@@ -104,7 +104,7 @@ async def test_stream_rag_sanitized_error():
 
 async def test_stream_rag_timeout_error_sanitized():
     """SSE error for TimeoutException shows user-friendly timeout message."""
-    from paper_ingestion.streaming import _stream_rag_events
+    from paper_ingestion.streaming import stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -112,7 +112,7 @@ async def test_stream_rag_timeout_error_sanitized():
     )
 
     events = []
-    async for event in _stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
+    async for event in stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
         events.append(event)
 
     error_event = json.loads(events[0].replace("data: ", "").strip())
@@ -123,7 +123,7 @@ async def test_stream_rag_timeout_error_sanitized():
 
 async def test_stream_rag_connect_error_sanitized():
     """SSE error for ConnectError shows user-friendly connection message."""
-    from paper_ingestion.streaming import _stream_rag_events
+    from paper_ingestion.streaming import stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -131,7 +131,7 @@ async def test_stream_rag_connect_error_sanitized():
     )
 
     events = []
-    async for event in _stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
+    async for event in stream_rag_events(mock_client, [{"role": "user", "content": "q"}], []):
         events.append(event)
 
     error_event = json.loads(events[0].replace("data: ", "").strip())

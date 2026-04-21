@@ -10,10 +10,10 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
-from defusedxml import ElementTree as ET  # noqa: N817
-from jarvis_common.rate_limiter import SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources._xml_safe import safe_fromstring
 from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import register_source
 
@@ -50,27 +50,11 @@ class ArxivSource(PaperSource):
         await self._rate_limiter.acquire()
 
     async def _fetch_xml(self, params: dict) -> Any:
-        """Make a rate-limited GET request to the arXiv API and parse XML.
-
-        Parameters
-        ----------
-        params : dict
-            Query parameters for the arXiv API.
-
-        Returns
-        -------
-        Element
-            Parsed XML root element.
-
-        Raises
-        ------
-        httpx.HTTPStatusError
-            If the request returns a non-2xx status.
-        """
+        """Rate-limited GET to the arXiv API; raises ``httpx.HTTPStatusError`` on non-2xx."""
         await self._rate_limit()
         response = await self.http_client.get(ARXIV_API_URL, params=params, timeout=30.0)
         response.raise_for_status()
-        return ET.fromstring(response.text)
+        return safe_fromstring(response.text)
 
     def _parse_entry(self, entry: Any) -> PaperCreate:
         """Parse a single Atom ``<entry>`` element into a PaperCreate model.

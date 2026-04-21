@@ -10,7 +10,7 @@ upgrades the rate limit to 10 requests/second.  Since no key is strictly
 required for baseline operation, this source is **shipped enabled by default**
 (migration 018 sets ``enabled=TRUE``).
 
-XML parsing uses ``lxml.etree`` with a hardened XMLParser (XXE-safe) for robust,
+XML parsing uses ``sources._xml_safe`` (shared XXE-safe lxml wrapper) for robust,
 namespace-aware handling.
 PubMed structured abstracts (multiple ``<AbstractText>`` elements with
 ``Label`` attributes) are concatenated with the label prefix to preserve
@@ -32,29 +32,20 @@ from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
-from jarvis_common.rate_limiter import SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 from lxml import (
     etree,  # type: ignore[reportAttributeAccessIssue]  # lxml stubs lack etree export typing
 )
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.sources._xml_safe import safe_fromstring
 from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import register_source
 
-# Hardened XML parser: no external entities, no network fetches, no DTD loading.
-# defusedxml.lxml is deprecated in newer releases, so we use lxml's own parser
-# flags — which provide equivalent XXE protection without fragile sub-modules.
-_XML_PARSER = etree.XMLParser(
-    resolve_entities=False,
-    no_network=True,
-    load_dtd=False,
-    huge_tree=False,
-)
-
 
 def _parse_xml(content: bytes) -> etree._Element:
-    """Parse *content* with the hardened XMLParser."""
-    return etree.fromstring(content, parser=_XML_PARSER)
+    """Parse *content* with the shared XXE-safe XMLParser."""
+    return safe_fromstring(content)
 
 
 logger = logging.getLogger(__name__)

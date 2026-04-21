@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _get_db
+from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.project_manager import ProjectManager
 
@@ -19,18 +19,10 @@ logger = logging.getLogger(__name__)
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/tasks [project_id]`` — list in-progress tasks.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/tasks [project_id]`` — list in-progress tasks, optionally filtered by project."""
     if update.message is None:
         return
-    db = _get_db(context)
+    db = get_db(context)
     project_id = None
     if context.args:
         try:
@@ -73,15 +65,7 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @auth_required
 @rate_limit(max_calls=10, window_seconds=60)
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/done <task_id>`` — mark a task as complete.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/done <task_id>`` — mark a task as complete via ProjectManager."""
     if update.message is None:
         return
     if not context.args:
@@ -94,7 +78,7 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Task ID must be a number.", parse_mode="HTML")
         return
 
-    db = _get_db(context)
+    db = get_db(context)
     pm = ProjectManager(db)
     result = await pm.complete_task(task_id)
 

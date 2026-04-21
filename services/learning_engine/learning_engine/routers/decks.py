@@ -7,10 +7,10 @@ from learning_engine.converters import row_to_deck_response
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import DeckCreate, DeckResponse
 
-router = APIRouter(tags=["decks"])
+router = APIRouter(prefix="/api/decks", tags=["decks"])
 
 
-@router.post("/api/decks", response_model=DeckResponse, status_code=201)
+@router.post("", response_model=DeckResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_deck(
     request: Request,
@@ -32,7 +32,7 @@ async def create_deck(
     return row_to_deck_response(row)
 
 
-@router.get("/api/decks", response_model=list[DeckResponse])
+@router.get("", response_model=list[DeckResponse])
 @limiter.limit("60/minute")
 async def list_decks(
     request: Request,

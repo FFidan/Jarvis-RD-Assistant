@@ -31,16 +31,9 @@ def rate_limit(
 ):
     """Decorator that rate-limits a Telegram command handler.
 
-    Parameters
-    ----------
-    max_calls : int
-        Maximum invocations allowed within *window_seconds*.
-    window_seconds : int
-        Sliding window size in seconds for the call counter.
-    cooldown_seconds : int
-        If > 0, enforce a hard per-command cooldown — the command cannot
-        be called again until this many seconds after the last invocation.
-        Useful for heavyweight commands (e.g. ``/pulse_now``).
+    *cooldown_seconds* > 0 enforces a hard per-command cooldown after the last
+    invocation (distinct from the sliding-window cap). Use for heavyweight
+    commands like ``/pulse_now``.
     """
 
     def decorator(func):  # type: ignore[no-untyped-def]

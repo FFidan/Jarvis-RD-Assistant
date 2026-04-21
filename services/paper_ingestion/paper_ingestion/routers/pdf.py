@@ -32,7 +32,7 @@ from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH, PDFPro
 from paper_ingestion.services.pdf_workflow import run_process_pdf
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["pdf"])
+router = APIRouter(prefix="/api", tags=["pdf"])
 
 LOCAL_PDF_SCAN_DIR = os.environ.get("LOCAL_PDF_SCAN_DIR", "/data/local_pdfs")
 
@@ -42,7 +42,7 @@ LOCAL_PDF_SCAN_DIR = os.environ.get("LOCAL_PDF_SCAN_DIR", "/data/local_pdfs")
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/download-pdf/{paper_id}", response_model=PaperResponse)
+@router.post("/download-pdf/{paper_id}", response_model=PaperResponse)
 @limiter.limit("30/minute")
 async def download_pdf(
     request: Request,
@@ -106,7 +106,7 @@ async def download_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/process-pdf/{paper_id}", response_model=ProcessPdfResponse)
+@router.post("/process-pdf/{paper_id}", response_model=ProcessPdfResponse)
 @limiter.limit("5/minute")
 async def process_pdf(
     request: Request,
@@ -189,7 +189,7 @@ async def process_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/upload-pdf", response_model=PaperResponse)
+@router.post("/upload-pdf", response_model=PaperResponse)
 @limiter.limit("10/minute")
 async def upload_pdf(
     request: Request,
@@ -306,7 +306,7 @@ async def upload_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/scan-local-pdfs", response_model=ScanLocalPdfsResponse)
+@router.post("/scan-local-pdfs", response_model=ScanLocalPdfsResponse)
 @limiter.limit("2/minute")
 async def scan_local_pdfs(
     request: Request,
@@ -442,7 +442,7 @@ async def scan_local_pdfs(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/batch-process", response_model=BatchProcessResponse)
+@router.post("/papers/batch-process", response_model=BatchProcessResponse)
 @limiter.limit("2/minute")
 async def batch_process_papers(
     request: Request,

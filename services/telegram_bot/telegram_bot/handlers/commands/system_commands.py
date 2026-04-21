@@ -11,7 +11,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
+from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -43,7 +43,7 @@ async def _handle_pairing(
 
     from telegram_bot.handlers.rate_limit import _timestamps
 
-    db_pool = _get_db(context)
+    db_pool = get_db(context)
     chat = update.effective_chat
     message = update.message
     if chat is None or message is None:
@@ -109,7 +109,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     dashboard-initiated pairing flow (sets ``user_config.telegram.owner_chat_id``
     to this chat's id) without requiring a pre-configured ``TELEGRAM_CHAT_ID``.
     This is the ONLY un-authed bot entrypoint; all other ``/start`` invocations
-    still go through :func:`_auth_check` before replying.
+    still go through :func:`auth_check` before replying.
 
     Parameters
     ----------
@@ -126,9 +126,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await _handle_pairing(update, context, parts[1][len("PAIR_") :])
             return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         chat_id = update.effective_chat.id if update.effective_chat else "unknown"
         logger.warning("Unauthorised /start attempt from chat_id=%s", chat_id)
         return
@@ -173,8 +173,8 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """
     if update.message is None:
         return
-    http = _get_http(context)
-    config = _get_config(context)
+    http = get_http(context)
+    config = get_config(context)
     headers = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key
@@ -233,8 +233,8 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             text=f"🍅 Focus session complete ({data_minutes} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
         )
         try:
-            http = _get_http(context)
-            config = _get_config(context)
+            http = get_http(context)
+            config = get_config(context)
             await http.post(
                 f"{config.learning_engine_url}/api/executive/focus/log",
                 json={"duration_hours": data_minutes / 60},

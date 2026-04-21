@@ -4,6 +4,7 @@ from datetime import datetime
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import ErrorResponse
 
 from learning_engine.card_store import insert_card
 from learning_engine.converters import row_to_card_response
@@ -11,10 +12,18 @@ from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
 from learning_engine.fsrs_manager import FSRSManager
 from learning_engine.models import CardCreate, CardResponse, CardUpdate
 
-router = APIRouter(tags=["cards"])
+router = APIRouter(
+    prefix="/api/cards",
+    tags=["cards"],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 
 
-@router.post("/api/cards", response_model=CardResponse, status_code=201)
+@router.post("", response_model=CardResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_card(
     request: Request,
@@ -47,7 +56,7 @@ async def create_card(
     return row_to_card_response(row)
 
 
-@router.get("/api/cards", response_model=list[CardResponse])
+@router.get("", response_model=list[CardResponse])
 @limiter.limit("60/minute")
 async def list_cards(
     request: Request,
@@ -83,7 +92,7 @@ async def list_cards(
     return [row_to_card_response(row) for row in rows]
 
 
-@router.put("/api/cards/{card_id}", response_model=CardResponse)
+@router.put("/{card_id}", response_model=CardResponse)
 @limiter.limit("30/minute")
 async def update_card(
     request: Request,
@@ -134,7 +143,7 @@ async def update_card(
     return row_to_card_response(row)
 
 
-@router.delete("/api/cards/{card_id}", status_code=204)
+@router.delete("/{card_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_card(
     request: Request,

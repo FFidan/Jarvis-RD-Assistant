@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import quote as _url_quote
 
 import httpx
-from jarvis_common.rate_limiter import SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType

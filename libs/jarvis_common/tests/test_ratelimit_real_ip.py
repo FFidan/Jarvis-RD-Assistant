@@ -10,9 +10,9 @@ from __future__ import annotations
 import ipaddress
 from unittest.mock import MagicMock
 
-import jarvis_common.ratelimit as ratelimit_mod
+import jarvis_common.http_rate_limiter as ratelimit_mod
 import pytest
-from jarvis_common.ratelimit import _real_ip
+from jarvis_common.http_rate_limiter import _real_ip
 from starlette.requests import Request
 
 # ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ from learning_engine.models import (
     ProjectUpdate,
 )
 
-router = APIRouter(tags=["projects"])
+router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 _PROJECT_ALLOWED_COLUMNS: set[str] = {"name", "description", "status", "deadline", "color"}
 _VALID_STATUSES = frozenset({"active", "paused", "completed", "archived"})
@@ -23,7 +23,7 @@ _VALID_STATUSES = frozenset({"active", "paused", "completed", "archived"})
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/projects", response_model=list[ProjectResponse])
+@router.get("", response_model=list[ProjectResponse])
 @limiter.limit("60/minute")
 async def list_projects(
     request: Request,
@@ -52,7 +52,7 @@ async def list_projects(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/projects", response_model=ProjectResponse, status_code=201)
+@router.post("", response_model=ProjectResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_project(
     request: Request,
@@ -80,7 +80,7 @@ async def create_project(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/projects/{project_id}", response_model=ProjectDetailResponse)
+@router.get("/{project_id}", response_model=ProjectDetailResponse)
 @limiter.limit("60/minute")
 async def get_project(
     request: Request,
@@ -128,7 +128,7 @@ async def get_project(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/api/projects/{project_id}", response_model=ProjectResponse)
+@router.put("/{project_id}", response_model=ProjectResponse)
 @limiter.limit("30/minute")
 async def update_project(
     request: Request,
@@ -167,7 +167,7 @@ async def update_project(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/api/projects/{project_id}", status_code=204)
+@router.delete("/{project_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_project(
     request: Request,

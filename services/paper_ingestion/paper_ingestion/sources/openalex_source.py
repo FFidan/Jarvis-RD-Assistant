@@ -30,7 +30,7 @@ import os
 from datetime import UTC, date, datetime
 
 import httpx
-from jarvis_common.rate_limiter import SourceRateLimiter
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.base import PaperSource

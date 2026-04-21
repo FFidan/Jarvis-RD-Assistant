@@ -13,14 +13,19 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import current_user_id, log_audit, verify_api_key
+from jarvis_common import ErrorResponse, current_user_id, log_audit
 from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
+    PulseDebugResponse,
+    PulseDebugTopCard,
+    PulseDebugTopicEmbedding,
     PulseDeckResponse,
+    PulseExplainResponse,
     PulseGenerateResponse,
     PulseRateRequest,
+    PulseRateResponse,
     PulseStatsResponse,
 )
 from paper_ingestion.pulse.deck import load_history, load_today
@@ -30,7 +35,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/api/pulse",
     tags=["pulse"],
-    dependencies=[Depends(verify_api_key)],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
 )
 
 
@@ -101,14 +110,14 @@ async def get_history(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/rate")
+@router.post("/rate", response_model=PulseRateResponse)
 @limiter.limit("60/minute")
 async def rate_card(
     request: Request,
     body: PulseRateRequest,
     user_id: int | None = Depends(current_user_id),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict:
+) -> PulseRateResponse:
     """Persist a user rating for a Pulse-shown paper.
 
     Rating is stored in ``pulse_ratings`` with ``source='pulse'`` so that the
@@ -142,7 +151,7 @@ async def rate_card(
             )
     except asyncpg.ForeignKeyViolationError as exc:
         raise HTTPException(status_code=404, detail="Paper not found") from exc
-    return {"status": "ok"}
+    return PulseRateResponse(status="ok")
 
 
 # ---------------------------------------------------------------------------
@@ -150,13 +159,13 @@ async def rate_card(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/explain/{card_id}")
+@router.get("/explain/{card_id}", response_model=PulseExplainResponse)
 @limiter.limit("30/minute")
 async def explain_card(
     request: Request,
     card_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict:
+) -> PulseExplainResponse:
     """Return the reasoning + signal breakdown for a single Pulse card."""
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -169,13 +178,13 @@ async def explain_card(
         )
     if row is None:
         raise HTTPException(status_code=404, detail="Pulse card not found")
-    return {
-        "card_id": row["id"],
-        "reasoning": row["reasoning"],
-        "signals": row["signals"] or {},
-        "llm_relevance": row["llm_relevance"],
-        "llm_novelty": row["llm_novelty"],
-    }
+    return PulseExplainResponse(
+        card_id=row["id"],
+        reasoning=row["reasoning"],
+        signals=row["signals"] or {},
+        llm_relevance=row["llm_relevance"],
+        llm_novelty=row["llm_novelty"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -249,12 +258,12 @@ async def get_stats(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/debug")
+@router.get("/debug", response_model=PulseDebugResponse)
 @limiter.limit("30/minute")
 async def debug_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict:
+) -> PulseDebugResponse:
     """Return diagnostics for the latest Pulse deck.
 
     Includes:
@@ -312,50 +321,53 @@ async def debug_pulse(
 
     # Topic embedding sanity
     embed_dim_expected = 768
-    topic_embeddings: list[dict] = []
+    topic_embeddings: list[PulseDebugTopicEmbedding] = []
     for er in embed_rows:
         val = er["value"]
         if isinstance(val, list):
             dim = len(val)
             topic_embeddings.append(
-                {
-                    "key": er["key"],
-                    "dim": dim,
-                    "ok": dim == embed_dim_expected,
-                    "non_null": True,
-                }
+                PulseDebugTopicEmbedding(
+                    key=er["key"],
+                    dim=dim,
+                    ok=dim == embed_dim_expected,
+                    non_null=True,
+                )
             )
         else:
             topic_embeddings.append(
-                {
-                    "key": er["key"],
-                    "dim": None,
-                    "ok": False,
-                    "non_null": val is not None,
-                }
+                PulseDebugTopicEmbedding(
+                    key=er["key"],
+                    dim=None,
+                    ok=False,
+                    non_null=val is not None,
+                )
             )
 
     # Top-N card breakdown
     top_cards = [
-        {
-            "card_id": r["card_id"],
-            "paper_id": r["paper_id"],
-            "title": r["paper_title"],
-            "signals": r["signals"] or {},
-            "final_score": float(r["final_score"]),
-            "llm_relevance": r["llm_relevance"],
-            "llm_novelty": r["llm_novelty"],
-        }
+        PulseDebugTopCard(
+            card_id=r["card_id"],
+            paper_id=r["paper_id"],
+            title=r["paper_title"],
+            signals=r["signals"] or {},
+            final_score=float(r["final_score"]),
+            llm_relevance=r["llm_relevance"],
+            llm_novelty=r["llm_novelty"],
+        )
         for r in card_rows
     ]
 
-    return {
-        "deck_date": deck_row["deck_date"].isoformat()
-        if hasattr(deck_row["deck_date"], "isoformat")
-        else deck_row["deck_date"],
-        "card_count": deck_row["card_count"],
-        "degraded_reason": deck_row["degraded_reason"],
-        "source_counts": source_counts,
-        "topic_embeddings": topic_embeddings,
-        "top_cards": top_cards,
-    }
+    deck_date_val = deck_row["deck_date"]
+    deck_date_str = (
+        deck_date_val.isoformat() if hasattr(deck_date_val, "isoformat") else str(deck_date_val)
+    )
+
+    return PulseDebugResponse(
+        deck_date=deck_date_str,
+        card_count=deck_row["card_count"],
+        degraded_reason=deck_row["degraded_reason"],
+        source_counts=source_counts,
+        topic_embeddings=topic_embeddings,
+        top_cards=top_cards,
+    )

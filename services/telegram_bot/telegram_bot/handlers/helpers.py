@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from telegram_bot.config import BotConfig
 
 
-def _get_config(context: ContextTypes.DEFAULT_TYPE) -> BotConfig:
+def get_config(context: ContextTypes.DEFAULT_TYPE) -> BotConfig:
     """Return the shared ``BotConfig`` instance.
 
     Thin accessor kept as a named function (rather than inlined dict lookup)
@@ -24,7 +24,7 @@ def _get_config(context: ContextTypes.DEFAULT_TYPE) -> BotConfig:
     return context.application.bot_data["config"]
 
 
-def _get_db(context: ContextTypes.DEFAULT_TYPE) -> asyncpg.Pool:
+def get_db(context: ContextTypes.DEFAULT_TYPE) -> asyncpg.Pool:
     """Return the shared asyncpg connection pool.
 
     Thin accessor kept as a named function for mockability in tests.
@@ -32,7 +32,7 @@ def _get_db(context: ContextTypes.DEFAULT_TYPE) -> asyncpg.Pool:
     return context.application.bot_data["db_pool"]
 
 
-def _get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
+def get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     """Return the shared httpx async client.
 
     Thin accessor kept as a named function for mockability in tests.
@@ -40,7 +40,7 @@ def _get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     return context.application.bot_data["http_client"]
 
 
-async def _auth_check(
+async def auth_check(
     update: Update,
     config: BotConfig,
     db_pool: asyncpg.Pool,

@@ -4,16 +4,25 @@ from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import ErrorResponse
 
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
 from learning_engine.fsrs_manager import FSRSManager
 from learning_engine.models import CardResponse, RetentionStats, ReviewRequest, ReviewResponse
 
-router = APIRouter(tags=["review"])
+router = APIRouter(
+    prefix="/api",
+    tags=["review"],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 
 
-@router.get("/api/review/next", response_model=list[CardResponse])
+@router.get("/review/next", response_model=list[CardResponse])
 @limiter.limit("60/minute")
 async def get_next_review(
     request: Request,
@@ -29,7 +38,7 @@ async def get_next_review(
     return [row_to_card_response(row) for row in rows]
 
 
-@router.post("/api/review/{card_id}", response_model=ReviewResponse)
+@router.post("/review/{card_id}", response_model=ReviewResponse)
 @limiter.limit("60/minute")
 async def submit_review(
     request: Request,
@@ -77,7 +86,7 @@ async def submit_review(
     )
 
 
-@router.get("/api/stats", response_model=RetentionStats)
+@router.get("/stats", response_model=RetentionStats)
 @limiter.limit("60/minute")
 async def get_stats(
     request: Request,

@@ -39,7 +39,7 @@ from paper_ingestion.services.pdf_workflow import upsert_paper
 from paper_ingestion.services.source_helper import get_source_for_type
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["search"])
+router = APIRouter(prefix="/api", tags=["search"])
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ def _raise_source_search_error(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/search", response_model=MultiSourceSearchResponse)
+@router.post("/search", response_model=MultiSourceSearchResponse)
 @limiter.limit("30/minute")
 async def search_papers(
     request: Request,
@@ -234,7 +234,7 @@ async def search_papers(
     )
 
 
-@router.post("/api/search-preview", response_model=MultiSourceSearchResponse)
+@router.post("/search-preview", response_model=MultiSourceSearchResponse)
 @limiter.limit("30/minute")
 async def search_papers_preview(
     request: Request,
@@ -325,7 +325,7 @@ async def search_papers_preview(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/search-hybrid", response_model=list[HybridSearchResult])
+@router.post("/papers/search-hybrid", response_model=list[HybridSearchResult])
 @limiter.limit("30/minute")
 async def search_hybrid(
     request: Request,
@@ -365,7 +365,7 @@ async def search_hybrid(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/papers/feed", response_model=FeedResponse)
+@router.get("/papers/feed", response_model=FeedResponse)
 @limiter.limit("60/minute")
 async def list_feed_papers(
     request: Request,
@@ -453,7 +453,7 @@ async def list_feed_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/similar/{paper_id}", response_model=list[SimilarPaperResult])
+@router.get("/similar/{paper_id}", response_model=list[SimilarPaperResult])
 @limiter.limit("20/minute")
 async def find_similar_papers(
     request: Request,
@@ -539,7 +539,7 @@ async def find_similar_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/discover", response_model=list[DiscoveryResultItem])
+@router.post("/discover", response_model=list[DiscoveryResultItem])
 @limiter.limit("10/minute")
 async def discover_papers(
     request: Request,
@@ -619,7 +619,7 @@ async def discover_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/relevance-score", response_model=RelevanceScoreResponse)
+@router.post("/relevance-score", response_model=RelevanceScoreResponse)
 @limiter.limit("30/minute")
 async def compute_relevance(
     request: Request,

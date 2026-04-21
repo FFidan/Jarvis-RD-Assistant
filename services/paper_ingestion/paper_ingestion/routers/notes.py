@@ -10,12 +10,12 @@ from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["notes"])
+router = APIRouter(prefix="/api", tags=["notes"])
 
 _NOTE_ALLOWED_COLUMNS: set[str] = {"user_note", "highlight_text", "page_number"}
 
 
-@router.get("/api/papers/{paper_id}/notes", response_model=list[NoteResponse])
+@router.get("/papers/{paper_id}/notes", response_model=list[NoteResponse])
 @limiter.limit("60/minute")
 async def list_notes(
     request: Request,
@@ -43,7 +43,7 @@ async def list_notes(
 
 
 @router.post(
-    "/api/papers/{paper_id}/notes",
+    "/papers/{paper_id}/notes",
     response_model=NoteResponse,
     status_code=201,
 )
@@ -84,7 +84,7 @@ async def create_note(
     return NoteResponse(**dict(row))
 
 
-@router.put("/api/notes/{note_id}", response_model=NoteResponse)
+@router.put("/notes/{note_id}", response_model=NoteResponse)
 @limiter.limit("30/minute")
 async def update_note(
     request: Request,
@@ -123,7 +123,7 @@ async def update_note(
     return NoteResponse(**dict(row))
 
 
-@router.delete("/api/notes/{note_id}", status_code=204)
+@router.delete("/notes/{note_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_note(
     request: Request,

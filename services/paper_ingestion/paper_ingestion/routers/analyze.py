@@ -6,16 +6,24 @@ import os
 from pathlib import Path
 
 import asyncpg
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from starlette.responses import StreamingResponse
 
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import (
+    get_db_pool,
+    get_embedder,
+    get_http_client,
+    get_pdf_processor,
+    get_verifier,
+    limiter,
+)
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["analyze"])
+router = APIRouter(prefix="/api", tags=["analyze"])
 
 
-def _sanitize_sse_error(exc: Exception) -> str:
+def safe_sse_error_message(exc: Exception) -> str:
     """Return a safe error message that doesn't leak implementation details.
 
     Only passes through messages from known safe exception types (ValueError,
@@ -35,16 +43,21 @@ def _sse_event(data: dict | str) -> str:
     return f"data: {json.dumps(data)}\n\n"
 
 
-async def _analyze_stream(request: Request, paper_id: int, db_pool: asyncpg.Pool):
+async def _analyze_stream(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    pdf_processor,
+    embedder,
+    verifier,
+):
     """Async generator: download → process → summarize with SSE progress events.
 
     B6 fix: local papers (``source_type='local'`` or ``pdf_local_path`` already
     set) skip the download step entirely — they never have a ``pdf_url`` and
     that is expected, not an error.
     """
-    http_client = request.app.state.http_client
-    pdf_processor = request.app.state.pdf_processor
-    embedder = request.app.state.embedder
 
     # ---- Step 1: Download PDF ----
     yield _sse_event({"type": "step", "step": "downloading", "status": "started"})
@@ -160,7 +173,7 @@ async def _analyze_stream(request: Request, paper_id: int, db_pool: asyncpg.Pool
             paper_id,
             db_pool,
             http_client,
-            request.app.state.verifier,
+            verifier,
             embedder,
         )
     except Exception as exc:
@@ -169,7 +182,7 @@ async def _analyze_stream(request: Request, paper_id: int, db_pool: asyncpg.Pool
             {
                 "type": "error",
                 "step": "summarizing",
-                "message": _sanitize_sse_error(exc),
+                "message": safe_sse_error_message(exc),
             }
         )
         yield _sse_event("[DONE]")
@@ -180,13 +193,17 @@ async def _analyze_stream(request: Request, paper_id: int, db_pool: asyncpg.Pool
     yield _sse_event("[DONE]")
 
 
-@router.post("/api/papers/{paper_id}/analyze")
+@router.post("/papers/{paper_id}/analyze")
 @limiter.limit("5/minute")
 async def analyze_paper(
     request: Request,
     paper_id: int,
     async_mode: bool = Query(default=False, alias="async"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    pdf_processor=Depends(get_pdf_processor),
+    embedder=Depends(get_embedder),
+    verifier=Depends(get_verifier),
 ):
     """Chain download → process → summarize with SSE progress events.
 
@@ -204,7 +221,7 @@ async def analyze_paper(
         return {"job_id": job_id, "status": "queued"}
 
     return StreamingResponse(
-        _analyze_stream(request, paper_id, db_pool),
+        _analyze_stream(request, paper_id, db_pool, http_client, pdf_processor, embedder, verifier),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

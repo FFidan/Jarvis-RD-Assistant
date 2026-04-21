@@ -19,6 +19,7 @@ from jarvis_common.error_handlers import (
     http_exception_handler,
     validation_exception_handler,
 )
+from jarvis_common.http_rate_limiter import create_limiter, rate_limit_exceeded_handler
 from jarvis_common.llm_client import (
     DEFAULT_LITELLM_BASE_URL,
     LITELLM_FALLBACK_ENV_NAMES,
@@ -36,12 +37,17 @@ from jarvis_common.llm_client import (
     strip_think_blocks,
 )
 from jarvis_common.logging_config import configure_logging
-from jarvis_common.models import HealthCheckResponse
+from jarvis_common.models import (
+    ErrorResponse,
+    HealthCheckResponse,
+    JobCreateResponse,
+    JobListResponse,
+    JobStatusResponse,
+)
 from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
-from jarvis_common.rate_limiter import SourceRateLimiter
-from jarvis_common.ratelimit import create_limiter, rate_limit_exceeded_handler
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.secrets import read_secret
+from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches, normalize_author_name
 
 __all__ = [
@@ -67,6 +73,10 @@ __all__ = [
     "generic_exception_handler",
     "configure_logging",
     "HealthCheckResponse",
+    "ErrorResponse",
+    "JobCreateResponse",
+    "JobListResponse",
+    "JobStatusResponse",
     "RequestIDMiddleware",
     "normalize_author_name",
     "author_matches",

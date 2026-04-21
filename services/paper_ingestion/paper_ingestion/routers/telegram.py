@@ -15,18 +15,14 @@ from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from jarvis_common import log_audit, verify_api_key
+from jarvis_common import log_audit
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/api/telegram",
-    tags=["telegram"],
-    dependencies=[Depends(verify_api_key)],
-)
+router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
 _PAIRING_TTL = timedelta(minutes=10)
 _TELEGRAM_BASE_URL = "https://t.me"

@@ -5,15 +5,16 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import escape_like
+from jarvis_common import ErrorResponse, escape_like
 
 from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_paper_response,
     row_to_summary_response,
 )
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import get_db_pool, get_optional_embedder, limiter
 from paper_ingestion.models import (
+    FeedbackRequest,
     FeedbackResponse,
     MarkReadResponse,
     PaperBriefResponse,
@@ -27,7 +28,15 @@ from paper_ingestion.models import (
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["papers"])
+router = APIRouter(
+    prefix="/api/papers",
+    tags=["papers"],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +44,7 @@ router = APIRouter(tags=["papers"])
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/papers/brief", response_model=list[PaperBriefResponse])
+@router.get("/brief", response_model=list[PaperBriefResponse])
 @limiter.limit("60/minute")
 async def list_papers_brief(
     request: Request,
@@ -68,7 +77,7 @@ async def list_papers_brief(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/papers", response_model=list[PaperResponse])
+@router.get("", response_model=list[PaperResponse])
 @limiter.limit("60/minute")
 async def list_papers(
     request: Request,
@@ -79,6 +88,7 @@ async def list_papers(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    embedder=Depends(get_optional_embedder),
 ) -> list[PaperResponse]:
     """List papers with optional filters.
 
@@ -106,14 +116,12 @@ async def list_papers(
         ``created_at DESC``.
     """
     from paper_ingestion.converters import hybrid_dict_to_paper_response
-    from paper_ingestion.embedder import Embedder
 
     # ------------------------------------------------------------------
     # Hybrid search path: q is set and no other filters are active
     # ------------------------------------------------------------------
     has_extra_filters = any([status, source_type, topic_id])
     if q and not has_extra_filters:
-        embedder: Embedder | None = getattr(request.app.state, "embedder", None)
         if embedder is not None and embedder.qdrant is not None:
             try:
                 hybrid_results = await embedder.hybrid_search(
@@ -181,7 +189,7 @@ async def list_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/papers/{paper_id}", response_model=PaperDetailResponse)
+@router.get("/{paper_id}", response_model=PaperDetailResponse)
 @limiter.limit("60/minute")
 async def get_paper_detail(
     request: Request,
@@ -238,7 +246,7 @@ async def get_paper_detail(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/api/papers/{paper_id}/read", response_model=MarkReadResponse)
+@router.put("/{paper_id}/read", response_model=MarkReadResponse)
 @limiter.limit("60/minute")
 async def mark_paper_read(
     request: Request,
@@ -282,7 +290,7 @@ async def mark_paper_read(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/batch-save", response_model=list[PaperResponse])
+@router.post("/batch-save", response_model=list[PaperResponse])
 @limiter.limit("5/minute")
 async def batch_save_papers(
     request: Request,
@@ -309,16 +317,21 @@ async def batch_save_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/{paper_id}/feedback", response_model=FeedbackResponse)
+@router.post("/{paper_id}/feedback", response_model=FeedbackResponse)
 @limiter.limit("30/minute")
 async def submit_feedback(
     request: Request,
     paper_id: int,
-    rating: int | None = Query(default=None, ge=1, le=5),
-    flagged: bool | None = Query(default=None),
+    feedback: FeedbackRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Allow users to rate a paper (1-5) and/or flag suspicious summaries."""
+    """Allow users to rate a paper (1-5) and/or flag suspicious summaries.
+
+    Both fields live in the JSON body (see :class:`FeedbackRequest`); at least
+    one of ``rating`` / ``flagged`` must be provided or the handler returns 400.
+    """
+    rating = feedback.rating
+    flagged = feedback.flagged
     if rating is None and flagged is None:
         raise HTTPException(
             status_code=400,

@@ -7,7 +7,7 @@ from jarvis_common import delete_or_404, dynamic_update
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
 
-router = APIRouter(tags=["milestones"])
+router = APIRouter(prefix="/api", tags=["milestones"])
 
 _MILESTONE_ALLOWED_COLUMNS: set[str] = {"name", "description", "deadline", "completed"}
 
@@ -17,7 +17,7 @@ _MILESTONE_ALLOWED_COLUMNS: set[str] = {"name", "description", "deadline", "comp
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/projects/{project_id}/milestones", response_model=list[MilestoneResponse])
+@router.get("/projects/{project_id}/milestones", response_model=list[MilestoneResponse])
 @limiter.limit("60/minute")
 async def list_milestones(
     request: Request,
@@ -44,7 +44,7 @@ async def list_milestones(
 
 
 @router.post(
-    "/api/projects/{project_id}/milestones",
+    "/projects/{project_id}/milestones",
     response_model=MilestoneResponse,
     status_code=201,
 )
@@ -80,7 +80,7 @@ async def create_milestone(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/api/milestones/{milestone_id}", response_model=MilestoneResponse)
+@router.put("/milestones/{milestone_id}", response_model=MilestoneResponse)
 @limiter.limit("30/minute")
 async def update_milestone(
     request: Request,
@@ -126,7 +126,7 @@ async def update_milestone(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/api/milestones/{milestone_id}", status_code=204)
+@router.delete("/milestones/{milestone_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_milestone(
     request: Request,

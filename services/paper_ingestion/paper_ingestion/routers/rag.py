@@ -10,7 +10,7 @@ import logging
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import get_smart_model
+from jarvis_common import ErrorResponse, get_smart_model
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
@@ -20,7 +20,13 @@ from jarvis_common.llm_client import (
 )
 from starlette.responses import StreamingResponse
 
-from paper_ingestion.deps import get_db_pool, get_http_client, get_verifier, limiter
+from paper_ingestion.deps import (
+    get_db_pool,
+    get_embedder,
+    get_http_client,
+    get_verifier,
+    limiter,
+)
 from paper_ingestion.models import (
     AskRequest,
     AskResponse,
@@ -31,15 +37,23 @@ from paper_ingestion.models import (
 from paper_ingestion.services.summarization import generate_paper_summary
 from paper_ingestion.streaming import (
     CrossPaperRagNoResults,
-    _prepare_cross_paper_rag,
-    _prepare_single_paper_rag,
-    _sse_error_stream,
-    _stream_rag_events,
+    prepare_cross_paper_rag,
+    prepare_single_paper_rag,
+    sse_error_stream,
+    stream_rag_events,
 )
 from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["rag"])
+router = APIRouter(
+    prefix="/api",
+    tags=["rag"],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +61,7 @@ router = APIRouter(tags=["rag"])
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/summarize/{paper_id}", response_model=SummaryResponse)
+@router.post("/summarize/{paper_id}", response_model=SummaryResponse)
 @limiter.limit("5/minute")
 async def summarize_paper(
     request: Request,
@@ -55,11 +69,10 @@ async def summarize_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    embedder=Depends(get_embedder),
 ) -> SummaryResponse:
     """Generate an LLM summary with quote verification. Rate-limited to 5/minute."""
-    return await generate_paper_summary(
-        paper_id, db_pool, http_client, verifier, request.app.state.embedder
-    )
+    return await generate_paper_summary(paper_id, db_pool, http_client, verifier, embedder)
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +80,7 @@ async def summarize_paper(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/batch-summarize")
+@router.post("/papers/batch-summarize")
 @limiter.limit("2/minute")
 async def batch_summarize_papers(
     request: Request,
@@ -107,13 +120,15 @@ async def batch_summarize_papers(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/{paper_id}/ask", response_model=AskResponse)
+@router.post("/papers/{paper_id}/ask", response_model=AskResponse)
 @limiter.limit("20/minute")
 async def ask_paper(
     request: Request,
     paper_id: int,
     body: AskRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    embedder=Depends(get_embedder),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Answer a question about a specific paper using RAG.
 
@@ -133,12 +148,7 @@ async def ask_paper(
     dict
         {answer: str, sources: [{content, page_number, score}]}
     """
-    from paper_ingestion.embedder import Embedder
-
-    embedder: Embedder = request.app.state.embedder
-    http_client: httpx.AsyncClient = request.app.state.http_client
-
-    messages, sources_list = await _prepare_single_paper_rag(
+    messages, sources_list = await prepare_single_paper_rag(
         embedder, db_pool, paper_id, body, http_client
     )
 
@@ -172,13 +182,15 @@ async def ask_paper(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/papers/{paper_id}/ask/stream")
+@router.post("/papers/{paper_id}/ask/stream")
 @limiter.limit("20/minute")
 async def ask_paper_stream(
     request: Request,
     paper_id: int,
     body: AskRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    embedder=Depends(get_embedder),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Stream RAG response for a single paper via SSE.
 
@@ -192,13 +204,8 @@ async def ask_paper_stream(
     body : AskRequest
         Question and optional max_chunks parameter.
     """
-    from paper_ingestion.embedder import Embedder
-
-    embedder: Embedder = request.app.state.embedder
-    http_client: httpx.AsyncClient = request.app.state.http_client
-
     try:
-        messages, sources = await _prepare_single_paper_rag(
+        messages, sources = await prepare_single_paper_rag(
             embedder, db_pool, paper_id, body, http_client
         )
     except HTTPException:
@@ -208,14 +215,14 @@ async def ask_paper_stream(
             "Streaming RAG preparation failed for paper %d: %r", paper_id, exc, exc_info=True
         )
         return StreamingResponse(
-            _sse_error_stream("An error occurred while preparing the response. Please try again."),
+            sse_error_stream("An error occurred while preparing the response. Please try again."),
             media_type="text/event-stream",
         )
 
     smart_model = get_smart_model()
 
     return StreamingResponse(
-        _stream_rag_events(http_client, messages, sources, model=smart_model),
+        stream_rag_events(http_client, messages, sources, model=smart_model),
         media_type="text/event-stream",
     )
 
@@ -225,12 +232,14 @@ async def ask_paper_stream(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/ask", response_model=AskResponse)
+@router.post("/ask", response_model=AskResponse)
 @limiter.limit("10/minute")
 async def ask_cross_paper(
     request: Request,
     body: CrossPaperAskRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    embedder=Depends(get_embedder),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Ask a question across ALL embedded papers.
 
@@ -252,12 +261,7 @@ async def ask_cross_paper(
     dict
         {answer: str, sources: [{paper_id, paper_title, content, page_number, score}]}
     """
-    from paper_ingestion.embedder import Embedder
-
-    embedder: Embedder = request.app.state.embedder
-    http_client: httpx.AsyncClient = request.app.state.http_client
-
-    result = await _prepare_cross_paper_rag(embedder, db_pool, body, http_client)
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client)
 
     # Short-circuit when no chunks were found
     if isinstance(result, CrossPaperRagNoResults):
@@ -295,12 +299,14 @@ async def ask_cross_paper(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/ask/stream")
+@router.post("/ask/stream")
 @limiter.limit("10/minute")
 async def ask_cross_paper_stream(
     request: Request,
     body: CrossPaperAskRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    embedder=Depends(get_embedder),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
 ):
     """Stream cross-paper RAG response via SSE.
 
@@ -312,19 +318,14 @@ async def ask_cross_paper_stream(
     body : CrossPaperAskRequest
         Question, max_chunks, max_papers, and decompose parameters.
     """
-    from paper_ingestion.embedder import Embedder
-
-    embedder: Embedder = request.app.state.embedder
-    http_client: httpx.AsyncClient = request.app.state.http_client
-
     try:
-        result = await _prepare_cross_paper_rag(embedder, db_pool, body, http_client)
+        result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client)
     except HTTPException:
         raise
     except Exception as exc:
         logger.error("Streaming cross-paper RAG preparation failed: %r", exc, exc_info=True)
         return StreamingResponse(
-            _sse_error_stream("An error occurred while preparing the response. Please try again."),
+            sse_error_stream("An error occurred while preparing the response. Please try again."),
             media_type="text/event-stream",
         )
 
@@ -348,7 +349,7 @@ async def ask_cross_paper_stream(
     smart_model = get_smart_model()
 
     return StreamingResponse(
-        _stream_rag_events(http_client, messages, sources, model=smart_model),
+        stream_rag_events(http_client, messages, sources, model=smart_model),
         media_type="text/event-stream",
     )
 
@@ -358,7 +359,7 @@ async def ask_cross_paper_stream(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/digest/weekly", response_model=WeeklyDigestResponse)
+@router.get("/digest/weekly", response_model=WeeklyDigestResponse)
 @limiter.limit("5/minute")
 async def get_weekly_digest(
     request: Request,

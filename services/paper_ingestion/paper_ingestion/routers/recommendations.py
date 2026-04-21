@@ -1,10 +1,10 @@
 """Recommendation endpoints."""
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import verify_api_key
 from pydantic import BaseModel
 
-from paper_ingestion.deps import limiter
+from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.recommender import refresh_recommendations
 
 router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
@@ -18,12 +18,14 @@ class RecommendationItem(BaseModel):
     dismissed: bool
 
 
-@router.get("", response_model=list[RecommendationItem], dependencies=[Depends(verify_api_key)])
+@router.get("", response_model=list[RecommendationItem])
 @limiter.limit("5/minute")
 async def list_recommendations(
-    request: Request, limit: int = Query(default=20, ge=1, le=200)
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=200),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[RecommendationItem]:
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT paper_id, score, modes, explanation, dismissed "
             "FROM paper_recommendations WHERE dismissed = FALSE "
@@ -33,17 +35,21 @@ async def list_recommendations(
     return [RecommendationItem(**dict(r)) for r in rows]
 
 
-@router.post("/refresh", dependencies=[Depends(verify_api_key)])
+@router.post("/refresh")
 @limiter.limit("2/hour")
 async def trigger_refresh(request: Request) -> dict[str, int]:
     count = await refresh_recommendations(request.app)
     return {"refreshed": count}
 
 
-@router.post("/{paper_id}/dismiss", dependencies=[Depends(verify_api_key)])
+@router.post("/{paper_id}/dismiss")
 @limiter.limit("30/minute")
-async def dismiss_recommendation(paper_id: int, request: Request) -> dict[str, bool]:
-    async with request.app.state.db_pool.acquire() as conn:
+async def dismiss_recommendation(
+    paper_id: int,
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, bool]:
+    async with db_pool.acquire() as conn:
         result = await conn.execute(
             "UPDATE paper_recommendations SET dismissed = TRUE WHERE paper_id = $1",
             paper_id,

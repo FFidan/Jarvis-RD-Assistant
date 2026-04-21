@@ -9,7 +9,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _get_db
+from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.project_manager import ProjectManager
 
@@ -30,18 +30,10 @@ def _project_keyboard(project_id: int | str) -> InlineKeyboardMarkup:
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/projects`` — list active projects.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/projects`` — list all active projects with status and description."""
     if update.message is None:
         return
-    db = _get_db(context)
+    db = get_db(context)
     rows = await db.fetch(
         "SELECT id, name, status, description, deadline "
         "FROM projects WHERE status = 'active' ORDER BY created_at DESC"
@@ -71,15 +63,7 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/newproject <name>`` — create a new project.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/newproject <name>`` — create a new project via ProjectManager."""
     if update.message is None:
         return
     if not context.args:
@@ -87,7 +71,7 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     name = " ".join(context.args)[:200]
-    db = _get_db(context)
+    db = get_db(context)
     try:
         pm = ProjectManager(db)
         result = await pm.create_project(name)

@@ -7,10 +7,10 @@ from fastapi.responses import JSONResponse
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
 
-router = APIRouter(tags=["project-papers"])
+router = APIRouter(prefix="/api/projects", tags=["project-papers"])
 
 
-@router.get("/api/projects/{project_id}/papers", response_model=list[ProjectPaperItem])
+@router.get("/{project_id}/papers", response_model=list[ProjectPaperItem])
 @limiter.limit("60/minute")
 async def list_project_papers(
     request: Request,
@@ -39,7 +39,7 @@ async def list_project_papers(
 
 
 @router.post(
-    "/api/projects/{project_id}/papers/{paper_id}",
+    "/{project_id}/papers/{paper_id}",
     status_code=201,
     response_model=ProjectPaperLinkResponse,
 )
@@ -78,7 +78,7 @@ async def link_paper(
     return {"project_id": project_id, "paper_id": paper_id}
 
 
-@router.delete("/api/projects/{project_id}/papers/{paper_id}", status_code=204)
+@router.delete("/{project_id}/papers/{paper_id}", status_code=204)
 @limiter.limit("30/minute")
 async def unlink_paper(
     request: Request,

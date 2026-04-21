@@ -26,11 +26,11 @@ class QuickAddTaskRequest(BaseModel):
 @limiter.limit("60/minute")
 async def get_my_day(
     request: Request,
-    db: Pool = Depends(get_db_pool),
+    db_pool: Pool = Depends(get_db_pool),
     limit_recommendations: int = Query(3, ge=1, le=10),
 ) -> dict[str, Any]:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers)."""
-    async with db.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Tasks: Todo (due today/overdue) + completed today, with project context
         tasks = await conn.fetch(
             """
@@ -155,10 +155,10 @@ async def quick_add_task(
 async def log_focus_session(
     request: Request,
     payload: FocusSessionRequest,
-    db: Pool = Depends(get_db_pool),
+    db_pool: Pool = Depends(get_db_pool),
 ) -> dict[str, Any]:
     """Log a completed focus session."""
-    async with db.acquire() as conn:
+    async with db_pool.acquire() as conn:
         # Pre-validate references (outside transaction)
         if payload.task_id is not None:
             task_exists = await conn.fetchval("SELECT 1 FROM tasks WHERE id = $1", payload.task_id)

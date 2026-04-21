@@ -7,9 +7,16 @@ import logging
 import uuid
 
 import asyncpg
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import (
+    get_db_pool,
+    get_http_client,
+    get_optional_embedder,
+    get_optional_qdrant,
+    limiter,
+)
 from paper_ingestion.entity_extractor import (
     extract_entities_for_paper,
     get_knowledge_graph,
@@ -38,14 +45,14 @@ async def extract_entities(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    embedder=Depends(get_optional_embedder),
+    qdrant=Depends(get_optional_qdrant),
 ) -> EntityExtractionResponse:
     """Trigger entity extraction for a single paper."""
-    embedder = getattr(request.app.state, "embedder", None)
-    qdrant = getattr(request.app.state, "qdrant_client", None)
-
     try:
         return await extract_entities_for_paper(
-            request.app.state.http_client,
+            http_client,
             db_pool,
             paper_id,
             embedder=embedder,
@@ -74,11 +81,11 @@ async def extract_entities(
 async def batch_extract_entities(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    embedder=Depends(get_optional_embedder),
+    qdrant=Depends(get_optional_qdrant),
 ):
     """Backfill entity extraction for all summarized papers."""
-    embedder = getattr(request.app.state, "embedder", None)
-    qdrant = getattr(request.app.state, "qdrant_client", None)
-
     async with db_pool.acquire() as conn:
         # Get papers with summaries but no entities
         rows = await conn.fetch(
@@ -94,7 +101,7 @@ async def batch_extract_entities(
     for row in rows:
         try:
             await extract_entities_for_paper(
-                request.app.state.http_client,
+                http_client,
                 db_pool,
                 row["id"],
                 embedder=embedder,

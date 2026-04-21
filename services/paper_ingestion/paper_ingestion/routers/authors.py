@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import verify_api_key
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -23,11 +22,7 @@ from paper_ingestion.models import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/api/authors",
-    tags=["authors"],
-    dependencies=[Depends(verify_api_key)],
-)
+router = APIRouter(prefix="/api/authors", tags=["authors"])
 
 _AUTHOR_ALLOWED_COLUMNS: set[str] = {"enabled", "s2_author_id"}
 

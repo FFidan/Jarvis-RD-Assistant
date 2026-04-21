@@ -201,6 +201,7 @@ async def test_list_papers_search_query_uses_bm25_clause():
         limit=10,
         offset=0,
         db_pool=pool,
+        embedder=None,
     )
 
     assert len(rows) == 1
@@ -248,20 +249,23 @@ async def test_batch_save_returns_empty_list_for_empty_payload():
 @pytest.mark.asyncio
 async def test_submit_feedback_requires_rating_or_flagged():
     """submit_feedback should reject empty updates instead of writing blank state."""
+    from paper_ingestion.models import FeedbackRequest
+
     with pytest.raises(
         HTTPException, match="At least one of 'rating' or 'flagged' must be provided."
     ):
         await papers.submit_feedback.__wrapped__(
             SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=MagicMock()))),
             paper_id=7,
-            rating=None,
-            flagged=None,
+            feedback=FeedbackRequest(rating=None, flagged=None),
         )
 
 
 @pytest.mark.asyncio
 async def test_submit_feedback_maps_foreign_key_violation_to_404():
     """submit_feedback should convert FK errors into a stable 404."""
+    from paper_ingestion.models import FeedbackRequest
+
     conn = AsyncMock()
     conn.execute.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     pool, _ = _make_pool_and_conn()
@@ -273,8 +277,7 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
         await papers.submit_feedback.__wrapped__(
             request,
             paper_id=7,
-            rating=5,
-            flagged=None,
+            feedback=FeedbackRequest(rating=5, flagged=None),
             db_pool=pool,
         )
 

@@ -216,7 +216,7 @@ async def test_create_pairing_is_transactional(app_fixture):
 async def test_create_pairing_rate_limited():
     """11th request within a minute from the same IP must receive HTTP 429."""
     from jarvis_common import verify_api_key
-    from jarvis_common.ratelimit import create_limiter
+    from jarvis_common.http_rate_limiter import create_limiter
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 

@@ -58,7 +58,7 @@ class CrossPaperRagNoResults:
 # ---------------------------------------------------------------------------
 
 
-async def _sse_error_stream(message: str):
+async def sse_error_stream(message: str):
     """Yield a single SSE error event followed by [DONE] sentinel."""
     yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
     yield "data: [DONE]\n\n"
@@ -69,7 +69,7 @@ async def _sse_error_stream(message: str):
 # ---------------------------------------------------------------------------
 
 
-async def _prepare_single_paper_rag(
+async def prepare_single_paper_rag(
     embedder: "Embedder",
     db_pool: asyncpg.Pool,
     paper_id: int,
@@ -131,7 +131,7 @@ async def _prepare_single_paper_rag(
     return messages, sources_list
 
 
-async def _prepare_cross_paper_rag(
+async def prepare_cross_paper_rag(
     embedder: "Embedder",
     db_pool: asyncpg.Pool,
     body: CrossPaperAskRequest,
@@ -281,7 +281,7 @@ async def _prepare_cross_paper_rag(
 # ---------------------------------------------------------------------------
 
 
-async def _stream_rag_events(
+async def stream_rag_events(
     http_client: httpx.AsyncClient,
     messages: list[dict],
     sources_list: list[dict],
@@ -330,7 +330,7 @@ async def _stream_rag_events(
             "An error occurred while generating the response. Please try again later.",
         )
         logger.error("LLM streaming failed: %r", e, exc_info=True)
-        async for event in _sse_error_stream(msg):
+        async for event in sse_error_stream(msg):
             yield event
         return
     yield f"data: {json.dumps({'type': 'sources', 'sources': sources_list})}\n\n"

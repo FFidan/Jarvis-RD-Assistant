@@ -11,11 +11,19 @@ import logging
 from datetime import UTC, datetime
 
 import asyncpg
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import ErrorResponse
 from jarvis_common import jobs as jobs_lib
 from starlette.responses import StreamingResponse
 
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import (
+    get_db_pool,
+    get_http_client,
+    get_optional_embedder,
+    get_optional_verifier,
+    limiter,
+)
 from paper_ingestion.extraction import extract_fields_for_paper
 from paper_ingestion.models import (
     BatchExtractionRequest,
@@ -31,7 +39,15 @@ from paper_ingestion.models import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api", tags=["extractions"])
+router = APIRouter(
+    prefix="/api",
+    tags=["extractions"],
+    responses={
+        400: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse},
+    },
+)
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +193,13 @@ async def update_template(
 
 @router.delete("/extraction-templates/{template_id}", status_code=204)
 @limiter.limit("30/minute")
-async def delete_template(request: Request, template_id: int) -> None:
+async def delete_template(
+    request: Request,
+    template_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
     """Delete an extraction template (cascades to extractions)."""
-    async with request.app.state.db_pool.acquire() as conn:
+    async with db_pool.acquire() as conn:
         try:
             result = await conn.execute(
                 "DELETE FROM extraction_templates WHERE id = $1", template_id
@@ -200,16 +220,19 @@ async def delete_template(request: Request, template_id: int) -> None:
 @router.post("/papers/{paper_id}/extract", response_model=ExtractionResponse)
 @limiter.limit("5/minute")
 async def extract_paper(
-    request: Request, paper_id: int, body: ExtractionRequest
+    request: Request,
+    paper_id: int,
+    body: ExtractionRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    embedder=Depends(get_optional_embedder),
+    verifier=Depends(get_optional_verifier),
 ) -> ExtractionResponse:
     """Extract structured fields from a single paper."""
-    embedder = getattr(request.app.state, "embedder", None)
-    verifier = getattr(request.app.state, "verifier", None)
-
     try:
         return await extract_fields_for_paper(
-            request.app.state.http_client,
-            request.app.state.db_pool,
+            http_client,
+            db_pool,
             paper_id,
             body.template_id,
             embedder=embedder,

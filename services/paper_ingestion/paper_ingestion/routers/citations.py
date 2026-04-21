@@ -9,10 +9,9 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
-from jarvis_common.auth import verify_api_key
 
 from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import get_db_pool, get_s2_source, limiter
 from paper_ingestion.models import (
     BatchCitationFetchResponse,
     CitationFetchResponse,
@@ -23,24 +22,7 @@ from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSourc
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/api/citations",
-    tags=["citations"],
-    dependencies=[Depends(verify_api_key)],
-)
-
-
-def _get_s2_source(request: Request) -> SemanticScholarSource:
-    """Get S2 source from app state, or create a default one."""
-    s2 = getattr(request.app.state, "s2_source", None)
-    if s2 is not None:
-        return s2
-    # Fallback: check registered sources
-    sources = getattr(request.app.state, "sources", {})
-    s2 = sources.get("semantic_scholar")
-    if s2 is not None:
-        return s2
-    raise HTTPException(503, "Semantic Scholar source not available")
+router = APIRouter(prefix="/api/citations", tags=["citations"])
 
 
 @router.get("/graph", response_model=CitationGraphResponse)
@@ -62,6 +44,7 @@ async def batch_fetch_citations(
     request: Request,
     background_tasks: BackgroundTasks,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    s2_source: SemanticScholarSource = Depends(get_s2_source),
 ):
     """Queue citation fetching for all papers without citations_fetched_at."""
     async with db_pool.acquire() as conn:
@@ -77,10 +60,6 @@ async def batch_fetch_citations(
 
     if not paper_ids:
         return {"queued": 0, "message": "No papers need citation fetching"}
-
-    # Capture references before creating the closure — after the response is
-    # sent the request object becomes invalid (PI-003).
-    s2_source = _get_s2_source(request)
 
     async def _fetch_batch(
         pool: asyncpg.Pool, source: SemanticScholarSource, pids: list[int]
@@ -101,9 +80,9 @@ async def fetch_citations_for_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    s2_source: SemanticScholarSource = Depends(get_s2_source),
 ) -> CitationFetchResponse:
     """Trigger citation fetch from S2 for a single paper."""
-    s2_source = _get_s2_source(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:

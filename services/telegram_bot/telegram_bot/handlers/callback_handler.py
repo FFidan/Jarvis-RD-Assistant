@@ -13,7 +13,7 @@ from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot.formatters import format_paper_detail, format_project_status
-from telegram_bot.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
+from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.review_handler import review_start
 from telegram_bot.project_manager import ProjectManager
@@ -28,18 +28,7 @@ logger = logging.getLogger(__name__)
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper_detail_{id}`` — show detailed paper view.
-
-    Fetches the paper from the paper_ingestion API and sends a
-    detailed formatted message.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``paper_detail_{id}`` — fetch paper from paper_ingestion API and show detail."""
     query = update.callback_query
     if query is None:
         return
@@ -47,16 +36,16 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not isinstance(query.message, Message):
         return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return
 
     if not query.data or not (match := re.search(r"paper_detail_(\d+)", query.data)):
         return
     paper_id = int(match.group(1))
 
-    http = _get_http(context)
+    http = get_http(context)
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}",
@@ -77,17 +66,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper.
-
-    Upserts a row in ``paper_user_state`` with status ``'starred'``.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper."""
     query = update.callback_query
     if query is None:
         return
@@ -95,16 +74,16 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
     if not isinstance(query.message, Message):
         return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return
 
     if not query.data or not (match := re.search(r"paper_bookmark_(\d+)", query.data)):
         return
     paper_id = int(match.group(1))
 
-    db = _get_db(context)
+    db = get_db(context)
     try:
         await db.execute(
             "INSERT INTO paper_user_state (paper_id, status) "
@@ -120,18 +99,7 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``project_detail_{id}`` — show detailed project status.
-
-    Queries the project record together with its tasks and milestones,
-    then formats via ``format_project_status``.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``project_detail_{id}`` — query project, tasks, and milestones then reply."""
     query = update.callback_query
     if query is None:
         return
@@ -139,16 +107,16 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     if not isinstance(query.message, Message):
         return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return
 
     if not query.data or not (match := re.search(r"project_detail_(\d+)", query.data)):
         return
     project_id = int(match.group(1))
 
-    db = _get_db(context)
+    db = get_db(context)
 
     project_row = await db.fetchrow(
         "SELECT id, name, status, description, deadline FROM projects WHERE id = $1",
@@ -193,9 +161,9 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not isinstance(query.message, Message):
         return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return
 
     # Delegate to review_start by patching the update so it carries a message.
@@ -207,15 +175,7 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``task_done_{id}`` — mark a task as complete.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``task_done_{id}`` — mark a task as complete via ProjectManager."""
     query = update.callback_query
     if query is None:
         return
@@ -223,16 +183,16 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not isinstance(query.message, Message):
         return
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return
 
     if not query.data or not (match := re.search(r"task_done_(\d+)", query.data)):
         return
     task_id = int(match.group(1))
 
-    db = _get_db(context)
+    db = get_db(context)
     pm = ProjectManager(db)
     result = await pm.complete_task(task_id)
 
@@ -261,9 +221,9 @@ async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if query is None:
         return
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         await query.answer()
         return
 
@@ -274,7 +234,7 @@ async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TY
     rating = match.group(1)
     paper_id = int(match.group(2))
 
-    http = _get_http(context)
+    http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key
@@ -300,13 +260,7 @@ async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 def register_callback_handlers(app: Application) -> None:
-    """Register all callback query handlers on the given application.
-
-    Parameters
-    ----------
-    app : Application
-        The ``python-telegram-bot`` Application instance.
-    """
+    """Register all callback query handlers on the given application."""
     app.add_handler(CallbackQueryHandler(paper_detail_callback, pattern=r"^paper_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(paper_bookmark_callback, pattern=r"^paper_bookmark_\d+$"))
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))

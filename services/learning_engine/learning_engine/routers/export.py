@@ -10,10 +10,10 @@ from fastapi.responses import StreamingResponse
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.deps import get_anki_exporter, get_db_pool, limiter
 
-router = APIRouter(tags=["export"])
+router = APIRouter(prefix="/api/export", tags=["export"])
 
 
-@router.get("/api/export/anki/{deck_id}")
+@router.get("/anki/{deck_id}")
 @limiter.limit("10/minute")
 async def export_anki(
     request: Request,

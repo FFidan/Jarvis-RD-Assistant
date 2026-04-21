@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import start_command  # noqa: E402
-from telegram_bot.handlers.helpers import _auth_check  # noqa: E402
+from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E402
 
 _OWNER_CHAT_ID = 777
 

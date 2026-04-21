@@ -37,13 +37,14 @@ async def test_create_job_rejects_disallowed_kind(monkeypatch):
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
-    mock_request.app.state.db_pool = MagicMock()
+    mock_pool = MagicMock()
 
     with pytest.raises(HTTPException) as exc_info:
         await jobs_router.create_job.__wrapped__(
             mock_request,
             body=CreateJobRequest(kind="secret.internal"),
             user_id=None,
+            db_pool=mock_pool,
         )
 
     assert exc_info.value.status_code == 422
@@ -56,16 +57,18 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
-    mock_request.app.state.db_pool = MagicMock()
+    mock_pool = MagicMock()
 
     with patch.object(jobs_router.jobs_lib, "enqueue", AsyncMock(return_value="abc-123")):
         result = await jobs_router.create_job.__wrapped__(
             mock_request,
             body=CreateJobRequest(kind="card.generate"),
             user_id=42,
+            db_pool=mock_pool,
         )
 
-    assert result == {"job_id": "abc-123", "status": "queued"}
+    assert result.job_id == "abc-123"
+    assert result.status == "queued"
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +79,7 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
 @pytest.mark.asyncio
 async def test_get_job_returns_404_when_not_found():
     mock_request = MagicMock()
-    mock_request.app.state.db_pool = MagicMock()
+    mock_pool = MagicMock()
 
     with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc_info:
@@ -84,6 +87,7 @@ async def test_get_job_returns_404_when_not_found():
                 mock_request,
                 job_id="missing-id",
                 user_id=1,
+                db_pool=mock_pool,
             )
 
     assert exc_info.value.status_code == 404
@@ -93,7 +97,7 @@ async def test_get_job_returns_404_when_not_found():
 async def test_get_job_returns_404_for_wrong_owner():
     """A job owned by user 7 is invisible to user 99."""
     mock_request = MagicMock()
-    mock_request.app.state.db_pool = MagicMock()
+    mock_pool = MagicMock()
     row = {"id": "job-1", "user_id": 7, "status": "done", "kind": "card.generate", "payload": {}}
 
     with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
@@ -102,6 +106,7 @@ async def test_get_job_returns_404_for_wrong_owner():
                 mock_request,
                 job_id="job-1",
                 user_id=99,
+                db_pool=mock_pool,
             )
 
     assert exc_info.value.status_code == 404
@@ -115,7 +120,7 @@ async def test_get_job_returns_404_for_wrong_owner():
 @pytest.mark.asyncio
 async def test_list_jobs_passes_status_filter_to_lib():
     mock_request = MagicMock()
-    mock_request.app.state.db_pool = MagicMock()
+    mock_pool = MagicMock()
     rows = [
         {"id": "j1", "status": "queued", "kind": "card.generate", "payload": {}, "user_id": None}
     ]
@@ -127,6 +132,7 @@ async def test_list_jobs_passes_status_filter_to_lib():
             kind=None,
             limit=10,
             user_id=5,
+            db_pool=mock_pool,
         )
 
     mock_list.assert_awaited_once()

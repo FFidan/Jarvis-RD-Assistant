@@ -31,7 +31,7 @@ from learning_engine.models import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["generation"])
+router = APIRouter(prefix="/api/generate", tags=["generation"])
 
 
 # ---------------------------------------------------------------------------
@@ -257,7 +257,7 @@ async def _card_generate_batch_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/generate", status_code=202)
+@router.post("", status_code=202)
 @limiter.limit("5/minute")
 async def generate_cards(
     request: Request,
@@ -277,7 +277,7 @@ async def generate_cards(
     return {"job_id": job_id, "status": "queued"}
 
 
-@router.post("/api/generate/batch", status_code=202, response_model=BatchAcceptedResponse)
+@router.post("/batch", status_code=202, response_model=BatchAcceptedResponse)
 @limiter.limit("2/minute")
 async def batch_generate_cards(
     request: Request,
@@ -301,7 +301,7 @@ async def batch_generate_cards(
     return BatchAcceptedResponse(job_id=job_id, status="queued")
 
 
-@router.get("/api/generate/batch/{job_id}")
+@router.get("/batch/{job_id}")
 @limiter.limit("10/minute")
 async def get_batch_status(
     request: Request,

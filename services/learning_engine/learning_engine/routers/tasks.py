@@ -13,7 +13,7 @@ from learning_engine.models import (
     TaskUpdate,
 )
 
-router = APIRouter(tags=["tasks"])
+router = APIRouter(prefix="/api", tags=["tasks"])
 
 _TASK_ALLOWED_COLUMNS: set[str] = {
     "title",
@@ -34,7 +34,7 @@ _TASK_ALLOWED_COLUMNS: set[str] = {
 _VALID_TASK_STATUSES = frozenset({"todo", "in_progress", "done", "blocked"})
 
 
-@router.get("/api/projects/{project_id}/tasks", response_model=list[TaskResponse])
+@router.get("/projects/{project_id}/tasks", response_model=list[TaskResponse])
 @limiter.limit("60/minute")
 async def list_tasks(
     request: Request,
@@ -77,7 +77,7 @@ async def list_tasks(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/projects/{project_id}/tasks", response_model=TaskResponse, status_code=201)
+@router.post("/projects/{project_id}/tasks", response_model=TaskResponse, status_code=201)
 @limiter.limit("30/minute")
 async def create_task(
     request: Request,
@@ -124,7 +124,7 @@ async def create_task(
 # ---------------------------------------------------------------------------
 
 
-@router.put("/api/tasks/{task_id}", response_model=TaskResponse)
+@router.put("/tasks/{task_id}", response_model=TaskResponse)
 @limiter.limit("30/minute")
 async def update_task(
     request: Request,
@@ -168,7 +168,7 @@ async def update_task(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/api/tasks/{task_id}", status_code=204)
+@router.delete("/tasks/{task_id}", status_code=204)
 @limiter.limit("30/minute")
 async def delete_task(
     request: Request,
@@ -189,7 +189,7 @@ async def delete_task(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/api/tasks/{task_id}/papers", status_code=201, response_model=TaskPaperLinkResponse)
+@router.post("/tasks/{task_id}/papers", status_code=201, response_model=TaskPaperLinkResponse)
 @limiter.limit("30/minute")
 async def link_paper_to_task(
     request: Request,
@@ -225,7 +225,7 @@ async def link_paper_to_task(
 # ---------------------------------------------------------------------------
 
 
-@router.delete("/api/tasks/{task_id}/papers/{paper_id}", status_code=204)
+@router.delete("/tasks/{task_id}/papers/{paper_id}", status_code=204)
 @limiter.limit("30/minute")
 async def unlink_paper_from_task(
     request: Request,

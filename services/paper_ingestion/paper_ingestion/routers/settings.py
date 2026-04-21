@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
 from pydantic import BaseModel
 
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
 from paper_ingestion.models import (
     ConfigEntry,
     NudgeResponse,
@@ -163,6 +163,7 @@ async def set_config(
     key: str,
     body: ConfigEntry,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    scheduler=Depends(get_scheduler),
 ) -> ConfigEntry:
     if key not in _ALLOWED_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
@@ -209,7 +210,6 @@ async def set_config(
             await reload_litellm()
     if key == "pulse.cron":
         try:
-            scheduler = getattr(request.app.state, "scheduler", None)
             if scheduler is not None:
                 scheduler.reschedule_job(
                     "pulse_overnight",

@@ -15,10 +15,10 @@ from paper_ingestion.models import (
 )
 
 logger = logging.getLogger(__name__)
-router = APIRouter(tags=["priority"])
+router = APIRouter(prefix="/api", tags=["priority"])
 
 
-@router.post("/api/papers/{paper_id}/priority", response_model=PaperPriorityResponse)
+@router.post("/papers/{paper_id}/priority", response_model=PaperPriorityResponse)
 @limiter.limit("60/minute")
 async def compute_paper_priority(
     request: Request,
@@ -64,7 +64,7 @@ async def compute_paper_priority(
     return {"paper_id": paper_id, "priority_score": score, "priority_level": level}
 
 
-@router.post("/api/papers/recompute-priorities", response_model=RecomputePrioritiesResponse)
+@router.post("/papers/recompute-priorities", response_model=RecomputePrioritiesResponse)
 @limiter.limit("5/minute")
 async def recompute_all_priorities(
     request: Request,

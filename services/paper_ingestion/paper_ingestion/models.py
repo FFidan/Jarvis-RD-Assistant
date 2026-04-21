@@ -857,6 +857,17 @@ class RelevanceScoreResponse(BaseModel):
     relevance_score: float
 
 
+class FeedbackRequest(BaseModel):
+    """Body for POST /api/papers/{paper_id}/feedback.
+
+    Both ``rating`` and ``flagged`` are optional but at least one must be
+    provided — the handler enforces this with a 400 response.
+    """
+
+    rating: int | None = Field(default=None, ge=1, le=5)
+    flagged: bool | None = None
+
+
 class FeedbackResponse(BaseModel):
     """Response for POST /api/papers/{paper_id}/feedback."""
 
@@ -1052,3 +1063,47 @@ class PulseRateRequest(BaseModel):
 
     paper_id: int
     rating: Literal["up", "down", "save", "dismiss", "open"]
+
+
+class PulseRateResponse(BaseModel):
+    """Response for POST /api/pulse/rate."""
+
+    status: str
+
+
+class PulseExplainResponse(BaseModel):
+    """Reasoning + signal breakdown for a single Pulse card."""
+
+    card_id: int
+    reasoning: str | None = None
+    signals: dict = {}
+    llm_relevance: float | None = None
+    llm_novelty: float | None = None
+
+
+class PulseDebugTopicEmbedding(BaseModel):
+    key: str
+    dim: int | None = None
+    ok: bool
+    non_null: bool
+
+
+class PulseDebugTopCard(BaseModel):
+    card_id: int
+    paper_id: int
+    title: str | None = None
+    signals: dict = {}
+    final_score: float
+    llm_relevance: float | None = None
+    llm_novelty: float | None = None
+
+
+class PulseDebugResponse(BaseModel):
+    """Diagnostics payload for the latest Pulse deck (GET /api/pulse/debug)."""
+
+    deck_date: str
+    card_count: int
+    degraded_reason: str | None = None
+    source_counts: dict = {}
+    topic_embeddings: list[PulseDebugTopicEmbedding] = []
+    top_cards: list[PulseDebugTopCard] = []

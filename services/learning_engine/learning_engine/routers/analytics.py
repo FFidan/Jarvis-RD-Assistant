@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ActivityItem, LLMCostItem, RetentionItem, ReviewDistributionItem
 
-router = APIRouter(tags=["analytics"])
+router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
 
 # ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ router = APIRouter(tags=["analytics"])
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/analytics/activity", response_model=list[ActivityItem])
+@router.get("/activity", response_model=list[ActivityItem])
 @limiter.limit("60/minute")
 async def get_activity(
     request: Request,
@@ -39,7 +39,7 @@ async def get_activity(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/analytics/reviews", response_model=list[ReviewDistributionItem])
+@router.get("/reviews", response_model=list[ReviewDistributionItem])
 @limiter.limit("60/minute")
 async def get_reviews(
     request: Request,
@@ -65,7 +65,7 @@ async def get_reviews(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/analytics/retention", response_model=list[RetentionItem])
+@router.get("/retention", response_model=list[RetentionItem])
 @limiter.limit("60/minute")
 async def get_retention(
     request: Request,
@@ -98,7 +98,7 @@ async def get_retention(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/analytics/llm-cost", response_model=list[LLMCostItem])
+@router.get("/llm-cost", response_model=list[LLMCostItem])
 @limiter.limit("60/minute")
 async def get_llm_cost(
     request: Request,

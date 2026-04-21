@@ -14,7 +14,7 @@ from telegram_bot.formatters import (
     format_review_stats,
 )
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import _get_config, _get_db, _get_http
+from telegram_bot.handlers.helpers import get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -35,23 +35,15 @@ def _paper_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/papers [query]`` — search or list recent papers.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/papers [query]`` — search paper_ingestion API or list 10 most recent papers."""
     if update.message is None:
         return
     query = (" ".join(context.args) if context.args else "")[:500]
 
     if query:
         # Search via paper_ingestion API
-        http = _get_http(context)
-        config = _get_config(context)
+        http = get_http(context)
+        config = get_config(context)
         try:
             resp = await http.post(
                 f"{config.paper_ingestion_url}/api/search",
@@ -69,7 +61,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             return
     else:
         # List recent papers from DB
-        db = _get_db(context)
+        db = get_db(context)
         rows = await db.fetch(
             "SELECT p.id, p.title, p.authors, p.published_date, p.source_type, p.url, "
             "ps.summary_brief "
@@ -99,19 +91,11 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/stats`` — show learning statistics.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/stats`` — fetch and display learning statistics from the learning engine."""
     if update.message is None:
         return
-    http = _get_http(context)
-    config = _get_config(context)
+    http = get_http(context)
+    config = get_config(context)
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/stats",
@@ -130,23 +114,12 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 @auth_required
 @rate_limit(max_calls=3, window_seconds=60)
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/briefing`` — composite morning briefing.
-
-    Gathers new paper count (24h), due cards, in-progress tasks,
-    and upcoming milestones (7 days).
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-    """
+    """Handle ``/briefing`` — composite morning briefing (papers, cards, tasks, milestones)."""
     if update.message is None:
         return
-    db = _get_db(context)
-    http = _get_http(context)
-    config = _get_config(context)
+    db = get_db(context)
+    http = get_http(context)
+    config = get_config(context)
 
     # New papers in last 24 hours
     since = datetime.now(UTC) - timedelta(hours=24)
@@ -193,7 +166,7 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Handle ``/next`` — recommend the next paper to read."""
     if update.message is None:
         return
-    db = _get_db(context)
+    db = get_db(context)
     from telegram_bot.formatters import escape
 
     row = await db.fetchrow(

@@ -7,20 +7,16 @@ import os
 import time
 from typing import Any
 
+import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, Request
-from jarvis_common import verify_api_key
 from pydantic import BaseModel
 
-from paper_ingestion.deps import limiter
+from paper_ingestion.deps import get_db_pool, limiter
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(
-    prefix="/api/system",
-    tags=["system"],
-    dependencies=[Depends(verify_api_key)],
-)
+router = APIRouter(prefix="/api/system", tags=["system"])
 
 # Ollama models expected after first-run provisioning. We match by name prefix
 # so either "mistral-nemo" or "mistral-nemo:latest" counts as installed.
@@ -136,10 +132,11 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
 
 @router.get("/setup-status", response_model=SetupStatus)
 @limiter.limit("30/minute")
-async def get_setup_status(request: Request) -> SetupStatus:
+async def get_setup_status(
+    request: Request,
+    pool: asyncpg.Pool = Depends(get_db_pool),
+) -> SetupStatus:
     """Return a point-in-time snapshot of setup wizard readiness signals."""
-    pool = request.app.state.db_pool
-
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT key, value FROM user_config WHERE key = ANY($1::text[])",

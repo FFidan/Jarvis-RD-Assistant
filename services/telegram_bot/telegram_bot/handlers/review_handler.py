@@ -19,7 +19,7 @@ from telegram.ext import (
 )
 
 from telegram_bot.formatters import format_card_back, format_card_front
-from telegram_bot.handlers.helpers import _auth_check, _get_config, _get_db, _get_http
+from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,9 @@ RATING_LABELS = {1: "Again", 2: "Hard", 3: "Good", 4: "Easy"}
 
 
 async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
-    """Fetch the next due card from the learning engine.
-
-    Returns
-    -------
-    dict or None
-        Card dict if available, ``None`` otherwise.
-    """
-    http = _get_http(context)
-    config = _get_config(context)
+    """Fetch the next due card from the learning engine; returns None when none are due."""
+    http = get_http(context)
+    config = get_config(context)
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/review/next",
@@ -89,26 +83,13 @@ def _rating_keyboard() -> InlineKeyboardMarkup:
 
 
 async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle ``/review`` — begin a flashcard review session.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-
-    Returns
-    -------
-    int
-        Next conversation state, or ``ConversationHandler.END``.
-    """
+    """Handle ``/review`` — begin a flashcard review session."""
     if update.message is None or context.user_data is None:
         return ConversationHandler.END
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     context.user_data["cards_reviewed"] = 0
@@ -131,28 +112,15 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle 'Show Answer' button — reveal the card back.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-
-    Returns
-    -------
-    int
-        Next conversation state.
-    """
+    """Handle 'Show Answer' button — edit the message to reveal the card back."""
     query = update.callback_query
     if query is None or context.user_data is None:
         return ConversationHandler.END
     await query.answer()
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     card = context.user_data.get("current_card")
@@ -173,28 +141,15 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 
 async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle rating callback — submit rating and fetch next card.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-
-    Returns
-    -------
-    int
-        Next conversation state, or ``ConversationHandler.END``.
-    """
+    """Handle rating callback — POST rating to learning engine then fetch and show next card."""
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return ConversationHandler.END
     await query.answer()
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     rating = int(query.data.split("_")[1])
@@ -213,7 +168,7 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ConversationHandler.END
 
     # Submit rating to learning engine
-    http = _get_http(context)
+    http = get_http(context)
     next_review_str = "unknown"
     review_ok = True
     try:
@@ -264,26 +219,13 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle ``/cancel`` — end the review session early.
-
-    Parameters
-    ----------
-    update : Update
-        Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
-
-    Returns
-    -------
-    int
-        ``ConversationHandler.END``.
-    """
+    """Handle ``/cancel`` — end the review session early and report cards reviewed."""
     if update.message is None or context.user_data is None:
         return ConversationHandler.END
 
-    config = _get_config(context)
-    db_pool = _get_db(context)
-    if not await _auth_check(update, config, db_pool):
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
 
     reviewed = context.user_data.get("cards_reviewed", 0)
@@ -303,13 +245,7 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 
 def get_review_conversation_handler() -> ConversationHandler:
-    """Build and return the review ``ConversationHandler``.
-
-    Returns
-    -------
-    ConversationHandler
-        Ready-to-register conversation handler for flashcard review.
-    """
+    """Build and return the review ``ConversationHandler`` for flashcard sessions."""
     return ConversationHandler(
         entry_points=[
             CommandHandler("review", review_start),
