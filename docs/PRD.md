@@ -181,7 +181,6 @@ Features shipped in v1 that form the foundation Pulse and Weekly Summary build o
 **Out of scope:**
 - Full-text PDF annotation
 - Manuscript drafting
-- Reference manager integration (Zotero, Mendeley)
 
 ### 3.2 Learning Engine
 
@@ -262,6 +261,24 @@ These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent au
 - **Local-paper analyze fix**: locally-uploaded PDFs skip the download step in "Analyze Paper" instead of erroring with "no PDF URL".
 - **Generate Cards error link**: "no processed chunks" error in Generate Cards is now a clickable link to Process PDF.
 - **Sidebar label**: "Feed" renamed to "Research Feed" throughout navigation.
+
+### 3.5 Zotero Integration
+
+JARVIS integrates with Zotero as the citation management layer.
+
+**Phase 1 — JARVIS → Zotero push:**
+- Auto-push on star: when a paper is starred AND linked to a project, enqueue a Zotero push job
+- Manual push via "Send to Zotero" button on Paper Detail
+- C1 strict scope: only push papers linked to a project (no "Unsorted" fallback)
+- Attach PDF when available
+- Match JARVIS topics as Zotero tags; DOI dedupe before push; push-once semantics
+- Store Better BibTeX citation key (BBT) via localhost:23119; fall back to Zotero item key if BBT unreachable
+- JARVIS delete does NOT cascade to Zotero
+
+**Phase 2 — Zotero → JARVIS sync:**
+- Hourly poll of Zotero library (incremental via `?since=<version>`)
+- Papers clipped via browser extension auto-ingest into JARVIS
+- DOI-based deduplication with existing JARVIS papers
 
 ### My Day — Daily Productivity Command Center
 
@@ -512,7 +529,14 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 - Metadata-aware embeddings (PaperQA2 pattern) fusing chunk text with paper-level metadata during indexing.
 - Auto-populating author watchlist from starred papers.
 
-### 8.6 Inspiration and Prior Art
+### 8.6 Zotero Roadmap
+
+- Group library support (`library_type="group"`)
+- Zotero annotations import (PDF highlights/notes → JARVIS notes)
+- Mendeley integration (analogous design)
+- API key encryption at rest in user_config
+
+### 8.7 Inspiration and Prior Art
 
 JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-source and public research tools. These are credited for their intellectual contribution; no code is copied.
 

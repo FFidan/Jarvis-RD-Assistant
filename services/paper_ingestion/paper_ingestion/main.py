@@ -173,6 +173,7 @@ async def lifespan(app: FastAPI):
     importlib.import_module("paper_ingestion.paper_jobs")
     importlib.import_module("paper_ingestion.extraction_jobs")
     importlib.import_module("paper_ingestion.pulse.job")
+    importlib.import_module("paper_ingestion.integrations.zotero_service")
 
     _kinds_paper_ingestion: set[str] = {
         "pulse.generate",
@@ -187,6 +188,8 @@ async def lifespan(app: FastAPI):
         "extraction.batch",
         "citations.batch_fetch",
         "digest.weekly",
+        "zotero.push",
+        "zotero.resync",
     }
     _jobs_stop = asyncio.Event()
     app.state.jobs_worker_stop = _jobs_stop

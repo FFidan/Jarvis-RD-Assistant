@@ -130,6 +130,12 @@ The following APIs are integrated in the Phase 1 Discovery & Pulse subsystem (se
 |-----|---------|-------|
 | [CORE API](https://core.ac.uk) | Secondary PDF fallback source (400M+ scholarly resources) | Phase 2 |
 
+**Phase D additions (Zotero integration):**
+
+| API | Base URL | Required? | Purpose |
+|-----|----------|-----------|---------|
+| [Zotero Web API](https://www.zotero.org/support/dev/web_api/v3/start) | `https://api.zotero.org` | optional | citation management push+sync |
+
 **Explicitly NOT integrated as Pulse sources:**
 
 - **[Consensus](https://consensus.app)** — wrong shape for Pulse polling (it is a synthesis engine, not a date-range discovery API) and the free tier is too limited for bulk polling. Deferred to Phase 3 as a separate "Ask the Literature" feature via a documented plugin interface.
@@ -211,6 +217,14 @@ The following environment variables are wired for the Phase 1 Discovery & Pulse 
 | `PUBMED_API_KEY` | `` | Optional free NCBI API key; upgrades PubMed rate limit from 3 to 10 requests per second. |
 | `UNPAYWALL_EMAIL` | `` | Any email address; required by Unpaywall's ToS to use their free PDF resolution API. |
 
+### Zotero integration additions (Phase D)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `ZOTERO_API_KEY` | `` | Zotero Web API key (Settings → Integrations → Zotero) |
+| `ZOTERO_USER_ID` | `` | Zotero user/library ID |
+| `ZOTERO_LIBRARY_TYPE` | `user` | `"user"` or `"group"` |
+
 Note:
 - the table above records intended configuration knobs. During stabilization,
   agents and operators should verify whether an env var is actually consumed by
@@ -218,7 +232,7 @@ Note:
 
 ## Database Migrations
 
-23 migrations currently applied in `db/migrations/` (001-023). Fresh installs get all tables via `db/init.sql`.
+31 migrations currently applied in `db/migrations/` (001-031). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/app/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
