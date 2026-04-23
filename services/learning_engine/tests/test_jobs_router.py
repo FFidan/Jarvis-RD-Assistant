@@ -140,3 +140,130 @@ async def test_list_jobs_passes_status_filter_to_lib():
     call_kwargs = mock_list.await_args.kwargs
     assert call_kwargs["status"] == "queued"
     assert len(result) == 1
+
+
+# ---------------------------------------------------------------------------
+# LE-001: CreateJobRequest payload default — no shared mutable state
+# ---------------------------------------------------------------------------
+
+
+def test_create_job_request_default_payload_is_empty_dict():
+    """Default payload must be {} and not shared across instances."""
+    req = CreateJobRequest(kind="card.generate")
+    assert req.payload == {}
+
+
+def test_create_job_request_payload_not_shared_between_instances():
+    """Mutating one instance's payload must not affect another (no mutable default)."""
+    req_a = CreateJobRequest(kind="card.generate")
+    req_b = CreateJobRequest(kind="card.generate")
+    req_a.payload["injected"] = True
+    assert "injected" not in req_b.payload, (
+        "Mutable default detected: req_b.payload was mutated via req_a"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LE-002: ownership check — str vs int normalisation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_job_str_user_id_row_matches_int_caller():
+    """Row user_id stored as str '1' must match int caller user_id=1 (LE-002 fix)."""
+    mock_request = MagicMock()
+    mock_pool = MagicMock()
+    # asyncpg returns UUID/user_id columns as str; simulate that here
+    row = {
+        "id": "job-str",
+        "user_id": "1",  # str from DB
+        "status": "queued",
+        "kind": "card.generate",
+        "payload": {},
+    }
+
+    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+        # user_id=1 (int) should match row["user_id"]="1" (str) — should NOT raise
+        result = await jobs_router.get_job.__wrapped__(
+            mock_request,
+            job_id="job-str",
+            user_id=1,
+            db_pool=mock_pool,
+        )
+
+    assert result["id"] == "job-str"
+
+
+@pytest.mark.asyncio
+async def test_get_job_str_user_id_row_rejects_wrong_int_caller():
+    """Row user_id='1' (str) must reject int caller user_id=2 (LE-002 fix)."""
+    mock_request = MagicMock()
+    mock_pool = MagicMock()
+    row = {
+        "id": "job-str2",
+        "user_id": "1",  # str from DB
+        "status": "queued",
+        "kind": "card.generate",
+        "payload": {},
+    }
+
+    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+        with pytest.raises(HTTPException) as exc_info:
+            await jobs_router.get_job.__wrapped__(
+                mock_request,
+                job_id="job-str2",
+                user_id=2,
+                db_pool=mock_pool,
+            )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_str_user_id_row_matches_int_caller():
+    """cancel_job: row user_id='5' (str) must allow int caller user_id=5 (LE-002 fix)."""
+    mock_request = MagicMock()
+    mock_pool = MagicMock()
+    row = {
+        "id": "job-cancel",
+        "user_id": "5",  # str from DB
+        "status": "queued",
+        "kind": "card.generate",
+        "payload": {},
+    }
+
+    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+        with patch.object(jobs_router.jobs_lib, "request_cancel", AsyncMock()):
+            result = await jobs_router.cancel_job.__wrapped__(
+                mock_request,
+                job_id="job-cancel",
+                user_id=5,
+                db_pool=mock_pool,
+            )
+
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_str_user_id_row_rejects_wrong_int_caller():
+    """cancel_job: row user_id='5' (str) must reject int caller user_id=9 (LE-002 fix)."""
+    mock_request = MagicMock()
+    mock_pool = MagicMock()
+    row = {
+        "id": "job-cancel2",
+        "user_id": "5",  # str from DB
+        "status": "queued",
+        "kind": "card.generate",
+        "payload": {},
+    }
+
+    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+        with pytest.raises(HTTPException) as exc_info:
+            await jobs_router.cancel_job.__wrapped__(
+                mock_request,
+                job_id="job-cancel2",
+                user_id=9,
+                db_pool=mock_pool,
+            )
+
+    assert exc_info.value.status_code == 404

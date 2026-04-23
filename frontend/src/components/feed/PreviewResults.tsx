@@ -1,7 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import type { SearchPreviewResult } from '@/types';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import {
   Select,
@@ -10,16 +10,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { formatAuthors, formatDate } from '@/lib/utils';
 import { Save, X, Loader2 } from 'lucide-react';
-
-const SOURCE_LABELS: Record<string, string> = {
-  arxiv: 'arXiv',
-  semantic_scholar: 'S2',
-  openalex: 'OA',
-  pubmed: 'PubMed',
-  local: 'Local',
-};
+import { SearchPreviewDrawer } from '@/components/feed/SearchPreviewDrawer';
+import { SearchPreviewRow } from '@/components/feed/SearchPreviewRow';
 
 interface PreviewResultsProps {
   papers: SearchPreviewResult[];
@@ -29,8 +22,21 @@ interface PreviewResultsProps {
 }
 
 export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewResultsProps) {
-  const [selected, setSelected] = useState<Set<string>>(() => new Set(papers.map((p) => p.external_id)));
+  const navigate = useNavigate();
+  const saveablePapers = useMemo(
+    () => papers.filter((paper) => !paper.library_match?.paper_id),
+    [papers],
+  );
+  const saveableIds = useMemo(
+    () => new Set(saveablePapers.map((paper) => paper.external_id)),
+    [saveablePapers],
+  );
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(saveablePapers.map((p) => p.external_id)),
+  );
   const [sortField, setSortField] = useState<'relevance' | 'date' | 'title' | 'citations'>('relevance');
+  const [previewPaper, setPreviewPaper] = useState<SearchPreviewResult | null>(null);
+  const previousPaperIdsRef = useRef<string[] | null>(null);
 
   const sortedPapers = useMemo(() => {
     const copy = [...papers];
@@ -46,12 +52,48 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
     }
   }, [papers, sortField]);
 
-  // Reset selection when papers change
+  // Preserve partial selection across in-place save reconciliation. A fresh
+  // result set initializes all saveable rows, but an update to the same result
+  // set only removes rows that became non-saveable.
   useEffect(() => {
-    setSelected(new Set(papers.map((p) => p.external_id)));
+    const nextPaperIds = papers.map((paper) => paper.external_id);
+    const previousPaperIds = previousPaperIdsRef.current;
+    const nextSaveableIds = new Set(saveablePapers.map((paper) => paper.external_id));
+    const sameResultSet =
+      previousPaperIds !== null &&
+      previousPaperIds.length === nextPaperIds.length &&
+      previousPaperIds.every((id) => nextPaperIds.includes(id));
+
+    if (!sameResultSet) {
+      setSelected(new Set(saveablePapers.map((paper) => paper.external_id)));
+    } else {
+      setSelected((current) => {
+        const next = new Set<string>();
+        current.forEach((id) => {
+          if (nextSaveableIds.has(id)) {
+            next.add(id);
+          }
+        });
+        return next;
+      });
+    }
+
+    previousPaperIdsRef.current = nextPaperIds;
+  }, [papers, saveablePapers]);
+
+  // Keep the preview drawer anchored to the current result set so stale paper
+  // objects do not survive a new search.
+  useEffect(() => {
+    setPreviewPaper((current) => {
+      if (!current) return null;
+      return papers.find((paper) => paper.external_id === current.external_id) ?? null;
+    });
   }, [papers]);
 
   function toggleSelection(id: string) {
+    if (!saveableIds.has(id)) {
+      return;
+    }
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -63,7 +105,18 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
     });
   }
 
-  const selectedCount = selected.size;
+  function openPaper(paper: SearchPreviewResult) {
+    if (paper.library_match?.paper_id) {
+      navigate(`/paper/${paper.library_match.paper_id}`);
+      return;
+    }
+    setPreviewPaper(paper);
+  }
+
+  const selectedPapers = saveablePapers.filter((paper) => selected.has(paper.external_id));
+  const selectedCount = selectedPapers.length;
+  const hasSaveablePapers = saveablePapers.length > 0;
+  const hasLibraryMatches = saveablePapers.length !== papers.length;
 
   return (
     <div className="space-y-4">
@@ -90,47 +143,35 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
       </div>
 
       <p className="text-sm text-muted-foreground mb-2">{papers.length} results</p>
+      <p className="text-sm text-muted-foreground">
+        {hasSaveablePapers
+          ? 'Library-matched results are already in your library and excluded from save actions.'
+          : 'All results in this preview are already in your library.'}
+      </p>
 
       <div className="space-y-2">
-        {sortedPapers.map((paper, i) => (
-          <div
-            key={paper.external_id || `paper-${i}`}
-            className="flex items-start gap-3 rounded-lg border p-3 hover:bg-accent/50"
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(paper.external_id)}
-              onChange={() => toggleSelection(paper.external_id)}
-              className="mt-1 h-4 w-4 rounded border-gray-300"
-              aria-label={`Select ${paper.title || 'paper'}`}
+        {sortedPapers.map((paper, i) => {
+          const isMatched = Boolean(paper.library_match?.paper_id);
+
+          return (
+            <SearchPreviewRow
+              key={paper.external_id || `paper-${i}`}
+              paper={paper}
+              selected={selected.has(paper.external_id)}
+              isSelectedDisabled={isMatched}
+              onToggleSelection={() => toggleSelection(paper.external_id)}
+              onPrimaryClick={() => openPaper(paper)}
+              onSavePaper={() => onSave([paper])}
+              isSaving={isSaving}
             />
-            <div className="min-w-0 flex-1">
-              <div className="flex items-start gap-2 flex-wrap">
-                <p className="font-medium leading-tight flex-1">{paper.title || 'Untitled'}</p>
-                {paper.source_type && (
-                  <Badge variant="outline" className="shrink-0 text-xs">
-                    {SOURCE_LABELS[paper.source_type] ?? paper.source_type}
-                  </Badge>
-                )}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {formatAuthors(paper.authors)} &middot; {formatDate(paper.published_date)}
-              </p>
-              {paper.abstract && (
-                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                  {paper.abstract}
-                </p>
-              )}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       <div className="flex items-center gap-2">
         <Button
           onClick={() => {
-            const toSave = papers.filter((p) => selected.has(p.external_id));
-            onSave(toSave);
+            onSave(selectedPapers);
           }}
           disabled={selectedCount === 0 || isSaving}
         >
@@ -143,18 +184,35 @@ export function PreviewResults({ papers, onSave, onClear, isSaving }: PreviewRes
         </Button>
         <Button
           variant="outline"
-          onClick={() => onSave(papers)}
-          disabled={isSaving}
+          onClick={() => onSave(saveablePapers)}
+          disabled={!hasSaveablePapers || isSaving}
         >
-          Save all
+          Save all unsaved
         </Button>
         <Button variant="ghost" onClick={onClear}>
           <X className="mr-2 h-4 w-4" />
           Clear
         </Button>
       </div>
+      {hasLibraryMatches && !hasSaveablePapers && (
+        <p className="text-xs text-muted-foreground">
+          Nothing here is saveable because every result already matches your library.
+        </p>
+      )}
 
       <Separator />
+
+      <SearchPreviewDrawer
+        paper={previewPaper}
+        open={previewPaper !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPreviewPaper(null);
+          }
+        }}
+        onSave={onSave}
+        isSaving={isSaving}
+      />
     </div>
   );
 }

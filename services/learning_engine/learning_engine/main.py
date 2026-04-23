@@ -170,7 +170,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         o.strip()
-        for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+        for o in os.environ.get("CORS_ORIGINS", "https://localhost:3001").split(",")
         if o.strip()
     ],
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

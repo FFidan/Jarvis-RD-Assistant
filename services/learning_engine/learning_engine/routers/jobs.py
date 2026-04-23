@@ -26,7 +26,7 @@ from jarvis_common.jobs import (
     _KEEPALIVE_INTERVAL,
     _MAX_STREAM_SECONDS,
 )
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from learning_engine.deps import get_db_pool, limiter
 
@@ -77,7 +77,7 @@ router = APIRouter(
 
 class CreateJobRequest(BaseModel):
     kind: str
-    payload: dict[str, Any] = {}
+    payload: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("kind")
     @classmethod
@@ -134,7 +134,7 @@ async def get_job(
     row = await jobs_lib.get(db_pool, job_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-    if row.get("user_id") is not None and row["user_id"] != user_id:
+    if row.get("user_id") is not None and str(row["user_id"]) != str(user_id):
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
     return _serialise_row(row)
 
@@ -190,7 +190,7 @@ async def stream_job(
     initial = await jobs_lib.get(pool, job_id)
     if initial is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-    if initial.get("user_id") is not None and initial["user_id"] != user_id:
+    if initial.get("user_id") is not None and str(initial["user_id"]) != str(user_id):
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
     _terminal_statuses = frozenset({"succeeded", "failed", "cancelled"})
@@ -289,7 +289,7 @@ async def cancel_job(
     row = await jobs_lib.get(db_pool, job_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
-    if row.get("user_id") is not None and row["user_id"] != user_id:
+    if row.get("user_id") is not None and str(row["user_id"]) != str(user_id):
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
     await jobs_lib.request_cancel(db_pool, job_id)
     return {"ok": True}

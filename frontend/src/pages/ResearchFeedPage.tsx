@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
   searchPreview,
@@ -9,23 +9,24 @@ import {
   fetchSources,
 } from '@/lib/api';
 import type { SearchFilters } from '@/lib/api';
-import type { PulseDeck as PulseDeckType, SearchPreviewResult, SourceConfig } from '@/types';
+import type {
+  PulseDeck as PulseDeckType,
+  SearchPreviewResult,
+  SearchPreviewSourceError,
+  SourceConfig,
+} from '@/types';
+import { toast } from 'sonner';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { StreamingChat } from '@/components/chat/StreamingChat';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
+import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
+import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { NewTab } from '@/components/feed/NewTab';
 import { LibraryTab } from '@/components/feed/LibraryTab';
 import { PulseDeck } from '@/components/my-day/PulseDeck';
-import { BookOpen, AlertTriangle } from 'lucide-react';
-
-const SOURCE_LABELS: Record<string, string> = {
-  arxiv: 'arXiv',
-  semantic_scholar: 'Semantic Scholar',
-  openalex: 'OpenAlex',
-  pubmed: 'PubMed',
-};
+import { BookOpen } from 'lucide-react';
 
 const VALID_TABS = new Set(['library', 'inbox', 'search', 'ask', 'pulse']);
 
@@ -37,12 +38,12 @@ export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const tabParam = searchParams.get('tab');
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
-  const [degradedSources, setDegradedSources] = useState<string[]>([]);
-  const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [sourceErrors, setSourceErrors] = useState<Record<string, SearchPreviewSourceError>>({});
   const [activeTab, setActiveTab] = useState(
     tabParam && VALID_TABS.has(tabParam) ? tabParam : 'library',
   );
   const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([]);
+  const queryClient = useQueryClient();
 
   // Load enabled external sources to drive the checkbox group
   const { data: allSources } = useQuery<SourceConfig[]>({
@@ -107,26 +108,51 @@ export function ResearchFeedPage() {
     }) => searchPreview(query, sourceTypes, maxResults, filters),
     onSuccess: (data) => {
       setPreviewResults(data.results);
-      setDegradedSources(data.degraded_sources);
-      setSaveMessage(null);
+      setSourceErrors(data.source_errors ?? {});
     },
     onError: () => {
       setPreviewResults([]);
-      setDegradedSources([]);
-      setSaveMessage(null);
+      setSourceErrors({});
     },
   });
 
   const saveMutation = useMutation({
     mutationFn: batchSavePapers,
     onSuccess: (data) => {
-      setSaveMessage({ type: 'success', text: `Saved ${data.length} paper(s) to your library.` });
-      setPreviewResults([]);
-      setActiveTab('library');
-      setSearchParams((prev) => { prev.delete('tab'); return prev; });
+      const savedByExternalId = new Map(
+        data.map((paper) => [paper.external_id, paper.id] as const),
+      );
+
+      setPreviewResults((current) =>
+        current.map((paper) => {
+          const paperId = savedByExternalId.get(paper.external_id);
+          if (!paperId) {
+            return paper;
+          }
+
+          return {
+            ...paper,
+            library_match: paper.library_match
+              ? { ...paper.library_match, paper_id: paperId }
+              : {
+                  paper_id: paperId,
+                  has_project_links: false,
+                  zotero_item_key: null,
+                },
+          };
+        }),
+      );
+      void queryClient.invalidateQueries({ queryKey: ['feed', 'library'] });
+      toast.success(`Saved ${data.length} paper(s) to your library.`);
     },
-    onError: () => {
-      setSaveMessage({ type: 'error', text: 'Save failed. Check service logs.' });
+    onError: (error) => {
+      const message =
+        error instanceof ApiError
+          ? error.detail
+          : error instanceof Error
+            ? error.message
+            : 'Save failed. Check service logs.';
+      toast.error(message);
     },
   });
 
@@ -145,8 +171,7 @@ export function ResearchFeedPage() {
 
   function handleClearPreview() {
     setPreviewResults([]);
-    setDegradedSources([]);
-    setSaveMessage(null);
+    setSourceErrors({});
   }
 
   const searchErrorMessage =
@@ -228,17 +253,7 @@ export function ResearchFeedPage() {
               sourceTypes={selectedSourceTypes}
             />
             {searchErrorMessage && <p className="text-sm text-destructive">{searchErrorMessage}</p>}
-            {degradedSources.length > 0 && (
-              <div className="flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">
-                <AlertTriangle className="h-4 w-4 shrink-0" />
-                <span>Some sources had errors: {degradedSources.map((s) => SOURCE_LABELS[s] ?? s).join(', ')}</span>
-              </div>
-            )}
-            {saveMessage && (
-              <p className={`text-sm ${saveMessage.type === 'success' ? 'text-green-600' : 'text-destructive'}`}>
-                {saveMessage.text}
-              </p>
-            )}
+            <SearchSourceErrors sourceErrors={sourceErrors} />
             {previewResults.length > 0 && (
               <PreviewResults
                 papers={previewResults}

@@ -228,8 +228,8 @@ async def test_generate_cards_endpoint_returns_job_id():
             db_pool=pool,
         )
 
-    assert response["job_id"] == fake_job_id
-    assert response["status"] == "queued"
+    assert response.job_id == fake_job_id
+    assert response.status == "queued"
     mock_enqueue.assert_awaited_once()
     call_kwargs = mock_enqueue.await_args
     assert call_kwargs is not None

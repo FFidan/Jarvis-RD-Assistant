@@ -268,7 +268,7 @@ JARVIS integrates with Zotero as the citation management layer.
 
 **Phase 1 — JARVIS → Zotero push:**
 - Auto-push on star: when a paper is starred AND linked to a project, enqueue a Zotero push job
-- Manual push via "Send to Zotero" button on Paper Detail
+- Manual push via "Send to Zotero" actions on Paper Detail and saved Research Feed search results
 - C1 strict scope: only push papers linked to a project (no "Unsorted" fallback)
 - Attach PDF when available
 - Match JARVIS topics as Zotero tags; DOI dedupe before push; push-once semantics

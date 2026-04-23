@@ -230,17 +230,6 @@ async def get_stats(
             """,
             days,
         )
-    if row is None:
-        return PulseStatsResponse(
-            window_days=days,
-            decks_generated=0,
-            avg_candidates=None,
-            avg_llm_calls=None,
-            avg_duration_s=None,
-            last_run_at=None,
-            last_error=None,
-            degraded_reason=None,
-        )
     return PulseStatsResponse(
         window_days=days,
         decks_generated=int(row["decks_generated"] or 0),

@@ -62,6 +62,13 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         # Setup wizard
         "setup.completed",
         "telegram.owner_chat_id",
+        # Zotero integration
+        "zotero.api_key",
+        "zotero.user_id",
+        "zotero.library_type",
+        "zotero.poll_enabled",
+        "zotero.poll_cron",
+        "zotero.auto_push_on_star",
     }
 )
 
@@ -117,6 +124,25 @@ def _validate_optional_int(v: Any) -> None:
         raise ValueError("value must be an integer or null")
 
 
+def _validate_nonempty_str(v: Any) -> None:
+    if not isinstance(v, str) or not v.strip():
+        raise ValueError("value must be a non-empty string")
+
+
+def _validate_library_type(v: Any) -> None:
+    if v not in ("user", "group"):
+        raise ValueError("zotero.library_type must be 'user' or 'group'")
+
+
+def _validate_zotero_cron(v: Any) -> None:
+    if not isinstance(v, str):
+        raise ValueError("zotero.poll_cron must be a string")
+    try:
+        CronTrigger.from_crontab(v)
+    except Exception as exc:
+        raise ValueError(f"invalid cron expression: {exc}") from exc
+
+
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.cron": _validate_cron,
     "pulse.weights": _validate_pulse_weights,
@@ -125,6 +151,13 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.enabled": _validate_bool,
     "setup.completed": _validate_bool,
     "telegram.owner_chat_id": _validate_optional_int,
+    # Zotero
+    "zotero.api_key": _validate_nonempty_str,
+    "zotero.user_id": _validate_nonempty_str,
+    "zotero.library_type": _validate_library_type,
+    "zotero.poll_enabled": _validate_bool,
+    "zotero.poll_cron": _validate_zotero_cron,
+    "zotero.auto_push_on_star": _validate_bool,
 }
 
 

@@ -68,12 +68,12 @@ async def push_paper_to_zotero(
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
             """
-            SELECT p.id, p.title, p.authors, p.doi, p.url, p.abstract,
+            SELECT p.id, p.title, p.authors, p.metadata->>'doi' AS doi, p.url, p.abstract,
                    p.pdf_local_path, p.zotero_item_key,
                    array_agg(DISTINCT pp.project_id)
                        FILTER (WHERE pp.project_id IS NOT NULL) AS project_ids
             FROM papers p
-            LEFT JOIN paper_projects pp ON pp.paper_id = p.id
+            LEFT JOIN project_papers pp ON pp.paper_id = p.id
             WHERE p.id = $1
             GROUP BY p.id
             """,
@@ -265,7 +265,7 @@ async def poll_zotero_library(
     # Read last known library version (persisted as a JSON number in user_config).
     last_version: int = 0
     raw_version = cfg.get("last_library_version")
-    if isinstance(raw_version, int | float):
+    if raw_version is not None:
         last_version = int(raw_version)
 
     client = ZoteroClient(
@@ -302,7 +302,7 @@ async def poll_zotero_library(
             try:
                 async with db_pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        "SELECT id, zotero_item_key FROM papers WHERE doi = $1",
+                        "SELECT id, zotero_item_key FROM papers WHERE metadata->>'doi' = $1",
                         doi,
                     )
                 if row:
@@ -358,7 +358,7 @@ async def poll_zotero_library(
                     VALUES ('zotero.last_library_version', $1::jsonb)
                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
                     """,
-                    str(new_version),
+                    new_version,
                 )
         except Exception:
             logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)

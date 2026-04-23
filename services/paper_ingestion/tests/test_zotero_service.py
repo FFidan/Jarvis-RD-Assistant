@@ -205,6 +205,9 @@ async def test_push_paper_happy_path():
 
         mock_zotero.create_item.assert_called_once()
         mock_zotero.ensure_collection.assert_called_once_with("AI Research")
+        sql = conn1.fetchrow.await_args.args[0]
+        assert "project_papers" in sql
+        assert "paper_projects" not in sql
 
         # Check that the key was persisted
         assert any("ABCD1234" in str(c) for c in conn5.execute.call_args_list)

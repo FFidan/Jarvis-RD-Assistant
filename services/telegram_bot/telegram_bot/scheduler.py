@@ -15,6 +15,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
 
+from telegram_bot import formatters
 from telegram_bot.config import BotConfig
 
 logger = logging.getLogger(__name__)
@@ -187,8 +188,8 @@ class JarvisScheduler:
             logger.exception("Job failed: %s (id=%d)", nudge_type, nudge_id)
             alert = (
                 "⚠️ <b>Scheduled job failed</b>\n"
-                f"\n<b>Type:</b> {nudge_type}\n"
-                f"<b>ID:</b> {nudge_id}\n"
+                f"\n<b>Type:</b> {formatters.escape(nudge_type)}\n"
+                f"<b>ID:</b> {formatters.escape(str(nudge_id))}\n"
                 "Please check service logs for details."
             )
             try:

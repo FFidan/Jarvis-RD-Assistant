@@ -36,5 +36,9 @@ def read_secret(name: str) -> str:
     """
     file_var = os.environ.get(f"{name}_FILE", "")
     if file_var:
-        return Path(file_var).read_text().strip()
+        try:
+            value = Path(file_var).read_text().strip()
+        except OSError as exc:
+            raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
+        return value
     return os.environ.get(name, "")

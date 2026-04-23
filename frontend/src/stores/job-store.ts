@@ -29,6 +29,14 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
   'papers.batch_process':   () => [['papers'], ['action-items-unprocessed']],
   'papers.batch_summarize': () => [['papers']],
   'extraction.batch':       () => [['extractions']],
+  'zotero.push':            (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
+  },
+  'zotero.resync':          (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
+  },
 };
 
 /** Terminal statuses — job will not receive more events. */
@@ -48,6 +56,11 @@ const sleep = (ms: number, signal?: AbortSignal) =>
 
 /** Delay before evicting terminal jobs from the store (ms). */
 const EVICT_DELAY_MS = 5 * 60 * 1000; // 5 minutes
+
+function getPaperIdFromJob(job: Job): number | null {
+  const paperId = job.payload?.paper_id;
+  return typeof paperId === 'number' && Number.isFinite(paperId) ? paperId : null;
+}
 
 export interface Job {
   id: string;
@@ -73,6 +86,8 @@ interface JobStore {
 
   /** POST a new job + subscribe to its SSE stream. Returns the job_id. */
   startJob: (kind: string, payload: unknown) => Promise<string>;
+  /** Register an externally created job id and subscribe if it is active. */
+  trackExternalJob: (job: { jobId: string; kind: string; payload: Record<string, unknown>; status?: Job['status'] }) => string;
   /** Hook up SSE stream for an existing job id. */
   subscribe: (jobId: string, reconnectDelay?: number) => void;
   /** Cancel a running job. */
@@ -119,15 +134,23 @@ export const useJobStore = create<JobStore>()(
 
       async startJob(kind, payload) {
         const { job_id } = await apiCreateJob(kind, payload);
-
-        // Add a placeholder job immediately so the UI reacts before SSE arrives
-        const placeholder: Job = {
-          id: job_id,
+        get().trackExternalJob({
+          jobId: job_id,
           kind,
+          payload: payload as Record<string, unknown>,
           status: 'queued',
+        });
+        return job_id;
+      },
+
+      trackExternalJob({ jobId, kind, payload, status = 'queued' }) {
+        const placeholder: Job = {
+          id: jobId,
+          kind,
+          status,
           progress: 0,
           progress_message: null,
-          payload: payload as Record<string, unknown>,
+          payload,
           result: null,
           error: null,
           created_at: new Date().toISOString(),
@@ -135,8 +158,10 @@ export const useJobStore = create<JobStore>()(
           finished_at: null,
         };
         get()._upsertJob(placeholder);
-        get().subscribe(job_id);
-        return job_id;
+        if (status === 'queued' || status === 'running') {
+          get().subscribe(jobId);
+        }
+        return jobId;
       },
 
       subscribe(jobId, reconnectDelay = RECONNECT_BASE_DELAY_MS) {
@@ -183,6 +208,30 @@ export const useJobStore = create<JobStore>()(
           }, EVICT_DELAY_MS);
         };
 
+        const _reconnectAfterDrop = async (delayMs: number) => {
+          get()._cleanupSubscription(jobId);
+          await sleep(delayMs);
+          const nextDelay = Math.min(delayMs * 2, RECONNECT_MAX_DELAY_MS);
+          get().subscribe(jobId, nextDelay);
+        };
+
+        const _reconcileOrRetry = async (delayMs: number) => {
+          try {
+            const finalJob = await apiGetJob(jobId).catch(() => null);
+            if (finalJob) {
+              set((s) => ({ jobs: { ...s.jobs, [jobId]: finalJob } }));
+              if (TERMINAL_STATUSES.has(finalJob.status)) {
+                _handleTerminal(finalJob);
+                return;
+              }
+            }
+          } catch {
+            /* best-effort: fall through to reconnect */
+          }
+
+          await _reconnectAfterDrop(delayMs);
+        };
+
         // Stream job events via GET SSE endpoint
         (async () => {
           try {
@@ -195,8 +244,11 @@ export const useJobStore = create<JobStore>()(
             if (!res.ok || !res.body) {
               // On auth failure, logout
               if (res.status === 401 || res.status === 403) {
+                get().removeJob(jobId);
                 useAuthStore.getState().logout();
+                return;
               }
+              await _reconcileOrRetry(reconnectDelay);
               return;
             }
 
@@ -204,6 +256,7 @@ export const useJobStore = create<JobStore>()(
             const decoder = new TextDecoder();
             let buffer = '';
             let terminalReceived = false;
+            let doneSentinelReceived = false;
             // Track current backoff delay; reset to base on every successful frame
             let currentReconnectDelay = reconnectDelay;
 
@@ -213,26 +266,7 @@ export const useJobStore = create<JobStore>()(
               if (done) {
                 // Stream closed without a terminal event — fall back to a REST poll
                 if (!terminalReceived) {
-                  try {
-                    const finalJob = await apiGetJob(jobId).catch(() => null);
-                    if (finalJob) {
-                      set((s) => ({ jobs: { ...s.jobs, [jobId]: finalJob } }));
-                      if (TERMINAL_STATUSES.has(finalJob.status)) {
-                        _handleTerminal(finalJob);
-                      } else {
-                        // Still running — re-subscribe with exponential backoff
-                        // controller is already aborted by _cleanupSubscription, so do NOT
-                        // pass its signal to sleep — it would throw AbortError immediately (G-01)
-                        get()._cleanupSubscription(jobId);
-                        await sleep(currentReconnectDelay);
-                        const nextDelay = Math.min(currentReconnectDelay * 2, RECONNECT_MAX_DELAY_MS);
-                        get().subscribe(jobId, nextDelay);
-                      }
-                    }
-                  } catch (err) {
-                    if (err instanceof DOMException && err.name === 'AbortError') return;
-                    /* best-effort */
-                  }
+                  await _reconcileOrRetry(currentReconnectDelay);
                 }
                 break;
               }
@@ -243,7 +277,7 @@ export const useJobStore = create<JobStore>()(
               for (const line of lines) {
                 if (!line.startsWith('data: ')) continue;
                 const raw = line.slice(6).trim();
-                if (raw === '[DONE]') { terminalReceived = true; streamDone = true; break; }
+                if (raw === '[DONE]') { doneSentinelReceived = true; streamDone = true; break; }
                 try {
                   const event = JSON.parse(raw) as Partial<Job>;
                   // streaming_timeout sentinel — treat as non-terminal; reconnect with backoff
@@ -279,12 +313,16 @@ export const useJobStore = create<JobStore>()(
               if (streamDone) break;
             }
 
+            if (doneSentinelReceived && !terminalReceived) {
+              await _reconcileOrRetry(currentReconnectDelay);
+            }
+
             await reader.cancel().catch(() => {});
           } catch (err) {
             // AbortError means we intentionally cancelled — not an error
             if (err instanceof DOMException && err.name === 'AbortError') return;
-            // Other errors: clean up
-            get()._cleanupSubscription(jobId);
+            // Other errors: reconcile if possible, otherwise reconnect with backoff.
+            await _reconcileOrRetry(reconnectDelay);
           }
         })();
       },

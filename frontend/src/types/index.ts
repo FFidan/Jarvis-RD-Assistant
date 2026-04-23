@@ -87,6 +87,7 @@ export interface PaperDetail {
   summary: Summary | null;
   chunks: Chunk[];
   user_state: UserState | null;
+  has_project_links?: boolean;
 }
 
 // --- Feed ---
@@ -582,6 +583,21 @@ export interface SearchPreviewResult {
   pdf_url: string | null;
   citation_count: number;
   metadata: Record<string, unknown>;
+  library_match: SearchPreviewLibraryMatch | null;
+}
+
+export interface SearchPreviewLibraryMatch {
+  paper_id: number;
+  has_project_links: boolean;
+  zotero_item_key: string | null;
+}
+
+export interface SearchPreviewSourceError {
+  kind: 'rate_limit' | 'api_error' | 'unavailable';
+  message: string;
+  status_code: number | null;
+  retry_after_s: number | null;
+  settings_hint: string | null;
 }
 
 export interface SearchPreviewResponse {
@@ -589,6 +605,7 @@ export interface SearchPreviewResponse {
   total: number;
   per_source_counts: Record<string, number>;
   degraded_sources: string[];
+  source_errors: Record<string, SearchPreviewSourceError>;
 }
 // --- User State ---
 

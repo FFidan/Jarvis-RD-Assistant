@@ -42,7 +42,7 @@ class JobStatusResponse(BaseModel):
     id: str
     kind: str
     status: str
-    progress: int | None = None
+    progress: float | None = None
     progress_message: str | None = None
     payload: dict[str, Any] | None = None
     result: dict[str, Any] | None = None

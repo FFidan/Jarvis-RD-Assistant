@@ -23,6 +23,7 @@ import { ChunksTab } from '@/components/paper/ChunksTab';
 import { CrossReferencesTab } from '@/components/paper/CrossReferencesTab';
 import { NotesTab } from '@/components/paper/NotesTab';
 import { RAGChatSection } from '@/components/paper/RAGChatSection';
+import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function PaperDetailPage() {
@@ -102,6 +103,7 @@ export function PaperDetailPage() {
   if (!data) return null;
 
   const { paper, summary, chunks, user_state } = data;
+  const hasProjectLinks = Boolean(data.has_project_links);
 
   const sidebarContent = (
     <div className="space-y-2">
@@ -113,6 +115,7 @@ export function PaperDetailPage() {
         pulseProcessButton={processPulse}
       />
       <UserStateForm paperId={paperId} userState={user_state} />
+      <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />
     </div>
   );
 

@@ -39,7 +39,6 @@ from paper_ingestion.sources.registry import register_source
 logger = logging.getLogger(__name__)
 
 OPENALEX_API_URL = "https://api.openalex.org/works"
-_OPENALEX_MISSING_KEY_LOGGED: set[int] = set()  # track per-instance to avoid spam
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str | None:

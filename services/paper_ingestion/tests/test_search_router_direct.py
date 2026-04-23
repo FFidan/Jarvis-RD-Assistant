@@ -51,7 +51,10 @@ async def test_search_preview_returns_results_without_db_writes(monkeypatch):
 
     assert len(result.results) == 1
     assert result.results[0].title == "Neural ODE"
-    db_pool.acquire.assert_not_called()
+    # DB reads for library matching are fine; no write path should execute.
+    acquired = db_pool.acquire.return_value.__aenter__.return_value
+    acquired.execute.assert_not_called()
+    acquired.executemany.assert_not_called()
 
 
 @pytest.mark.asyncio

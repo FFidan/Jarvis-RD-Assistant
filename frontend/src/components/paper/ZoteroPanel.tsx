@@ -13,7 +13,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   const queryClient = useQueryClient();
   const [copied, setCopied] = useState(false);
 
-  const { data: linkage, isLoading } = useQuery({
+  const { data: linkage, isLoading, isError } = useQuery({
     queryKey: ['zotero-linkage', paperId],
     queryFn: () => zoteroGetLinkage(paperId),
   });
@@ -35,6 +35,14 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
   };
 
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading Zotero status…</div>;
+  if (isError) {
+    return (
+      <div className="space-y-3">
+        <h3 className="text-sm font-semibold">Zotero</h3>
+        <p className="text-xs text-destructive">Zotero status unavailable.</p>
+      </div>
+    );
+  }
 
   const isPushed = !!linkage?.zotero_item_key;
 

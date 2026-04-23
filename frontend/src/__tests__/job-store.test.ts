@@ -10,6 +10,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useJobStore, type Job } from '@/stores/job-store';
+import { queryClient } from '@/lib/query-client';
 
 // --- Module mocks (hoisted before any imports) ---
 
@@ -34,6 +35,7 @@ vi.mock('@/lib/api', () => ({
   createJob: vi.fn(),
   listJobs: vi.fn(),
   cancelJob: vi.fn(),
+  getJob: vi.fn(),
 }));
 
 // --- Helpers ---
@@ -107,6 +109,131 @@ describe('JobStore', () => {
     expect(job.status).toBe('queued');
     expect(job.kind).toBe('pulse.generate');
   });
+
+  it.each(['zotero.push', 'zotero.resync'] as const)(
+    'trackExternalJob: invalidates zotero linkage queries when %s succeeds',
+    async (kind) => {
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(
+          createMockSSEStream([
+            'data: {"status":"running","progress":25,"progress_message":"Working"}\n\n',
+            'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+            'data: [DONE]\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+
+      useJobStore.getState().trackExternalJob({
+        jobId: `job-${kind}`,
+        kind,
+        payload: { paper_id: 77 },
+        status: 'queued',
+      });
+
+      expect(useJobStore.getState().jobs[`job-${kind}`]).toMatchObject({
+        kind,
+        status: 'queued',
+        payload: { paper_id: 77 },
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['zotero-linkage', 77] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['paper-detail', 77] });
+    },
+  );
+
+  it('subscribe: running + [DONE] reconciles and retries external Zotero jobs', async () => {
+    vi.useFakeTimers();
+    const { getJob } = await import('@/lib/api');
+
+    vi.mocked(getJob)
+      .mockResolvedValueOnce(
+        makeJob({
+          id: 'job-zotero-transient',
+          kind: 'zotero.push',
+          status: 'running',
+          progress: 20,
+          progress_message: 'Still working',
+          payload: { paper_id: 77 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeJob({
+          id: 'job-zotero-transient',
+          kind: 'zotero.push',
+          status: 'succeeded',
+          progress: 100,
+          progress_message: 'Done',
+          payload: { paper_id: 77 },
+        }),
+      );
+
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(
+          createMockSSEStream([
+            'data: {"status":"running","progress":20,"progress_message":"Still working"}\n\n',
+            'data: [DONE]\n\n',
+          ]),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          createMockSSEStream([
+            'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+            'data: [DONE]\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-zotero-transient',
+      kind: 'zotero.push',
+      payload: { paper_id: 77 },
+      status: 'queued',
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(getJob).toHaveBeenCalledWith('job-zotero-transient');
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(useJobStore.getState().jobs['job-zotero-transient'].status).toBe('succeeded');
+    expect(useJobStore.getState().activeAborts['job-zotero-transient']).toBeUndefined();
+  });
+
+  it.each([401, 403] as const)(
+    'subscribe: %s SSE response clears auth-failed external Zotero jobs from busy state',
+    async (statusCode) => {
+      const { useAuthStore } = await import('@/stores/auth-store');
+      const logout = vi.fn();
+      vi.mocked(useAuthStore.getState).mockReturnValue({
+        getApiKey: vi.fn(() => 'test-key'),
+        logout,
+      });
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: statusCode }));
+
+      useJobStore.getState().trackExternalJob({
+        jobId: 'job-zotero-auth',
+        kind: 'zotero.push',
+        payload: { paper_id: 88 },
+        status: 'queued',
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(logout).toHaveBeenCalledTimes(1);
+      expect(useJobStore.getState().jobs['job-zotero-auth']).toBeUndefined();
+      expect(useJobStore.getState().activeAborts['job-zotero-auth']).toBeUndefined();
+    },
+  );
 
   // ----- subscribe / SSE progress events -----
 

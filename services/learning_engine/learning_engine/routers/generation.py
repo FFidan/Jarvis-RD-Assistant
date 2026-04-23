@@ -257,13 +257,13 @@ async def _card_generate_batch_job(
 # ---------------------------------------------------------------------------
 
 
-@router.post("", status_code=202)
+@router.post("", status_code=202, response_model=BatchAcceptedResponse)
 @limiter.limit("5/minute")
 async def generate_cards(
     request: Request,
     body: GenerateCardsRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict[str, Any]:
+) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
     job_id = await jobs_lib.enqueue(
         db_pool,
@@ -274,7 +274,7 @@ async def generate_cards(
             "max_cards": body.max_cards,
         },
     )
-    return {"job_id": job_id, "status": "queued"}
+    return BatchAcceptedResponse(job_id=job_id, status="queued")
 
 
 @router.post("/batch", status_code=202, response_model=BatchAcceptedResponse)

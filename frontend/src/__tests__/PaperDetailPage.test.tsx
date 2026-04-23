@@ -33,6 +33,9 @@ vi.mock('@/lib/api', async () => {
     fetchPaperDetail: vi.fn(),
     fetchNotes: vi.fn(),
     fetchDecks: vi.fn(),
+    zoteroGetLinkage: vi.fn(),
+    zoteroPushPaper: vi.fn(),
+    zoteroResync: vi.fn(),
     upsertUserState: vi.fn(),
     createNote: vi.fn(),
     deleteNote: vi.fn(),
@@ -55,10 +58,11 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
   }),
 }));
 
-import { fetchPaperDetail, fetchNotes, fetchDecks } from '@/lib/api';
+import { fetchPaperDetail, fetchNotes, fetchDecks, zoteroGetLinkage } from '@/lib/api';
 const mockFetchPaperDetail = vi.mocked(fetchPaperDetail);
 const mockFetchNotes = vi.mocked(fetchNotes);
 const mockFetchDecks = vi.mocked(fetchDecks);
+const mockZoteroGetLinkage = vi.mocked(zoteroGetLinkage);
 
 const MOCK_PAPER = {
   id: 42,
@@ -176,6 +180,11 @@ describe('PaperDetailPage', () => {
     mockPaperDetailNoteDismissed = false;
     mockFetchDecks.mockResolvedValue([]);
     mockFetchNotes.mockResolvedValue(MOCK_NOTES);
+    mockZoteroGetLinkage.mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
   });
 
   it('renders paper title and author info after loading', async () => {
@@ -317,6 +326,60 @@ describe('PaperDetailPage', () => {
     });
     expect(screen.getByText('This paper')).toBeInTheDocument();
     expect(screen.getByText('All papers')).toBeInTheDocument();
+  });
+
+  it('renders the Zotero panel disabled when the paper has no project links', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+      has_project_links: false,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Zotero')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Link to a project first to enable Zotero push.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeDisabled();
+  });
+
+  it('renders the Zotero panel enabled when the paper has project links', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+      has_project_links: true,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Link to a project first to enable Zotero push.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Send to Zotero' })).toBeEnabled();
+  });
+
+  it('shows a degraded Zotero state when linkage status fails to load', async () => {
+    mockZoteroGetLinkage.mockRejectedValueOnce(new Error('failed to load linkage'));
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+      has_project_links: true,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Zotero status unavailable.')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: 'Send to Zotero' })).not.toBeInTheDocument();
   });
 
   it('shows error state for invalid paper ID', () => {
