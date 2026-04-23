@@ -119,6 +119,7 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
         {"status": "reading", "rating": 4, "user_notes": "Important", "flagged": False},
     ]
     conn.fetch.return_value = [FakeRecord(id=1)]
+    conn.fetchval = AsyncMock(return_value=2)
 
     paper_model = PaperResponse(
         id=3,
@@ -163,9 +164,44 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     assert result.summary.id == 10
     assert result.chunks[0].id == 1
     assert result.user_state.status == "reading"
+    assert result.has_project_links is True
     paper_conv.assert_called_once()
     summary_conv.assert_called_once()
     chunk_conv.assert_called_once()
+    conn.fetchval.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
+    """get_paper_detail should expose a false project-link flag when count is zero."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        _paper_row(id=4),
+        None,
+        None,
+    ]
+    conn.fetch.return_value = []
+    conn.fetchval = AsyncMock(return_value=0)
+
+    paper_model = PaperResponse(
+        id=4,
+        external_id="paper-4",
+        source_type=SourceType.ARXIV,
+        title="Paper 4",
+        authors=["Ada"],
+        url="https://example.com/papers/4",
+        created_at=datetime.now(UTC),
+    )
+
+    with patch.object(papers, "row_to_paper_response", return_value=paper_model):
+        result = await papers.get_paper_detail.__wrapped__(
+            MagicMock(),
+            paper_id=4,
+            db_pool=pool,
+        )
+
+    assert result.has_project_links is False
+    conn.fetchval.assert_awaited_once()
 
 
 @pytest.mark.asyncio

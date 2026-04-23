@@ -72,7 +72,8 @@ async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
         paper.citation_count,
         paper.metadata,
     )
-    assert row is not None, "upsert_paper RETURNING always yields a row"
+    if row is None:
+        raise RuntimeError("upsert_paper RETURNING always yields a row")
     return row
 
 

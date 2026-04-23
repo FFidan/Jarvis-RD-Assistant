@@ -234,7 +234,7 @@ Note:
 
 31 migrations currently applied in `db/migrations/` (001-031). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
-`paper_ingestion/app/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
+`paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
 **Migration 018** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem added:
 

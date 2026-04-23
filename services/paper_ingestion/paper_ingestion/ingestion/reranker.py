@@ -76,12 +76,12 @@ class Reranker:
         if not passages:
             return []
         self._load_model_if_needed()
-        assert self._model is not None, "reranker model should be loaded"
+        if self._model is None:
+            raise RuntimeError("reranker model should be loaded")
         pairs = [[query, p] for p in passages]
         scores = self._model.predict(pairs)
-        indexed_scores = list(
-            enumerate(scores.tolist() if hasattr(scores, "tolist") else list(scores))
-        )
+        raw = scores.tolist() if hasattr(scores, "tolist") else list(scores)
+        indexed_scores: list[tuple[int, float]] = [(i, float(s)) for i, s in enumerate(raw)]
         indexed_scores.sort(key=lambda x: x[1], reverse=True)
         return indexed_scores[:top_k]
 

@@ -100,7 +100,11 @@ async def _paper_process_job(
     await ctx.update_progress(0.1, "Downloaded")
 
     pdf_processor = svc.pdf_processor
+    if pdf_processor is None:
+        raise RuntimeError("pdf_processor not initialized")
     embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
 
     result = await run_process_pdf(
         paper_id,
@@ -156,8 +160,14 @@ async def _paper_analyze_job(
         raise JobError(f"Paper {paper_id} has no PDF URL")
 
     pdf_processor = svc.pdf_processor
+    if pdf_processor is None:
+        raise RuntimeError("pdf_processor not initialized")
     embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
     verifier = svc.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
 
     # ---- Step 1: Download (skip for local) ----
     if not is_local and not row["pdf_downloaded"]:
@@ -238,7 +248,11 @@ async def _papers_batch_process_job(
     total = len(paper_ids)
 
     pdf_processor = svc.pdf_processor
+    if pdf_processor is None:
+        raise RuntimeError("pdf_processor not initialized")
     embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
 
     processed = 0
     skipped = 0
@@ -302,7 +316,11 @@ async def _papers_batch_summarize_job(
     total = len(paper_ids)
 
     verifier = svc.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
     embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
 
     summarized = 0
     failed = 0

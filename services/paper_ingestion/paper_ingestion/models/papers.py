@@ -176,6 +176,7 @@ class PaperDetailResponse(BaseModel):
     summary: SummaryResponse | None = None
     chunks: list[ChunkResponse] = Field(default_factory=list)
     user_state: UserStateResponse | None = None
+    has_project_links: bool = False
 
 
 # --- Search / Request Models ---

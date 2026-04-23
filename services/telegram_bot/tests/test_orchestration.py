@@ -1,0 +1,338 @@
+"""Orchestration workflow tests.
+
+Covers:
+- author_alerts: alerts when new papers by tracked authors are found
+- daily_briefing: morning briefing message sent to owner
+- deadline_warning: milestone deadline warnings within next 3 days
+- review_reminder: spaced repetition due-cards reminder
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+from telegram_bot.config import BotConfig
+from telegram_bot.orchestration import author_alerts as author_alerts_mod
+from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
+from telegram_bot.orchestration import deadline_warning as deadline_warning_mod
+from telegram_bot.orchestration import review_reminder as review_reminder_mod
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_config() -> BotConfig:
+    return BotConfig(
+        telegram_token="token",
+        telegram_chat_id=9999,
+        database_url="postgres://example",
+        paper_ingestion_url="http://paper-ingestion:8000",
+        learning_engine_url="http://learning-engine:8001",
+        jarvis_api_key="secret",
+    )
+
+
+def _async_cm(return_value):
+    """Return a MagicMock that works as an async context manager."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=return_value)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
+def _make_pool(conn):
+    """Wrap a connection mock in a pool mock."""
+    pool = MagicMock()
+    pool.acquire.return_value = _async_cm(conn)
+    return pool
+
+
+# ---------------------------------------------------------------------------
+# test_author_alerts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_author_alerts_sends_message_when_new_paper_found():
+    """run_author_alerts sends an HTML alert when a tracked author has a new paper."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    config = _make_config()
+
+    # Build a paper that matches the tracked author by name
+    paper_id = 42
+    tracked_name = "Alice Smith"
+    author_row = MagicMock()
+    author_row.__getitem__ = lambda self, k: {
+        "id": 1,
+        "author_name": tracked_name,
+        "s2_author_id": None,
+        "enabled": True,
+    }[k]
+    author_row.get = lambda k, d=None: {
+        "id": 1,
+        "author_name": tracked_name,
+        "s2_author_id": None,
+        "enabled": True,
+    }.get(k, d)
+
+    paper_row = MagicMock()
+    paper_row.__getitem__ = lambda self, k: {
+        "id": paper_id,
+        "title": "Paper by Alice",
+        "authors": [tracked_name],
+        "abstract": "Test abstract",
+        "url": "https://example.com/paper",
+        "source_type": "arxiv",
+        "published_date": date.today(),
+        "metadata": {},
+    }[k]
+    paper_row.get = lambda k, d=None: {
+        "id": paper_id,
+        "title": "Paper by Alice",
+        "authors": [tracked_name],
+        "abstract": "Test abstract",
+        "url": "https://example.com/paper",
+        "source_type": "arxiv",
+        "published_date": date.today(),
+        "metadata": {},
+    }.get(k, d)
+
+    # First acquire: fetch authors + recent papers
+    conn_read = AsyncMock()
+    conn_read.fetch.side_effect = [
+        [author_row],  # tracked_authors query
+        [paper_row],  # recent papers query
+    ]
+
+    # Second acquire: per-author dedup insert + update
+    conn_write = AsyncMock()
+    # INSERT … ON CONFLICT … RETURNING → returns a row (new alert)
+    insert_row = MagicMock()
+    insert_row.__getitem__ = lambda self, k: {"tracked_author_id": 1}[k]
+    conn_write.fetchrow.return_value = insert_row
+    conn_write.execute.return_value = None
+
+    pool = MagicMock()
+    call_count = 0
+
+    def _acquire():
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _async_cm(conn_read)
+        return _async_cm(conn_write)
+
+    pool.acquire.side_effect = _acquire
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    _, kwargs = bot.send_message.await_args
+    assert kwargs["chat_id"] == 9999
+    assert kwargs["parse_mode"] == "HTML"
+    assert tracked_name in kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_author_alerts_skips_when_no_owner():
+    """run_author_alerts returns early and sends nothing when owner is not paired."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    pool = AsyncMock()
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+        await author_alerts_mod.run_author_alerts(http_client, pool, bot, _make_config())
+
+    bot.send_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# test_daily_briefing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_daily_briefing_sends_briefing_with_two_papers():
+    """run_daily_briefing sends an HTML morning briefing message that includes paper count."""
+    bot = AsyncMock()
+    config = _make_config()
+
+    now = datetime.now(UTC)
+    conn = AsyncMock()
+    # new_papers_count query
+    count_row = MagicMock()
+    count_row.__getitem__ = lambda self, k: {"count": 2}[k]
+
+    task_row = MagicMock()
+    task_row.__getitem__ = lambda self, k: {"title": "Write paper", "project_name": "ResearchX"}[k]
+    task_row.get = lambda k, d=None: {"title": "Write paper", "project_name": "ResearchX"}.get(k, d)
+
+    milestone_row = MagicMock()
+    milestone_row.__getitem__ = lambda self, k: {
+        "name": "Submit draft",
+        "deadline": now + timedelta(days=3),
+        "project_name": "ResearchX",
+    }[k]
+    milestone_row.get = lambda k, d=None: {
+        "name": "Submit draft",
+        "deadline": now + timedelta(days=3),
+        "project_name": "ResearchX",
+    }.get(k, d)
+
+    conn.fetchrow.return_value = count_row
+    conn.fetch.side_effect = [
+        [task_row],  # in-progress tasks
+        [milestone_row],  # upcoming milestones
+    ]
+
+    pool = _make_pool(conn)
+
+    # Mock the learning engine /api/stats call
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    stats_resp = MagicMock()
+    stats_resp.raise_for_status.return_value = None
+    stats_resp.json.return_value = {"due_now": 5}
+    http_client.get.return_value = stats_resp
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    _, kwargs = bot.send_message.await_args
+    assert kwargs["chat_id"] == 9999
+    assert kwargs["parse_mode"] == "HTML"
+    # Message should reference paper count and cards
+    text = kwargs["text"]
+    assert "2" in text  # new_papers_count
+    assert "5" in text  # due cards
+
+
+@pytest.mark.asyncio
+async def test_daily_briefing_skips_when_no_owner():
+    """run_daily_briefing returns early and sends nothing when owner is not paired."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    pool = AsyncMock()
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, _make_config())
+
+    bot.send_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# test_deadline_warning
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deadline_warning_sends_alert_for_upcoming_milestones():
+    """run_deadline_warning sends a warning message listing imminent milestones."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    config = _make_config()
+
+    now = datetime.now(UTC)
+    milestone_row = MagicMock()
+    milestone_row.__getitem__ = lambda self, k: {
+        "name": "Grant submission",
+        "deadline": now + timedelta(days=1),
+        "project_name": "FundingProject",
+    }[k]
+    milestone_row.get = lambda k, d=None: {
+        "name": "Grant submission",
+        "deadline": now + timedelta(days=1),
+        "project_name": "FundingProject",
+    }.get(k, d)
+
+    pool = AsyncMock()
+    pool.fetch.return_value = [milestone_row]
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    _, kwargs = bot.send_message.await_args
+    assert kwargs["chat_id"] == 9999
+    assert kwargs["parse_mode"] == "HTML"
+    assert "Grant submission" in kwargs["text"]
+
+
+@pytest.mark.asyncio
+async def test_deadline_warning_silent_when_no_milestones():
+    """run_deadline_warning sends nothing when no milestones are due within 3 days."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    pool = AsyncMock()
+    pool.fetch.return_value = []
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, _make_config())
+
+    bot.send_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# test_review_reminder
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_review_reminder_sends_message_for_due_cards():
+    """run_review_reminder sends an inline-button message when cards are due."""
+    bot = AsyncMock()
+    config = _make_config()
+    pool = AsyncMock()
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"due_now": 3}
+    http_client.get.return_value = resp
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await review_reminder_mod.run_review_reminder(http_client, pool, bot, config)
+
+    bot.send_message.assert_awaited_once()
+    _, kwargs = bot.send_message.await_args
+    assert kwargs["chat_id"] == 9999
+    assert kwargs["parse_mode"] == "HTML"
+    assert "3" in kwargs["text"]
+    assert kwargs["reply_markup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_review_reminder_silent_when_no_cards_due():
+    """run_review_reminder sends nothing when due_now is 0."""
+    bot = AsyncMock()
+    pool = AsyncMock()
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    resp = MagicMock()
+    resp.raise_for_status.return_value = None
+    resp.json.return_value = {"due_now": 0}
+    http_client.get.return_value = resp
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+        await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
+
+    bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_review_reminder_skips_when_no_owner():
+    """run_review_reminder returns early and sends nothing when owner is not paired."""
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    pool = AsyncMock()
+
+    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=None)):
+        await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
+
+    bot.send_message.assert_not_awaited()

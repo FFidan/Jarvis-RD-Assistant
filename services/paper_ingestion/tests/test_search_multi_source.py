@@ -14,12 +14,12 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
 from paper_ingestion.routers import search
 from paper_ingestion.routers.search import (
-    MultiSourceSearchResponse,
     _dedup_papers,
     _normalize_title,
     _round_robin_merge,
@@ -129,6 +129,7 @@ def _make_paper(
     doi: str | None = None,
     arxiv_id: str | None = None,
     pub_year: int | None = None,
+    authors: list[str] | None = None,
 ) -> PaperCreate:
     metadata: dict = {}
     if doi:
@@ -140,7 +141,7 @@ def _make_paper(
         external_id=external_id,
         source_type=source_type,
         title=title,
-        authors=["Test Author"],
+        authors=authors or ["Test Author"],
         abstract="Abstract",
         published_date=published_date,
         url=f"https://example.com/{external_id}",
@@ -162,6 +163,37 @@ def _make_plugin_source(
         config=SimpleNamespace(config={}),
         search=mock_search,
     )
+
+
+class _FakeAcquire:
+    def __init__(self, conn):
+        self._conn = conn
+
+    async def __aenter__(self):
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeConn:
+    def __init__(self, rows: list[dict] | None = None):
+        self.rows = rows or []
+
+    async def fetch(self, query, *args):
+        return self.rows
+
+
+class _FakePool:
+    def __init__(self, rows: list[dict] | None = None):
+        self._conn = _FakeConn(rows)
+
+    def acquire(self):
+        return _FakeAcquire(self._conn)
+
+
+def _make_preview_pool(rows: list[dict] | None = None) -> _FakePool:
+    return _FakePool(rows)
 
 
 @pytest.mark.asyncio
@@ -194,11 +226,11 @@ async def test_preview_multi_source_merge_and_dedup(monkeypatch):
     result = await search.search_papers_preview.__wrapped__(
         MagicMock(),
         body=body,
-        db_pool=MagicMock(),
+        db_pool=_make_preview_pool(),
         http_client=MagicMock(),
     )
 
-    assert isinstance(result, MultiSourceSearchResponse)
+    assert isinstance(result, search.SearchPreviewResponse)
     assert result.total == 3  # 4 papers minus 1 dup
     assert len(result.results) == 3
     assert result.degraded_sources == []
@@ -227,7 +259,7 @@ async def test_preview_per_source_counts_accurate(monkeypatch):
         max_results=10,
     )
     result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
     )
 
     assert result.per_source_counts["arxiv"] == 3
@@ -255,7 +287,7 @@ async def test_preview_source_error_isolated(monkeypatch):
         max_results=10,
     )
     result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
     )
 
     # arxiv results still returned
@@ -285,7 +317,7 @@ async def test_preview_legacy_source_both_still_works(monkeypatch):
     assert SourceType.SEMANTIC_SCHOLAR in body.source_types
 
     result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
     )
 
     assert result.total == 2
@@ -316,7 +348,7 @@ async def test_preview_date_sort_orders_by_published_date(monkeypatch):
         sort_by="date",
     )
     result = await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
     )
 
     assert result.results[0].published_date.year == 2024  # newest first
@@ -348,13 +380,407 @@ async def test_preview_budget_split_respects_max_results(monkeypatch):
         max_results=10,
     )
     await search.search_papers_preview.__wrapped__(
-        MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
     )
 
     # 10 / 3 = 3 remainder 1; first source gets 4, rest get 3
     assert sum(call_budgets.values()) == 10
     assert max(call_budgets.values()) <= 4
     assert min(call_budgets.values()) >= 3
+
+
+@pytest.mark.asyncio
+async def test_preview_library_match_by_doi_arxiv_and_title_year(monkeypatch):
+    """Preview rows carry local-library linkage metadata in match-precedence order."""
+    local_rows = [
+        {
+            "id": 11,
+            "external_id": "local:doi",
+            "title": "DOI Match Paper",
+            "authors": ["Local Author"],
+            "url": "https://library.example/doi",
+            "published_date": date(2024, 1, 1),
+            "metadata": {"doi": "10.1000/DOI-MATCH"},
+            "zotero_item_key": "ZOTERO-DOI",
+            "has_project_links": False,
+        },
+        {
+            "id": 12,
+            "external_id": "local:arxiv",
+            "title": "ArXiv Match Paper",
+            "authors": ["Local Author"],
+            "url": "https://library.example/arxiv",
+            "published_date": date(2023, 1, 1),
+            "metadata": {"arxiv_id": "2301.12345"},
+            "zotero_item_key": None,
+            "has_project_links": True,
+        },
+        {
+            "id": 13,
+            "external_id": "local:title",
+            "title": "Title Match Paper",
+            "authors": ["Local Author"],
+            "url": "https://library.example/title",
+            "published_date": date(2022, 1, 1),
+            "metadata": {},
+            "zotero_item_key": "ZOTERO-TITLE",
+            "has_project_links": True,
+        },
+    ]
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [
+            _make_paper(
+                "preview:doi",
+                "DOI Match Paper",
+                SourceType.ARXIV,
+                doi="10.1000/doi-match",
+            ),
+            _make_paper(
+                "preview:arxiv",
+                "ArXiv Match Paper",
+                SourceType.ARXIV,
+                arxiv_id="2301.12345",
+            ),
+            _make_paper(
+                "preview:title",
+                "Title Match Paper",
+                SourceType.ARXIV,
+                pub_year=2022,
+                authors=["Local Author"],
+            ),
+        ],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(local_rows), http_client=MagicMock()
+    )
+
+    assert [row.library_match.paper_id for row in result.results] == [11, 12, 13]
+    assert [row.library_match.has_project_links for row in result.results] == [False, True, True]
+    assert [row.library_match.zotero_item_key for row in result.results] == [
+        "ZOTERO-DOI",
+        None,
+        "ZOTERO-TITLE",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_preview_duplicate_local_rows_prefer_most_actionable_match(monkeypatch):
+    """Duplicate local rows keep the most actionable/current row for each key."""
+    local_rows = [
+        {
+            "id": 31,
+            "external_id": "local:old",
+            "title": "Duplicate Title",
+            "authors": ["Local Author"],
+            "url": "https://library.example/duplicate-old",
+            "published_date": date(2024, 1, 1),
+            "metadata": {"doi": "10.1000/dup"},
+            "zotero_item_key": None,
+            "has_project_links": False,
+        },
+        {
+            "id": 44,
+            "external_id": "local:newer-key",
+            "title": "Duplicate Title",
+            "authors": ["Local Author"],
+            "url": "https://library.example/duplicate-newer-key",
+            "published_date": date(2024, 1, 1),
+            "metadata": {"doi": "10.1000/dup"},
+            "zotero_item_key": "ZOTERO-DUP",
+            "has_project_links": False,
+        },
+        {
+            "id": 52,
+            "external_id": "local:project",
+            "title": "Duplicate Title",
+            "authors": ["Local Author"],
+            "url": "https://library.example/duplicate-project",
+            "published_date": date(2024, 1, 1),
+            "metadata": {"doi": "10.1000/dup"},
+            "zotero_item_key": "ZOTERO-DUP-PROJECT",
+            "has_project_links": True,
+        },
+    ]
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [_make_paper("preview:dup", "Duplicate Title", SourceType.ARXIV, doi="10.1000/dup")],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(local_rows), http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match.paper_id == 52
+    assert result.results[0].library_match.has_project_links is True
+    assert result.results[0].library_match.zotero_item_key == "ZOTERO-DUP-PROJECT"
+
+
+@pytest.mark.asyncio
+async def test_preview_title_year_match_requires_preview_year(monkeypatch):
+    """Title fallback does not match when the preview row has no year."""
+    local_rows = [
+        {
+            "id": 21,
+            "external_id": "local:title-year",
+            "title": "Yeared Title",
+            "authors": ["Local Author"],
+            "url": "https://library.example/yeared",
+            "published_date": date(2024, 1, 1),
+            "metadata": {},
+            "zotero_item_key": None,
+            "has_project_links": False,
+        }
+    ]
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [_make_paper("preview:title-year", "Yeared Title", SourceType.ARXIV)],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(local_rows), http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match is None
+
+
+@pytest.mark.asyncio
+async def test_preview_title_year_match_requires_local_year(monkeypatch):
+    """Title fallback does not match when the local row has no year."""
+    local_rows = [
+        {
+            "id": 22,
+            "external_id": "local:title-no-year",
+            "title": "No Year Title",
+            "authors": ["Local Author"],
+            "url": "https://library.example/no-year",
+            "published_date": None,
+            "metadata": {},
+            "zotero_item_key": None,
+            "has_project_links": False,
+        }
+    ]
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [_make_paper("preview:no-year", "No Year Title", SourceType.ARXIV, pub_year=2024)],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(local_rows), http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match is None
+
+
+@pytest.mark.asyncio
+async def test_preview_title_year_collision_requires_author_overlap(monkeypatch):
+    """Same-title/same-year collisions do not match without author overlap."""
+    local_rows = [
+        {
+            "id": 23,
+            "external_id": "local:collision-a",
+            "title": "Collision Paper",
+            "authors": ["Alice Example"],
+            "url": "https://library.example/collision-a",
+            "published_date": date(2024, 1, 1),
+            "metadata": {},
+            "zotero_item_key": None,
+            "has_project_links": False,
+        },
+        {
+            "id": 24,
+            "external_id": "local:collision-b",
+            "title": "Collision Paper",
+            "authors": ["Bob Example"],
+            "url": "https://library.example/collision-b",
+            "published_date": date(2024, 1, 1),
+            "metadata": {},
+            "zotero_item_key": None,
+            "has_project_links": False,
+        },
+    ]
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [
+            _make_paper(
+                "preview:collision",
+                "Collision Paper",
+                SourceType.ARXIV,
+                pub_year=2024,
+                authors=["Carol Example"],
+            )
+        ],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(local_rows), http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match is None
+
+
+@pytest.mark.asyncio
+async def test_preview_unmatched_rows_have_null_library_match(monkeypatch):
+    """Preview rows without a local-library hit keep ``library_match`` null."""
+    source = _make_plugin_source(
+        SourceType.PUBMED,
+        [_make_paper("preview:1", "Unmatched Paper", SourceType.PUBMED, pub_year=2025)],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(query="test", source_types=[SourceType.PUBMED], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match is None
+
+
+@pytest.mark.asyncio
+async def test_preview_source_errors_are_structured_and_drive_degraded_sources(monkeypatch):
+    """Source load/search failures populate structured source_errors and degraded_sources."""
+    rate_limit_response = httpx.Response(
+        429,
+        request=httpx.Request("GET", "https://api.semanticscholar.org/graph/v1/paper/search"),
+        headers={"Retry-After": "17"},
+    )
+    rate_limit_exc = httpx.HTTPStatusError(
+        "too many requests",
+        request=rate_limit_response.request,
+        response=rate_limit_response,
+    )
+
+    source_map = {
+        SourceType.ARXIV: _make_plugin_source(
+            SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
+        ),
+        SourceType.SEMANTIC_SCHOLAR: _make_plugin_source(
+            SourceType.SEMANTIC_SCHOLAR, [], raises=rate_limit_exc
+        ),
+    }
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        if st == SourceType.PUBMED:
+            raise ValueError("bootstrap failed")
+        return source_map[st]
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(
+        query="test",
+        source_types=[SourceType.PUBMED, SourceType.SEMANTIC_SCHOLAR, SourceType.ARXIV],
+        max_results=10,
+    )
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
+    )
+
+    assert result.degraded_sources == list(result.source_errors.keys())
+    assert result.source_errors["pubmed"].kind == "unavailable"
+    assert result.source_errors["semantic_scholar"].kind == "rate_limit"
+    assert result.source_errors["semantic_scholar"].status_code == 429
+    assert result.source_errors["semantic_scholar"].retry_after_s == 17
+    assert result.source_errors["semantic_scholar"].message.startswith(
+        "Semantic Scholar rate limit reached"
+    )
+    assert set(result.source_errors) == {"pubmed", "semantic_scholar"}
+
+
+@pytest.mark.asyncio
+async def test_preview_generic_http_429_maps_to_rate_limit(monkeypatch):
+    """Any source returning HTTP 429 is classified as a rate limit."""
+    rate_limit_response = httpx.Response(
+        429,
+        request=httpx.Request("GET", "https://api.pubmed.ncbi.nlm.nih.gov"),
+        headers={"Retry-After": "11"},
+    )
+    rate_limit_exc = httpx.HTTPStatusError(
+        "too many requests",
+        request=rate_limit_response.request,
+        response=rate_limit_response,
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return _make_plugin_source(
+            st,
+            [_make_paper("ok:1", "Ok Paper", st)],
+            raises=rate_limit_exc if st == SourceType.PUBMED else None,
+        )
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(
+        query="test",
+        source_types=[SourceType.PUBMED, SourceType.ARXIV],
+        max_results=10,
+    )
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
+    )
+
+    assert result.source_errors["pubmed"].kind == "rate_limit"
+    assert result.source_errors["pubmed"].status_code == 429
+    assert result.source_errors["pubmed"].retry_after_s == 11
+    assert result.source_errors["pubmed"].message.startswith("PubMed rate limit reached")
+
+
+@pytest.mark.asyncio
+async def test_preview_unexpected_source_init_failure_propagates(monkeypatch):
+    """Unexpected source-resolution bugs should still surface instead of degrading."""
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        if st == SourceType.ARXIV:
+            return _make_plugin_source(
+                SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
+            )
+        raise AssertionError("unexpected bug")
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+
+    body = SearchRequest(
+        query="test",
+        source_types=[SourceType.ARXIV, SourceType.PUBMED],
+        max_results=10,
+    )
+    with pytest.raises(AssertionError, match="unexpected bug"):
+        await search.search_papers_preview.__wrapped__(
+            MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +824,7 @@ async def test_empty_source_types_defensive_guard_preview():
     )
     with pytest.raises(HTTPException) as exc_info:
         await search.search_papers_preview.__wrapped__(
-            MagicMock(), body=body, db_pool=MagicMock(), http_client=MagicMock()
+            MagicMock(), body=body, db_pool=_make_preview_pool(), http_client=MagicMock()
         )
     assert exc_info.value.status_code == 400
     assert "at least one source" in exc_info.value.detail.lower()

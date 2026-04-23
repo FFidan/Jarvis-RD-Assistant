@@ -5,7 +5,7 @@ DTD loading, and network fetches. All source plugins should parse via
 `safe_fromstring` / `safe_parse` — never construct an etree parser inline.
 """
 
-from lxml import etree
+import lxml.etree as etree
 
 _SAFE_PARSER = etree.XMLParser(
     resolve_entities=False,

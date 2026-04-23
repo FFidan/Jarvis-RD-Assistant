@@ -7,17 +7,18 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from paper_ingestion.ingestion import refresh_recommendations
 from paper_ingestion.pipelines.auto_fetch import run_auto_pipeline
-from paper_ingestion.recommender import refresh_recommendations
 
 logger = logging.getLogger(__name__)
 
 # Re-export so callers that do ``from paper_ingestion.scheduler import run_auto_pipeline``
 # (e.g. tests) continue to work without modification.
-__all__ = ["run_auto_pipeline", "run_pulse_wrapper", "start_scheduler"]
+__all__ = ["run_auto_pipeline", "run_pulse_wrapper", "run_zotero_sync_wrapper", "start_scheduler"]
 
 
 _DEFAULT_PULSE_CRON = "0 4 * * *"
+_DEFAULT_ZOTERO_CRON = "0 * * * *"  # hourly
 
 
 async def _is_pulse_enabled(db_pool: Any) -> bool:
@@ -62,6 +63,62 @@ async def _get_pulse_cron(db_pool: Any) -> str:
             return _DEFAULT_PULSE_CRON
         return expr
     return _DEFAULT_PULSE_CRON
+
+
+async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
+    """Return (poll_enabled, cron_expr) from user_config.
+
+    Defaults: poll_enabled=False, cron='0 * * * *' (hourly).
+    """
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, value FROM user_config WHERE key IN"
+                " ('zotero.enabled', 'zotero.poll_enabled', 'zotero.poll_cron')"
+            )
+    except Exception:
+        logger.exception("zotero: failed to read zotero config")
+        return False, _DEFAULT_ZOTERO_CRON
+
+    cfg: dict[str, Any] = {}
+    for row in rows:
+        cfg[row["key"]] = row["value"]
+
+    # Integration must be enabled AND poll specifically enabled.
+    enabled = bool(cfg.get("zotero.enabled", False))
+    poll_enabled = bool(cfg.get("zotero.poll_enabled", False))
+    if not (enabled and poll_enabled):
+        return False, _DEFAULT_ZOTERO_CRON
+
+    # Validate cron expression.
+    raw_cron = cfg.get("zotero.poll_cron")
+    cron_expr = _DEFAULT_ZOTERO_CRON
+    if isinstance(raw_cron, str) and raw_cron.strip():
+        expr = raw_cron.strip()
+        try:
+            CronTrigger.from_crontab(expr)
+            cron_expr = expr
+        except Exception:
+            logger.warning(
+                "zotero.poll_cron value %r is not a valid cron expression; using default", expr
+            )
+    return True, cron_expr
+
+
+async def run_zotero_sync_wrapper(app: Any) -> None:
+    """APScheduler entrypoint for Zotero library sync — enqueues via job system."""
+    db_pool = app.state.db_pool
+    poll_enabled, _ = await _get_zotero_poll_config(db_pool)
+    if not poll_enabled:
+        logger.info("zotero: poll disabled via user_config, skipping scheduled sync")
+        return
+    try:
+        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
+        await jobs_lib.enqueue(db_pool, "zotero.sync_from_zotero", {})
+        logger.info("zotero: enqueued zotero.sync_from_zotero job")
+    except Exception:
+        logger.exception("zotero: failed to enqueue sync job")
 
 
 async def run_pulse_wrapper(app: Any) -> None:
@@ -133,6 +190,26 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         logger.info("pulse_overnight scheduler registered (cron=%s)", cron_expr)
     except Exception:
         logger.exception("Failed to register pulse_overnight job")
+
+    # Zotero library sync (cron-scheduled, gated on zotero.poll_enabled)
+    try:
+        _zotero_enabled, zotero_cron = await _get_zotero_poll_config(app.state.db_pool)
+        scheduler.add_job(
+            run_zotero_sync_wrapper,
+            trigger=CronTrigger.from_crontab(zotero_cron),
+            args=[app],
+            id="zotero_library_sync",
+            name="Zotero library sync",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "zotero_library_sync scheduler registered (cron=%s, enabled=%s)",
+            zotero_cron,
+            _zotero_enabled,
+        )
+    except Exception:
+        logger.exception("Failed to register zotero_library_sync job")
 
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)

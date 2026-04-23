@@ -2,14 +2,17 @@
 
 import asyncio
 import logging
+import os
 import re
+from dataclasses import dataclass
 from datetime import date
-from typing import Any, NoReturn
+from typing import Any, Literal, NoReturn
+from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from paper_ingestion.converters import (
     deduplicate_by_paper_id,
@@ -54,6 +57,52 @@ class MultiSourceSearchResponse(BaseModel):
     total: int
     per_source_counts: dict[str, int]
     degraded_sources: list[str]
+
+
+class SearchPreviewLibraryMatch(BaseModel):
+    """Local-library linkage metadata attached to preview search rows."""
+
+    paper_id: int
+    has_project_links: bool
+    zotero_item_key: str | None
+
+
+class SearchPreviewSourceError(BaseModel):
+    """Structured per-source error details for preview searches."""
+
+    kind: Literal["rate_limit", "api_error", "unavailable"]
+    message: str
+    status_code: int | None
+    retry_after_s: int | None
+    settings_hint: str | None
+
+
+class SearchPreviewResult(PaperCreate):
+    """Search preview result enriched with local-library metadata."""
+
+    library_match: SearchPreviewLibraryMatch | None = None
+
+
+class SearchPreviewResponse(BaseModel):
+    """Response for POST /api/search-preview."""
+
+    results: list[SearchPreviewResult]
+    total: int
+    per_source_counts: dict[str, int]
+    degraded_sources: list[str]
+    source_errors: dict[str, SearchPreviewSourceError]
+
+
+# Only downgrade expected source bootstrap/configuration failures. Programming bugs
+# should still surface so they are not hidden as degraded search state.
+PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS = (TypeError, ValueError, ValidationError)
+
+_SOURCE_DISPLAY_NAMES = {
+    "arxiv": "arXiv",
+    "openalex": "OpenAlex",
+    "pubmed": "PubMed",
+    "semantic_scholar": "Semantic Scholar",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +167,295 @@ def _raise_source_search_error(
             detail += " or configure an API key in Settings > Sources."
         raise HTTPException(status_code=429, detail=detail) from exc
     raise HTTPException(status_code=502, detail=f"Source API error: {status_code}") from exc
+
+
+def _normalize_url(url: str) -> str:
+    """Canonicalize a URL for exact comparison.
+
+    We normalize the scheme/netloc casing and remove trailing path slashes so
+    equivalent canonical URLs compare cleanly without trying to guess at deeper
+    URL semantics.
+    """
+    parsed = urlsplit(url.strip())
+    if not parsed.scheme and not parsed.netloc:
+        return url.strip().rstrip("/")
+    path = parsed.path.rstrip("/")
+    return urlunsplit((parsed.scheme.lower(), parsed.netloc.lower(), path, "", ""))
+
+
+def _normalize_author_name(author: str) -> str:
+    """Canonicalize an author string for exact-overlap matching."""
+    normalized = author.lower()
+    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _normalize_authors(authors: Any) -> frozenset[str]:
+    """Return normalized author strings suitable for overlap checks."""
+    if not isinstance(authors, list):
+        return frozenset()
+    return frozenset(
+        _normalize_author_name(str(author)) for author in authors if str(author).strip()
+    )
+
+
+def _source_display_name(source_name: str) -> str:
+    """Return a human-readable source label for user-facing error messages."""
+    return _SOURCE_DISPLAY_NAMES.get(source_name, source_name.replace("_", " ").title())
+
+
+def _library_match_priority(row: Any) -> tuple[int, int, int]:
+    """Rank duplicate local rows by actionability, then recency.
+
+    Preference order:
+    1. project-linked rows
+    2. rows with a Zotero item key
+    3. newest paper id
+    """
+    return (
+        int(bool(row.get("has_project_links"))),
+        int(bool(row.get("zotero_item_key"))),
+        int(row["id"]),
+    )
+
+
+@dataclass(slots=True)
+class _TitleYearLibraryCandidate:
+    """Local-library candidate for the author-aware title/year fallback."""
+
+    match: SearchPreviewLibraryMatch
+    priority: tuple[int, int, int]
+    authors: frozenset[str]
+
+
+def _store_preferred_library_match(
+    indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch],
+    priorities: dict[tuple[str, Any], tuple[int, int, int]],
+    key: tuple[str, Any],
+    row: Any,
+    match: SearchPreviewLibraryMatch,
+) -> None:
+    """Store the best local match for a lookup key using deterministic tie-breaking."""
+    priority = _library_match_priority(row)
+    if priorities.get(key) is None or priority > priorities[key]:
+        priorities[key] = priority
+        indexes[key] = match
+
+
+def _retry_after_seconds(exc: Exception) -> int | None:
+    """Extract an integer Retry-After header when the upstream provided one."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is None:
+        return None
+    try:
+        return int(float(retry_after))
+    except (TypeError, ValueError):
+        return None
+
+
+def _semantic_scholar_api_key_configured(plugin: Any) -> bool:
+    """Return True when the Semantic Scholar source appears to have an API key."""
+    config_obj = getattr(getattr(plugin, "config", None), "config", None)
+    if isinstance(config_obj, dict) and config_obj.get("api_key"):
+        return True
+    return bool(os.environ.get("SEMANTIC_SCHOLAR_API_KEY"))
+
+
+def _build_preview_source_error(
+    source_name: str,
+    exc: Exception,
+    *,
+    plugin: Any | None = None,
+    unavailable: bool = False,
+) -> SearchPreviewSourceError:
+    """Translate preview fan-out failures into structured error details."""
+    if unavailable:
+        message = str(getattr(exc, "detail", exc))
+        return SearchPreviewSourceError(
+            kind="unavailable",
+            message=message,
+            status_code=getattr(exc, "status_code", None),
+            retry_after_s=None,
+            settings_hint=(
+                "Enable the source in Settings > Sources."
+                if "disabled" in message.lower()
+                else None
+            ),
+        )
+
+    status_code = None
+    retry_after_s = None
+    if isinstance(exc, httpx.HTTPStatusError):
+        status_code = exc.response.status_code
+        retry_after_s = _retry_after_seconds(exc)
+
+        if status_code == 429:
+            message = f"{_source_display_name(source_name)} rate limit reached. Retry later"
+            settings_hint = None
+            if source_name == "semantic_scholar" and not _semantic_scholar_api_key_configured(
+                plugin
+            ):
+                message += " or configure an API key in Settings > Sources."
+                settings_hint = "Configure a Semantic Scholar API key in Settings > Sources."
+            return SearchPreviewSourceError(
+                kind="rate_limit",
+                message=message,
+                status_code=status_code,
+                retry_after_s=retry_after_s,
+                settings_hint=settings_hint,
+            )
+
+        return SearchPreviewSourceError(
+            kind="api_error",
+            message=f"Source API error: {status_code}",
+            status_code=status_code,
+            retry_after_s=retry_after_s,
+            settings_hint=None,
+        )
+
+    if isinstance(exc, HTTPException):
+        status_code = exc.status_code
+        message = str(exc.detail)
+    else:
+        message = str(exc) or f"{source_name} search failed"
+
+    return SearchPreviewSourceError(
+        kind="api_error",
+        message=message,
+        status_code=status_code,
+        retry_after_s=None,
+        settings_hint=None,
+    )
+
+
+async def _load_local_library_matches(
+    db_pool: asyncpg.Pool,
+) -> tuple[
+    dict[tuple[str, Any], SearchPreviewLibraryMatch],
+    dict[tuple[str, int], list[_TitleYearLibraryCandidate]],
+]:
+    """Fetch local-library rows once and index them by every supported match key."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT p.id,
+                   p.external_id,
+                   p.title,
+                   p.authors,
+                   p.published_date,
+                   p.url,
+                   p.metadata,
+                   p.zotero_item_key,
+                   EXISTS (
+                       SELECT 1
+                       FROM project_papers pp
+                       WHERE pp.paper_id = p.id
+                   ) AS has_project_links
+            FROM papers p
+            ORDER BY p.id ASC
+            """
+        )
+
+    indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch] = {}
+    priorities: dict[tuple[str, Any], tuple[int, int, int]] = {}
+    title_year_candidates: dict[tuple[str, int], list[_TitleYearLibraryCandidate]] = {}
+    for row in rows:
+        metadata = row.get("metadata") or {}
+        match = SearchPreviewLibraryMatch(
+            paper_id=row["id"],
+            has_project_links=bool(row.get("has_project_links")),
+            zotero_item_key=row.get("zotero_item_key") or None,
+        )
+        priority = _library_match_priority(row)
+
+        doi = metadata.get("doi")
+        if doi:
+            _store_preferred_library_match(
+                indexes, priorities, ("doi", str(doi).strip().lower()), row, match
+            )
+
+        arxiv_id = metadata.get("arxiv_id")
+        if arxiv_id:
+            _store_preferred_library_match(
+                indexes, priorities, ("arxiv_id", str(arxiv_id).strip().lower()), row, match
+            )
+
+        normalized_url = _normalize_url(str(row["url"]))
+        _store_preferred_library_match(indexes, priorities, ("url", normalized_url), row, match)
+        _store_preferred_library_match(
+            indexes,
+            priorities,
+            ("external_id", str(row["external_id"]).strip().lower()),
+            row,
+            match,
+        )
+
+        published_date = row.get("published_date")
+        if published_date is not None:
+            title_year = (_normalize_title(str(row["title"])), published_date.year)
+            title_year_candidates.setdefault(title_year, []).append(
+                _TitleYearLibraryCandidate(
+                    match=match,
+                    priority=priority,
+                    authors=_normalize_authors(row.get("authors")),
+                )
+            )
+
+    return indexes, title_year_candidates
+
+
+def _match_preview_result(
+    paper: PaperCreate,
+    library_indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch],
+    title_year_candidates: dict[tuple[str, int], list[_TitleYearLibraryCandidate]],
+) -> SearchPreviewLibraryMatch | None:
+    """Apply local-library matching precedence to a preview result."""
+    metadata = paper.metadata or {}
+
+    doi = metadata.get("doi")
+    if doi:
+        match = library_indexes.get(("doi", str(doi).strip().lower()))
+        if match is not None:
+            return match
+
+    arxiv_id = metadata.get("arxiv_id")
+    if arxiv_id:
+        match = library_indexes.get(("arxiv_id", str(arxiv_id).strip().lower()))
+        if match is not None:
+            return match
+
+    normalized_url = _normalize_url(paper.url)
+    match = library_indexes.get(("url", normalized_url))
+    if match is not None:
+        return match
+
+    match = library_indexes.get(("external_id", paper.external_id.strip().lower()))
+    if match is not None:
+        return match
+
+    if paper.published_date is None:
+        return None
+
+    preview_authors = _normalize_authors(paper.authors)
+    if not preview_authors:
+        return None
+
+    # Title/year alone is too weak; only use this fallback when authors overlap.
+    title_year_key = (_normalize_title(paper.title), paper.published_date.year)
+    candidates = title_year_candidates.get(title_year_key)
+    if not candidates:
+        return None
+
+    matching_candidates = [
+        candidate for candidate in candidates if candidate.authors.intersection(preview_authors)
+    ]
+    if not matching_candidates:
+        return None
+
+    return max(matching_candidates, key=lambda candidate: candidate.priority).match
 
 
 # ---------------------------------------------------------------------------
@@ -234,14 +572,14 @@ async def search_papers(
     )
 
 
-@router.post("/search-preview", response_model=MultiSourceSearchResponse)
+@router.post("/search-preview", response_model=SearchPreviewResponse)
 @limiter.limit("30/minute")
 async def search_papers_preview(
     request: Request,
     body: SearchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
-) -> MultiSourceSearchResponse:
+) -> SearchPreviewResponse:
     """Search papers without saving to DB -- for preview & select flow.
 
     Supports multi-source fan-out; returns deduplicated results with
@@ -260,12 +598,18 @@ async def search_papers_preview(
     # Resolve source instances
     plugins = []
     degraded_sources: list[str] = []
+    source_errors: dict[str, SearchPreviewSourceError] = {}
     for st, budget in zip(source_types, budgets):
         try:
             plugin = await get_source_for_type(st, db_pool, http_client, request=request)
             plugins.append((st.value, plugin, budget))
         except HTTPException as e:
             logger.warning("Source %s unavailable for preview search: %s", st.value, e.detail)
+            source_errors[st.value] = _build_preview_source_error(st.value, e, unavailable=True)
+            degraded_sources.append(st.value)
+        except PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS as exc:
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
             degraded_sources.append(st.value)
 
     if not plugins:
@@ -275,7 +619,7 @@ async def search_papers_preview(
     # Fan-out search concurrently
     async def _search_one(
         source_name: str, plugin: Any, budget: int
-    ) -> tuple[str, list[PaperCreate]]:
+    ) -> tuple[str, list[PaperCreate], SearchPreviewSourceError | None]:
         try:
             papers = await plugin.search(
                 body.query,
@@ -285,15 +629,20 @@ async def search_papers_preview(
                 sort_by=body.sort_by,
                 author=body.author,
             )
-            return source_name, papers
+            return source_name, papers, None
         except Exception as exc:  # broad: heterogeneous plugins raise different exception types
             logger.warning("Source %s preview search failed: %s", source_name, exc, exc_info=True)
-            degraded_sources.append(source_name)
-            return source_name, []
+            error = _build_preview_source_error(source_name, exc, plugin=plugin)
+            return source_name, [], error
 
     raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
 
-    per_source: dict[str, list[PaperCreate]] = {name: papers for name, papers in raw_results}
+    per_source: dict[str, list[PaperCreate]] = {}
+    for source_name, papers, error in raw_results:
+        per_source[source_name] = papers
+        if error is not None:
+            source_errors[source_name] = error
+            degraded_sources.append(source_name)
 
     # Merge and dedup
     if body.sort_by == "date":
@@ -306,17 +655,27 @@ async def search_papers_preview(
         interleaved = _round_robin_merge(per_source)
         deduped = _dedup_papers(interleaved)
 
+    library_indexes, title_year_candidates = await _load_local_library_matches(db_pool)
+    preview_results = [
+        SearchPreviewResult(
+            **paper.model_dump(),
+            library_match=_match_preview_result(paper, library_indexes, title_year_candidates),
+        )
+        for paper in deduped
+    ]
+
     per_source_counts: dict[str, int] = {}
     for source_name in per_source:
         per_source_counts[source_name] = sum(
             1 for p in deduped if p.source_type.value == source_name
         )
 
-    return MultiSourceSearchResponse(
-        results=deduped,
+    return SearchPreviewResponse(
+        results=preview_results,
         total=len(deduped),
         per_source_counts=per_source_counts,
-        degraded_sources=degraded_sources,
+        degraded_sources=list(source_errors.keys()),
+        source_errors=source_errors,
     )
 
 

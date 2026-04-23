@@ -223,6 +223,10 @@ async def get_paper_detail(
             "SELECT status, rating, user_notes, flagged FROM paper_user_state WHERE paper_id = $1",
             paper_id,
         )
+        project_link_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
+            paper_id,
+        )
 
     paper = row_to_paper_response(paper_row)
     summary = row_to_summary_response(summary_row) if summary_row else None
@@ -237,8 +241,15 @@ async def get_paper_detail(
         if user_state_row
         else None
     )
+    has_project_links = bool(project_link_count)
 
-    return PaperDetailResponse(paper=paper, summary=summary, chunks=chunks, user_state=user_state)
+    return PaperDetailResponse(
+        paper=paper,
+        summary=summary,
+        chunks=chunks,
+        user_state=user_state,
+        has_project_links=has_project_links,
+    )
 
 
 # ---------------------------------------------------------------------------

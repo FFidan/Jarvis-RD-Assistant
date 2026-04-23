@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from paper_ingestion.integrations.zotero_service import (
+    poll_zotero_library,
     push_paper_to_zotero,
     resync_paper_to_zotero,
 )
@@ -335,3 +336,167 @@ async def test_resync_clears_and_repushes():
 
         # push must be called afterwards
         mock_push.assert_called_once_with(42, pool, http)
+
+
+# ---------------------------------------------------------------------------
+# Helpers for poll tests
+# ---------------------------------------------------------------------------
+
+
+def _zotero_poll_enabled_config_rows():
+    """user_config rows for an enabled Zotero config with polling on."""
+    return [
+        FakeRecord({"key": "zotero.enabled", "value": True}),
+        FakeRecord({"key": "zotero.api_key", "value": "test_api_key"}),
+        FakeRecord({"key": "zotero.user_id", "value": "123456"}),
+        FakeRecord({"key": "zotero.library_type", "value": "user"}),
+        FakeRecord({"key": "zotero.poll_enabled", "value": True}),
+        FakeRecord({"key": "zotero.last_library_version", "value": 0}),
+    ]
+
+
+def _zotero_item(
+    *,
+    key: str = "ITEM0001",
+    title: str = "A New Paper",
+    doi: str = "",
+    extra: str = "",
+    abstract: str = "Some abstract.",
+    url: str = "https://example.com/paper",
+    creators: list[dict] | None = None,
+) -> dict:
+    """Build a minimal Zotero item dict."""
+    return {
+        "key": key,
+        "data": {
+            "key": key,
+            "itemType": "journalArticle",
+            "title": title,
+            "DOI": doi,
+            "extra": extra,
+            "abstractNote": abstract,
+            "url": url,
+            "creators": creators or [{"firstName": "Alice", "lastName": "Smith"}],
+        },
+    }
+
+
+def _make_poll_pool(*conn_returns, config_rows=None):
+    """Pool mock where pool.fetch returns config rows and acquire() uses conn_returns."""
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=config_rows or _zotero_poll_enabled_config_rows())
+
+    def _cm(rv):
+        cm = MagicMock()
+        cm.__aenter__ = AsyncMock(return_value=rv)
+        cm.__aexit__ = AsyncMock(return_value=False)
+        return cm
+
+    pool.acquire = MagicMock(side_effect=[_cm(rv) for rv in conn_returns])
+    return pool
+
+
+# ---------------------------------------------------------------------------
+# E4 Poll tests
+# ---------------------------------------------------------------------------
+
+
+async def test_poll_library_disabled():
+    """Returns disabled status when zotero.enabled is false."""
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=_zotero_disabled_config_rows())
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    assert result["status"] == "disabled"
+
+
+async def test_poll_library_poll_disabled():
+    """Returns poll_disabled status when zotero.poll_enabled is false."""
+    config_rows = [
+        FakeRecord({"key": "zotero.enabled", "value": True}),
+        FakeRecord({"key": "zotero.api_key", "value": "key"}),
+        FakeRecord({"key": "zotero.user_id", "value": "123"}),
+        FakeRecord({"key": "zotero.poll_enabled", "value": False}),
+    ]
+    pool = MagicMock()
+    pool.fetch = AsyncMock(return_value=config_rows)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    assert result["status"] == "poll_disabled"
+
+
+async def test_poll_library_skips_jarvis_origin():
+    """Items with jarvis_paper_id= in Extra are skipped (not enqueued)."""
+    jarvis_item = _zotero_item(key="JARVIS01", extra="jarvis_paper_id=42")
+    # version conn: persist new version
+    version_conn = _make_conn()
+    pool = _make_poll_pool(version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([jarvis_item], 5))
+
+        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
+            mock_jobs.enqueue = AsyncMock()
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    # JARVIS-originated item must not be enqueued
+    mock_jobs.enqueue.assert_not_called()
+    assert result["status"] == "ok"
+    assert result["new_items"] == 0
+    assert result["enqueued"] == 0
+
+
+async def test_poll_library_enqueues_new_items():
+    """New items without jarvis origin are enqueued as paper.process jobs."""
+    new_item = _zotero_item(key="NEWITEM1", title="New Paper", doi="")
+    # No DOI → no DB lookup; one enqueue call; one version-persist conn
+    version_conn = _make_conn()
+    pool = _make_poll_pool(version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 10))
+
+        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
+            mock_jobs.enqueue = AsyncMock(return_value="job-uuid-1")
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    mock_jobs.enqueue.assert_called_once()
+    call_args = mock_jobs.enqueue.call_args
+    assert call_args[0][1] == "paper.process"
+    payload = call_args[0][2]
+    assert payload["source_override"] == "zotero"
+    assert payload["zotero_item_key"] == "NEWITEM1"
+    assert result["enqueued"] == 1
+    assert result["new_items"] == 1
+
+
+async def test_poll_library_updates_version():
+    """zotero.last_library_version updated in user_config after poll."""
+    item = _zotero_item(key="VER0001", doi="")
+    version_conn = _make_conn()
+    pool = _make_poll_pool(version_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        # Return a newer version (42) than the current (0)
+        mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
+
+        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
+            mock_jobs.enqueue = AsyncMock(return_value="job-uuid-2")
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    # The version-persist connection should have had execute called
+    version_conn.execute.assert_called_once()
+    sql, version_arg = version_conn.execute.call_args[0][:2]
+    assert "zotero.last_library_version" in sql
+    assert "42" in str(version_arg)
+    assert result["version_to"] == 42

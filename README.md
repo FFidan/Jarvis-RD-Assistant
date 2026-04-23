@@ -174,7 +174,7 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
    ```
 6. Send `/start` to the bot — it should reply.
 
-**Security note on `TELEGRAM_CHAT_ID`:** The bot only checks this single chat ID. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. For personal use, keep the bot in a private DM. For a shared setup, add a per-user allowlist in `services/telegram_bot/app/handlers/` (not currently supported out of the box).
+**Security note on `TELEGRAM_CHAT_ID`:** The bot only checks this single chat ID. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. For personal use, keep the bot in a private DM. For a shared setup, add a per-user allowlist in `services/telegram_bot/telegram_bot/handlers/` (not currently supported out of the box).
 
 ## Remote Access (LAN)
 
@@ -249,9 +249,23 @@ Built-in scheduling (daily briefings, review reminders, etc.) is handled by APSc
 
 See `n8n/workflows/` for template workflows and the recreation guide.
 
+## Zotero Integration
+
+JARVIS integrates with Zotero to sync papers between your research workspace and citation manager.
+
+**Push (JARVIS → Zotero):**
+- Configure Zotero API key + User ID in Settings → Integrations
+- Papers are auto-pushed to Zotero when starred and linked to a project
+- Requires [Better BibTeX](https://github.com/retorquere/zotero-better-bibtex) for citation key generation (optional)
+
+**Sync (Zotero → JARVIS):**
+- Enable "Zotero → JARVIS sync" in Settings → Integrations
+- New papers clipped via Zotero browser extension are ingested hourly
+- Papers already in JARVIS are linked by DOI; new papers are queued for processing
+
 ### Adding a Paper Source
 
-1. Create `services/paper_ingestion/app/sources/new_source.py`
+1. Create `services/paper_ingestion/paper_ingestion/sources/new_source.py`
 2. Implement the `PaperSource` abstract class from `base.py`
 3. Decorate with `@register_source`
 4. Add a row to the `paper_sources` table via the Settings UI
@@ -267,7 +281,7 @@ See `n8n/workflows/` for template workflows and the recreation guide.
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-030)
+│   └── migrations/             # Versioned schema changes (001-031)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services

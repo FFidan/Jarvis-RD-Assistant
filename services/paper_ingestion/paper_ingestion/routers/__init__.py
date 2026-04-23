@@ -1,3 +1,3 @@
-from paper_ingestion.routers import zotero
+from . import zotero
 
 __all__ = ["zotero"]

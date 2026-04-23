@@ -140,14 +140,14 @@ A ChatGPT-Pulse-inspired subsystem that discovers new papers from external sourc
 - Rating data is collected silently from Phase 1; Phase 2 activates a per-user logistic-regression classifier that consumes the accumulated ratings as a rescoring layer.
 
 **Architectural footprint (Phase 1):**
-- New backend package `services/paper_ingestion/app/pulse/` contains all Pulse logic: `job.py` (overnight orchestrator), `profile.py` (load user profile), `discovery.py` (parallel source fan-out), `scoring.py` (3-stage pipeline), `prompts.py` (version-controlled LLM system prompt), `deck.py` (deck assembly and persistence), `resolver.py` (PDF resolution chain).
-- New source plugins: `services/paper_ingestion/app/sources/openalex_source.py` and `pubmed_source.py`.
+- New backend package `services/paper_ingestion/paper_ingestion/pulse/` contains all Pulse logic: `job.py` (overnight orchestrator), `profile.py` (load user profile), `discovery.py` (parallel source fan-out), `scoring.py` (3-stage pipeline), `prompts.py` (version-controlled LLM system prompt), `deck.py` (deck assembly and persistence), `resolver.py` (PDF resolution chain).
+- New source plugins: `services/paper_ingestion/paper_ingestion/sources/openalex_source.py` and `pubmed_source.py`.
 - Existing `PaperSource` ABC extended with two optional methods (`fetch_new_since`, `get_recommendations`) that default to empty lists so legacy sources do not need modification.
 - New database tables: `pulse_decks`, `pulse_cards`, `pulse_ratings`, `pdf_resolutions`. New optional column: `topics.description`.
-- New API router `services/paper_ingestion/app/routers/pulse.py` exposes six endpoints: `POST /api/pulse/generate`, `GET /api/pulse/today`, `GET /api/pulse/history`, `POST /api/pulse/rate`, `GET /api/pulse/explain/{card_id}`, `GET /api/pulse/stats`.
+- New API router `services/paper_ingestion/paper_ingestion/routers/pulse.py` exposes six endpoints: `POST /api/pulse/generate`, `GET /api/pulse/today`, `GET /api/pulse/history`, `POST /api/pulse/rate`, `GET /api/pulse/explain/{card_id}`, `GET /api/pulse/stats`.
 - New frontend components: `PulseDeck` (My Day widget), `PulseCard` (card component matching existing Research Feed card style), `WhyPopover` (transparency dialog), and a reusable `InfoTooltip` primitive (generalized `(i)` info tooltip for Settings).
 - Settings extensions: Topics gain optional description field, Automation retains general scheduling controls (Pulse controls moved to dedicated tab), Sources gain API-key fields and provider tooltips. A new dedicated **Pulse** settings tab consolidates enable/schedule/scoring weights/manual generate/diagnostics, replacing the former "Recommendations" tab.
-- Existing `services/telegram_bot/app/orchestration/research_pulse.py` (~165 lines of naive keyword search + notify) is gutted and rewritten as a ~40-line thin delivery wrapper over `GET /api/pulse/today`.
+- Existing `services/telegram_bot/telegram_bot/orchestration/research_pulse.py` (~165 lines of naive keyword search + notify) is gutted and rewritten as a ~40-line thin delivery wrapper over `GET /api/pulse/today`.
 - APScheduler gains one new job (`pulse_overnight`) in `scheduler.py`; no new scheduling mechanism.
 
 **Anti-bloat commitments (actual on ship 2026-04-11):** 4 new tables + 1 new column, 1 new migration (018), 1 new Python package, 11 new Python source files (8 pulse package + 2 source plugins + 1 new API router), 6 new API endpoints, 4 new frontend files, 0 new Docker services, 0 new pages. All Pulse logic is colocated in `pulse/` and `sources/*_source.py`; no scatter across existing modules. The router file is the "+1" over the pulse-package ≤10 limit called out in the original spec.
