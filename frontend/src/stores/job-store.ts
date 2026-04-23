@@ -37,6 +37,7 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
   },
+  'zotero.poll':            () => [['zotero-library']],
 };
 
 /** Terminal statuses — job will not receive more events. */

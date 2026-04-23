@@ -391,3 +391,72 @@ class ProjectPaperItem(BaseModel):
     published_date: date | None = None
     notes: str | None = None
     added_at: datetime
+
+
+# --- Executive Endpoint Response Models ---
+
+
+class FocusSessionResponse(BaseModel):
+    """Response for POST /api/executive/focus/log."""
+
+    status: str
+    recorded_hours: float
+
+
+class StreakResponse(BaseModel):
+    """Response for GET /api/executive/streak (unused standalone; embedded in MyDayResponse)."""
+
+    focus_streak_days: int
+    today_focus_hours: float
+
+
+class MyDayTaskItem(BaseModel):
+    """A single task entry in the my-day response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    project_id: int | None = None
+    title: str
+    priority: int
+    deadline: date | None = None
+    status: str
+    completed_at: datetime | None = None
+    project_name: str | None = None
+    project_color: str | None = None
+
+
+class MyDayRecommendationItem(BaseModel):
+    """A single recommendation entry in the my-day response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    recommendation_id: int
+    paper_id: int
+    score: float
+    title: str
+    authors: list[str]
+
+
+class MyDayProjectPulseItem(BaseModel):
+    """A single active-project entry in the my-day response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    total_tasks: int
+    done_tasks: int
+    next_milestone: str | None = None
+    next_milestone_deadline: date | None = None
+
+
+class MyDayResponse(BaseModel):
+    """Response for GET /api/executive/my-day."""
+
+    tasks: list[MyDayTaskItem]
+    cards_due: int
+    recommendations: list[MyDayRecommendationItem]
+    today_focus_hours: float
+    focus_streak_days: int
+    project_pulse: list[MyDayProjectPulseItem]

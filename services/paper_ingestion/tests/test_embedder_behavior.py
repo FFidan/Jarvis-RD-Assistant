@@ -490,7 +490,8 @@ async def test_discover_from_seeds_fallback_when_no_qdrant_points(monkeypatch):
     e.qdrant.scroll.return_value = ([], None)
 
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"title": "Paper Title", "abstract": "An abstract."}
+    # ING-002: batch fetch uses conn.fetch() with ANY($1::bigint[]) (not fetchrow)
+    conn.fetch.return_value = [{"id": 42, "title": "Paper Title", "abstract": "An abstract."}]
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)

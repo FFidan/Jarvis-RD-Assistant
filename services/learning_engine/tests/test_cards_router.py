@@ -125,9 +125,12 @@ async def test_list_cards_builds_query_with_filters():
 
 @pytest.mark.asyncio
 async def test_update_card_returns_existing_row_when_body_is_empty():
-    """update_card is a no-op when no fields change."""
+    """update_card is a no-op when no fields change: first fetchrow checks existence,
+    second fetchrow returns the full row."""
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = _make_card_row(id=9)
+    card_row = _make_card_row(id=9)
+    # First call: SELECT id (existence check), second call: SELECT * (no-op fetch)
+    conn.fetchrow.side_effect = [card_row, card_row]
 
     response = await cards.update_card.__wrapped__(
         MagicMock(),
@@ -137,13 +140,14 @@ async def test_update_card_returns_existing_row_when_body_is_empty():
     )
 
     assert response.id == 9
-    assert conn.fetchrow.await_count == 1
+    assert conn.fetchrow.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_update_card_raises_404_when_missing():
     """update_card returns 404 when the target card does not exist."""
     pool, conn = _make_pool_and_conn()
+    # First fetchrow: existence check returns None → 404 raised before dynamic_update
     conn.fetchrow.return_value = None
 
     with pytest.raises(HTTPException, match="Card not found") as exc_info:
@@ -155,6 +159,35 @@ async def test_update_card_raises_404_when_missing():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_card_uses_dynamic_update():
+    """update_card delegates to dynamic_update and returns the updated row."""
+    pool, conn = _make_pool_and_conn()
+    existing = FakeRecord(id=7)
+    updated_row = _make_card_row(id=7)
+    # fetchrow calls: existence check, then dynamic_update internally calls fetchrow
+    conn.fetchrow.side_effect = [existing, updated_row]
+
+    with patch(
+        "learning_engine.routers.cards.dynamic_update", AsyncMock(return_value=updated_row)
+    ) as mock_du:
+        response = await cards.update_card.__wrapped__(
+            MagicMock(),
+            card_id=7,
+            body=CardUpdate(front="New front", back="New back"),
+            db_pool=pool,
+        )
+
+    assert response.id == 7
+    mock_du.assert_awaited_once()
+    call_kwargs = mock_du.await_args.kwargs
+    assert call_kwargs["table"] == "cards"
+    assert call_kwargs["record_id"] == 7
+    assert call_kwargs["updates"] == {"front": "New front", "back": "New back"}
+    assert "evidence" in call_kwargs["jsonb_columns"]
+    assert "updated_at = NOW()" in call_kwargs["extra_sets"]
 
 
 @pytest.mark.asyncio

@@ -130,6 +130,125 @@ async def test_ensure_collection_reuses_existing(client):
 
 
 # ---------------------------------------------------------------------------
+# ensure_collection — PI-012 pagination
+# ---------------------------------------------------------------------------
+
+
+def _make_page(start: int, count: int, prefix: str = "COL") -> list[dict]:
+    """Build a page of `count` fake collection dicts starting at index `start`."""
+    return [
+        {"key": f"{prefix}{start + i:04d}", "data": {"name": f"Collection {start + i}"}}
+        for i in range(count)
+    ]
+
+
+@respx.mock
+async def test_ensure_collection_paginates_three_pages(client):
+    """ensure_collection fetches all pages when >100 collections exist.
+
+    Scenario: 250 total collections across 3 pages (100 + 100 + 50).
+    The target collection is on the third page — single-shot GET would miss it.
+    """
+    page1 = _make_page(0, 100)
+    page2 = _make_page(100, 100)
+    # Third page contains our target
+    page3 = _make_page(200, 49) + [{"key": "TARGET", "data": {"name": "My Target"}}]
+
+    total = 250
+    call_count = 0
+
+    def side_effect(request):
+        nonlocal call_count
+        params = dict(request.url.params)
+        start = int(params.get("start", 0))
+        if start == 0:
+            page = page1
+        elif start == 100:
+            page = page2
+        else:
+            page = page3
+        call_count += 1
+        return httpx.Response(
+            200,
+            json=page,
+            headers={"Total-Results": str(total)},
+        )
+
+    respx.get(f"{BASE}/collections").mock(side_effect=side_effect)
+
+    col_key = await client.ensure_collection("My Target")
+
+    assert col_key == "TARGET"
+    assert call_count == 3, f"Expected 3 GET requests, got {call_count}"
+
+
+@respx.mock
+async def test_ensure_collection_deduplicates_across_pages(client):
+    """ensure_collection deduplicates collections that appear on multiple pages."""
+    # Page 1 has 100 items; page 2 has 50 new + 10 duplicates (same key as page 1 start)
+    page1 = _make_page(0, 100)
+    # Duplicate the first 10 keys from page1 + 50 new ones
+    duplicates = _make_page(0, 10)
+    new_items = _make_page(100, 50)
+    page2 = duplicates + new_items  # 60 items, < 100 → loop stops
+
+    total = 150
+
+    call_count = 0
+
+    def side_effect(request):
+        nonlocal call_count
+        start = int(dict(request.url.params).get("start", 0))
+        page = page1 if start == 0 else page2
+        call_count += 1
+        return httpx.Response(200, json=page, headers={"Total-Results": str(total)})
+
+    respx.get(f"{BASE}/collections").mock(side_effect=side_effect)
+    # The target is in the new items on page 2
+    target_col = {"key": "UNIQUE150", "data": {"name": "Last Collection"}}
+    # Inject it — rebuild page2 with target at end
+    page2_with_target = duplicates + new_items[:-1] + [target_col]
+
+    # Reset and remock with updated page2
+    respx.get(f"{BASE}/collections").mock(
+        side_effect=lambda req: httpx.Response(
+            200,
+            json=page1 if int(dict(req.url.params).get("start", 0)) == 0 else page2_with_target,
+            headers={"Total-Results": str(total)},
+        )
+    )
+
+    col_key = await client.ensure_collection("Last Collection")
+    assert col_key == "UNIQUE150"
+
+
+@respx.mock
+async def test_ensure_collection_single_page_no_extra_requests(client):
+    """ensure_collection stops after one page when fewer than 100 items returned."""
+    collections = _make_page(0, 50)
+    get_route = respx.get(f"{BASE}/collections").mock(
+        return_value=httpx.Response(
+            200,
+            json=collections,
+            headers={"Total-Results": "50"},
+        )
+    )
+    respx.post(f"{BASE}/collections").mock(
+        return_value=httpx.Response(
+            200,
+            json={"successful": {"0": {"key": "NEWCOL"}}, "unchanged": {}, "failed": {}},
+        )
+    )
+
+    # Request a collection that doesn't exist → should create it
+    col_key = await client.ensure_collection("Brand New Collection")
+
+    assert col_key == "NEWCOL"
+    # Only one GET page fetched
+    assert get_route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
 # fetch_bbt_citation_key
 # ---------------------------------------------------------------------------
 

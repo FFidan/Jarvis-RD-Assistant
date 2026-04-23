@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
 
 import httpx
 
 ZOTERO_API_BASE = "https://api.zotero.org"
-BBT_LOCAL_BASE = "http://localhost:23119/better-bibtex"
+BBT_BASE_URL = os.getenv("BBT_BASE_URL", "http://host.docker.internal:23119")
+BBT_LOCAL_BASE = f"{BBT_BASE_URL}/better-bibtex"
 
 logger = logging.getLogger(__name__)
 
@@ -65,16 +67,38 @@ class ZoteroClient:
         return items[0] if items else None
 
     async def ensure_collection(self, name: str, parent_key: str | None = None) -> str:
-        """Find or create a collection by name. Returns collection key."""
-        resp = await self._http.get(
-            f"{self._base}/collections",
-            headers=self._headers(),
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        for col in resp.json():
+        """Find or create a collection by name. Returns collection key.
+
+        Paginates through all collections (100 per page) so users with more than
+        100 collections are handled correctly.
+        """
+        all_collections: list[dict] = []
+        start = 0
+        while True:
+            resp = await self._http.get(
+                f"{self._base}/collections",
+                params={"start": start, "limit": 100},
+                headers=self._headers(),
+                timeout=15.0,
+            )
+            resp.raise_for_status()
+            items = resp.json()
+            all_collections.extend(items)
+            total = int(resp.headers.get("Total-Results", "0"))
+            if len(items) < 100 or len(all_collections) >= total:
+                break
+            start += 100
+
+        # Deduplicate by key (last write wins for duplicates, which shouldn't occur)
+        seen: dict[str, dict] = {}
+        for col in all_collections:
+            seen[col["key"]] = col
+        all_collections = list(seen.values())
+
+        for col in all_collections:
             if col["data"]["name"] == name:
                 return col["key"]
+
         # Create new collection
         payload = [{"name": name, "parentCollection": parent_key or False}]
         resp = await self._http.post(

@@ -5,7 +5,6 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from jarvis_common import jobs as jobs_lib
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
@@ -70,45 +69,54 @@ async def link_paper(
                 project_id,
                 paper_id,
             )
-    # result is e.g. "INSERT 0 1" (inserted) or "INSERT 0 0" (no-op)
-    if result and result == "INSERT 0 0":
-        return JSONResponse(
-            content={
-                "project_id": project_id,
-                "paper_id": paper_id,
-                "message": "Paper already linked",
-            },
-            status_code=200,
-        )
+            # result is e.g. "INSERT 0 1" (inserted) or "INSERT 0 0" (no-op)
+            if result and result == "INSERT 0 0":
+                # Paper already linked — return early before enqueuing any job.
+                return JSONResponse(
+                    content={
+                        "project_id": project_id,
+                        "paper_id": paper_id,
+                        "message": "Paper already linked",
+                    },
+                    status_code=200,
+                )
 
-    # Trigger Zotero push when a paper is linked to a project if it is starred
-    # or was previously pushed to Zotero.  The job handler checks config at runtime
-    # and returns early if Zotero is disabled.
-    try:
-        async with db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT pus.status, p.zotero_item_key
-                FROM papers p
-                LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                WHERE p.id = $1
-                """,
-                paper_id,
-            )
-        if row and (row["status"] == "starred" or row["zotero_item_key"]):
-            await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
-            logger.debug(
-                "Enqueued zotero.push for paper %d linked to project %d",
-                paper_id,
-                project_id,
-            )
-    except Exception:
-        logger.warning(
-            "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
-            paper_id,
-            project_id,
-            exc_info=True,
-        )
+            # Trigger Zotero push when a paper is linked to a project if it is starred
+            # or was previously pushed to Zotero.  The job handler checks config at runtime
+            # and returns early if Zotero is disabled.
+            # LE-012: enqueue inside the same transaction so the job is never lost
+            # if the commit succeeds.  We inline the INSERT because jobs_lib.enqueue
+            # only accepts asyncpg.Pool, not asyncpg.Connection.
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT pus.status, p.zotero_item_key
+                    FROM papers p
+                    LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+                    WHERE p.id = $1
+                    """,
+                    paper_id,
+                )
+                if row and (row["status"] == "starred" or row["zotero_item_key"]):
+                    await conn.execute(
+                        """
+                        INSERT INTO jobs (kind, payload)
+                        VALUES ('zotero.push', $1::jsonb)
+                        """,
+                        {"paper_id": paper_id},
+                    )
+                    logger.debug(
+                        "Enqueued zotero.push for paper %d linked to project %d",
+                        paper_id,
+                        project_id,
+                    )
+            except Exception:
+                logger.warning(
+                    "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
+                    paper_id,
+                    project_id,
+                    exc_info=True,
+                )
 
     return {"project_id": project_id, "paper_id": paper_id}
 

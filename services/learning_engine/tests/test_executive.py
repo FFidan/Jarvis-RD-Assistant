@@ -268,8 +268,8 @@ async def test_focus_log_task_not_found(exec_app):
     """POST /api/executive/focus/log with a missing task_id returns 404."""
     app, conn = exec_app
 
-    # Pre-validation fetchval returns None — task doesn't exist
-    conn.fetchval.return_value = None
+    # fetchrow (SELECT FOR UPDATE) returns None — task doesn't exist
+    conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -288,8 +288,8 @@ async def test_focus_log_with_paper_id(exec_app):
     """POST /api/executive/focus/log with paper_id returns 200."""
     app, conn = exec_app
 
-    # fetchval for "SELECT 1 FROM papers WHERE id = $1" returns 1 (paper exists)
-    conn.fetchval.return_value = 1
+    # fetchrow (SELECT FOR UPDATE) returns a row — paper exists
+    conn.fetchrow.return_value = FakeRecord(id=7)
     conn.execute.return_value = "INSERT 1"
 
     async with httpx.AsyncClient(
@@ -311,8 +311,8 @@ async def test_focus_log_paper_not_found(exec_app):
     """POST /api/executive/focus/log with a missing paper_id returns 404."""
     app, conn = exec_app
 
-    # fetchval returns None — paper does not exist
-    conn.fetchval.return_value = None
+    # fetchrow (SELECT FOR UPDATE) returns None — paper does not exist
+    conn.fetchrow.return_value = None
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -396,7 +396,9 @@ async def test_my_day_returns_focus_stats(exec_app):
     import datetime
 
     app, conn = exec_app
-    today = datetime.date.today()
+    # Use UTC date to match the streak logic in executive.py which calls
+    # datetime.datetime.now(datetime.UTC).date() — local and UTC may differ.
+    today = datetime.datetime.now(datetime.UTC).date()
     streak_rows = [
         FakeRecord(log_date=today),
         FakeRecord(log_date=today - datetime.timedelta(days=1)),
@@ -628,9 +630,9 @@ async def test_quick_add_task_invalid_priority_returns_422(exec_app):
 
 @pytest.mark.asyncio
 async def test_focus_log_task_not_found_no_side_effects(exec_app):
-    """When task_id doesn't exist, 404 fires BEFORE transaction — no daily_log update."""
+    """When task_id doesn't exist, 404 fires inside transaction — no DML executed."""
     app, conn = exec_app
-    conn.fetchval.return_value = None  # task doesn't exist
+    conn.fetchrow.return_value = None  # task doesn't exist (SELECT FOR UPDATE → None)
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -639,5 +641,48 @@ async def test_focus_log_task_not_found_no_side_effects(exec_app):
             json={"duration_hours": 0.5, "task_id": 99999},
         )
     assert resp.status_code == 404
-    # Verify no transaction was opened (execute should NOT be called for daily_log)
+    # Verify no DML was issued (execute should NOT be called for daily_log)
     conn.execute.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# LE-009 concurrency regression — SELECT FOR UPDATE prevents double rows
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_focus_log_concurrent_requests_no_duplicate_rows(exec_app):
+    """LE-009: Two concurrent log_focus_session calls must not produce duplicate daily_log rows.
+
+    The mock verifies that each request uses a transaction + fetchrow (SELECT FOR UPDATE)
+    before its DML, ensuring the serialised upsert path is exercised.  In production,
+    PostgreSQL row-locking prevents concurrent INSERTs; here we assert the correct call
+    sequence (fetchrow → execute) occurs for both concurrent requests.
+    """
+    import asyncio
+
+    app, conn = exec_app
+
+    # Both requests target an existing task — fetchrow returns a row for each call.
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    conn.execute.return_value = "UPDATE 1"
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        results = await asyncio.gather(
+            client.post("/api/executive/focus/log", json={"duration_hours": 0.5, "task_id": 1}),
+            client.post("/api/executive/focus/log", json={"duration_hours": 0.5, "task_id": 1}),
+        )
+
+    # Both requests must succeed.
+    assert all(r.status_code == 200 for r in results)
+    assert all(r.json()["status"] == "success" for r in results)
+
+    # fetchrow (SELECT ... FOR UPDATE) must have been called twice — once per request.
+    assert conn.fetchrow.call_count == 2
+
+    # The FOR UPDATE SQL must appear in both fetchrow calls.
+    for call in conn.fetchrow.call_args_list:
+        sql = call[0][0]
+        assert "FOR UPDATE" in sql.upper(), f"Expected FOR UPDATE in SQL: {sql!r}"

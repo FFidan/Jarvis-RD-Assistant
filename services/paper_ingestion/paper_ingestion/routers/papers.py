@@ -141,42 +141,38 @@ async def list_papers(
     joins: list[str] = []
     conditions: list[str] = []
     params: list = []
-    param_idx = 1
 
     if topic_id is not None:
         joins.append("JOIN paper_topics pt ON p.id = pt.paper_id")
-        conditions.append(f"pt.topic_id = ${param_idx}")
         params.append(topic_id)
-        param_idx += 1
+        conditions.append(f"pt.topic_id = ${len(params)}")
 
     if status is not None:
         if status.value == "new":
             # Papers without a user_state row are implicitly "new"
             joins.append("LEFT JOIN paper_user_state pus ON p.id = pus.paper_id")
-            conditions.append(f"(pus.status = ${param_idx} OR pus.paper_id IS NULL)")
+            params.append(status.value)
+            conditions.append(f"(pus.status = ${len(params)} OR pus.paper_id IS NULL)")
         else:
             joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
-            conditions.append(f"pus.status = ${param_idx}")
-        params.append(status.value)
-        param_idx += 1
+            params.append(status.value)
+            conditions.append(f"pus.status = ${len(params)}")
 
     if source_type is not None:
-        conditions.append(f"p.source_type = ${param_idx}")
         params.append(source_type.value)
-        param_idx += 1
+        conditions.append(f"p.source_type = ${len(params)}")
 
     if q:
-        conditions.append(f"p.search_vector @@ plainto_tsquery('english', ${param_idx})")
         params.append(q)
-        param_idx += 1
+        conditions.append(f"p.search_vector @@ plainto_tsquery('english', ${len(params)})")
 
     if joins:
         query += " " + " ".join(joins)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
 
-    query += f" ORDER BY p.created_at DESC LIMIT ${param_idx} OFFSET ${param_idx + 1}"
     params.extend([limit, offset])
+    query += f" ORDER BY p.created_at DESC LIMIT ${len(params) - 1} OFFSET ${len(params)}"
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(query, *params)

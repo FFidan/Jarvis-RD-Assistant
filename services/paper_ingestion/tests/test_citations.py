@@ -2,7 +2,7 @@
 
 from datetime import date
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import asyncpg
 import pytest
@@ -453,3 +453,67 @@ async def test_build_graph_depth_2():
     result = await build_citation_graph(mock_conn, [1], depth=2)
     assert len(result.nodes) == 3
     assert len(result.edges) == 2
+
+
+# ---------------------------------------------------------------------------
+# PI-007: batch_fetch_citations endpoint enqueues a durable job
+# ---------------------------------------------------------------------------
+
+
+def _make_pool_and_conn():
+    """Create a mock asyncpg Pool whose acquire() returns an async context manager."""
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool, conn
+
+
+@pytest.mark.asyncio
+async def test_batch_fetch_citations_enqueues_job():
+    """POST /api/citations/batch-fetch enqueues a citations.batch_fetch job.
+
+    PI-007: endpoint must no longer use BackgroundTasks — it must call
+    jobs_lib.enqueue and return a job_id in the response.
+    """
+    from paper_ingestion.routers import citations as citations_router
+
+    pool, _conn = _make_pool_and_conn()
+    fake_job_id = "aabb-ccdd-eeff"
+
+    with patch(
+        "paper_ingestion.routers.citations.jobs_lib.enqueue",
+        new=AsyncMock(return_value=fake_job_id),
+    ) as mock_enqueue:
+        result = await citations_router.batch_fetch_citations.__wrapped__(
+            MagicMock(),
+            db_pool=pool,
+        )
+
+    mock_enqueue.assert_awaited_once()
+    call_args = mock_enqueue.call_args
+    assert call_args.args[1] == "citations.batch_fetch"
+    assert result.message == f"Job {fake_job_id} queued"
+    assert result.queued == 1
+
+
+@pytest.mark.asyncio
+async def test_batch_fetch_citations_response_shape():
+    """batch_fetch_citations response has job_id embedded in message field."""
+    from paper_ingestion.routers import citations as citations_router
+
+    pool, _conn = _make_pool_and_conn()
+
+    with patch(
+        "paper_ingestion.routers.citations.jobs_lib.enqueue",
+        new=AsyncMock(return_value="test-uuid"),
+    ):
+        result = await citations_router.batch_fetch_citations.__wrapped__(
+            MagicMock(),
+            db_pool=pool,
+        )
+
+    assert "test-uuid" in result.message
+    assert result.queued >= 1

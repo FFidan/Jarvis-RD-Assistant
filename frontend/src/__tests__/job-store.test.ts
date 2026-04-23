@@ -146,6 +146,37 @@ describe('JobStore', () => {
     },
   );
 
+  it('trackExternalJob: invalidates zotero-library query when zotero.poll succeeds', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":25,"progress_message":"Polling"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-zotero-poll',
+      kind: 'zotero.poll',
+      payload: {},
+      status: 'queued',
+    });
+
+    expect(useJobStore.getState().jobs['job-zotero-poll']).toMatchObject({
+      kind: 'zotero.poll',
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['zotero-library'] });
+  });
+
   it('subscribe: running + [DONE] reconciles and retries external Zotero jobs', async () => {
     vi.useFakeTimers();
     const { getJob } = await import('@/lib/api');

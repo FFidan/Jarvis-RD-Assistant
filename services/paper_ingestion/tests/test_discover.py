@@ -242,9 +242,11 @@ async def test_discover_fallback_embeds_title_abstract():
     qp_response.points = []
     embedder.qdrant.query_points = AsyncMock(return_value=qp_response)
 
-    pool = _make_pool_with_fetchrow(
-        [
-            {"title": "My Paper Title", "abstract": "The abstract text"},
+    # ING-002: fallback now uses batch fetch (conn.fetch) not fetchrow
+    pool = _make_pool_with_fetchrow([])
+    pool.acquire.return_value.__aenter__.return_value.fetch = AsyncMock(
+        return_value=[
+            _dict_to_record({"id": 42, "title": "My Paper Title", "abstract": "The abstract text"})
         ]
     )
 

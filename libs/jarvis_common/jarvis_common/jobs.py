@@ -18,12 +18,44 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 import asyncpg
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Job-handler ownership map (documentation only — not runtime-enforced)
+# ---------------------------------------------------------------------------
+#
+# Contract:
+#   - Each ``@job_handler`` kind is registered by exactly ONE service's worker
+#     loop (the OWNER listed below).  The owner's ``worker_loop`` will dequeue
+#     and execute jobs of that kind.
+#   - Any service may ENQUEUE a job of any kind via ``jobs_lib.enqueue``.
+#     The enqueuing service does NOT need to own the handler — it just writes
+#     a row to the ``jobs`` table and the owner's worker will pick it up.
+#   - This mapping is informational.  Adding a kind here does NOT register a
+#     handler; you must still decorate the function with ``@job_handler``.
+#
+# Ownership map (grep for ``@job_handler(`` to keep this in sync):
+JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "telegram_bot"]] = {
+    # paper_ingestion handlers
+    "paper.process": "paper_ingestion",
+    "paper.analyze": "paper_ingestion",
+    "papers.batch_process": "paper_ingestion",
+    "papers.batch_summarize": "paper_ingestion",
+    "citations.batch_fetch": "paper_ingestion",
+    "extraction.batch": "paper_ingestion",
+    "pulse.generate": "paper_ingestion",
+    "zotero.push": "paper_ingestion",
+    "zotero.resync": "paper_ingestion",
+    "zotero.sync_from_zotero": "paper_ingestion",
+    # learning_engine handlers
+    "card.generate": "learning_engine",
+    "card.generate_batch": "learning_engine",
+}
 
 # ---------------------------------------------------------------------------
 # Protocols

@@ -865,6 +865,8 @@ class Embedder:
 
         all_positive: list = []  # mix of point ID strings and raw vectors
 
+        # Pass 1: Scroll Qdrant for each seed; collect IDs missing from Qdrant.
+        missing_seed_ids: list[int] = []
         for seed_id in seed_paper_ids:
             # Scroll Qdrant for this seed's chunks
             seed_filter = Filter(
@@ -888,18 +890,26 @@ class Embedder:
                     sampled = [ids[int(i * step)] for i in range(max_points_per_seed)]
                 all_positive.extend(sampled)
             else:
-                # Fallback: embed title + abstract on-the-fly
-                async with db_pool.acquire() as conn:
-                    row = await conn.fetchrow(
-                        "SELECT title, abstract FROM papers WHERE id = $1", seed_id
-                    )
-                if row:
-                    title = row["title"] or ""
-                    abstract = row["abstract"] or ""
-                    if title or abstract:
-                        text = f"{title}. {abstract}".strip()
-                        vectors = await self.embed_texts([text])
-                        all_positive.append(vectors[0])
+                missing_seed_ids.append(seed_id)
+
+        # Pass 2: Batch-fetch metadata for all missing seeds in a single DB round-trip,
+        # then release the connection before doing any embedding network I/O.
+        if missing_seed_ids:
+            async with db_pool.acquire() as conn:
+                missing_rows = await conn.fetch(
+                    "SELECT id, title, abstract FROM papers WHERE id = ANY($1::bigint[])",
+                    missing_seed_ids,
+                )
+            # Connection released here — embed outside the DB context.
+            texts_to_embed: list[str] = []
+            for row in missing_rows:
+                title = row["title"] or ""
+                abstract = row["abstract"] or ""
+                if title or abstract:
+                    texts_to_embed.append(f"{title}. {abstract}".strip())
+            if texts_to_embed:
+                vectors = await self.embed_texts(texts_to_embed)
+                all_positive.extend(vectors)
 
         if not all_positive:
             return []

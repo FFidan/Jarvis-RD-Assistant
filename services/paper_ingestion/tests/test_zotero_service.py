@@ -105,6 +105,14 @@ def _project_row(*, project_id: int = 10, name: str = "AI Research", col_key: st
     )
 
 
+def _cm(conn):
+    """Wrap a connection in an async context manager mock."""
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    return cm
+
+
 # ---------------------------------------------------------------------------
 # Test: disabled
 # ---------------------------------------------------------------------------
@@ -112,8 +120,10 @@ def _project_row(*, project_id: int = 10, name: str = "AI Research", col_key: st
 
 async def test_push_paper_not_configured():
     """push_paper_to_zotero returns early when Zotero is disabled."""
+    # PI-010: _get_zotero_config now uses acquire() — config conn is first acquire().
+    config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_disabled_config_rows())
+    pool.acquire = MagicMock(return_value=_cm(config_conn))
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -130,16 +140,12 @@ async def test_push_paper_not_configured():
 
 async def test_push_paper_no_project_links():
     """push_paper_to_zotero returns early when paper has no project links."""
-    pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_enabled_config_rows())
-
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     paper = _paper_row(project_ids=None)  # NULL → empty list in service
     paper_conn = _make_conn(fetchrow=paper)
 
-    acquire_cm = MagicMock()
-    acquire_cm.__aenter__ = AsyncMock(return_value=paper_conn)
-    acquire_cm.__aexit__ = AsyncMock(return_value=False)
-    pool.acquire = MagicMock(return_value=acquire_cm)
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(paper_conn)])
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -160,13 +166,15 @@ async def test_push_paper_happy_path():
     topic_rows: list = []
 
     # Connection sequence:
-    # 1. acquire() for fetchrow(paper)
-    # 2. acquire() for fetch(topic_rows)
-    # 3. acquire() for fetchrow(project)
-    # 4. acquire() for execute(UPDATE projects …)
-    # 5. acquire() for execute(UPDATE papers zotero_item_key)
-    # 6. acquire() for execute(UPDATE papers zotero_citation_key)
+    # 1. acquire() for _get_zotero_config fetch
+    # 2. acquire() for fetchrow(paper)
+    # 3. acquire() for fetch(topic_rows)
+    # 4. acquire() for fetchrow(project)
+    # 5. acquire() for execute(UPDATE projects …)
+    # 6. acquire() for execute(UPDATE papers zotero_item_key)
+    # 7. acquire() for execute(UPDATE papers zotero_citation_key)
 
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     conn1 = _make_conn(fetchrow=paper)
     conn2 = _make_conn(fetch=topic_rows)
     conn3 = _make_conn(fetchrow=project)
@@ -174,16 +182,17 @@ async def test_push_paper_happy_path():
     conn5 = _make_conn()
     conn6 = _make_conn()
 
-    def _cm(conn):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
-
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_enabled_config_rows())
     pool.acquire = MagicMock(
-        side_effect=[_cm(conn1), _cm(conn2), _cm(conn3), _cm(conn4), _cm(conn5), _cm(conn6)]
+        side_effect=[
+            _cm(config_conn),
+            _cm(conn1),
+            _cm(conn2),
+            _cm(conn3),
+            _cm(conn4),
+            _cm(conn5),
+            _cm(conn6),
+        ]
     )
 
     http = AsyncMock(spec=httpx.AsyncClient)
@@ -221,20 +230,17 @@ async def test_push_paper_happy_path():
 async def test_push_paper_doi_dedupe():
     """push_paper_to_zotero reuses existing Zotero item found by DOI search."""
     paper = _paper_row(project_ids=[10], doi="10.1234/test")
-    conn1 = _make_conn(fetchrow=paper)
 
-    # After DOI dedupe, we only need the persist-key connection
+    # Connection sequence:
+    # 1. acquire() for _get_zotero_config fetch
+    # 2. acquire() for fetchrow(paper)
+    # 3. acquire() for execute(UPDATE papers zotero_item_key) — after DOI dedupe
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    conn1 = _make_conn(fetchrow=paper)
     conn2 = _make_conn()
 
-    def _cm(conn):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
-
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_enabled_config_rows())
-    pool.acquire = MagicMock(side_effect=[_cm(conn1), _cm(conn2)])
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(conn1), _cm(conn2)])
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -265,20 +271,22 @@ async def test_push_paper_bbt_fallback():
     project = _project_row(col_key="PRECOLL")
     topic_rows: list = []
 
+    # Connection sequence:
+    # 1. config conn
+    # 2. paper fetchrow conn
+    # 3. topic fetch conn
+    # 4. project fetchrow conn
+    # 5. UPDATE papers zotero_item_key conn
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
     conn1 = _make_conn(fetchrow=paper)
     conn2 = _make_conn(fetch=topic_rows)
     conn3 = _make_conn(fetchrow=project)
     conn4 = _make_conn()  # UPDATE papers zotero_item_key
 
-    def _cm(conn):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
-
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_enabled_config_rows())
-    pool.acquire = MagicMock(side_effect=[_cm(conn1), _cm(conn2), _cm(conn3), _cm(conn4)])
+    pool.acquire = MagicMock(
+        side_effect=[_cm(config_conn), _cm(conn1), _cm(conn2), _cm(conn3), _cm(conn4)]
+    )
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -312,12 +320,6 @@ async def test_push_paper_bbt_fallback():
 async def test_resync_clears_and_repushes():
     """resync_paper_to_zotero clears zotero_item_key before delegating to push."""
     clear_conn = _make_conn()
-
-    def _cm(conn):
-        cm = MagicMock()
-        cm.__aenter__ = AsyncMock(return_value=conn)
-        cm.__aexit__ = AsyncMock(return_value=False)
-        return cm
 
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=_cm(clear_conn))
@@ -385,17 +387,22 @@ def _zotero_item(
 
 
 def _make_poll_pool(*conn_returns, config_rows=None):
-    """Pool mock where pool.fetch returns config rows and acquire() uses conn_returns."""
-    pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=config_rows or _zotero_poll_enabled_config_rows())
+    """Pool mock where config is fetched via acquire() and subsequent acquire() uses conn_returns.
 
-    def _cm(rv):
+    PI-010: _get_zotero_config now uses acquire() — config conn is prepended automatically.
+    """
+    config_conn = _make_conn(fetch=config_rows or _zotero_poll_enabled_config_rows())
+
+    def _cm_rv(rv):
         cm = MagicMock()
         cm.__aenter__ = AsyncMock(return_value=rv)
         cm.__aexit__ = AsyncMock(return_value=False)
         return cm
 
-    pool.acquire = MagicMock(side_effect=[_cm(rv) for rv in conn_returns])
+    pool = MagicMock()
+    pool.acquire = MagicMock(
+        side_effect=[_cm_rv(config_conn)] + [_cm_rv(rv) for rv in conn_returns]
+    )
     return pool
 
 
@@ -406,8 +413,9 @@ def _make_poll_pool(*conn_returns, config_rows=None):
 
 async def test_poll_library_disabled():
     """Returns disabled status when zotero.enabled is false."""
+    config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=_zotero_disabled_config_rows())
+    pool.acquire = MagicMock(return_value=_cm(config_conn))
     http = AsyncMock(spec=httpx.AsyncClient)
 
     result = await poll_zotero_library(db_pool=pool, http_client=http)
@@ -423,8 +431,9 @@ async def test_poll_library_poll_disabled():
         FakeRecord({"key": "zotero.user_id", "value": "123"}),
         FakeRecord({"key": "zotero.poll_enabled", "value": False}),
     ]
+    config_conn = _make_conn(fetch=config_rows)
     pool = MagicMock()
-    pool.fetch = AsyncMock(return_value=config_rows)
+    pool.acquire = MagicMock(return_value=_cm(config_conn))
     http = AsyncMock(spec=httpx.AsyncClient)
 
     result = await poll_zotero_library(db_pool=pool, http_client=http)
@@ -435,7 +444,7 @@ async def test_poll_library_poll_disabled():
 async def test_poll_library_skips_jarvis_origin():
     """Items with jarvis_paper_id= in Extra are skipped (not enqueued)."""
     jarvis_item = _zotero_item(key="JARVIS01", extra="jarvis_paper_id=42")
-    # version conn: persist new version
+    # version conn: persist new version (version 5 != 0 → execute)
     version_conn = _make_conn()
     pool = _make_poll_pool(version_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
@@ -456,11 +465,17 @@ async def test_poll_library_skips_jarvis_origin():
 
 
 async def test_poll_library_enqueues_new_items():
-    """New items without jarvis origin are enqueued as paper.process jobs."""
+    """New items without jarvis origin are upserted and enqueued as paper.analyze jobs.
+
+    PI-002: poll now calls upsert_paper → enqueues paper.analyze with paper_id.
+    """
     new_item = _zotero_item(key="NEWITEM1", title="New Paper", doi="")
-    # No DOI → no DB lookup; one enqueue call; one version-persist conn
+    # No DOI → no DOI-lookup conn needed.
+    # upsert conn: fetchrow returns the upserted paper row; execute for zotero_item_key update.
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 99}))
+    # version conn: persist new version (10 != 0)
     version_conn = _make_conn()
-    pool = _make_poll_pool(version_conn)
+    pool = _make_poll_pool(upsert_conn, version_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
@@ -473,10 +488,10 @@ async def test_poll_library_enqueues_new_items():
 
     mock_jobs.enqueue.assert_called_once()
     call_args = mock_jobs.enqueue.call_args
-    assert call_args[0][1] == "paper.process"
+    # PI-002: job kind is now paper.analyze, payload has paper_id
+    assert call_args[0][1] == "paper.analyze"
     payload = call_args[0][2]
-    assert payload["source_override"] == "zotero"
-    assert payload["zotero_item_key"] == "NEWITEM1"
+    assert payload["paper_id"] == 99
     assert result["enqueued"] == 1
     assert result["new_items"] == 1
 
@@ -484,8 +499,11 @@ async def test_poll_library_enqueues_new_items():
 async def test_poll_library_updates_version():
     """zotero.last_library_version updated in user_config after poll."""
     item = _zotero_item(key="VER0001", doi="")
+    # upsert conn for the item
+    upsert_conn = _make_conn(fetchrow=FakeRecord({"id": 55}))
+    # version conn: persists new version
     version_conn = _make_conn()
-    pool = _make_poll_pool(version_conn)
+    pool = _make_poll_pool(upsert_conn, version_conn)
     http = AsyncMock(spec=httpx.AsyncClient)
 
     with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:

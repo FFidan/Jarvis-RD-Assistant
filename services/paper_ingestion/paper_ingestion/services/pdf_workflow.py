@@ -175,7 +175,8 @@ async def run_process_pdf(
     # --- Phase 3: Store chunks in DB (new connection, no advisory lock needed) ---
     # ON CONFLICT DO NOTHING handles the rare race where two requests both
     # passed phase 1.
-    total_batches = max(len(chunks), 1)
+    batch_size = 32
+    total_batches = max((len(chunks) + batch_size - 1) // batch_size, 1)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             await conn.executemany(

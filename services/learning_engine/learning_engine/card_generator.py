@@ -9,7 +9,6 @@ Implements AGENTS.md anti-hallucination rules 5/6/7:
   7. Link verified cards to PDF page snapshots
 """
 
-import json
 import logging
 import os
 import unicodedata
@@ -123,10 +122,8 @@ class CardGenerator:
                 options=options,
                 config=self.litellm_config,
             )
-        except RuntimeError:
-            raise
-        except (json.JSONDecodeError, ValueError):
-            logger.error("LLM returned invalid JSON for card generation")
+        except RuntimeError as exc:
+            logger.error("LLM call failed during card generation: %s", exc)
             return None
         if isinstance(result, dict):
             return result.get("cards", [])
@@ -180,7 +177,7 @@ class CardGenerator:
             snapshot_path = None
             if paper_id and isinstance(page_num, int) and page_num > 0:
                 candidate = snapshot_base_path / str(paper_id) / f"page_{page_num}.png"
-                if candidate.resolve().is_relative_to(snapshot_base_path):
+                if candidate.resolve().is_relative_to(snapshot_base_path) and candidate.exists():
                     snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
             card_type = card.get("card_type", "concept")

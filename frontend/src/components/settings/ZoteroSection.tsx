@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
+import { useJobStore } from '@/stores/job-store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -105,7 +106,13 @@ export function ZoteroSection() {
   const handleSyncNow = async () => {
     setIsSyncing(true);
     try {
-      await zoteroPollNow();
+      const response = await zoteroPollNow();
+      useJobStore.getState().trackExternalJob({
+        jobId: response.job_id,
+        kind: 'zotero.poll',
+        payload: {},
+        status: response.status as 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
+      });
     } catch {
       // silently ignore — job may have queued anyway
     } finally {

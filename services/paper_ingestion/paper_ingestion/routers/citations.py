@@ -8,7 +8,8 @@ import logging
 from typing import Annotated
 
 import asyncpg
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
 from paper_ingestion.deps import get_db_pool, get_s2_source, limiter
@@ -42,36 +43,15 @@ async def get_citation_graph(
 @limiter.limit("2/minute")
 async def batch_fetch_citations(
     request: Request,
-    background_tasks: BackgroundTasks,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    s2_source: SemanticScholarSource = Depends(get_s2_source),
-):
-    """Queue citation fetching for all papers without citations_fetched_at."""
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """SELECT id FROM papers
-               WHERE citations_fetched_at IS NULL
-                 AND external_id LIKE 's2:%'
-                 AND (metadata->>'stub' IS NULL OR metadata->>'stub' != 'true')
-               ORDER BY created_at DESC
-               LIMIT 50"""
-        )
-    paper_ids = [r["id"] for r in rows]
+) -> BatchCitationFetchResponse:
+    """Enqueue a citations.batch_fetch job for papers without citations_fetched_at.
 
-    if not paper_ids:
-        return {"queued": 0, "message": "No papers need citation fetching"}
-
-    async def _fetch_batch(
-        pool: asyncpg.Pool, source: SemanticScholarSource, pids: list[int]
-    ) -> None:
-        for pid in pids:
-            try:
-                await sync_citations_for_paper(pool, source, pid)
-            except Exception:
-                logger.exception("Failed batch citation fetch for paper %d", pid)
-
-    background_tasks.add_task(_fetch_batch, db_pool, s2_source, paper_ids)
-    return {"queued": len(paper_ids), "message": f"Fetching citations for {len(paper_ids)} papers"}
+    The job is durable and visible in the jobs table.  The handler runs in the
+    paper_ingestion worker loop (``citations_job.py``).
+    """
+    job_id = await jobs_lib.enqueue(db_pool, "citations.batch_fetch", {})
+    return BatchCitationFetchResponse(queued=1, message=f"Job {job_id} queued")
 
 
 @router.post("/{paper_id}/fetch", response_model=CitationFetchResponse)

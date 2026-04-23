@@ -8,12 +8,20 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import jobs as jobs_lib
+from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["zotero"])
+
+
+class JobEnqueuedResponse(BaseModel):
+    """Generic response for endpoints that enqueue a background job."""
+
+    job_id: str
+    status: str
 
 
 # ---------------------------------------------------------------------------
@@ -143,3 +151,24 @@ async def resync_paper_to_zotero(
 
     job_id = await jobs_lib.enqueue(db_pool, "zotero.resync", {"paper_id": paper_id})
     return {"job_id": job_id, "status": "queued"}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/zotero/poll  — trigger manual Zotero sync
+# ---------------------------------------------------------------------------
+
+
+@router.post("/zotero/poll", response_model=JobEnqueuedResponse)
+@limiter.limit("6/hour")
+async def poll_now(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> JobEnqueuedResponse:
+    """Trigger manual Zotero sync — enqueues a ``zotero.sync_from_zotero`` job.
+
+    Returns immediately with a ``job_id`` so the caller can poll
+    ``GET /api/jobs/{job_id}`` for progress.  Rate-limited to 6/hour.
+    """
+    logger.info("zotero.poll: enqueueing sync job")
+    job_id = await jobs_lib.enqueue(db_pool, "zotero.sync_from_zotero", {})
+    return JobEnqueuedResponse(job_id=str(job_id), status="queued")

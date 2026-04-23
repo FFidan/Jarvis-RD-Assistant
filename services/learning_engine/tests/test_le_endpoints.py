@@ -284,8 +284,13 @@ async def test_analytics_handlers_return_expected_shapes(handler_name, rows, exp
     """Analytics handlers preserve the row shape expected by their response models."""
     from learning_engine.routers import analytics
 
-    db_pool = AsyncMock()
-    db_pool.fetch.return_value = rows
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(return_value=rows)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value = ctx
     handler = getattr(analytics, handler_name).__wrapped__
 
     result = await handler(MagicMock(), days=30, db_pool=db_pool)

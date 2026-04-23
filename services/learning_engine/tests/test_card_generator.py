@@ -34,27 +34,13 @@ def _make_chunks() -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_call_llm_for_cards_returns_none_on_malformed_response():
-    """Malformed LiteLLM response structure degrades to None."""
+async def test_call_llm_for_cards_returns_none_on_runtime_error():
+    """call_llm RuntimeError (e.g. LiteLLM unreachable) degrades to None."""
     generator, _ = _make_generator()
 
     with patch(
-        "learning_engine.card_generator.call_llm", side_effect=ValueError("Malformed LLM response")
-    ):
-        result = await generator._call_llm_for_cards("prompt", "smart")
-
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_call_llm_for_cards_returns_none_on_invalid_json_payload():
-    """Non-JSON message content degrades to None."""
-    import json as _json
-
-    generator, _ = _make_generator()
-
-    with patch(
-        "learning_engine.card_generator.call_llm", side_effect=_json.JSONDecodeError("err", "", 0)
+        "learning_engine.card_generator.call_llm",
+        side_effect=RuntimeError("LLM call failed: upstream error"),
     ):
         result = await generator._call_llm_for_cards("prompt", "smart")
 
@@ -79,6 +65,10 @@ def test_verify_raw_cards_attaches_chunk_metadata_and_snapshot(monkeypatch, tmp_
     """Verified cards use chunk-derived page numbers and snapshots under the storage root."""
     generator, _ = _make_generator()
     monkeypatch.setenv("SNAPSHOT_STORAGE_PATH", str(tmp_path))
+    # Create the snapshot file so the existence check passes (LE-015 fix)
+    snapshot_dir = tmp_path / "42"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    (snapshot_dir / "page_3.png").write_bytes(b"")
 
     verified = generator._verify_raw_cards(
         raw_cards=[

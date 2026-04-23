@@ -100,7 +100,7 @@ def _extract_text_sync(pdf_path: Path) -> tuple[str, list[tuple[int, int]]]:
             chars_per_page = len(full_text) // max(total_pages, 1)
             for i in range(total_pages):
                 start = i * chars_per_page
-                end = min((i + 1) * chars_per_page, len(full_text))
+                end = len(full_text) if i == total_pages - 1 else (i + 1) * chars_per_page
                 page_boundaries.append((start, end))
     else:
         page_boundaries = [(0, len(full_text))]
@@ -217,7 +217,10 @@ class PDFProcessor:
         for _ in range(4):  # Up to 4 additional redirects
             if head_resp.status_code not in (301, 302, 303, 307, 308):
                 break
-            redirect_url = urljoin(current_url, head_resp.headers.get("location", ""))
+            location = head_resp.headers.get("Location") or head_resp.headers.get("location")
+            if not location:
+                break
+            redirect_url = urljoin(current_url, location)
             await _validate_pdf_url(redirect_url)
             current_url = redirect_url
             head_resp = await self.http_client.request(

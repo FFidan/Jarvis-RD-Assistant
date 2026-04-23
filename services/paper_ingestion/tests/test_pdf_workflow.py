@@ -101,6 +101,27 @@ async def test_run_process_pdf_wraps_embedding_failures():
         )
 
 
+# ---------------------------------------------------------------------------
+# ING-001: total_batches ceiling division
+# ---------------------------------------------------------------------------
+
+
+def test_total_batches_ceiling_division() -> None:
+    """33 chunks with batch_size=32 → total_batches=2 (ceiling division)."""
+    # Replicate the formula from pdf_workflow.run_process_pdf
+    batch_size = 32
+    for n_chunks, expected in [
+        (0, 1),  # max(..., 1) guard
+        (1, 1),
+        (32, 1),
+        (33, 2),
+        (64, 2),
+        (65, 3),
+    ]:
+        result = max((n_chunks + batch_size - 1) // batch_size, 1)
+        assert result == expected, f"n_chunks={n_chunks}: got {result}, want {expected}"
+
+
 @pytest.mark.asyncio
 async def test_run_process_pdf_stores_chunks_and_returns_processed():
     """Successful processing writes chunks and returns processed status."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -55,7 +54,12 @@ async def test_init_pg_connection_registers_json_and_jsonb_codecs():
 
 @pytest.mark.asyncio
 async def test_dynamic_update_serializes_jsonb_and_extra_sets():
-    """dynamic_update should parameterize values while casting configured JSONB columns."""
+    """dynamic_update passes native dict to asyncpg for JSONB columns (no json.dumps).
+
+    The asyncpg global JSONB codec (registered via init_pg_connection) handles
+    serialisation.  dynamic_update must NOT call json.dumps itself — that would
+    produce a double-encoded JSON string-of-a-string on the wire (JC-001).
+    """
     conn = AsyncMock()
     conn.fetchrow.return_value = {"id": 7, "config": {"enabled": True}}
 
@@ -73,7 +77,8 @@ async def test_dynamic_update_serializes_jsonb_and_extra_sets():
     params = conn.fetchrow.await_args.args[1:]
 
     assert 'UPDATE "user_config" SET "value" = $2::jsonb, updated_at = NOW()' in sql
-    assert params == (7, json.dumps({"enabled": True}))
+    # JC-001 fix: asyncpg codec handles serialisation — raw dict is passed, NOT json.dumps()
+    assert params == (7, {"enabled": True})
     assert row == {"id": 7, "config": {"enabled": True}}
 
 

@@ -10,12 +10,16 @@ import httpx
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, job_handler
 
+from paper_ingestion.models.papers import PaperCreate, SourceType
+from paper_ingestion.services.pdf_workflow import upsert_paper
+
 logger = logging.getLogger(__name__)
 
 
 async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
     """Read Zotero settings from user_config. Returns dict with short keys."""
-    rows = await db_pool.fetch("SELECT key, value FROM user_config WHERE key LIKE 'zotero.%'")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'zotero.%'")
     config: dict[str, Any] = {}
     for row in rows:
         short_key = row["key"][len("zotero.") :]
@@ -328,24 +332,43 @@ async def poll_zotero_library(
             if name:
                 authors.append(name)
 
-        # Enqueue paper.process job with Zotero metadata.
-        payload: dict[str, Any] = {
-            "source_override": "zotero",
-            "title": data.get("title", ""),
-            "authors": authors,
-            "abstract": data.get("abstractNote", "") or "",
-            "url": data.get("url", "") or "",
-            "zotero_item_key": item_key,
-        }
+        # Upsert paper into DB first so paper_id exists, then enqueue paper.analyze.
+        title: str = data.get("title", "") or ""
+        abstract: str = data.get("abstractNote", "") or ""
+        url: str = data.get("url", "") or ""
+        if not url:
+            url = f"https://www.zotero.org/items/{item_key}"
+        metadata: dict[str, Any] = {"zotero_item_key": item_key}
         if doi:
-            payload["doi"] = doi
+            metadata["doi"] = doi
+
+        paper_create = PaperCreate(
+            external_id=f"zotero:{item_key}",
+            source_type=SourceType.LOCAL,
+            title=title or f"Zotero item {item_key}",
+            authors=authors,
+            abstract=abstract or None,
+            url=url,
+            metadata=metadata,
+        )
 
         try:
-            await jobs_lib.enqueue(db_pool, "paper.process", payload)
+            async with db_pool.acquire() as conn:
+                row = await upsert_paper(conn, paper_create)
+                paper_id: int = row["id"]
+                # Store the Zotero item key on the paper row.
+                if item_key:
+                    await conn.execute(
+                        "UPDATE papers SET zotero_item_key = $1"
+                        " WHERE id = $2 AND zotero_item_key IS NULL",
+                        item_key,
+                        paper_id,
+                    )
+            await jobs_lib.enqueue(db_pool, "paper.analyze", {"paper_id": paper_id})
             enqueued_count += 1
         except Exception:
             logger.error(
-                "Zotero poll: failed to enqueue paper.process for key %s", item_key, exc_info=True
+                "Zotero poll: failed to upsert/enqueue paper for key %s", item_key, exc_info=True
             )
 
     # Persist updated library version.

@@ -318,3 +318,116 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
         )
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PI-009: list_papers positional parameter correctness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_papers_no_filters_uses_limit_offset():
+    """list_papers with no filters should still pass LIMIT/OFFSET as positional params."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_paper_row()]
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        status=None,
+        source_type=None,
+        topic_id=None,
+        q=None,
+        limit=5,
+        offset=10,
+        db_pool=pool,
+        embedder=None,
+    )
+
+    fetch_call = conn.fetch.await_args
+    sql, *positional = fetch_call.args
+    assert "LIMIT $1" in sql
+    assert "OFFSET $2" in sql
+    assert positional == [5, 10]
+
+
+@pytest.mark.asyncio
+async def test_list_papers_topic_filter_correct_param_indices():
+    """list_papers with topic_id should use $1 for topic_id, $2/$3 for LIMIT/OFFSET."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_paper_row()]
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        status=None,
+        source_type=None,
+        topic_id=42,
+        q=None,
+        limit=20,
+        offset=0,
+        db_pool=pool,
+        embedder=None,
+    )
+
+    fetch_call = conn.fetch.await_args
+    sql, *positional = fetch_call.args
+    assert "pt.topic_id = $1" in sql
+    assert "LIMIT $2" in sql
+    assert "OFFSET $3" in sql
+    assert positional == [42, 20, 0]
+
+
+@pytest.mark.asyncio
+async def test_list_papers_status_and_source_type_correct_param_indices():
+    """list_papers with status + source_type assigns $1/$2 filters, $3/$4 LIMIT/OFFSET."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_paper_row()]
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        status=PaperStatus.READ,
+        source_type=SourceType.ARXIV,
+        topic_id=None,
+        q=None,
+        limit=10,
+        offset=5,
+        db_pool=pool,
+        embedder=None,
+    )
+
+    fetch_call = conn.fetch.await_args
+    sql, *positional = fetch_call.args
+    assert "pus.status = $1" in sql
+    assert "p.source_type = $2" in sql
+    assert "LIMIT $3" in sql
+    assert "OFFSET $4" in sql
+    assert positional == ["read", "arxiv", 10, 5]
+
+
+@pytest.mark.asyncio
+async def test_list_papers_all_filters_correct_param_indices():
+    """list_papers with topic_id + status + source_type + q assigns params in order."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_paper_row()]
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        status=PaperStatus.READ,
+        source_type=SourceType.ARXIV,
+        topic_id=7,
+        q="neural",
+        limit=15,
+        offset=3,
+        db_pool=pool,
+        embedder=None,
+    )
+
+    fetch_call = conn.fetch.await_args
+    sql, *positional = fetch_call.args
+    # topic=$1, status=$2, source_type=$3, q=$4, LIMIT=$5, OFFSET=$6
+    assert "pt.topic_id = $1" in sql
+    assert "pus.status = $2" in sql
+    assert "p.source_type = $3" in sql
+    assert "plainto_tsquery" in sql and "$4" in sql
+    assert "LIMIT $5" in sql
+    assert "OFFSET $6" in sql
+    assert positional == [7, "read", "arxiv", "neural", 15, 3]

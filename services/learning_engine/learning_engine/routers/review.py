@@ -1,10 +1,11 @@
 """Review and stats endpoints."""
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
+from jarvis_common.streak import compute_streak
 
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
@@ -148,26 +149,12 @@ async def get_stats(
                 FROM review_logs ORDER BY review_date DESC LIMIT 365
                 """
             )
-            streak_days = 0
-            today = datetime.now(UTC).date()
-            yesterday = today - timedelta(days=1)
-            expected: date | None = None
-            for row in streak_rows:
-                rd = row["review_date"]
-                if expected is None:
-                    # Accept today or yesterday as streak start
-                    if rd == today:
-                        expected = today - timedelta(days=1)
-                    elif rd == yesterday:
-                        expected = yesterday - timedelta(days=1)
-                    else:
-                        break  # streak is already broken (gap > 1 day)
-                    streak_days += 1
-                elif rd == expected:
-                    streak_days += 1
-                    expected -= timedelta(days=1)
-                else:
-                    break
+            streak_days = compute_streak(
+                [
+                    datetime(r["review_date"].year, r["review_date"].month, r["review_date"].day)
+                    for r in streak_rows
+                ]
+            )
 
     return RetentionStats(
         total_cards=total_cards,

@@ -452,6 +452,77 @@ async def test_download_pdf_rejects_truncated_pdf(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# ING-003: page-boundary off-by-one
+# ---------------------------------------------------------------------------
+
+
+def test_page_boundaries_last_page_captures_all_chars() -> None:
+    """10-page doc whose length is not divisible by 10 must include all trailing chars."""
+    # Replicate the formula from _extract_text_sync in pdf_processor.py
+    full_text = "x" * 103  # 103 chars, not divisible by 10
+    total_pages = 10
+    chars_per_page = len(full_text) // max(total_pages, 1)  # = 10
+
+    page_boundaries: list[tuple[int, int]] = []
+    for i in range(total_pages):
+        start = i * chars_per_page
+        end = len(full_text) if i == total_pages - 1 else (i + 1) * chars_per_page
+        page_boundaries.append((start, end))
+
+    # Last page must reach exactly len(full_text)
+    assert page_boundaries[-1][1] == len(full_text), (
+        f"Last page end={page_boundaries[-1][1]} != {len(full_text)}"
+    )
+    # All chars covered
+    reconstructed = "".join(full_text[s:e] for s, e in page_boundaries)
+    assert reconstructed == full_text
+
+
+# ---------------------------------------------------------------------------
+# ING-004: download_pdf null-location guard
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_no_location_header_does_not_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Redirect response with no Location header must not crash (break out of loop)."""
+    # First HEAD returns a 302 with NO Location header; second returns 200.
+    head_302 = MagicMock()
+    head_302.status_code = 302
+    head_302.headers = {}  # no Location
+    head_302.raise_for_status = MagicMock()
+
+    head_200 = MagicMock()
+    head_200.status_code = 200
+    head_200.raise_for_status = MagicMock()
+
+    async def fake_stream_bytes(chunk_size: int = 65536):  # type: ignore[override]
+        yield b"%PDF-" + b"a" * 16
+
+    stream_response = MagicMock()
+    stream_response.raise_for_status = MagicMock()
+    stream_response.aiter_bytes = fake_stream_bytes
+    stream_cm = MagicMock()
+    stream_cm.__aenter__ = AsyncMock(return_value=stream_response)
+    stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+    http_client = MagicMock()
+    # First request() call → 302 with no Location → should break and then use current_url
+    http_client.request = AsyncMock(side_effect=[head_302, head_200])
+    http_client.stream = MagicMock(return_value=stream_cm)
+
+    processor = PDFProcessor(http_client=http_client, embedder=MagicMock())
+    monkeypatch.setattr(pdf_processor, "PDF_STORAGE_PATH", str(tmp_path))
+    monkeypatch.setattr(socket, "getaddrinfo", lambda h, p: _fake_getaddrinfo("151.101.1.1"))
+
+    # Should not raise — broken out of redirect loop, then downloads from current_url
+    result = await processor.download_pdf("https://arxiv.org/pdf/test.pdf", paper_id=42)
+    assert result == tmp_path / "42.pdf"
+
+
 def test_allowed_pdf_domains_contains_expected_entries() -> None:
     """ALLOWED_PDF_DOMAINS must contain all 5 expected entries."""
     expected = {

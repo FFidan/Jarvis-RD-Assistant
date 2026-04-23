@@ -6,6 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from learning_engine.deps import get_db_pool, limiter
+from learning_engine.models import (
+    FocusSessionResponse,
+    MyDayProjectPulseItem,
+    MyDayRecommendationItem,
+    MyDayResponse,
+    MyDayTaskItem,
+)
 
 router = APIRouter(prefix="/api/executive", tags=["executive"])
 
@@ -22,13 +29,13 @@ class QuickAddTaskRequest(BaseModel):
     priority: int = Field(3, ge=1, le=4)
 
 
-@router.get("/my-day")
+@router.get("/my-day", response_model=MyDayResponse)
 @limiter.limit("60/minute")
 async def get_my_day(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
     limit_recommendations: int = Query(3, ge=1, le=10),
-) -> dict[str, Any]:
+) -> MyDayResponse:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers)."""
     async with db_pool.acquire() as conn:
         # Tasks: Todo (due today/overdue) + completed today, with project context
@@ -113,14 +120,14 @@ async def get_my_day(
             ORDER BY p.name
         """)
 
-    return {
-        "tasks": [dict(t) for t in tasks],
-        "cards_due": cards_due,
-        "recommendations": [dict(r) for r in recommendations],
-        "today_focus_hours": float(today_focus_hours),
-        "focus_streak_days": focus_streak_days,
-        "project_pulse": [dict(p) for p in project_pulse],
-    }
+    return MyDayResponse(
+        tasks=[MyDayTaskItem.model_validate(dict(t)) for t in tasks],
+        cards_due=int(cards_due or 0),
+        recommendations=[MyDayRecommendationItem.model_validate(dict(r)) for r in recommendations],
+        today_focus_hours=float(today_focus_hours),
+        focus_streak_days=focus_streak_days,
+        project_pulse=[MyDayProjectPulseItem.model_validate(dict(p)) for p in project_pulse],
+    )
 
 
 @router.post("/tasks", status_code=201)
@@ -150,29 +157,37 @@ async def quick_add_task(
     return dict(row)  # type: ignore[arg-type]
 
 
-@router.post("/focus/log")
+@router.post("/focus/log", response_model=FocusSessionResponse)
 @limiter.limit("10/minute")
 async def log_focus_session(
     request: Request,
     payload: FocusSessionRequest,
     db_pool: Pool = Depends(get_db_pool),
-) -> dict[str, Any]:
-    """Log a completed focus session."""
-    async with db_pool.acquire() as conn:
-        # Pre-validate references (outside transaction)
-        if payload.task_id is not None:
-            task_exists = await conn.fetchval("SELECT 1 FROM tasks WHERE id = $1", payload.task_id)
-            if not task_exists:
-                raise HTTPException(status_code=404, detail="Task not found")
-        if payload.paper_id is not None:
-            paper_exists = await conn.fetchval(
-                "SELECT 1 FROM papers WHERE id = $1", payload.paper_id
-            )
-            if not paper_exists:
-                raise HTTPException(status_code=404, detail="Paper not found")
+) -> FocusSessionResponse:
+    """Log a completed focus session.
 
-        # All validated — execute mutations in transaction (no more HTTPException inside)
+    Validation and mutations run inside a single transaction using SELECT FOR UPDATE
+    to eliminate the TOCTOU race between existence checks and DML (LE-009).
+    """
+    async with db_pool.acquire() as conn:
         async with conn.transaction():
+            # Validate and lock referenced rows inside the transaction (LE-009: FOR UPDATE
+            # prevents concurrent deletes from racing between the check and the DML).
+            if payload.task_id is not None:
+                task_row = await conn.fetchrow(
+                    "SELECT id FROM tasks WHERE id = $1 FOR UPDATE",
+                    payload.task_id,
+                )
+                if task_row is None:
+                    raise HTTPException(status_code=404, detail="Task not found")
+            if payload.paper_id is not None:
+                paper_row = await conn.fetchrow(
+                    "SELECT id FROM papers WHERE id = $1 FOR UPDATE",
+                    payload.paper_id,
+                )
+                if paper_row is None:
+                    raise HTTPException(status_code=404, detail="Paper not found")
+
             if payload.task_id is not None:
                 await conn.execute(
                     "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
@@ -188,7 +203,7 @@ async def log_focus_session(
                     WHERE paper_user_state.status = 'new'""",
                     payload.paper_id,
                 )
-            # Always upsert daily_log
+            # Atomic upsert — ON CONFLICT handles concurrent inserts safely.
             await conn.execute(
                 """INSERT INTO daily_log (log_date, focus_hours)
                 VALUES (CURRENT_DATE, $1)
@@ -196,4 +211,4 @@ async def log_focus_session(
                 payload.duration_hours,
             )
 
-    return {"status": "success", "recorded_hours": payload.duration_hours}
+    return FocusSessionResponse(status="success", recorded_hours=payload.duration_hours)

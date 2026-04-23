@@ -5,12 +5,16 @@ from datetime import datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
+from jarvis_common.db_helpers import dynamic_update
 
 from learning_engine.card_store import insert_card
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
 from learning_engine.fsrs_manager import FSRSManager
 from learning_engine.models import CardCreate, CardResponse, CardUpdate
+
+_CARD_ALLOWED_COLUMNS: frozenset[str] = frozenset({"front", "back", "card_type", "evidence"})
+_CARD_JSONB_COLUMNS: frozenset[str] = frozenset({"evidence"})
 
 router = APIRouter(
     prefix="/api/cards",
@@ -69,22 +73,19 @@ async def list_cards(
     """List cards with optional filters."""
     conditions: list[str] = []
     params: list = []
-    param_idx = 1
 
     if deck_id is not None:
-        conditions.append(f"deck_id = ${param_idx}")
+        conditions.append(f"deck_id = ${len(params) + 1}")
         params.append(deck_id)
-        param_idx += 1
 
     if due_before is not None:
-        conditions.append(f"due_at <= ${param_idx}")
+        conditions.append(f"due_at <= ${len(params) + 1}")
         params.append(due_before)
-        param_idx += 1
 
     query = "SELECT * FROM cards"
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += f" ORDER BY due_at ASC NULLS LAST LIMIT ${param_idx} OFFSET ${param_idx + 1}"
+    query += f" ORDER BY due_at ASC NULLS LAST LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
     params.extend([limit, offset])
 
     async with db_pool.acquire() as conn:
@@ -102,42 +103,35 @@ async def update_card(
 ) -> CardResponse:
     """Update a card's content (does not affect FSRS state)."""
     async with db_pool.acquire() as conn:
-        async with conn.transaction():
-            existing = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
-            if not existing:
+        existing = await conn.fetchrow("SELECT id FROM cards WHERE id = $1", card_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="Card not found")
+
+        update_dict: dict = {}
+        if body.front is not None:
+            update_dict["front"] = body.front
+        if body.back is not None:
+            update_dict["back"] = body.back
+        if body.card_type is not None:
+            update_dict["card_type"] = body.card_type.value
+        if body.evidence is not None:
+            update_dict["evidence"] = body.evidence.model_dump()
+
+        if not update_dict:
+            row = await conn.fetchrow("SELECT * FROM cards WHERE id = $1", card_id)
+            if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
+            return row_to_card_response(row)
 
-            updates: list[str] = []
-            params: list = []
-            param_idx = 1
-
-            if body.front is not None:
-                updates.append(f"front = ${param_idx}")
-                params.append(body.front)
-                param_idx += 1
-            if body.back is not None:
-                updates.append(f"back = ${param_idx}")
-                params.append(body.back)
-                param_idx += 1
-            if body.card_type is not None:
-                updates.append(f"card_type = ${param_idx}")
-                params.append(body.card_type.value)
-                param_idx += 1
-            if body.evidence is not None:
-                updates.append(f"evidence = ${param_idx}")
-                params.append(body.evidence.model_dump())
-                param_idx += 1
-
-            if not updates:
-                return row_to_card_response(existing)
-
-            updates.append("updated_at = NOW()")
-            params.append(card_id)
-
-            row = await conn.fetchrow(
-                f"UPDATE cards SET {', '.join(updates)} WHERE id = ${param_idx} RETURNING *",  # nosec B608 - column names are hardcoded and values stay parameterized
-                *params,
-            )
+        row = await dynamic_update(
+            conn,
+            table="cards",
+            record_id=card_id,
+            updates=update_dict,
+            allowed_columns=_CARD_ALLOWED_COLUMNS,
+            jsonb_columns=_CARD_JSONB_COLUMNS,
+            extra_sets=["updated_at = NOW()"],
+        )
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     return row_to_card_response(row)

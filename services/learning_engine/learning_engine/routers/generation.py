@@ -301,22 +301,6 @@ async def batch_generate_cards(
     return BatchAcceptedResponse(job_id=job_id, status="queued")
 
 
-@router.get("/batch/{job_id}")
-@limiter.limit("10/minute")
-async def get_batch_status(
-    request: Request,
-    job_id: str,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict[str, Any]:
-    """Poll the status of a batch generation job started by POST /api/generate/batch."""
-    row = await jobs_lib.get(db_pool, job_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    # Normalise datetime fields for JSON serialisation
-    out: dict[str, Any] = {}
-    for k, v in row.items():
-        if hasattr(v, "isoformat"):
-            out[k] = v.isoformat()
-        else:
-            out[k] = v
-    return out
+# NOTE: GET /api/generate/batch/{job_id} has been removed (LE-004).
+# Use GET /api/jobs/{job_id} instead — it has ownership checks and is the canonical
+# job-status endpoint.

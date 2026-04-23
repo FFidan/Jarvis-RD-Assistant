@@ -130,8 +130,9 @@ async def dynamic_update(
     allowed_columns:
         Whitelist of column names that may appear in *updates*.
     jsonb_columns:
-        Subset of *allowed_columns* whose values need ``::jsonb`` cast and
-        ``json.dumps`` serialisation.
+        Subset of *allowed_columns* whose values need ``::jsonb`` cast.
+        asyncpg's global JSONB codec handles serialisation automatically —
+        do NOT call ``json.dumps`` here; that would double-encode.
     extra_sets:
         Literal SQL fragments appended to the SET clause, e.g.
         ``["updated_at = NOW()", "completed_at = NULL"]``.
@@ -179,7 +180,7 @@ async def dynamic_update(
         quoted_col = quote_ident(col)
         if col in jsonb_columns:
             sets.append(f"{quoted_col} = ${idx}::jsonb")
-            params.append(json.dumps(value))
+            params.append(value)  # asyncpg JSONB codec handles serialisation
         else:
             sets.append(f"{quoted_col} = ${idx}")
             params.append(value)

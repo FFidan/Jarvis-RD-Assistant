@@ -37,13 +37,14 @@ async def list_projects(
             status_code=400,
             detail=f"Invalid status '{status}'. Must be one of: {valid}",
         )
-    if status:
-        rows = await db_pool.fetch(
-            "SELECT * FROM projects WHERE status = $1 ORDER BY created_at DESC",
-            status,
-        )
-    else:
-        rows = await db_pool.fetch("SELECT * FROM projects ORDER BY created_at DESC")
+    async with db_pool.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                "SELECT * FROM projects WHERE status = $1 ORDER BY created_at DESC",
+                status,
+            )
+        else:
+            rows = await conn.fetch("SELECT * FROM projects ORDER BY created_at DESC")
     return [ProjectResponse(**dict(row)) for row in rows]
 
 
@@ -114,13 +115,13 @@ async def get_project(
             project_id,
         )
 
-    project = ProjectResponse(**dict(row))
-    result = project.model_dump()
-    result["total_tasks"] = counts["total_tasks"]
-    result["done_tasks"] = counts["done_tasks"]
-    result["total_milestones"] = counts["total_milestones"]
-    result["completed_milestones"] = counts["completed_milestones"]
-    return result
+    return ProjectDetailResponse(
+        **dict(row),
+        total_tasks=counts["total_tasks"],
+        done_tasks=counts["done_tasks"],
+        total_milestones=counts["total_milestones"],
+        completed_milestones=counts["completed_milestones"],
+    )
 
 
 # ---------------------------------------------------------------------------

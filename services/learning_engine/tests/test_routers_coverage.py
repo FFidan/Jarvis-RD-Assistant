@@ -164,7 +164,7 @@ def _app():
 async def test_list_projects_returns_list(_app):
     """GET /api/projects returns a JSON list of projects."""
     app, conn, pool = _app
-    pool.fetch = AsyncMock(
+    conn.fetch = AsyncMock(
         return_value=[_make_project_row(id=1, name="Alpha"), _make_project_row(id=2, name="Beta")]
     )
 

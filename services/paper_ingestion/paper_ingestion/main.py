@@ -172,6 +172,7 @@ async def lifespan(app: FastAPI):
 
     importlib.import_module("paper_ingestion.paper_jobs")
     importlib.import_module("paper_ingestion.extraction_jobs")
+    importlib.import_module("paper_ingestion.citations_job")
     importlib.import_module("paper_ingestion.pulse.job")
     importlib.import_module("paper_ingestion.integrations.zotero_service")
 

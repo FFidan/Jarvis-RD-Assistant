@@ -297,6 +297,19 @@ async def set_config(
                 "pulse_overnight live reschedule failed (job may not exist yet)",
                 exc_info=True,
             )
+    if key == "zotero.poll_cron":
+        try:
+            if scheduler is not None:
+                scheduler.reschedule_job(
+                    "zotero_library_sync",
+                    trigger=CronTrigger.from_crontab(body.value),
+                )
+                logger.info("zotero_library_sync rescheduled live (cron=%s)", body.value)
+        except Exception:
+            logger.warning(
+                "zotero_library_sync live reschedule failed (job may not exist yet)",
+                exc_info=True,
+            )
     if key == "user.timezone":
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
         telegram_url = os.getenv("TELEGRAM_BOT_URL", "").strip()
