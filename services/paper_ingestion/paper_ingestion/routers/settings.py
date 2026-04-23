@@ -72,6 +72,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
     }
 )
 
+_SECRET_KEYS: frozenset[str] = frozenset({"zotero.api_key"})
+
 _NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
 _NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
 
@@ -182,11 +184,14 @@ async def get_config(
     key: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ConfigEntry:
+    if key not in _ALLOWED_CONFIG_KEYS:
+        raise HTTPException(404, f"Config key '{key}' not found")
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT key, value FROM user_config WHERE key = $1", key)
     if not row:
         raise HTTPException(404, f"Config key '{key}' not found")
-    return ConfigEntry(key=row["key"], value=row["value"])
+    value = "****" if key in _SECRET_KEYS else row["value"]
+    return ConfigEntry(key=row["key"], value=value)
 
 
 @router.put("/config/{key}")

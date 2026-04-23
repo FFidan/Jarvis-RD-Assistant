@@ -264,7 +264,10 @@ app.add_middleware(
 
 # ProxyHeadersMiddleware (outermost — added last so it runs first, decoding
 # X-Forwarded-For / X-Forwarded-Proto before any other middleware sees the request)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
+app.add_middleware(
+    ProxyHeadersMiddleware,
+    trusted_hosts=os.getenv("TRUSTED_PROXY_HOSTS", "dashboard").split(","),
+)
 
 # Standardized error handlers
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)

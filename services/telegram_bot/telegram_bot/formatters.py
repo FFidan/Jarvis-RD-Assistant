@@ -6,6 +6,7 @@ Maximum message length is 4096 characters.
 """
 
 import html
+import re
 from datetime import UTC, datetime
 from urllib.parse import urlparse
 
@@ -14,6 +15,10 @@ TRUNCATION_HEADROOM = 100
 
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# Matches BIDI control characters (U+202A–U+202E, U+2066–U+2069) and
+# zero-width/invisible characters (U+200B–U+200D, U+FEFF, etc.)
+_BIDI_ZW_RE = re.compile(r"[‪-‮⁦-⁩​-‍﻿]")
 
 
 def safe_url(url: str) -> str:
@@ -42,8 +47,11 @@ def safe_url(url: str) -> str:
 
 
 def escape(text: str) -> str:
-    """Escape HTML special characters for Telegram."""
-    return html.escape(str(text))
+    """Escape HTML special characters for Telegram, stripping BIDI/zero-width chars."""
+    if text is None:
+        return ""
+    text = _BIDI_ZW_RE.sub("", str(text))
+    return html.escape(text)
 
 
 def truncate(text: str, max_length: int = MAX_MESSAGE_LENGTH) -> str:

@@ -221,6 +221,60 @@ async def test_zotero_user_id_rejects_empty_string(_app):
     assert "non-empty" in resp.json()["detail"]
 
 
+async def _get_config(app, key: str):
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        return await client.get(f"/api/config/{key}")
+
+
+# ---------------------------------------------------------------------------
+# Tests: PI-017 — GET /api/config/{key} secret masking
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_zotero_api_key_returns_masked(_app):
+    """GET zotero.api_key returns '****', not the real value (PI-017)."""
+    app, conn = _app
+    conn.fetchrow.return_value = {"key": "zotero.api_key", "value": "supersecret123"}
+    resp = await _get_config(app, "zotero.api_key")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "zotero.api_key"
+    assert body["value"] == "****"
+    assert "supersecret123" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_zotero_user_id_not_masked(_app):
+    """GET zotero.user_id returns the real value (not a secret key)."""
+    app, conn = _app
+    conn.fetchrow.return_value = {"key": "zotero.user_id", "value": "12345678"}
+    resp = await _get_config(app, "zotero.user_id")
+    assert resp.status_code == 200
+    assert resp.json()["value"] == "12345678"
+
+
+@pytest.mark.asyncio
+async def test_get_unknown_config_key_returns_404(_app):
+    """GET /api/config/{key} rejects unknown keys with 404 (PI-017 allowlist check)."""
+    app, conn = _app
+    resp = await _get_config(app, "unknown.secret.key")
+    assert resp.status_code == 404
+    # DB should NOT have been queried for unknown keys
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_zotero_api_key_not_found_returns_404(_app):
+    """GET zotero.api_key returns 404 when the key is not set in the DB."""
+    app, conn = _app
+    conn.fetchrow.return_value = None
+    resp = await _get_config(app, "zotero.api_key")
+    assert resp.status_code == 404
+
+
 @pytest.mark.asyncio
 async def test_zotero_key_not_blocked_by_allowlist(_app):
     """All 6 zotero.* keys are in the allowlist (no 'Unknown config key' rejection)."""

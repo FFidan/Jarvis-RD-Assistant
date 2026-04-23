@@ -41,11 +41,10 @@ async def test_nudge_type_html_injection_is_escaped() -> None:
     nudge_id = 7
 
     # Patch JOB_REGISTRY so the lookup raises KeyError, triggering the alert path.
+    # resolve_owner_chat_id is imported lazily inside _run_job from telegram_bot.owner,
+    # so we patch it there.
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        # Also patch resolve_owner_chat_id so we get past the owner check.
-        with patch(
-            "telegram_bot.scheduler.resolve_owner_chat_id", new=AsyncMock(return_value=99)
-        ) as _mock_owner:
+        with patch("telegram_bot.owner.resolve_owner_chat_id", new=AsyncMock(return_value=99)):
             # _run_job will hit KeyError on JOB_REGISTRY lookup → except block fires.
             await scheduler._run_job(malicious_nudge_type, nudge_id)
 
@@ -74,15 +73,15 @@ async def test_nudge_type_ampersand_is_escaped() -> None:
     nudge_id = 3
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch("telegram_bot.scheduler.resolve_owner_chat_id", new=AsyncMock(return_value=99)):
+        with patch("telegram_bot.owner.resolve_owner_chat_id", new=AsyncMock(return_value=99)):
             await scheduler._run_job(nudge_type_with_amp, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
     text: str = call_kwargs["text"]
 
-    assert "&" not in text.replace("&amp;", "").replace("&lt;", "").replace("&gt;", ""), (
-        "Unescaped & still present in alert text"
-    )
+    # Strip all known safe entity sequences and ensure no bare & remains.
+    sanitized = text.replace("&amp;", "").replace("&lt;", "").replace("&gt;", "")
+    assert "&" not in sanitized, "Unescaped & still present in alert text"
     assert "&amp;" in text
 
 
@@ -94,7 +93,7 @@ async def test_safe_nudge_type_passes_through() -> None:
     nudge_id = 1
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch("telegram_bot.scheduler.resolve_owner_chat_id", new=AsyncMock(return_value=99)):
+        with patch("telegram_bot.owner.resolve_owner_chat_id", new=AsyncMock(return_value=99)):
             await scheduler._run_job(safe_nudge_type, nudge_id)
 
     call_kwargs = scheduler.bot.send_message.call_args.kwargs
@@ -110,9 +109,7 @@ async def test_no_alert_sent_when_no_owner() -> None:
     scheduler = _make_scheduler()
 
     with patch.dict("telegram_bot.scheduler.JOB_REGISTRY", {}, clear=True):
-        with patch(
-            "telegram_bot.scheduler.resolve_owner_chat_id", new=AsyncMock(return_value=None)
-        ):
+        with patch("telegram_bot.owner.resolve_owner_chat_id", new=AsyncMock(return_value=None)):
             await scheduler._run_job("daily_summary", 5)
 
     scheduler.bot.send_message.assert_not_called()

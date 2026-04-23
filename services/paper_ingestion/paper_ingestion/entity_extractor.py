@@ -471,13 +471,10 @@ async def get_knowledge_graph(
 ) -> dict:
     """Get the full knowledge graph or a filtered subset."""
     try:
-        entity_cols = (
-            "id, name, canonical_name, entity_type, description, metadata, "
-            "embedding_id, paper_count, created_at"
-        )
         if entity_type:
             entities = await conn.fetch(
-                f"""SELECT {entity_cols} FROM entities
+                """SELECT id, name, canonical_name, entity_type, description, metadata,
+                          embedding_id, paper_count, created_at FROM entities
                    WHERE entity_type = $1 AND paper_count >= $2
                    ORDER BY paper_count DESC LIMIT $3""",
                 entity_type,
@@ -486,7 +483,8 @@ async def get_knowledge_graph(
             )
         else:
             entities = await conn.fetch(
-                f"""SELECT {entity_cols} FROM entities
+                """SELECT id, name, canonical_name, entity_type, description, metadata,
+                          embedding_id, paper_count, created_at FROM entities
                    WHERE paper_count >= $1
                    ORDER BY paper_count DESC LIMIT $2""",
                 min_paper_count,

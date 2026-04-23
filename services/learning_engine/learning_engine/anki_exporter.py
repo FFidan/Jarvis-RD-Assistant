@@ -5,6 +5,7 @@ Optional extension — converts JARVIS flashcards to Anki-importable
 """
 
 import hashlib
+import html
 import io
 
 import genanki
@@ -63,10 +64,10 @@ class AnkiExporter:
             note = genanki.Note(
                 model=self.model,
                 fields=[
-                    card["front"],
-                    card["back"],
-                    card.get("source", ""),
-                    card.get("evidence_text", ""),
+                    html.escape(card["front"]),
+                    html.escape(card["back"]),
+                    html.escape(card.get("source", "")),
+                    html.escape(card.get("evidence_text", "")),
                 ],
             )
             deck.add_note(note)

@@ -19,6 +19,7 @@ import asyncpg
 import httpx
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
+from jarvis_common.prompt_safety import wrap_delimited
 
 from paper_ingestion.models import (
     BatchExtractionResponse,
@@ -36,10 +37,13 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
         for f in fields
     )
 
+    safe_title = wrap_delimited("title", title, max_chars=500)
+    safe_body = wrap_delimited("paper_text", text, max_chars=15000)
+
     return (
         f"You are a precise research paper data extractor."
         f" Extract structured data from the following paper.\n\n"
-        f"PAPER TITLE: {title}\n\n"
+        f"PAPER TITLE:\n{safe_title}\n\n"
         f"FIELDS TO EXTRACT:\n{field_specs}\n\n"
         f"RULES:\n"
         f"1. For each field, provide:\n"
@@ -52,7 +56,7 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
         f"3. Do NOT invent or paraphrase quotes —"
         f" they must be exact substrings of the source text\n"
         f"4. Be conservative: prefer null over uncertain values\n\n"
-        f"PAPER TEXT:\n{text[:15000]}\n\n"
+        f"PAPER TEXT:\n{safe_body}\n\n"
         f"Respond with ONLY a JSON object where keys are field names"
         f' and values are objects with "value" and "quote" keys.\n'
         f"Example format:\n"
@@ -179,6 +183,13 @@ async def extract_fields_for_paper(
                 verified = vr.verified
                 chunk_id = vr.chunk_id
                 page_number = vr.page_number
+                if not vr.verified:
+                    # Mirror entity_extractor policy: unverified extractions are
+                    # dropped rather than persisted with uncertain values.
+                    logger.debug(
+                        "Quote verification failed for field %s — discarding value", field_name
+                    )
+                    value = None
             except Exception:
                 # Recoverable: verification is best-effort; a failure means the
                 # field is stored with verified=False and confidence=0.5 instead
