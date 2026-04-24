@@ -1,9 +1,15 @@
 import * as React from 'react';
-import { ThumbsUp, ThumbsDown, Bookmark, HelpCircle } from 'lucide-react';
+import { ThumbsUp, ThumbsDown, Bookmark, HelpCircle, CheckCircle, AlertTriangle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { WhyPopover } from '@/components/pulse/WhyPopover';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import type { PulseCardItem, PulseRating } from '@/types';
 
@@ -69,9 +75,45 @@ export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProp
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">{authorsDisplay}</p>
           {card.reasoning && (
-            <p className="mt-2 line-clamp-2 text-sm italic text-muted-foreground">
-              {card.reasoning}
-            </p>
+            <div className="mt-2 flex items-start gap-1.5">
+              <p className="line-clamp-2 text-sm italic text-muted-foreground">
+                {card.reasoning}
+              </p>
+              {card.reasoning_verified === true && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <CheckCircle
+                        data-testid="reasoning-verified-icon"
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600"
+                        aria-label="Reasoning verified"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs">
+                      Reasoning verified against paper title/abstract
+                      {card.reasoning_confidence && ` (${card.reasoning_confidence})`}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+              {card.reasoning_verified === false && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <AlertTriangle
+                        data-testid="reasoning-unverified-icon"
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
+                        aria-label="Reasoning not verified"
+                      />
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs text-xs">
+                      Reasoning not verified against paper title/abstract
+                      {card.reasoning_confidence && ` (${card.reasoning_confidence})`}
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
           )}
         </div>
 

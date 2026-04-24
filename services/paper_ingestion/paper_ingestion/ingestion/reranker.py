@@ -10,7 +10,6 @@ returns ``None`` and callers fall back to retrieval-score ordering.
 """
 
 import logging
-import os
 from typing import Any
 
 try:
@@ -170,7 +169,8 @@ def get_reranker() -> Reranker | None:
     Unlike @lru_cache, this does not permanently cache None on transient
     failures. A process restart will retry model loading.
     """
-    enabled = os.getenv("RERANKER_ENABLED", "false").lower() in ("true", "1", "yes")
-    if not enabled or not _HAS_RERANKER:
+    from jarvis_common.settings import get_reranker_settings
+
+    if not get_reranker_settings().reranker_enabled or not _HAS_RERANKER:
         return None
     return _reranker_state.get()

@@ -1,0 +1,160 @@
+"""Tests for jarvis_common.settings env -> typed settings roundtrip."""
+
+from __future__ import annotations
+
+import pytest
+from jarvis_common.settings import (
+    CoreSettings,
+    JobsSettings,
+    RerankerSettings,
+    TelegramSettings,
+    get_core_settings,
+    get_jobs_settings,
+    get_reranker_settings,
+    get_telegram_settings,
+)
+from pydantic import ValidationError
+
+# ---------------------------------------------------------------------------
+# CoreSettings
+# ---------------------------------------------------------------------------
+
+
+def test_core_settings_defaults(monkeypatch):
+    """With no env vars set, CoreSettings returns documented defaults."""
+    for key in (
+        "DEV_MODE",
+        "JARVIS_API_KEY",
+        "JARVIS_CONFIG_KEY",
+        "LOG_LEVEL",
+        "ENVIRONMENT",
+        "TRUSTED_PROXY_HOSTS",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    settings = CoreSettings()
+    assert settings.dev_mode is False
+    assert settings.jarvis_api_key is None
+    assert settings.jarvis_config_key is None
+    assert settings.log_level == "INFO"
+    assert settings.environment == "development"
+    assert settings.trusted_proxy_hosts == "dashboard"
+    assert settings.trusted_proxy_hosts_list == ["dashboard"]
+
+
+def test_core_settings_reads_env(monkeypatch):
+    """Env vars are picked up case-insensitively."""
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("JARVIS_API_KEY", "secret-key")
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "fernet-key")
+    monkeypatch.setenv("LOG_LEVEL", "DEBUG")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "dashboard,nginx,cf")
+
+    settings = CoreSettings()
+    assert settings.dev_mode is True
+    assert settings.jarvis_api_key == "secret-key"
+    assert settings.jarvis_config_key == "fernet-key"
+    assert settings.log_level == "DEBUG"
+    assert settings.environment == "production"
+    assert settings.trusted_proxy_hosts_list == ["dashboard", "nginx", "cf"]
+
+
+def test_core_settings_trusted_proxy_list_ignores_empties(monkeypatch):
+    """Whitespace-only entries are dropped from the parsed list."""
+    monkeypatch.setenv("TRUSTED_PROXY_HOSTS", "  dashboard , , nginx ,")
+    assert CoreSettings().trusted_proxy_hosts_list == ["dashboard", "nginx"]
+
+
+def test_core_settings_dev_mode_invalid_raises(monkeypatch):
+    """A non-boolean DEV_MODE raises a validation error."""
+    monkeypatch.setenv("DEV_MODE", "not-a-bool")
+    with pytest.raises(ValidationError):
+        CoreSettings()
+
+
+# ---------------------------------------------------------------------------
+# RerankerSettings
+# ---------------------------------------------------------------------------
+
+
+def test_reranker_settings_default(monkeypatch):
+    monkeypatch.delenv("RERANKER_ENABLED", raising=False)
+    assert RerankerSettings().reranker_enabled is False
+
+
+@pytest.mark.parametrize("raw, expected", [("true", True), ("1", True), ("false", False)])
+def test_reranker_settings_accepts_truthy(monkeypatch, raw, expected):
+    monkeypatch.setenv("RERANKER_ENABLED", raw)
+    assert RerankerSettings().reranker_enabled is expected
+
+
+def test_reranker_settings_invalid_raises(monkeypatch):
+    monkeypatch.setenv("RERANKER_ENABLED", "bogus")
+    with pytest.raises(ValidationError):
+        RerankerSettings()
+
+
+# ---------------------------------------------------------------------------
+# JobsSettings
+# ---------------------------------------------------------------------------
+
+
+def test_jobs_settings_default(monkeypatch):
+    monkeypatch.delenv("JARVIS_ENABLE_TEST_JOBS", raising=False)
+    settings = JobsSettings()
+    assert settings.jarvis_enable_test_jobs is None
+    assert settings.test_jobs_enabled is False
+
+
+def test_jobs_settings_enabled_only_when_exactly_one(monkeypatch):
+    """Preserve the original `== "1"` semantics — anything else is disabled."""
+    monkeypatch.setenv("JARVIS_ENABLE_TEST_JOBS", "1")
+    assert JobsSettings().test_jobs_enabled is True
+
+    monkeypatch.setenv("JARVIS_ENABLE_TEST_JOBS", "true")
+    assert JobsSettings().test_jobs_enabled is False
+
+    monkeypatch.setenv("JARVIS_ENABLE_TEST_JOBS", "")
+    assert JobsSettings().test_jobs_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# TelegramSettings
+# ---------------------------------------------------------------------------
+
+
+def test_telegram_settings_default(monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_URL", raising=False)
+    settings = TelegramSettings()
+    assert settings.telegram_bot_url == ""
+    assert settings.url_or_none is None
+
+
+def test_telegram_settings_strips_and_preserves(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_URL", "  http://telegram_bot:8002  ")
+    settings = TelegramSettings()
+    assert settings.url_or_none == "http://telegram_bot:8002"
+
+
+# ---------------------------------------------------------------------------
+# Factory functions mirror fresh reads (no stale cache)
+# ---------------------------------------------------------------------------
+
+
+def test_factories_reflect_runtime_env_changes(monkeypatch):
+    """Factories are intentionally uncached so monkeypatch.setenv is honoured."""
+    monkeypatch.setenv("DEV_MODE", "false")
+    assert get_core_settings().dev_mode is False
+
+    monkeypatch.setenv("DEV_MODE", "true")
+    assert get_core_settings().dev_mode is True
+
+    monkeypatch.setenv("RERANKER_ENABLED", "true")
+    assert get_reranker_settings().reranker_enabled is True
+
+    monkeypatch.setenv("JARVIS_ENABLE_TEST_JOBS", "1")
+    assert get_jobs_settings().test_jobs_enabled is True
+
+    monkeypatch.setenv("TELEGRAM_BOT_URL", "http://host:9000")
+    assert get_telegram_settings().url_or_none == "http://host:9000"

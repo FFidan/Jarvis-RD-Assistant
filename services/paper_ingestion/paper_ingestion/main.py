@@ -37,6 +37,7 @@ from jarvis_common import (
     verify_api_key,
 )
 from jarvis_common.llm_client import get_litellm_config
+from jarvis_common.settings import get_core_settings
 from qdrant_client import AsyncQdrantClient
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -267,7 +268,7 @@ app.add_middleware(
 # X-Forwarded-For / X-Forwarded-Proto before any other middleware sees the request)
 app.add_middleware(
     ProxyHeadersMiddleware,
-    trusted_hosts=os.getenv("TRUSTED_PROXY_HOSTS", "dashboard").split(","),
+    trusted_hosts=get_core_settings().trusted_proxy_hosts_list,
 )
 
 # Standardized error handlers

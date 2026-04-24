@@ -2,7 +2,6 @@
 
 import contextlib
 import logging
-import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -14,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
 from jarvis_common.auth import verify_api_key
 from jarvis_common.crypto import decrypt_secret, encrypt_secret, mask_secret
+from jarvis_common.settings import get_core_settings, get_telegram_settings
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
@@ -377,7 +377,7 @@ async def set_config(
             )
     if key == "user.timezone":
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
-        telegram_url = os.getenv("TELEGRAM_BOT_URL", "").strip()
+        telegram_url = get_telegram_settings().url_or_none
         if not telegram_url:
             logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
         else:
@@ -385,7 +385,7 @@ async def set_config(
                 async with httpx.AsyncClient() as client:
                     await client.post(
                         f"{telegram_url}/internal/reload-nudges",
-                        headers={"X-API-Key": os.environ.get("JARVIS_API_KEY", "")},
+                        headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
                         timeout=2.0,
                     )
     display_value = mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value
@@ -439,7 +439,7 @@ async def update_nudge(
         )
 
     # Best-effort: notify telegram_bot to reload its nudge jobs
-    telegram_url = os.getenv("TELEGRAM_BOT_URL", "").strip()
+    telegram_url = get_telegram_settings().url_or_none
     if not telegram_url:
         logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
     else:
@@ -447,7 +447,7 @@ async def update_nudge(
             async with httpx.AsyncClient() as client:
                 await client.post(
                     f"{telegram_url}/internal/reload-nudges",
-                    headers={"X-API-Key": os.getenv("JARVIS_API_KEY", "")},
+                    headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
                     timeout=2.0,
                 )
 

@@ -658,6 +658,8 @@ export interface PulseCardItem {
   llm_relevance: number | null;
   llm_novelty: number | null;
   reasoning: string | null;
+  reasoning_verified: boolean | null;
+  reasoning_confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNVERIFIED' | null;
   signals: Record<string, number>;
 }
 

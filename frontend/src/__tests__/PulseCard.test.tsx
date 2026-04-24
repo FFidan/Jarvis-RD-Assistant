@@ -30,23 +30,27 @@ const sampleCard: PulseCardItem = {
   llm_relevance: 9,
   llm_novelty: 8,
   reasoning: 'Directly extends your prior work on continuous-depth models.',
+  reasoning_verified: null,
+  reasoning_confidence: null,
   signals: { topic_sim: 0.8, author_overlap: 0.2 },
 };
 
 function renderCard(
   props: Partial<React.ComponentProps<typeof PulseCard>> = {},
+  cardOverrides: Partial<PulseCardItem> = {},
 ) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   const onRate = props.onRate ?? vi.fn();
   const onOpen = props.onOpen;
+  const card = { ...sampleCard, ...cardOverrides };
   return {
     onRate,
     onOpen,
     ...render(
       <QueryClientProvider client={queryClient}>
-        <PulseCard card={sampleCard} onRate={onRate} onOpen={onOpen} />
+        <PulseCard card={card} onRate={onRate} onOpen={onOpen} />
       </QueryClientProvider>,
     ),
   };
@@ -113,6 +117,26 @@ describe('PulseCard', () => {
     await user.click(screen.getByRole('button', { name: /why/i }));
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: /why this paper/i })).toBeInTheDocument();
+    });
+  });
+
+  describe('reasoning verification badge', () => {
+    it('renders green check icon when reasoning_verified is true', () => {
+      renderCard({}, { reasoning_verified: true, reasoning_confidence: 'HIGH' });
+      expect(screen.getByTestId('reasoning-verified-icon')).toBeInTheDocument();
+      expect(screen.queryByTestId('reasoning-unverified-icon')).not.toBeInTheDocument();
+    });
+
+    it('renders amber warning icon when reasoning_verified is false', () => {
+      renderCard({}, { reasoning_verified: false, reasoning_confidence: 'LOW' });
+      expect(screen.getByTestId('reasoning-unverified-icon')).toBeInTheDocument();
+      expect(screen.queryByTestId('reasoning-verified-icon')).not.toBeInTheDocument();
+    });
+
+    it('renders no verification icon when reasoning_verified is null', () => {
+      renderCard({}, { reasoning_verified: null, reasoning_confidence: null });
+      expect(screen.queryByTestId('reasoning-verified-icon')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('reasoning-unverified-icon')).not.toBeInTheDocument();
     });
   });
 });

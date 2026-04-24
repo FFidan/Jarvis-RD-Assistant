@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from typing import Any
 
 import asyncpg
@@ -26,6 +25,7 @@ from jarvis_common.jobs import (
     KEEPALIVE_INTERVAL,
     MAX_STREAM_SECONDS,
 )
+from jarvis_common.settings import get_jobs_settings
 from pydantic import BaseModel, field_validator
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -59,7 +59,7 @@ def _get_public_job_kinds() -> set[str]:
     without a restart (e.g. in integration tests that set the env var at runtime).
     """
     kinds = set(_BASE_PUBLIC_JOB_KINDS)
-    if os.getenv("JARVIS_ENABLE_TEST_JOBS") == "1":
+    if get_jobs_settings().test_jobs_enabled:
         kinds.add("noop.test")
     return kinds
 

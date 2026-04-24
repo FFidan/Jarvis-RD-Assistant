@@ -6,11 +6,11 @@ Exposes a minimal FastAPI application on :8002 that allows other services
 
 import asyncio
 import logging
-import os
 
 import uvicorn
 from fastapi import Depends, FastAPI
 from jarvis_common.auth import verify_api_key
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +61,8 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         TCP port to listen on (default 8002).
     """
     # F-01: Refuse to start unauthenticated internal API in DEV_MODE
-    dev_mode = os.getenv("DEV_MODE", "false").lower() == "true"
-    api_key = os.getenv("JARVIS_API_KEY", "")
-    if dev_mode and not api_key:
+    core = get_core_settings()
+    if core.dev_mode and not core.jarvis_api_key:
         logger.warning(
             "Refusing to start telegram_bot internal API: DEV_MODE=true and "
             "JARVIS_API_KEY is empty — unauthenticated endpoint would accept any caller."
