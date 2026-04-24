@@ -11,8 +11,17 @@
 
 import { useAuthStore } from '@/stores/auth-store';
 
+export type ConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNVERIFIED';
+
+export interface ConfidenceEvent {
+  type: 'confidence';
+  confidence: ConfidenceLevel;
+  verified_fraction: number;
+  per_sentence: { text: string; verified: boolean }[];
+}
+
 export interface StreamEvent {
-  type: 'token' | 'sources' | 'done' | 'error';
+  type: 'token' | 'sources' | 'done' | 'error' | 'confidence';
   content?: string;
   full_answer?: string;
   sources?: Array<{
@@ -25,6 +34,10 @@ export interface StreamEvent {
     score: number;
   }>;
   message?: string;
+  // confidence event fields
+  confidence?: ConfidenceLevel;
+  verified_fraction?: number;
+  per_sentence?: { text: string; verified: boolean }[];
 }
 
 // --- Analyze Paper SSE types ---

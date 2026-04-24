@@ -232,7 +232,7 @@ Note:
 
 ## Database Migrations
 
-31 migrations currently applied in `db/migrations/` (001-031). Fresh installs get all tables via `db/init.sql`.
+32 migrations currently applied in `db/migrations/` (001-032). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 

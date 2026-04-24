@@ -174,6 +174,48 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
    ```
 6. Send `/start` to the bot — it should reply.
 
+#### Telegram Bot Commands
+
+| Command | What it does | Rate limit | Auth |
+|---|---|---|---|
+| `/start` | Pair this chat with your JARVIS install (first use) / greet you (subsequent uses). | per-user default | Any chat; pairing code required on first use |
+| `/help` | List available commands. | per-user default | Paired chat only |
+| `/papers` | Show the latest papers in your library. | per-user default | Paired chat only |
+| `/stats` | Library stats — paper count, review streak, starred count. | per-user default | Paired chat only |
+| `/briefing` | Generate an on-demand research briefing for today. | per-user default | Paired chat only |
+| `/projects` | List your projects with progress indicators. | per-user default | Paired chat only |
+| `/tasks` | List open tasks across all projects. | per-user default | Paired chat only |
+| `/done <task_id>` | Mark a task done. | per-user default | Paired chat only |
+| `/newproject <name>` | Create a new project. | per-user default | Paired chat only |
+| `/focus <project_id>` | Set the current focus project (scopes later commands). | per-user default | Paired chat only |
+| `/next` | Show the next recommended task in the focus project. | per-user default | Paired chat only |
+| `/pulse_now` | Generate today's Pulse deck on demand. | **5-minute cooldown** | Paired chat only |
+
+> `/cancel` is only valid during an active `/review` conversation (it is a `ConversationHandler` fallback, not a standalone command). See `services/telegram_bot/telegram_bot/handlers/review_handler.py`.
+
+#### Inline Interactions
+
+- **Pulse card rating** — each Pulse card has 👍 / 👎 / 💾 buttons (`pulse_up_<id>`, `pulse_down_<id>`, `pulse_save_<id>`). Ratings feed the Phase-2 relevance classifier.
+- **Paper drill-down** — paper list entries expose a detail button (`paper_detail_<id>`) and a 💾 bookmark button (`paper_bookmark_<id>`).
+- **Project drill-down** — project list entries expose a detail button (`project_detail_<id>`).
+- **Task-done-from-chat** — task list entries expose ✅ complete buttons (`task_done_<id>`) so you can finish a task without typing `/done`.
+- **Review flashcards in chat** — the `/review` flow uses an inline keyboard for Again / Hard / Good / Easy grading.
+
+#### Scheduled Nudges
+
+Six cron-scheduled nudge types are delivered to the paired chat (timezone-aware, configured via **Settings → Notifications** in the dashboard):
+
+- `daily_summary` — morning digest of yesterday's activity and today's agenda.
+- `paper_digest` — newly ingested papers in topics you follow.
+- `review_reminder` — reminder when flashcards are due for review.
+- `deadline_warning` — heads-up for upcoming project deadlines.
+- `research_pulse` — your daily Pulse deck (when the Pulse subsystem finishes generation).
+- `author_alert` — new paper alerts for authors you follow.
+
+#### Rate Limits
+
+Commands are rate-limited per-user by a sliding-window decorator. `/pulse_now` additionally has a **5-minute cooldown** to protect the LLM gateway from manual refresh loops.
+
 **Security note on `TELEGRAM_CHAT_ID`:** The bot only checks this single chat ID. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. For personal use, keep the bot in a private DM. For a shared setup, add a per-user allowlist in `services/telegram_bot/telegram_bot/handlers/` (not currently supported out of the box).
 
 ## Remote Access (LAN)
@@ -281,7 +323,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-031)
+│   └── migrations/             # Versioned schema changes (001-032)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -352,6 +394,7 @@ docker compose exec postgres psql -U jarvis -d jarvis -c \
 
 ## Further Reading
 
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.
 - [docs/PRD.md](docs/PRD.md) — Product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — Non-functional requirements and technical constraints.
 - [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the [1.2.4] Round-7 audit remediation.

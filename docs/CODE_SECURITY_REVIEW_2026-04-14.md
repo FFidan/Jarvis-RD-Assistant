@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-14
 **Branch reviewed:** `claude/code-security-review-kYhVr`
-**Scope:** Full backend (`services/paper_ingestion`, `services/learning_engine`, `services/telegram_bot`), shared lib (`libs/jarvis_common`), DB migrations (`db/migrations/001..021`), Docker/compose config, and React frontend (`frontend/`).
+**Scope:** Full backend (`services/paper_ingestion`, `services/learning_engine`, `services/telegram_bot`), shared lib (`libs/jarvis_common`), DB migrations (`db/migrations/001..032`), Docker/compose config, and React frontend (`frontend/`).
 **Review type:** Combined `/code-review` + `/security-review`. **No code changes were made.**
 
 ---
@@ -33,10 +33,10 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| S-1.1 | Info | `verify_api_key` wired at app-level on both FastAPI services; every router automatically inherits auth. No per-router bypasses. | `services/paper_ingestion/app/main.py:321`, `services/learning_engine/app/main.py:115` |
+| S-1.1 | Info | `verify_api_key` wired at app-level on both FastAPI services; every router automatically inherits auth. No per-router bypasses. | `services/paper_ingestion/paper_ingestion/main.py:321`, `services/learning_engine/learning_engine/main.py:115` |
 | S-1.2 | Info | Health endpoints (`/health`, `/healthz`, `/health/readiness`) intentionally skip auth to support container/upstream probes. | `libs/jarvis_common/jarvis_common/auth.py:13,24` |
-| S-1.3 | Info | Telegram pairing uses `secrets.token_hex(6)` (48 bits entropy), 10-minute TTL, DB expiry sweep, rate-limited to 10/min, and compared with `hmac.compare_digest`. No replay/brute-force path identified. | `services/paper_ingestion/app/routers/telegram.py:62,72-84` |
-| S-1.4 | Info | No IDOR vectors: system is single-user per deployment; all DB lookups are parameterised and the path-id → resource binding does not cross a trust boundary. | `services/paper_ingestion/app/routers/papers.py` (representative) |
+| S-1.3 | Info | Telegram pairing uses `secrets.token_hex(6)` (48 bits entropy), 10-minute TTL, DB expiry sweep, rate-limited to 10/min, and compared with `hmac.compare_digest`. No replay/brute-force path identified. | `services/paper_ingestion/paper_ingestion/routers/telegram.py:62,72-84` |
+| S-1.4 | Info | No IDOR vectors: system is single-user per deployment; all DB lookups are parameterised and the path-id → resource binding does not cross a trust boundary. | `services/paper_ingestion/paper_ingestion/routers/papers.py` (representative) |
 
 **Category verdict:** Clean.
 
@@ -45,10 +45,10 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 | # | Sev | Finding | Location |
 |---|---|---|---|
 | S-2.1 | Info | All SQL uses asyncpg `$1/$2` parameterisation. `dynamic_update()` helper quotes identifiers via `quote_ident()`. No f-string / `.format()` SQL observed anywhere. | `libs/jarvis_common/jarvis_common/db_helpers.py:163-165` |
-| S-2.2 | Info | PDF and snapshot file-serving resolve user paths and enforce `Path.resolve().is_relative_to(base)` before `FileResponse`. No traversal vector. | `services/paper_ingestion/app/routers/pdf.py:135`, `services/paper_ingestion/app/routers/snapshots.py:32` |
-| **S-2.3** | **High** | **PDF download SSRF allowlist is hardcoded.** `_validate_pdf_url()` checks the host against a fixed allowlist (arxiv.org, semanticscholar.org, …) and resolves DNS to reject RFC1918 / loopback / link-local ranges. This is correct, but the allowlist lives in code — adding new sources (OpenAlex direct PDFs, institutional repositories) risks either (a) developers disabling the check or (b) silent breakage. | `services/paper_ingestion/app/pdf_processor.py:33-39, 114-150` |
-| S-2.4 | Low | Prompt injection via PDF/user text is partially mitigated: inputs are XML-escaped (`<` → `&lt;`) and wrapped in tagged delimiters before being passed to the LLM; extraction input is truncated to 15 000 chars. Residual risk exists because the LLM still operates on attacker-controlled text. | `services/paper_ingestion/app/streaming.py:87,208`, `services/paper_ingestion/app/extraction.py:32-63` |
-| S-2.5 | Info | arXiv XML parsing uses `defusedxml.ElementTree`, blocking XXE / billion-laughs. | `services/paper_ingestion/app/sources/arxiv_source.py:14` |
+| S-2.2 | Info | PDF and snapshot file-serving resolve user paths and enforce `Path.resolve().is_relative_to(base)` before `FileResponse`. No traversal vector. | `services/paper_ingestion/paper_ingestion/routers/pdf.py:135`, `services/paper_ingestion/paper_ingestion/routers/snapshots.py:32` |
+| **S-2.3** | **High** | **PDF download SSRF allowlist is hardcoded.** `_validate_pdf_url()` checks the host against a fixed allowlist (arxiv.org, semanticscholar.org, …) and resolves DNS to reject RFC1918 / loopback / link-local ranges. This is correct, but the allowlist lives in code — adding new sources (OpenAlex direct PDFs, institutional repositories) risks either (a) developers disabling the check or (b) silent breakage. | `services/paper_ingestion/paper_ingestion/pdf_processor.py:33-39, 114-150` |
+| S-2.4 | Low | Prompt injection via PDF/user text is partially mitigated: inputs are XML-escaped (`<` → `&lt;`) and wrapped in tagged delimiters before being passed to the LLM; extraction input is truncated to 15 000 chars. Residual risk exists because the LLM still operates on attacker-controlled text. | `services/paper_ingestion/paper_ingestion/streaming.py:87,208`, `services/paper_ingestion/paper_ingestion/extraction.py:32-63` |
+| S-2.5 | Info | arXiv XML parsing uses `defusedxml.ElementTree`, blocking XXE / billion-laughs. | `services/paper_ingestion/paper_ingestion/sources/arxiv_source.py:14` |
 
 **Suggested fix (S-2.3):** Move the allowlist to an environment-driven config (e.g. `PDF_ALLOWED_DOMAINS` comma-list, merged with a secure default) and document the procedure for extending it. Keep the private-IP block unconditional.
 
@@ -60,7 +60,7 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 | S-3.2 | Info | `setup.sh` generates `LITELLM_MASTER_KEY`, `JARVIS_API_KEY`, `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY` via `openssl rand -hex N` (≥48 bytes where appropriate). | `setup.sh:121-127` |
 | S-3.3 | Info | `setup.sh` sets `chmod 600 .env` after writing. | `setup.sh:351` |
 | S-3.4 | Info | Structured JSON logger does **not** log request bodies or headers — so the `X-API-Key` header cannot leak into logs via generic middleware. Spot checks of `logger.*` calls confirm no token/key interpolation. | `libs/jarvis_common/jarvis_common/logging_config.py:25-36` |
-| S-3.5 | Info | CORS origins are read from `CORS_ORIGINS` env (comma-split), not wildcard. `allow_credentials=True` combined with `*` is **not** present. | `services/paper_ingestion/app/main.py:325-330`, `services/learning_engine/app/main.py:119-124` |
+| S-3.5 | Info | CORS origins are read from `CORS_ORIGINS` env (comma-split), not wildcard. `allow_credentials=True` combined with `*` is **not** present. | `services/paper_ingestion/paper_ingestion/main.py:325-330`, `services/learning_engine/learning_engine/main.py:119-124` |
 
 ### 1.4 Crypto / Sessions
 
@@ -73,10 +73,10 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| S-5.1 | Info | `jarvis_common.ratelimit` is applied to PDF download, PDF processing, telegram pairing, and other sensitive endpoints with sensible per-IP limits. Client IP derived with trusted-proxy `X-Forwarded-For` walk. | `services/paper_ingestion/app/routers/pdf.py:46,105`, `routers/telegram.py:62` |
-| S-5.2 | Info | `MAX_PDF_SIZE = 100 MB` and `MAX_PAGES = 500` enforced during download/parse — anti-zip-bomb. | `services/paper_ingestion/app/pdf_processor.py:30-31` |
-| S-5.3 | Info | LLM streaming calls carry explicit `timeout=300.0`; generator yields sanitised error events on timeout/connect failures. | `services/paper_ingestion/app/streaming.py:289,306-318` |
-| S-5.4 | Low → see CQ-4.1 | `max_papers`/`max_chunks` for cross-paper RAG come from the request body. Validate they carry Pydantic `gt=0, le=<cap>` constraints. | `services/paper_ingestion/app/streaming.py:189` |
+| S-5.1 | Info | `jarvis_common.ratelimit` is applied to PDF download, PDF processing, telegram pairing, and other sensitive endpoints with sensible per-IP limits. Client IP derived with trusted-proxy `X-Forwarded-For` walk. | `services/paper_ingestion/paper_ingestion/routers/pdf.py:46,105`, `routers/telegram.py:62` |
+| S-5.2 | Info | `MAX_PDF_SIZE = 100 MB` and `MAX_PAGES = 500` enforced during download/parse — anti-zip-bomb. | `services/paper_ingestion/paper_ingestion/pdf_processor.py:30-31` |
+| S-5.3 | Info | LLM streaming calls carry explicit `timeout=300.0`; generator yields sanitised error events on timeout/connect failures. | `services/paper_ingestion/paper_ingestion/streaming.py:289,306-318` |
+| S-5.4 | Low → see CQ-4.1 | `max_papers`/`max_chunks` for cross-paper RAG come from the request body. Validate they carry Pydantic `gt=0, le=<cap>` constraints. | `services/paper_ingestion/paper_ingestion/streaming.py:189` |
 
 ### 1.6 Deserialisation / SSTI / XSS
 
@@ -102,8 +102,8 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 | # | Sev | Finding | Location |
 |---|---|---|---|
 | S-8.1 | Info | `generic_exception_handler` logs full exception internally but returns only `{"detail": "An internal error occurred."}`. No stack traces leak to clients. | `libs/jarvis_common/jarvis_common/error_handlers.py:28-30` |
-| S-8.2 | Info | SSE stream exception-to-message mapping is explicit (timeout → "LLM request timed out", connect error → "Cannot connect to LLM service", fallback → "An error occurred"). Internal exception still logged. | `services/paper_ingestion/app/streaming.py:306-318` |
-| S-8.3 | Info | `RequestIDMiddleware` injects a correlation ID into logs without capturing headers. | `services/paper_ingestion/app/main.py:331` |
+| S-8.2 | Info | SSE stream exception-to-message mapping is explicit (timeout → "LLM request timed out", connect error → "Cannot connect to LLM service", fallback → "An error occurred"). Internal exception still logged. | `services/paper_ingestion/paper_ingestion/streaming.py:306-318` |
+| S-8.3 | Info | `RequestIDMiddleware` injects a correlation ID into logs without capturing headers. | `services/paper_ingestion/paper_ingestion/main.py:331` |
 
 ---
 
@@ -135,7 +135,7 @@ No Critical issues were identified. No SQL injection, no hardcoded secrets, no u
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| CQ-4.1 | Low | `paper_ids_sorted[: body.max_papers]` is correct only if Pydantic enforces `gt=0`. Verify the `PaperRagRequest` schema declares `Field(..., gt=0, le=<cap>)` on `max_papers` and `max_chunks`. | `services/paper_ingestion/app/streaming.py:189` |
+| CQ-4.1 | Low | `paper_ids_sorted[: body.max_papers]` is correct only if Pydantic enforces `gt=0`. Verify the `PaperRagRequest` schema declares `Field(..., gt=0, le=<cap>)` on `max_papers` and `max_chunks`. | `services/paper_ingestion/paper_ingestion/streaming.py:189` |
 
 Otherwise: no N+1 queries; cross-paper RAG deduplicates chunks in memory (`streaming.py:141-148`); embedder uses a semaphore (limit 3) for concurrent embedding (`scheduler.py:30`).
 
@@ -143,8 +143,8 @@ Otherwise: no N+1 queries; cross-paper RAG deduplicates chunks in memory (`strea
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| **CQ-5.1** | **Medium** | **`pdf_processor.py` (222 LOC) has no dedicated test file.** This module owns SSRF validation, 100 MB/500-page limits, and PDF parsing — exactly the surface that deserves adversarial unit tests. | `services/paper_ingestion/app/pdf_processor.py` |
-| CQ-5.2 | Medium | `recommender.py` (245 LOC) has no dedicated test file. Scoring and ranking logic is untested at unit level. | `services/paper_ingestion/app/recommender.py` |
+| **CQ-5.1** | **Medium** | **`pdf_processor.py` (222 LOC) has no dedicated test file.** This module owns SSRF validation, 100 MB/500-page limits, and PDF parsing — exactly the surface that deserves adversarial unit tests. | `services/paper_ingestion/paper_ingestion/pdf_processor.py` |
+| CQ-5.2 | Medium | `recommender.py` (245 LOC) has no dedicated test file. Scoring and ranking logic is untested at unit level. | `services/paper_ingestion/paper_ingestion/recommender.py` |
 
 **Coverage that IS strong:** `test_summarization_service.py` (570 LOC), `test_le_endpoints.py` (934 LOC), `test_verification_fix.py` (anti-hallucination), `test_stream_rag.py` (442 LOC).
 
@@ -154,8 +154,8 @@ Otherwise: no N+1 queries; cross-paper RAG deduplicates chunks in memory (`strea
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| CQ-6.1 | Low | `services/telegram_bot/app/handlers/command_handler.py` is 694 lines implementing 9 slash-commands. Harder to test and review as a monolith. | `services/telegram_bot/app/handlers/command_handler.py` |
-| CQ-6.2 | Info | RAG prompt assembly is duplicated between single-paper and cross-paper paths (both do identical XML escaping and delimiter wrapping). Candidate for `jarvis_common` helper. | `services/paper_ingestion/app/streaming.py:84-99, 207-241` |
+| CQ-6.1 | Low | `services/telegram_bot/telegram_bot/handlers/command_handler.py` is 694 lines implementing 9 slash-commands. Harder to test and review as a monolith. | `services/telegram_bot/telegram_bot/handlers/command_handler.py` |
+| CQ-6.2 | Info | RAG prompt assembly is duplicated between single-paper and cross-paper paths (both do identical XML escaping and delimiter wrapping). Candidate for `jarvis_common` helper. | `services/paper_ingestion/paper_ingestion/streaming.py:84-99, 207-241` |
 
 Large files that are **not** problems: `paper_ingestion/app/models.py` (997 LOC — pure Pydantic) and `embedder.py` (934 LOC — single responsibility).
 
@@ -186,7 +186,7 @@ Large files that are **not** problems: `paper_ingestion/app/models.py` (997 LOC 
 
 | # | Sev | Finding | Location |
 |---|---|---|---|
-| CQ-10.1 | Low | Backpressure not explicitly managed. `async with httpx.stream(...)` handles cleanup on client disconnect, but if the LLM emits tokens faster than the client consumes them, the buffer grows unbounded. Practical risk is low for ~50 tok/s local models. | `services/paper_ingestion/app/streaming.py:265-321` |
+| CQ-10.1 | Low | Backpressure not explicitly managed. `async with httpx.stream(...)` handles cleanup on client disconnect, but if the LLM emits tokens faster than the client consumes them, the buffer grows unbounded. Practical risk is low for ~50 tok/s local models. | `services/paper_ingestion/paper_ingestion/streaming.py:265-321` |
 
 **Suggested fix:** If production monitoring ever shows buffer growth, insert a small `await asyncio.sleep(0)` yield between SSE events, or switch to an async queue with a bounded maxsize.
 

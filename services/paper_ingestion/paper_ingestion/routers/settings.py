@@ -1,6 +1,5 @@
 """Settings, nudges, and source management endpoints."""
 
-import asyncio
 import contextlib
 import logging
 import os
@@ -306,7 +305,7 @@ async def set_config(
 
         try:
             async with _config_lock:
-                updated = await asyncio.to_thread(update_litellm_model, key, body.value)
+                updated = await update_litellm_model(key, body.value, db_pool=db_pool)
         except (ValueError, RuntimeError) as exc:
             # SEC-002: model name validation failure or read-only config mount
             raise HTTPException(status_code=400, detail=str(exc)) from exc

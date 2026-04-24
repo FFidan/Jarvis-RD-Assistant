@@ -335,11 +335,34 @@ The My Day page is the researcher's daily triage hub, redesigned around a mornin
 This is the differentiating feature of JARVIS. Every design decision prioritizes
 verifiability over fluency.
 
-> Current implementation note (2026-03-10):
-> verified quotes and findings exist in the current system, but summary prose and
-> RAG answers should be treated as retrieval-grounded rather than fully
-> claim-verified end-to-end. The requirements in this section remain the target
-> state the implementation should converge toward.
+> **Current implementation status (2026-04-24):**
+>
+> Per-layer status (see §5.3):
+>
+> - **Layer 1 — Grounded generation:** ✅ Implemented. LLM inputs are paper
+>   chunks + API metadata only; no untrusted free-form context.
+> - **Layer 2 — Quote verification:** ✅ Implemented for extraction fields,
+>   paper summaries, flashcard evidence, and KG edges (exact + fuzzy ≥92%,
+>   page numbers attached; `paper_ingestion/verification.py` `QuoteVerifier`).
+>   ⚠️ **Not applied to** RAG answers (`POST /api/papers/{id}/ask`,
+>   cross-paper RAG), Pulse card `reasoning` field, or weekly-summary themes —
+>   these paths are retrieval-grounded but LLM prose is not quote-verified
+>   before the user sees it.
+> - **Layer 3 — PDF page snapshots:** ✅ Implemented. Renderer at
+>   `paper_ingestion/pdf_processor.py::generate_snapshots` (150 DPI via
+>   PyMuPDF); serving endpoint at `GET /api/snapshots/{paper_id}/{page}`.
+> - **Layer 4 — Cross-reference consistency:** ⚠️ Partial. Cross-reference
+>   *linking* between papers exists (`services/summarization.py::_find_cross_references`
+>   using semantic similarity + keyword overlap; `CrossReference` model). But
+>   **contradiction detection** — the surface called out in §5.3 — is not yet
+>   implemented; the weekly-summary prompt asks the LLM to surface
+>   contradictions, but there is no downstream verification of that output.
+>
+> Closing the ⚠️ gaps (Layer-2 coverage on RAG/Pulse/weekly, Layer-4
+> contradiction detection) is tracked in
+> [`docs/plans/2026-04-24-post-r14-roadmap.md`](plans/2026-04-24-post-r14-roadmap.md) WS-2
+> (anti-hallucination hardening). The aspirational requirements below remain
+> the target state.
 
 ### 5.1 Citation Rules
 
@@ -536,7 +559,28 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 - Mendeley integration (analogous design)
 - API key encryption at rest in user_config
 
-### 8.7 Inspiration and Prior Art
+### 8.7 Phase 4 — Conversational Agent Layer (Hermes integration or native build)
+
+**Status:** PLANNING ONLY. Not scheduled until Pulse Phase 2, Zotero Phase 3, and the anti-hallucination hardening (4-layer pipeline, §5.3) have shipped.
+
+**Goal.** A natural-language control plane over the JARVIS REST API. A user should be able to say *"find last week's AI safety Pulse cards I haven't rated"* and have the agent compose the right API calls, present results, and honor the anti-hallucination policy end-to-end.
+
+**Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record. See [`docs/plans/2026-04-24-post-r14-roadmap.md`](plans/2026-04-24-post-r14-roadmap.md) WS-7 for the spike scope.
+
+**Decision point.** Adopt [`NousResearch/hermes-agent`](https://github.com/NousResearch) (MIT, 2026) as-is, or build natively on LiteLLM tool-calling plus our existing prompt harness. The WS-7 spike will resolve this.
+
+**Acceptance criteria.**
+
+- Agent reasoning may generate prose, but every user-facing factual claim must trace back to a tool result that passed `QuoteVerifier` — i.e. the anti-hallucination policy wrapper (§5) applies at the agent boundary.
+- Hermes ↔ JARVIS link uses signed short-lived tokens (not the shared `X-API-Key` header) — see §4.1.
+- No new always-on runtime dependency until the spike lands.
+
+**Not in scope for this roadmap entry.**
+
+- Not a current dependency, not a docker service, not in any `requirements.txt`.
+- All of the above ship with the Phase-4 implementation plan, not this doc.
+
+### 8.8 Inspiration and Prior Art
 
 JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-source and public research tools. These are credited for their intellectual contribution; no code is copied.
 
@@ -549,6 +593,8 @@ JARVIS's Discovery & Pulse design borrows ideas and patterns from several open-s
 - **[BERTopic](https://github.com/MaartenGr/BERTopic)** — neural topic modeling with dynamic temporal topics for trend detection (Phase 2).
 - **[OpenScholar](https://github.com/AkariAsai/OpenScholar)** (Allen Institute) — iterative self-feedback RAG over scientific literature (Phase 3 inspiration).
 - **[PaperQA2](https://github.com/Future-House/paper-qa)** (FutureHouse) — metadata-aware embeddings and agentic retrieval (Phase 3 inspiration).
+- **[NousResearch/hermes-agent](https://github.com/NousResearch)** (MIT, 2026) — agent-as-control-plane pattern over a REST surface (Phase 4 inspiration).
+- **OpenClaw** — messaging-first UX validation for conversational interfaces (Phase 4 inspiration).
 
 All are MIT/Apache-licensed. Our use is at the idea/pattern level.
 digests, extraction) MUST pass through the anti-hallucination verification pipeline.

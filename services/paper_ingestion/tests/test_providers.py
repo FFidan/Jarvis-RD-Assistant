@@ -101,7 +101,8 @@ async def _post_provider_test(app, provider: str):
 
 
 @pytest.mark.asyncio
-async def test_set_encrypted_key_writes_bytea(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_set_encrypted_key_writes_bytea(_app):
     """PUT /api/config/llm.anthropic.api_key writes encrypted_value BYTEA, not plaintext."""
     app, conn = _app
 
@@ -127,7 +128,8 @@ async def test_set_encrypted_key_writes_bytea(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_set_encrypted_key_does_not_store_plaintext(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_set_encrypted_key_does_not_store_plaintext(_app):
     """PUT /api/config/llm.openai.api_key does not pass the raw key to asyncpg."""
     app, conn = _app
 
@@ -148,7 +150,8 @@ async def test_set_encrypted_key_does_not_store_plaintext(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_get_encrypted_key_returns_masked(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_get_encrypted_key_returns_masked(_app):
     """GET /api/config/llm.anthropic.api_key returns masked value, never plaintext."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -175,7 +178,8 @@ async def test_get_encrypted_key_returns_masked(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_get_encrypted_key_short_returns_four_stars(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_get_encrypted_key_short_returns_four_stars(_app):
     """GET returns '****' for an encrypted key with value <= 4 chars."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -200,7 +204,8 @@ async def test_get_encrypted_key_short_returns_four_stars(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_legacy_plaintext_row_masks_on_read(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_legacy_plaintext_row_masks_on_read(_app):
     """GET for an encrypted key that still has plaintext value returns masked form."""
     app, conn = _app
 
@@ -227,7 +232,8 @@ async def test_legacy_plaintext_row_masks_on_read(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_test_provider_unsupported_returns_400(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_unsupported_returns_400(_app):
     """POST /api/providers/unknown/test returns 400 for unsupported provider."""
     app, _ = _app
 
@@ -238,7 +244,8 @@ async def test_test_provider_unsupported_returns_400(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_test_provider_unsupported_ollama_returns_400(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_unsupported_ollama_returns_400(_app):
     """POST /api/providers/ollama/test returns 400 — not in supported set."""
     app, _ = _app
 
@@ -248,7 +255,8 @@ async def test_test_provider_unsupported_ollama_returns_400(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_test_provider_missing_key_returns_ok_false(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_missing_key_returns_ok_false(_app):
     """POST /api/providers/anthropic/test returns ok=false when no key is configured."""
     app, conn = _app
     conn.fetchrow.return_value = None  # No row in DB
@@ -262,7 +270,8 @@ async def test_test_provider_missing_key_returns_ok_false(_app, fernet_key):
 
 
 @pytest.mark.asyncio
-async def test_test_provider_empty_key_returns_ok_false(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_empty_key_returns_ok_false(_app):
     """POST /api/providers/openai/test returns ok=false when key decrypts to empty."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -286,7 +295,8 @@ async def test_test_provider_empty_key_returns_ok_false(_app, fernet_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_test_provider_happy_path_anthropic(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_happy_path_anthropic(_app):
     """POST /api/providers/anthropic/test returns ok=true when Anthropic responds 200."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -314,7 +324,8 @@ async def test_test_provider_happy_path_anthropic(_app, fernet_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_test_provider_happy_path_openai(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_happy_path_openai(_app):
     """POST /api/providers/openai/test returns ok=true when OpenAI responds 200."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -338,7 +349,8 @@ async def test_test_provider_happy_path_openai(_app, fernet_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_test_provider_happy_path_google(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_happy_path_google(_app):
     """POST /api/providers/google/test returns ok=true when Google responds 200."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -362,7 +374,8 @@ async def test_test_provider_happy_path_google(_app, fernet_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_test_provider_http_error_returns_ok_false(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_http_error_returns_ok_false(_app):
     """POST /api/providers/anthropic/test returns ok=false on 401 response."""
     from jarvis_common.crypto import encrypt_secret
 
@@ -389,7 +402,8 @@ async def test_test_provider_http_error_returns_ok_false(_app, fernet_key):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_test_provider_connection_error_returns_ok_false(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_test_provider_connection_error_returns_ok_false(_app):
     """POST /api/providers/anthropic/test returns ok=false on network error."""
     from jarvis_common.crypto import encrypt_secret
 

@@ -128,6 +128,9 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   sources?: Source[];
+  confidence?: import('@/lib/sse').ConfidenceLevel;
+  verified_fraction?: number;
+  per_sentence?: { text: string; verified: boolean }[];
 }
 
 // --- Notes ---

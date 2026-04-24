@@ -1,6 +1,7 @@
 import type { ChatMessage as ChatMessageType } from '@/types';
 import { cn } from '@/lib/utils';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
+import { ConfidenceBadge } from '@/components/chat/ConfidenceBadge';
 import { Loader2 } from 'lucide-react';
 
 interface ChatMessageProps {
@@ -24,7 +25,18 @@ export function ChatMessage({ message, isLoading }: ChatMessageProps) {
         {isUser ? (
           <p className="text-sm whitespace-pre-wrap">{message.content}</p>
         ) : message.content ? (
-          <MarkdownContent>{message.content}</MarkdownContent>
+          <>
+            <MarkdownContent>{message.content}</MarkdownContent>
+            {message.confidence && (
+              <div className="mt-2">
+                <ConfidenceBadge
+                  confidence={message.confidence}
+                  verified_fraction={message.verified_fraction ?? 0}
+                  per_sentence={message.per_sentence ?? []}
+                />
+              </div>
+            )}
+          </>
         ) : isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />

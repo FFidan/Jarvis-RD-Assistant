@@ -87,7 +87,8 @@ async def _put_config(app, key: str, value):
 
 
 @pytest.mark.asyncio
-async def test_zotero_api_key_valid(_app, fernet_key):
+@pytest.mark.usefixtures("fernet_key")
+async def test_zotero_api_key_valid(_app):
     """zotero.api_key accepts a non-empty string; response is masked (encrypted key)."""
     app, conn = _app
     resp = await _put_config(app, "zotero.api_key", "abc123")
@@ -114,7 +115,7 @@ async def test_zotero_user_id_valid(_app):
 @pytest.mark.asyncio
 async def test_zotero_library_type_user(_app):
     """zotero.library_type accepts 'user'."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.library_type", "user")
     assert resp.status_code == 200
     assert resp.json()["value"] == "user"
@@ -123,7 +124,7 @@ async def test_zotero_library_type_user(_app):
 @pytest.mark.asyncio
 async def test_zotero_library_type_group(_app):
     """zotero.library_type accepts 'group'."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.library_type", "group")
     assert resp.status_code == 200
     assert resp.json()["value"] == "group"
@@ -132,7 +133,7 @@ async def test_zotero_library_type_group(_app):
 @pytest.mark.asyncio
 async def test_zotero_poll_enabled_true(_app):
     """zotero.poll_enabled accepts True."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.poll_enabled", True)
     assert resp.status_code == 200
     assert resp.json()["value"] is True
@@ -141,7 +142,7 @@ async def test_zotero_poll_enabled_true(_app):
 @pytest.mark.asyncio
 async def test_zotero_poll_enabled_false(_app):
     """zotero.poll_enabled accepts False."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.poll_enabled", False)
     assert resp.status_code == 200
     assert resp.json()["value"] is False
@@ -150,7 +151,7 @@ async def test_zotero_poll_enabled_false(_app):
 @pytest.mark.asyncio
 async def test_zotero_poll_cron_valid(_app):
     """zotero.poll_cron accepts a valid cron expression."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.poll_cron", "0 * * * *")
     assert resp.status_code == 200
     assert resp.json()["value"] == "0 * * * *"
@@ -159,7 +160,7 @@ async def test_zotero_poll_cron_valid(_app):
 @pytest.mark.asyncio
 async def test_zotero_auto_push_on_star_true(_app):
     """zotero.auto_push_on_star accepts True."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.auto_push_on_star", True)
     assert resp.status_code == 200
     assert resp.json()["value"] is True
@@ -168,7 +169,7 @@ async def test_zotero_auto_push_on_star_true(_app):
 @pytest.mark.asyncio
 async def test_zotero_auto_push_on_star_false(_app):
     """zotero.auto_push_on_star accepts False."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.auto_push_on_star", False)
     assert resp.status_code == 200
     assert resp.json()["value"] is False
@@ -182,7 +183,7 @@ async def test_zotero_auto_push_on_star_false(_app):
 @pytest.mark.asyncio
 async def test_zotero_library_type_invalid(_app):
     """zotero.library_type rejects values other than 'user' or 'group'."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.library_type", "invalid")
     assert resp.status_code == 400
     assert "user" in resp.json()["detail"] or "group" in resp.json()["detail"]
@@ -191,7 +192,7 @@ async def test_zotero_library_type_invalid(_app):
 @pytest.mark.asyncio
 async def test_zotero_poll_cron_invalid(_app):
     """zotero.poll_cron rejects non-cron strings."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.poll_cron", "not a cron")
     assert resp.status_code == 400
     detail = resp.json()["detail"]
@@ -201,7 +202,7 @@ async def test_zotero_poll_cron_invalid(_app):
 @pytest.mark.asyncio
 async def test_zotero_poll_enabled_rejects_string(_app):
     """zotero.poll_enabled rejects string values."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.poll_enabled", "true")
     assert resp.status_code == 400
     assert "boolean" in resp.json()["detail"]
@@ -210,7 +211,7 @@ async def test_zotero_poll_enabled_rejects_string(_app):
 @pytest.mark.asyncio
 async def test_zotero_auto_push_on_star_rejects_string(_app):
     """zotero.auto_push_on_star rejects string values."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.auto_push_on_star", "yes")
     assert resp.status_code == 400
     assert "boolean" in resp.json()["detail"]
@@ -219,7 +220,7 @@ async def test_zotero_auto_push_on_star_rejects_string(_app):
 @pytest.mark.asyncio
 async def test_zotero_api_key_rejects_empty_string(_app):
     """zotero.api_key rejects empty string."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.api_key", "")
     assert resp.status_code == 400
     assert "non-empty" in resp.json()["detail"]
@@ -228,7 +229,7 @@ async def test_zotero_api_key_rejects_empty_string(_app):
 @pytest.mark.asyncio
 async def test_zotero_user_id_rejects_empty_string(_app):
     """zotero.user_id rejects empty string."""
-    app, conn = _app
+    app, _conn = _app
     resp = await _put_config(app, "zotero.user_id", "")
     assert resp.status_code == 400
     assert "non-empty" in resp.json()["detail"]

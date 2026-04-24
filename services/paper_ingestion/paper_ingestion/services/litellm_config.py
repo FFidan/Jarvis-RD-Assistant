@@ -28,6 +28,11 @@ from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_con
 
 logger = logging.getLogger(__name__)
 
+# Serializes concurrent LiteLLM config updates — the settings router imports this
+# to guard PUT /api/config/{llm.*_model} against racy YAML rewrites / overlapping
+# POST /config/update calls.
+_config_lock = asyncio.Lock()  # pyright: ignore[reportUnusedVariable]  # imported from routers/settings.py
+
 
 class ProviderKeyMissing(Exception):  # noqa: N818
     """Raised when a cloud-provider API key is required but not configured."""
@@ -113,9 +118,6 @@ ROLE_TO_ALIAS: dict[str, str] = {
     "llm.fast_model": "fast",
     "llm.embed_model": "embed",
 }
-
-# Async-safe lock for config file I/O (A3: PI-009 + PI-010)
-_config_lock = asyncio.Lock()
 
 
 async def update_litellm_model(

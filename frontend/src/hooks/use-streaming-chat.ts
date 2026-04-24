@@ -11,8 +11,14 @@ interface UseStreamingChatOptions {
 }
 
 export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOptions) {
-  const { chats, addMessage, appendToLastMessage, setLastMessageSources, clearChat } =
-    useChatStore();
+  const {
+    chats,
+    addMessage,
+    appendToLastMessage,
+    setLastMessageSources,
+    setLastMessageConfidence,
+    clearChat,
+  } = useChatStore();
   const [phase, setPhase] = useState<'idle' | 'searching' | 'streaming'>('idle');
   const [sources, setSources] = useState<Source[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -64,6 +70,12 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
             }));
             setSources(mapped);
             setLastMessageSources(chatId, mapped);
+          } else if (event.type === 'confidence' && event.confidence) {
+            setLastMessageConfidence(chatId, {
+              confidence: event.confidence,
+              verified_fraction: event.verified_fraction ?? 0,
+              per_sentence: event.per_sentence ?? [],
+            });
           } else if (event.type === 'error') {
             appendToLastMessage(chatId, `\n\n**Error:** ${event.message || 'Unknown error'}`);
           }
@@ -77,7 +89,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
         abortControllerRef.current = null;
       }
     },
-    [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources],
+    [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources, setLastMessageConfidence],
   );
 
   const stopStreaming = useCallback(() => {

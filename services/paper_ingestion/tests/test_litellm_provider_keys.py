@@ -14,7 +14,6 @@ import httpx
 import pytest
 import respx
 from paper_ingestion.services.litellm_config import (
-    ProviderKeyMissing,  # noqa: F401 — verify the symbol is exported
     get_provider_api_key,
     update_litellm_model,
 )
