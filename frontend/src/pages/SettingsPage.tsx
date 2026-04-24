@@ -9,6 +9,7 @@ import { PulseSection } from '@/components/settings/PulseSection';
 import { TimerSection } from '@/components/settings/TimerSection';
 import { PairTelegram } from '@/components/setup/PairTelegram';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
+import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
 export function SettingsPage() {
   return (
@@ -25,6 +26,7 @@ export function SettingsPage() {
           <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
           <TabsTrigger value="pulse">Pulse</TabsTrigger>
           <TabsTrigger value="timer">Timer</TabsTrigger>
+          <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
         </TabsList>
 
@@ -58,6 +60,10 @@ export function SettingsPage() {
 
         <TabsContent value="timer">
           <TimerSection />
+        </TabsContent>
+
+        <TabsContent value="providers">
+          <ProvidersSection />
         </TabsContent>
 
         <TabsContent value="integrations">

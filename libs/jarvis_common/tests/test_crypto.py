@@ -27,7 +27,8 @@ def valid_key(monkeypatch) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def test_roundtrip(valid_key) -> None:
+@pytest.mark.usefixtures("valid_key")
+def test_roundtrip() -> None:
     """encrypt_secret then decrypt_secret returns the original plaintext."""
     plaintext = "super-secret-api-key-12345"
     ciphertext = encrypt_secret(plaintext)
@@ -39,7 +40,8 @@ def test_roundtrip(valid_key) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_tamper_raises(valid_key) -> None:
+@pytest.mark.usefixtures("valid_key")
+def test_tamper_raises() -> None:
     """Modifying a character of the ciphertext causes decrypt to raise InvalidToken."""
     ciphertext = encrypt_secret("my-secret")
     # Flip the last character

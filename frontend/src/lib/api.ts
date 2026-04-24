@@ -730,6 +730,39 @@ export async function zoteroPollNow(): Promise<{ job_id: string; status: string 
   return apiFetch('/api/zotero/poll', { method: 'POST' });
 }
 
+// --- Cloud LLM Providers ---
+
+export type CloudProvider = 'anthropic' | 'openai' | 'google';
+
+/**
+ * Returns the masked key value for each cloud provider (e.g. "sk-a****").
+ * Null if no key is stored.
+ */
+export async function getProviderStatuses(): Promise<Record<CloudProvider, string | null>> {
+  const configs = await apiFetch<Array<{ key: string; value: unknown }>>('/api/config');
+  const result: Record<CloudProvider, string | null> = { anthropic: null, openai: null, google: null };
+  for (const provider of ['anthropic', 'openai', 'google'] as CloudProvider[]) {
+    const entry = configs.find((c) => c.key === `llm.${provider}.api_key`);
+    if (entry != null && entry.value != null) {
+      const v = entry.value;
+      result[provider] = typeof v === 'string' ? v.replace(/^"|"$/g, '') : String(v);
+    }
+  }
+  return result;
+}
+
+/** Save a cloud provider API key via the unified config endpoint. */
+export async function setProviderKey(provider: CloudProvider, apiKey: string): Promise<void> {
+  await setConfig(`llm.${provider}.api_key`, apiKey);
+}
+
+/** Test connectivity for a cloud provider. */
+export async function testProvider(
+  provider: CloudProvider,
+): Promise<{ ok: boolean; error: string | null }> {
+  return apiFetch(`/api/providers/${provider}/test`, { method: 'POST' });
+}
+
 // --- Jobs (streaming) ---
 
 export async function streamJob(
