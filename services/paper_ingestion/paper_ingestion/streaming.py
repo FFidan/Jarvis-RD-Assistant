@@ -26,6 +26,7 @@ from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 
 if TYPE_CHECKING:
     from paper_ingestion.ingestion.embedder import Embedder
+    from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -297,8 +298,10 @@ async def stream_rag_events(
     sources_list: list[dict],
     *,
     model: str = "smart",
+    verifier: "QuoteVerifier | None" = None,
+    db_pool: "asyncpg.Pool | None" = None,
 ):
-    """Stream LLM response as SSE events (token → sources → done → [DONE])."""
+    """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
     litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
     full_answer = ""
     try:
@@ -345,4 +348,21 @@ async def stream_rag_events(
         return
     yield f"data: {json.dumps({'type': 'sources', 'sources': sources_list})}\n\n"
     yield f"data: {json.dumps({'type': 'done', 'full_answer': full_answer})}\n\n"
+    # Sentence-level verification — runs after tokens have streamed (additive latency only)
+    if verifier is not None and db_pool is not None:
+        try:
+            from paper_ingestion.rag.verification import verify_answer_sentences
+
+            report = await verify_answer_sentences(full_answer, sources_list, verifier, db_pool)
+            payload = {
+                "type": "confidence",
+                "confidence": report.confidence.value,
+                "verified_fraction": report.pass_rate,
+                "per_sentence": [
+                    {"text": s.text, "verified": s.verified} for s in report.per_sentence
+                ],
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+        except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
+            logger.warning("RAG verification failed: %s", exc)
     yield "data: [DONE]\n\n"

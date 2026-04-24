@@ -129,12 +129,14 @@ async def ask_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ):
     """Answer a question about a specific paper using RAG.
 
     Embeds the question, retrieves the top-k relevant chunks from this
     paper's Qdrant vectors, then prompts LiteLLM with the chunks as context.
-    Returns the answer with source evidence (chunk content + page number).
+    Returns the answer with source evidence (chunk content + page number) and
+    a sentence-level confidence score from the anti-hallucination verifier.
 
     Parameters
     ----------
@@ -146,9 +148,9 @@ async def ask_paper(
     Returns
     -------
     dict
-        {answer: str, sources: [{content, page_number, score}]}
+        {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    messages, sources_list = await prepare_single_paper_rag(
+    messages, raw_sources = await prepare_single_paper_rag(
         embedder, db_pool, paper_id, body, http_client
     )
 
@@ -174,7 +176,26 @@ async def ask_paper(
         logger.error("RAG LLM call failed for paper %d: %s", paper_id, exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    return {"answer": answer, "sources": sources_list}
+    # Enrich sources with paper_id for verification
+    sources = [{**s, "paper_id": paper_id} for s in raw_sources]
+
+    confidence: str | None = None
+    verified_fraction: float | None = None
+    try:
+        from paper_ingestion.rag.verification import verify_answer_sentences
+
+        report = await verify_answer_sentences(answer, sources, verifier, db_pool)
+        confidence = report.confidence.value
+        verified_fraction = report.pass_rate
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("RAG verification failed for paper %d: %s", paper_id, exc)
+
+    return {
+        "answer": answer,
+        "sources": sources,
+        "confidence": confidence,
+        "verified_fraction": verified_fraction,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -191,11 +212,14 @@ async def ask_paper_stream(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ):
     """Stream RAG response for a single paper via SSE.
 
     Uses the same retrieval pipeline as ``/api/papers/{paper_id}/ask`` but
-    streams the LLM answer token-by-token as Server-Sent Events.
+    streams the LLM answer token-by-token as Server-Sent Events.  After the
+    answer is fully streamed, emits a ``confidence`` event with sentence-level
+    verification results.
 
     Parameters
     ----------
@@ -205,7 +229,7 @@ async def ask_paper_stream(
         Question and optional max_chunks parameter.
     """
     try:
-        messages, sources = await prepare_single_paper_rag(
+        messages, raw_sources = await prepare_single_paper_rag(
             embedder, db_pool, paper_id, body, http_client
         )
     except HTTPException:
@@ -219,10 +243,20 @@ async def ask_paper_stream(
             media_type="text/event-stream",
         )
 
+    # Enrich sources with paper_id so verification can fetch full text per paper
+    sources = [{**s, "paper_id": paper_id} for s in raw_sources]
+
     smart_model = get_smart_model()
 
     return StreamingResponse(
-        stream_rag_events(http_client, messages, sources, model=smart_model),
+        stream_rag_events(
+            http_client,
+            messages,
+            sources,
+            model=smart_model,
+            verifier=verifier,
+            db_pool=db_pool,
+        ),
         media_type="text/event-stream",
     )
 
@@ -240,11 +274,13 @@ async def ask_cross_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ):
     """Ask a question across ALL embedded papers.
 
     Retrieves relevant chunks from multiple papers, builds a multi-paper
-    context, and generates an answer with per-paper attribution.
+    context, and generates an answer with per-paper attribution and a
+    sentence-level confidence score from the anti-hallucination verifier.
 
     When ``decompose=True`` (default), the question is first broken into
     2-4 sub-queries via LLM.  Each sub-query is searched concurrently,
@@ -259,7 +295,7 @@ async def ask_cross_paper(
     Returns
     -------
     dict
-        {answer: str, sources: [{paper_id, paper_title, content, page_number, score}]}
+        {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
     result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client)
 
@@ -291,7 +327,23 @@ async def ask_cross_paper(
         logger.error("Cross-paper RAG LLM call failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=502, detail="LLM request failed") from exc
 
-    return {"answer": answer, "sources": sources_list}
+    confidence: str | None = None
+    verified_fraction: float | None = None
+    try:
+        from paper_ingestion.rag.verification import verify_answer_sentences
+
+        report = await verify_answer_sentences(answer, sources_list, verifier, db_pool)
+        confidence = report.confidence.value
+        verified_fraction = report.pass_rate
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Cross-paper RAG verification failed: %s", exc)
+
+    return {
+        "answer": answer,
+        "sources": sources_list,
+        "confidence": confidence,
+        "verified_fraction": verified_fraction,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +359,14 @@ async def ask_cross_paper_stream(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ):
     """Stream cross-paper RAG response via SSE.
 
     Uses the same retrieval pipeline as ``/api/ask`` but streams the LLM
-    answer token-by-token as Server-Sent Events.
+    answer token-by-token as Server-Sent Events.  After the answer is fully
+    streamed, emits a ``confidence`` event with sentence-level verification
+    results.
 
     Parameters
     ----------
@@ -349,7 +404,14 @@ async def ask_cross_paper_stream(
     smart_model = get_smart_model()
 
     return StreamingResponse(
-        stream_rag_events(http_client, messages, sources, model=smart_model),
+        stream_rag_events(
+            http_client,
+            messages,
+            sources,
+            model=smart_model,
+            verifier=verifier,
+            db_pool=db_pool,
+        ),
         media_type="text/event-stream",
     )
 

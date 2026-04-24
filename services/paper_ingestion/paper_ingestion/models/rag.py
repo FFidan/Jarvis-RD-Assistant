@@ -35,3 +35,5 @@ class AskResponse(BaseModel):
 
     answer: str
     sources: list[AskSourceItem] = Field(default_factory=list)
+    confidence: str | None = None  # RagConfidence.value or None
+    verified_fraction: float | None = None
