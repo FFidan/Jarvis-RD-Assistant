@@ -11,7 +11,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from httpx import ASGITransport
+from jarvis_common.crypto import refresh_fernet_cache
 
 # ---------------------------------------------------------------------------
 # Helpers (mirrors test_settings.py style)
@@ -34,8 +36,18 @@ def _make_pool_and_conn():
 
 
 # ---------------------------------------------------------------------------
-# Fixture
+# Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def fernet_key(monkeypatch):
+    """Generate a fresh Fernet key and wire it into JARVIS_CONFIG_KEY for the test."""
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", key)
+    refresh_fernet_cache()
+    yield key
+    refresh_fernet_cache()
 
 
 @pytest.fixture()
@@ -75,14 +87,15 @@ async def _put_config(app, key: str, value):
 
 
 @pytest.mark.asyncio
-async def test_zotero_api_key_valid(_app):
-    """zotero.api_key accepts a non-empty string."""
+async def test_zotero_api_key_valid(_app, fernet_key):
+    """zotero.api_key accepts a non-empty string; response is masked (encrypted key)."""
     app, conn = _app
     resp = await _put_config(app, "zotero.api_key", "abc123")
     assert resp.status_code == 200
     body = resp.json()
     assert body["key"] == "zotero.api_key"
-    assert body["value"] == "abc123"
+    # zotero.api_key is now an encrypted key — response returns masked preview
+    assert "abc1****" == body["value"]
     conn.execute.assert_awaited_once()
 
 
@@ -235,14 +248,25 @@ async def _get_config(app, key: str):
 
 @pytest.mark.asyncio
 async def test_get_zotero_api_key_returns_masked(_app):
-    """GET zotero.api_key returns '****', not the real value (PI-017)."""
+    """GET zotero.api_key returns masked preview, not the real value (PI-017).
+
+    zotero.api_key is in _ENCRYPTED_KEYS. When the row has only a legacy plaintext
+    value (encrypted_value = NULL), _resolve_config_value falls back to masking the
+    plaintext via mask_secret(), which yields first-4-chars + '****'.
+    """
     app, conn = _app
-    conn.fetchrow.return_value = {"key": "zotero.api_key", "value": "supersecret123"}
+    # Simulate a legacy plaintext row (encrypted_value = NULL)
+    conn.fetchrow.return_value = {
+        "key": "zotero.api_key",
+        "value": "supersecret123",
+        "encrypted_value": None,
+    }
     resp = await _get_config(app, "zotero.api_key")
     assert resp.status_code == 200
     body = resp.json()
     assert body["key"] == "zotero.api_key"
-    assert body["value"] == "****"
+    # mask_secret("supersecret123") → "supe****"
+    assert body["value"] == "supe****"
     assert "supersecret123" not in resp.text
 
 
@@ -276,7 +300,7 @@ async def test_get_zotero_api_key_not_found_returns_404(_app):
 
 
 @pytest.mark.asyncio
-async def test_zotero_key_not_blocked_by_allowlist(_app):
+async def test_zotero_key_not_blocked_by_allowlist(_app, fernet_key):
     """All 6 zotero.* keys are in the allowlist (no 'Unknown config key' rejection)."""
     app, conn = _app
     zotero_keys = [

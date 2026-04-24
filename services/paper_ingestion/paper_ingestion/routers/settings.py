@@ -13,6 +13,8 @@ import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
+from jarvis_common.auth import verify_api_key
+from jarvis_common.crypto import decrypt_secret, encrypt_secret, mask_secret
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_scheduler, limiter
@@ -33,6 +35,12 @@ from paper_ingestion.services.litellm_config import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
+
+
+class ProviderTestResponse(BaseModel):
+    ok: bool
+    error: str | None = None
+
 
 _ALLOWED_CONFIG_KEYS = frozenset(
     {
@@ -69,10 +77,30 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
+        # Cloud LLM provider keys
+        "llm.anthropic.api_key",
+        "llm.openai.api_key",
+        "llm.google.api_key",
     }
 )
 
-_SECRET_KEYS: frozenset[str] = frozenset({"zotero.api_key"})
+_SECRET_KEYS: frozenset[str] = frozenset(
+    {
+        "zotero.api_key",
+        "llm.anthropic.api_key",
+        "llm.openai.api_key",
+        "llm.google.api_key",
+    }
+)
+
+_ENCRYPTED_KEYS: frozenset[str] = frozenset(
+    {
+        "llm.anthropic.api_key",
+        "llm.openai.api_key",
+        "llm.google.api_key",
+        "zotero.api_key",
+    }
+)
 
 _NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
 _NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
@@ -160,10 +188,33 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.poll_enabled": _validate_bool,
     "zotero.poll_cron": _validate_zotero_cron,
     "zotero.auto_push_on_star": _validate_bool,
+    # Cloud LLM provider keys
+    "llm.anthropic.api_key": _validate_nonempty_str,
+    "llm.openai.api_key": _validate_nonempty_str,
+    "llm.google.api_key": _validate_nonempty_str,
 }
 
 
 # --- User Config ---
+
+
+def _resolve_config_value(key: str, row: dict) -> Any:
+    """Return the display value for a config row, applying masking / decryption."""
+    if key in _ENCRYPTED_KEYS:
+        enc = row.get("encrypted_value")
+        if enc is not None:
+            # Decrypt then mask — never expose plaintext over the API
+            plaintext = decrypt_secret(enc.decode("ascii"))
+            return mask_secret(plaintext)
+        raw = row.get("value")
+        if raw is not None:
+            # Legacy plaintext row: mask without decrypting
+            return mask_secret(str(raw))
+        return None
+    if key in _SECRET_KEYS:
+        raw = row.get("value")
+        return "****" if raw is not None else None
+    return row.get("value")
 
 
 @router.get("/config", response_model=list[ConfigEntry])
@@ -173,8 +224,8 @@ async def list_config(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[ConfigEntry]:
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT key, value FROM user_config ORDER BY key")
-    return [ConfigEntry(key=r["key"], value=r["value"]) for r in rows]
+        rows = await conn.fetch("SELECT key, value, encrypted_value FROM user_config ORDER BY key")
+    return [ConfigEntry(key=r["key"], value=_resolve_config_value(r["key"], r)) for r in rows]
 
 
 @router.get("/config/{key}")
@@ -187,10 +238,12 @@ async def get_config(
     if key not in _ALLOWED_CONFIG_KEYS:
         raise HTTPException(404, f"Config key '{key}' not found")
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT key, value FROM user_config WHERE key = $1", key)
+        row = await conn.fetchrow(
+            "SELECT key, value, encrypted_value FROM user_config WHERE key = $1", key
+        )
     if not row:
         raise HTTPException(404, f"Config key '{key}' not found")
-    value = "****" if key in _SECRET_KEYS else row["value"]
+    value = _resolve_config_value(key, row)
     return ConfigEntry(key=row["key"], value=value)
 
 
@@ -228,13 +281,26 @@ async def set_config(
     # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
     # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
     # storing e.g. '"0 4 * * *"' instead of '"0 4 * * *"' in JSONB. (WEB-C01)
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
-            ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
-            key,
-            body.value,
-        )
+    if key in _ENCRYPTED_KEYS:
+        # Encrypt the secret and store in encrypted_value; clear plaintext value column.
+        ciphertext_bytes = encrypt_secret(str(body.value)).encode("ascii")
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO user_config (key, value, encrypted_value)
+                VALUES ($1, NULL, $2)
+                ON CONFLICT (key) DO UPDATE
+                    SET value = NULL, encrypted_value = $2, updated_at = NOW()""",
+                key,
+                ciphertext_bytes,
+            )
+    else:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
+                ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
+                key,
+                body.value,
+            )
     if key in ROLE_TO_ALIAS:
         from paper_ingestion.services.litellm_config import _config_lock
 
@@ -323,7 +389,8 @@ async def set_config(
                         headers={"X-API-Key": os.environ.get("JARVIS_API_KEY", "")},
                         timeout=2.0,
                     )
-    return ConfigEntry(key=key, value=body.value)
+    display_value = mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value
+    return ConfigEntry(key=key, value=display_value)
 
 
 # --- Scheduled Nudges ---
@@ -497,3 +564,71 @@ async def papers_by_status(
             """
         )
     return [{"status": r["status"], "count": r["count"]} for r in rows]
+
+
+# --- Cloud LLM Provider Test ---
+
+_SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google"})
+
+
+@router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
+async def test_provider(
+    provider: str,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _: None = Depends(verify_api_key),
+) -> ProviderTestResponse:
+    """Probe a cloud LLM provider with its stored API key to verify connectivity."""
+    if provider not in _SUPPORTED_PROVIDERS:
+        raise HTTPException(status_code=400, detail="unsupported provider")
+
+    config_key = f"llm.{provider}.api_key"
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config WHERE key = $1", config_key
+        )
+
+    api_key: str | None = None
+    if row is not None:
+        enc = row.get("encrypted_value")
+        if enc is not None:
+            try:
+                api_key = decrypt_secret(enc.decode("ascii"))
+            except Exception:
+                api_key = None
+        elif row.get("value") is not None:
+            # Legacy plaintext row
+            api_key = str(row["value"])
+
+    if not api_key:
+        return ProviderTestResponse(ok=False, error="no api key configured")
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            if provider == "anthropic":
+                resp = await client.post(
+                    "https://api.anthropic.com/v1/messages/count_tokens",
+                    json={
+                        "model": "claude-sonnet-4-5",
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                    headers={
+                        "x-api-key": api_key,
+                        "anthropic-version": "2023-06-01",
+                        "content-type": "application/json",
+                    },
+                )
+            elif provider == "openai":
+                resp = await client.get(
+                    "https://api.openai.com/v1/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+            else:  # google
+                resp = await client.get(
+                    f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}",
+                )
+    except httpx.HTTPError as exc:
+        return ProviderTestResponse(ok=False, error=str(exc)[:200])
+
+    if resp.is_success:
+        return ProviderTestResponse(ok=True)
+    return ProviderTestResponse(ok=False, error=resp.text[:200])
