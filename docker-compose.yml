@@ -235,6 +235,7 @@ services:
       AUTO_FETCH_INTERVAL_HOURS: ${AUTO_FETCH_INTERVAL_HOURS:-0}
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
+      JARVIS_CONFIG_KEY: ${JARVIS_CONFIG_KEY:-}
     secrets:
       - jarvis_api_key
       - telegram_bot_token
