@@ -348,6 +348,11 @@ class Embedder:
                 batch = chunks[i : i + batch_size]
                 texts = [c.content for c in batch]
                 embeddings = await self.embed_texts(texts)
+                if len(embeddings) != len(texts):
+                    raise RuntimeError(
+                        f"Embedder returned {len(embeddings)} vectors for {len(texts)} texts;"
+                        " refusing partial upsert"
+                    )
 
                 points = []
                 batch_ids: list[str] = []

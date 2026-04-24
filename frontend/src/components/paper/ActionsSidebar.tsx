@@ -155,7 +155,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
     onSuccess: (data) => {
       setActionResult({
         type: 'success',
-        message: `Processed: ${data.chunk_count} chunks created`,
+        message: `Processing queued (job ${data.job_id})`,
       });
       queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
     },

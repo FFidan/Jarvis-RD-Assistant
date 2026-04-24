@@ -544,7 +544,7 @@ export const downloadPdf = (paperId: number) =>
   apiFetch<Paper>(`/api/download-pdf/${paperId}`, { method: 'POST' });
 
 export const processPdf = (paperId: number) =>
-  apiFetch<{ paper_id: number; chunk_count: number; status: string }>(`/api/process-pdf/${paperId}`, { method: 'POST' });
+  apiFetch<{ job_id: string; status: string }>(`/api/process-pdf/${paperId}`, { method: 'POST' });
 
 export const summarizePaper = (paperId: number) =>
   apiFetch<Summary>(`/api/summarize/${paperId}`, { method: 'POST' });

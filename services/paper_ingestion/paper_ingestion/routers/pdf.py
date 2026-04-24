@@ -25,7 +25,6 @@ from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor, l
 from paper_ingestion.models import (
     BatchProcessResponse,
     PaperResponse,
-    ProcessPdfResponse,
     ScanLocalPdfsResponse,
 )
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH, PDFProcessor
@@ -106,7 +105,10 @@ async def download_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/process-pdf/{paper_id}", response_model=ProcessPdfResponse)
+# response_model is intentionally omitted: the async branch returns {job_id, status}
+# while the sync branch returns {paper_id, chunk_count, status} — two different shapes.
+# FastAPI serialises whichever dict the handler returns without validation errors.
+@router.post("/process-pdf/{paper_id}")
 @limiter.limit("5/minute")
 async def process_pdf(
     request: Request,

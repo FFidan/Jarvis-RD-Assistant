@@ -425,3 +425,43 @@ async def test_test_provider_connection_error_returns_ok_false(_app):
     body = resp.json()
     assert body["ok"] is False
     assert body["error"] is not None
+
+
+@pytest.mark.asyncio
+@respx.mock
+@pytest.mark.usefixtures("fernet_key")
+async def test_google_probe_uses_header_not_url_param(_app):
+    """SEC-003: Google probe must send key via x-goog-api-key header, never as URL param."""
+    from jarvis_common.crypto import encrypt_secret
+
+    app, conn = _app
+
+    plaintext_key = "AIza-sec003-secret-key"
+    ciphertext = encrypt_secret(plaintext_key).encode("ascii")
+    conn.fetchrow.return_value = {
+        "value": None,
+        "encrypted_value": ciphertext,
+    }
+
+    captured: list = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"models": []})
+
+    respx.get("https://generativelanguage.googleapis.com/v1beta/models").mock(side_effect=_capture)
+
+    resp = await _post_provider_test(app, "google")
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+    assert len(captured) == 1, "Expected exactly one outbound Google request"
+    req = captured[0]
+
+    # Key must NOT appear in the URL query string (SEC-003)
+    assert "key=" not in str(req.url), f"API key leaked in URL: {req.url}"
+    # Key must be in the request header
+    assert req.headers.get("x-goog-api-key") == plaintext_key, (
+        "Expected x-goog-api-key header with the API key"
+    )

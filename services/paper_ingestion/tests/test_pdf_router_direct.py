@@ -370,3 +370,47 @@ async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, mo
     assert not (storage_dir / "99.pdf").exists(), (
         "Dangling file left on disk after DB UPDATE failure"
     )
+
+
+# ---------------------------------------------------------------------------
+# API-001 — process-pdf async branch must return 200 with {job_id, status}
+# (response_model=ProcessPdfResponse was causing 500 ResponseValidationError)
+# ---------------------------------------------------------------------------
+
+
+def test_process_pdf_async_response_model_no_500():
+    """API-001: POST /api/process-pdf/{id} default (sync=False) must return 200.
+
+    Before the fix, FastAPI would validate the returned dict {job_id, status}
+    against ProcessPdfResponse (which requires paper_id + chunk_count) and raise
+    a ResponseValidationError → 500.  After dropping response_model the route
+    serialises whatever dict is returned without validation.
+    """
+    from unittest.mock import patch as mock_patch
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
+    from paper_ingestion.routers.pdf import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    fake_job_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    fake_pool = MagicMock()
+
+    # Override FastAPI dependencies so no real DB/embedder is needed
+    app.dependency_overrides[get_db_pool] = lambda: fake_pool
+    app.dependency_overrides[get_pdf_processor] = lambda: MagicMock()
+    app.dependency_overrides[get_embedder] = lambda: MagicMock()
+
+    with (
+        mock_patch("jarvis_common.jobs.enqueue", new=AsyncMock(return_value=fake_job_id)),
+        TestClient(app, raise_server_exceptions=True) as client,
+    ):
+        resp = client.post("/api/process-pdf/1")  # sync defaults to False
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["job_id"] == fake_job_id
+    assert body["status"] == "queued"

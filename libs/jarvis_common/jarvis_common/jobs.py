@@ -141,10 +141,16 @@ class JobContext:
     _cancelled: bool = field(default=False, init=False, repr=False)
 
     async def update_progress(self, progress: float, message: str | None = None) -> None:
-        """Persist progress (0–1) and optional human-readable message to the DB."""
+        """Persist progress (0–1) and optional human-readable message to the DB.
+
+        Also refreshes ``last_heartbeat_at`` so the stale-job reaper does not
+        kill long-running jobs that are actively reporting progress.
+        """
         async with self._pool.acquire() as conn:
             await conn.execute(
-                "UPDATE jobs SET progress = $1, progress_message = $2 WHERE id = $3::uuid",
+                "UPDATE jobs"
+                " SET progress = $1, progress_message = $2, last_heartbeat_at = NOW()"
+                " WHERE id = $3::uuid",
                 progress,
                 message,
                 self.job_id,
@@ -247,10 +253,22 @@ async def list_jobs(
 
 
 async def request_cancel(pool: asyncpg.Pool, job_id: str) -> None:
-    """Set cancel_requested=TRUE for the given job."""
+    """Set cancel_requested=TRUE for the given job.
+
+    If the job is still queued (not yet claimed by a worker), it is
+    transitioned immediately to the terminal 'cancelled' state so that the
+    worker_loop never picks it up.  Running jobs keep their status; the
+    handler is expected to poll ``JobContext.is_cancelled()`` co-operatively.
+    """
     async with pool.acquire() as conn:
         await conn.execute(
-            "UPDATE jobs SET cancel_requested = TRUE WHERE id = $1::uuid",
+            """
+            UPDATE jobs
+               SET cancel_requested = TRUE,
+                   status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
+                   finished_at = CASE WHEN status = 'queued' THEN NOW() ELSE finished_at END
+             WHERE id = $1::uuid
+            """,
             job_id,
         )
 
@@ -364,25 +382,46 @@ async def run_job(
 _STALE_REAP_INTERVAL_SEC: float = 60.0
 
 
-async def _reap_stale_jobs(pool: asyncpg.Pool) -> None:
-    """Mark any ``running`` job older than 30 minutes as ``failed``.
+async def _reap_stale_jobs(pool: asyncpg.Pool, kinds: list[str]) -> int:
+    """Mark stale ``running`` jobs owned by this worker as ``failed``.
 
-    Called periodically from ``worker_loop`` to clean up jobs that were
-    abandoned when a worker crashed or restarted mid-handler.
+    A job is considered stale if it has not emitted a heartbeat (via
+    ``update_progress``) for 30 minutes.  ``COALESCE(last_heartbeat_at,
+    started_at)`` is used so pre-migration rows with a NULL heartbeat still fall
+    back to ``started_at`` for the staleness check.
+
+    The ``kinds`` filter ensures each service only reaps jobs it owns — preventing
+    paper_ingestion from killing pulse_ingestion jobs still running elsewhere.
+
+    Args:
+        pool:  asyncpg connection pool.
+        kinds: job kinds this worker handles.
+
+    Returns:
+        Number of jobs reaped.
     """
     # Pass a dict rather than a JSON string so the asyncpg JSONB codec
     # (registered via ``init_pg_connection``) handles encoding.  Feeding a
     # pre-serialised string results in double-encoded values that later
     # decode as strings instead of objects.
     async with pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE jobs SET status='failed',"
-            " error = $1::jsonb,"
-            " finished_at = NOW()"
-            " WHERE status='running'"
-            "   AND started_at < NOW() - INTERVAL '30 minutes'",
-            {"message": "Job stalled: worker restart or crash"},
+        rows = await conn.fetch(
+            "UPDATE jobs"
+            " SET status = 'failed',"
+            "     error = $1::jsonb,"
+            "     finished_at = NOW()"
+            " WHERE status = 'running'"
+            "   AND kind = ANY($2::text[])"
+            "   AND COALESCE(last_heartbeat_at, started_at)"
+            "       < NOW() - INTERVAL '30 minutes'"
+            " RETURNING id",
+            {"message": "reaped as stale (no heartbeat)", "type": "StaleJobReaped"},
+            kinds,
         )
+    count = len(rows)
+    if count:
+        logger.warning("jobs.reaper reaped %d stale job(s) for kinds=%s", count, kinds)
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -417,11 +456,14 @@ async def worker_loop(
     while not stop_event.is_set():
         try:
             # Reap stale running jobs at most once per 60 seconds.
+            # Pass kind_list so each service only reaps jobs it owns — prevents
+            # paper_ingestion from killing pulse_ingestion jobs still running on
+            # another service's worker.
             now = time.monotonic()
             if now - last_reap_ts >= _STALE_REAP_INTERVAL_SEC:
                 last_reap_ts = now
                 try:
-                    await _reap_stale_jobs(pool)
+                    await _reap_stale_jobs(pool, kind_list)
                 except Exception:
                     logger.warning(
                         "jobs.worker_loop stale-job reaper failed — continuing",
@@ -430,13 +472,17 @@ async def worker_loop(
 
             if kind_list:
                 rows = await pool.fetch(
-                    "SELECT id::text FROM jobs WHERE status = 'queued' AND kind = ANY($1::text[])"
+                    "SELECT id::text FROM jobs"
+                    " WHERE status = 'queued' AND cancel_requested = FALSE"
+                    " AND kind = ANY($1::text[])"
                     " ORDER BY created_at LIMIT 5",
                     kind_list,
                 )
             else:
                 rows = await pool.fetch(
-                    "SELECT id::text FROM jobs WHERE status = 'queued' ORDER BY created_at LIMIT 5"
+                    "SELECT id::text FROM jobs"
+                    " WHERE status = 'queued' AND cancel_requested = FALSE"
+                    " ORDER BY created_at LIMIT 5"
                 )
 
             if rows:

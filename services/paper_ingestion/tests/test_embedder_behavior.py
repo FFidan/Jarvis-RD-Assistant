@@ -260,6 +260,22 @@ async def test_embed_and_store_cleanup_on_partial_failure(monkeypatch):
     e.qdrant.delete.assert_awaited_once()
 
 
+async def test_embed_and_store_raises_on_partial_embed_response(monkeypatch):
+    """ING-001: embed_and_store raises RuntimeError if embedder returns fewer vectors than texts."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+
+    # embed_texts returns only 1 vector for 2 texts — simulates partial batch failure
+    e.embed_texts = AsyncMock(return_value=[[0.1] * EMBEDDING_DIMENSION])
+
+    chunks = [_chunk(0, "chunk A"), _chunk(1, "chunk B")]
+    with pytest.raises(RuntimeError, match="refusing partial upsert"):
+        await e.embed_and_store(paper_id=99, chunks=chunks)
+
+    # No vectors should have been upserted (error raised before qdrant.upsert)
+    e.qdrant.upsert.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # search_similar
 # ---------------------------------------------------------------------------

@@ -46,7 +46,7 @@ class JobStatusResponse(BaseModel):
     progress_message: str | None = None
     payload: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
-    error: str | None = None
+    error: dict[str, Any] | None = None
     user_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None

@@ -267,6 +267,80 @@ async def test_extract_fields_happy_path():
 
 
 @pytest.mark.asyncio
+async def test_extract_fields_verifier_exception_clears_value_and_quote():
+    """AH-002: when verify_quote raises, value AND quote are cleared (not kept unverified)."""
+    from paper_ingestion.extraction import extract_fields_for_paper
+
+    mock_conn = AsyncMock()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conn
+    mock_cm.__aexit__.return_value = False
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = mock_cm
+
+    mock_conn.fetchrow.side_effect = [
+        # Template lookup
+        {
+            "id": 1,
+            "name": "Test",
+            "fields": [
+                {"name": "methodology", "label": "Methodology", "description": "d", "type": "text"}
+            ],
+            "is_default": True,
+        },
+        # Paper lookup
+        {"id": 10, "title": "Test Paper"},
+        # INSERT RETURNING
+        {
+            "id": 1,
+            "paper_id": 10,
+            "template_id": 1,
+            "extractions": {
+                "methodology": {
+                    "value": None,
+                    "quote": None,
+                    "verified": False,
+                    "confidence": 0.0,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
+            "extraction_model": "smart",
+            "created_at": datetime.now(tz=UTC),
+        },
+    ]
+    mock_conn.fetch.return_value = [
+        {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
+    ]
+
+    mock_http = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    # LLM returns a value + quote — both should be discarded on verifier crash
+                    "content": '{"methodology": {"value": "hallucinated", "quote": "fake quote"}}'
+                }
+            }
+        ]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_response
+
+    # Verifier raises instead of returning a VerificationResult
+    mock_verifier = MagicMock()
+    mock_verifier.verify_quote.side_effect = RuntimeError("verifier crashed")
+
+    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=mock_verifier)
+
+    ef = result.extractions["methodology"]
+    assert ef.value is None, "value must be cleared when verifier raises (AH-002)"
+    assert ef.quote is None, "quote must be cleared when verifier raises (AH-002)"
+    assert ef.verified is False
+
+
+@pytest.mark.asyncio
 async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fails():
     """Mixed chunk-search outcomes should use full paper context for all fields."""
     from paper_ingestion.extraction import extract_fields_for_paper

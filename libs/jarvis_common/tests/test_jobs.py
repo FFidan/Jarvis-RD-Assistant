@@ -213,9 +213,14 @@ async def db_pool():
                 user_id         TEXT,
                 created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 started_at      TIMESTAMPTZ,
-                finished_at     TIMESTAMPTZ
+                finished_at     TIMESTAMPTZ,
+                last_heartbeat_at TIMESTAMPTZ
             )
         """)
+        # Migration 035: ensure the heartbeat column exists in pre-existing DBs.
+        await conn.execute(
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ"
+        )
         # Clean slate for each test
         await conn.execute("DELETE FROM jobs")
 
@@ -608,8 +613,9 @@ async def test_worker_loop_reaps_stale_running_jobs(db_pool):
     assert row_fresh is not None
     fresh_id = row_fresh["id"]
 
-    # Run reaper once.
-    await _reap_stale_jobs(db_pool)
+    # Run reaper once — pass the kind so it is in scope.
+    reaped = await _reap_stale_jobs(db_pool, ["noop.test"])
+    assert reaped == 1
 
     from jarvis_common.jobs import get
 
@@ -619,8 +625,220 @@ async def test_worker_loop_reaps_stale_running_jobs(db_pool):
     assert stale is not None
     assert stale["status"] == "failed"
     assert stale["error"] is not None
-    assert stale["error"]["message"] == "Job stalled: worker restart or crash"
+    assert stale["error"]["message"] == "reaped as stale (no heartbeat)"
     assert stale["finished_at"] is not None
 
     assert fresh is not None
     assert fresh["status"] == "running"  # untouched
+
+
+# ---------------------------------------------------------------------------
+# JOB-002 — request_cancel on queued job → immediate terminal transition
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_request_cancel_queued_job_transitions_to_cancelled(db_pool):
+    """JOB-002: request_cancel() on a queued job must flip status to 'cancelled' immediately."""
+    from jarvis_common.jobs import enqueue, get, request_cancel
+
+    job_id = await enqueue(db_pool, "noop.test", {})
+
+    # Confirm the job starts as queued
+    row_before = await get(db_pool, job_id)
+    assert row_before is not None
+    assert row_before["status"] == "queued"
+
+    await request_cancel(db_pool, job_id)
+
+    row_after = await get(db_pool, job_id)
+    assert row_after is not None
+    assert row_after["status"] == "cancelled", f"Expected 'cancelled', got '{row_after['status']}'"
+    assert row_after["cancel_requested"] is True
+    assert row_after["finished_at"] is not None, "finished_at must be set for terminal cancel"
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_worker_loop_skips_cancelled_queued_job(db_pool):
+    """JOB-002: worker_loop must not pick up a job with cancel_requested=TRUE."""
+    import asyncpg
+    import httpx
+    from jarvis_common.jobs import (
+        JobContext,
+        enqueue,
+        get,
+        job_handler,
+        request_cancel,
+        worker_loop,
+    )
+
+    unique_kind = f"test.cancel.skip.{uuid.uuid4().hex}"
+    handler_called = []
+
+    @job_handler(unique_kind)
+    async def _should_never_run(
+        _pool: asyncpg.Pool,
+        _http: httpx.AsyncClient,
+        payload: dict[str, Any],
+        ctx: JobContext,
+    ) -> dict[str, Any]:
+        handler_called.append(True)
+        return {}
+
+    job_id = await enqueue(db_pool, unique_kind, {})
+    # Cancel while still queued — status transitions to 'cancelled' immediately (JOB-002 fix)
+    await request_cancel(db_pool, job_id)
+
+    row_cancelled = await get(db_pool, job_id)
+    assert row_cancelled is not None
+    assert row_cancelled["status"] == "cancelled"
+
+    http_mock = AsyncMock(spec=httpx.AsyncClient)
+    stop_event = asyncio.Event()
+
+    # Run the worker for a short burst — it should not pick up the cancelled job
+    async def _run_one_poll():
+        stop_event.set()  # stop immediately after first iteration
+        await worker_loop(
+            db_pool,
+            http_mock,
+            kinds={unique_kind},
+            poll_interval=0.05,
+            stop_event=stop_event,
+        )
+
+    await _run_one_poll()
+
+    # Handler must never have been invoked
+    assert handler_called == [], "Worker must not execute a job that was cancelled before pickup"
+
+    # DB status must remain 'cancelled' (not 'succeeded'/'failed'/'running')
+    row_final = await get(db_pool, job_id)
+    assert row_final is not None
+    assert row_final["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# JOB-003 — JobStatusResponse.error is dict, not str
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_job_status_response_error_is_dict(db_pool):
+    """JOB-003: error column (JSONB) must be deserialised as dict, not coerced to str."""
+    from jarvis_common.jobs import get
+    from jarvis_common.models import JobStatusResponse
+
+    # Insert a job row whose error column is a JSONB dict (simulating a real failure)
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, error, finished_at)
+            VALUES ('noop.test', 'failed', $1::jsonb, NOW())
+            RETURNING id::text
+            """,
+            '{"message": "boom", "type": "RuntimeError"}',
+        )
+    assert row is not None
+    job_id = row["id"]
+
+    db_row = await get(db_pool, job_id)
+    assert db_row is not None
+
+    # Pydantic model must accept and preserve the dict (not coerce to str)
+    status_resp = JobStatusResponse(**db_row)
+    assert isinstance(status_resp.error, dict), (
+        f"Expected dict, got {type(status_resp.error)}: {status_resp.error!r}"
+    )
+    assert status_resp.error["message"] == "boom"
+    assert status_resp.error["type"] == "RuntimeError"
+
+
+# ---------------------------------------------------------------------------
+# JOB-001: heartbeat-based reaper + kind-scoped kill filter
+# ---------------------------------------------------------------------------
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_reaper_spares_job_with_recent_heartbeat(db_pool):
+    """A job that is 2 hours old but heartbeated 1 minute ago must NOT be reaped."""
+    from jarvis_common.jobs import _reap_stale_jobs
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, started_at, last_heartbeat_at)
+            VALUES ($1, 'running',
+                    NOW() - INTERVAL '2 hours',
+                    NOW() - INTERVAL '1 minute')
+            RETURNING id::text
+            """,
+            "pulse.generate",
+        )
+    assert row is not None
+    job_id = row["id"]
+
+    reaped = await _reap_stale_jobs(db_pool, ["pulse.generate"])
+    assert reaped == 0, "Job with recent heartbeat should not be reaped"
+
+    from jarvis_common.jobs import get
+
+    db_row = await get(db_pool, job_id)
+    assert db_row is not None
+    assert db_row["status"] == "running"
+
+
+@_SKIP_NO_DB
+@pytest.mark.asyncio
+async def test_reaper_scopes_to_kinds(db_pool):
+    """Reaper only kills jobs whose kind appears in the kinds list."""
+    from jarvis_common.jobs import _reap_stale_jobs
+
+    # Insert a stale running job of a different kind (paper.download).
+    async with db_pool.acquire() as conn:
+        row_other = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, started_at)
+            VALUES ($1, 'running', NOW() - INTERVAL '2 hours')
+            RETURNING id::text
+            """,
+            "paper.download",
+        )
+    assert row_other is not None
+    other_id = row_other["id"]
+
+    # Reaper for pulse.generate should NOT touch the paper.download job.
+    reaped = await _reap_stale_jobs(db_pool, ["pulse.generate"])
+    assert reaped == 0, "Reaper must not kill jobs belonging to another service"
+
+    from jarvis_common.jobs import get
+
+    other_row = await get(db_pool, other_id)
+    assert other_row is not None
+    assert other_row["status"] == "running"
+
+    # Now insert a stale job of pulse.generate — it SHOULD be reaped.
+    async with db_pool.acquire() as conn:
+        row_own = await conn.fetchrow(
+            """
+            INSERT INTO jobs (kind, status, started_at)
+            VALUES ($1, 'running', NOW() - INTERVAL '2 hours')
+            RETURNING id::text
+            """,
+            "pulse.generate",
+        )
+    assert row_own is not None
+    own_id = row_own["id"]
+
+    reaped = await _reap_stale_jobs(db_pool, ["pulse.generate"])
+    assert reaped == 1, "Reaper must kill its own stale job"
+
+    own_row = await get(db_pool, own_id)
+    assert own_row is not None
+    assert own_row["status"] == "failed"
+    assert own_row["error"] is not None
+    assert own_row["error"]["message"] == "reaped as stale (no heartbeat)"

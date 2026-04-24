@@ -191,10 +191,11 @@ async def extract_fields_for_paper(
                     )
                     value = None
             except Exception:
-                # Recoverable: verification is best-effort; a failure means the
-                # field is stored with verified=False and confidence=0.5 instead
-                # of being lost entirely.
-                logger.debug("Quote verification failed for field %s", field_name)
+                # Verifier raised unexpectedly: treat as unverified and discard
+                # value+quote so the anti-hallucination rule is never bypassed.
+                logger.debug("Quote verifier raised for field %s — discarding value", field_name)
+                value = None
+                quote = None
 
         extractions[field_name] = ExtractedField(
             value=value,
