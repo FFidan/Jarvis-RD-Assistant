@@ -20,9 +20,6 @@ logger = logging.getLogger(__name__)
 # chat_id:command_name → list of monotonic timestamps
 _timestamps: dict[str, list[float]] = defaultdict(list)
 
-# Maximum entries per key before garbage-collecting old timestamps
-_GC_THRESHOLD = 100
-
 
 def rate_limit(
     max_calls: int = 5,
@@ -44,10 +41,10 @@ def rate_limit(
             now = time.monotonic()
             horizon = max(window_seconds, cooldown_seconds)
 
-            # Garbage-collect old entries
+            # Garbage-collect old entries unconditionally so stale timestamps
+            # can never skew the window for long-idle users.
             stamps = _timestamps[key]
-            if len(stamps) > _GC_THRESHOLD:
-                stamps[:] = [t for t in stamps if now - t < horizon]
+            stamps[:] = [t for t in stamps if now - t < horizon]
 
             # --- cooldown check (heavy commands) ---
             if cooldown_seconds and stamps:

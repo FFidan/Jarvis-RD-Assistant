@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
 
 
@@ -120,6 +121,44 @@ class TestWrapDelimited:
         result = wrap_delimited("user", "\ufeffstart")
         assert "\ufeff" not in result
         assert "start" in result
+
+
+class TestWrapDelimitedTagValidation:
+    def test_invalid_tag_with_hyphen_raises(self) -> None:
+        """JC-008: tag containing hyphen must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid tag"):
+            wrap_delimited("bad-tag", "content")
+
+    def test_invalid_tag_with_space_raises(self) -> None:
+        """Tag containing space must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid tag"):
+            wrap_delimited("my tag", "content")
+
+    def test_invalid_tag_starting_with_digit_raises(self) -> None:
+        """Tag starting with digit must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid tag"):
+            wrap_delimited("1tag", "content")
+
+    def test_invalid_tag_with_special_chars_raises(self) -> None:
+        """Tag with special chars must raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid tag"):
+            wrap_delimited("<script>", "content")
+
+    def test_valid_tag_with_underscore_prefix(self) -> None:
+        """Tag starting with underscore is valid."""
+        result = wrap_delimited("_private_tag", "hello")
+        assert result.startswith("<_private_tag>")
+        assert result.endswith("</_private_tag>")
+
+    def test_valid_tag_with_digits(self) -> None:
+        """Tag with digits after initial letter is valid."""
+        result = wrap_delimited("tag123", "hello")
+        assert result.startswith("<tag123>")
+
+    def test_valid_tag_with_underscore(self) -> None:
+        """Tag with underscores is valid (regression: underscores were already tested)."""
+        result = wrap_delimited("paper_text", "body")
+        assert result.startswith("<paper_text>")
 
 
 class TestSafeForPrompt:

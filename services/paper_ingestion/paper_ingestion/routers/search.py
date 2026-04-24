@@ -690,7 +690,7 @@ async def search_hybrid(
     request: Request,
     body: SearchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    embedder: Embedder | None = Depends(get_embedder),
+    embedder: Embedder = Depends(get_embedder),
 ) -> list[dict]:
     """Search papers using hybrid BM25 + semantic search with RRF fusion.
 
@@ -709,10 +709,10 @@ async def search_hybrid(
         Papers with ``id``, ``title``, ``authors``, ``url``, ``abstract``,
         ``published_date``, ``rrf_score``, ``bm25_rank``, ``semantic_rank``.
     """
-    if embedder is None or embedder.qdrant is None:
+    if embedder.qdrant is None:
         raise HTTPException(
             status_code=503,
-            detail="Embedder or Qdrant unavailable for hybrid search",
+            detail="Qdrant unavailable for hybrid search",
         )
 
     results = await embedder.hybrid_search(body.query, db_pool, limit=body.max_results)

@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { streamSSE } from '@/lib/sse';
 import { useChatStore } from '@/stores/chat-store';
 import type { Source } from '@/types';
@@ -17,13 +17,20 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   const [sources, setSources] = useState<Source[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // Keep a ref to phase so sendMessage doesn't need phase in its deps array,
+  // preventing unnecessary recreation on every phase change.
+  const phaseRef = useRef(phase);
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
   const isStreaming = phase !== 'idle';
 
   const messages = chats[chatId] || [];
 
   const sendMessage = useCallback(
     async (question: string) => {
-      if (isStreaming) return;
+      if (phaseRef.current !== 'idle') return;
 
       // Add user message
       addMessage(chatId, { role: 'user', content: question });
@@ -70,7 +77,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
         abortControllerRef.current = null;
       }
     },
-    [chatId, scope, paperId, phase, addMessage, appendToLastMessage, setLastMessageSources],
+    [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources],
   );
 
   const stopStreaming = useCallback(() => {

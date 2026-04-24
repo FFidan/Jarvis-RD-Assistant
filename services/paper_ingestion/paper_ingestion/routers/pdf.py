@@ -286,14 +286,22 @@ async def upload_pdf(
                 pdf_path = storage_path / f"{paper_id}.pdf"
                 temp_path.rename(pdf_path)
 
-                updated = await conn.fetchrow(
-                    """
-                    UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
-                    WHERE id = $2 RETURNING *
-                    """,
-                    str(pdf_path),
-                    paper_id,
-                )
+                try:
+                    updated = await conn.fetchrow(
+                        """
+                        UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
+                        WHERE id = $2 RETURNING *
+                        """,
+                        str(pdf_path),
+                        paper_id,
+                    )
+                except Exception:
+                    # DB update failed — remove the renamed file to avoid dangling artifact
+                    try:
+                        pdf_path.unlink()
+                    except OSError:
+                        pass
+                    raise
     finally:
         # No-op after successful rename (file no longer at temp_path); cleans up on any exception
         temp_path.unlink(missing_ok=True)

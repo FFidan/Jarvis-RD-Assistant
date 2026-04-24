@@ -265,7 +265,9 @@ def register_callback_handlers(app: Application) -> None:
     app.add_handler(CallbackQueryHandler(paper_bookmark_callback, pattern=r"^paper_bookmark_\d+$"))
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
-    app.add_handler(CallbackQueryHandler(start_review_callback, pattern=r"^start_review$"))
+    # NOTE: start_review is intentionally NOT registered here; it is an entry_point
+    # of the ConversationHandler in review_handler.py.  Registering it here too
+    # causes ghost callbacks (double dispatch).
     app.add_handler(
         CallbackQueryHandler(pulse_rating_callback, pattern=r"^pulse_(up|down|save)_\d+$")
     )

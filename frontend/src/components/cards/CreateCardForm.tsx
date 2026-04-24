@@ -218,7 +218,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
     }
   }, [defaultDeckId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const isGenerating = genMut.isPending || (!!jobId && !!job && !TERMINAL_STATUSES.includes(job.status));
+  const isGenerating = genMut.isPending || (!!jobId && (!job || !TERMINAL_STATUSES.includes(job.status)));
   const isQueued = !!jobId && (!job || job.status === 'queued');
   const isRunning = !!job && job.status === 'running';
   const isDone = !!job && TERMINAL_STATUSES.includes(job.status);

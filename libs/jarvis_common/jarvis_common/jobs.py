@@ -79,8 +79,12 @@ HandlerFn = Callable[
 ]
 
 # SSE keepalive / max-stream constants shared across routers
-_KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
-_MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
+MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+
+# Backward-compatible aliases (deprecated — import the public names instead)
+_KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
+_MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
 
 _HANDLERS: dict[str, HandlerFn] = {}
 
@@ -185,7 +189,8 @@ async def enqueue(
             payload or {},
             user_id,
         )
-    assert row is not None
+    if row is None:
+        raise RuntimeError("enqueue returned no row")
     return row["id"]
 
 

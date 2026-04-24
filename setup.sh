@@ -263,7 +263,9 @@ EOF
     done
     CORS_ORIGINS_OVERRIDE="https://${TUNNEL_HOSTNAME},https://localhost:3001"
     JARVIS_CERT_SAN="DNS:localhost,IP:127.0.0.1,DNS:${TUNNEL_HOSTNAME}"
+    CF_TRUST_OVERRIDE=true
     ok "Tunnel hostname: ${TUNNEL_HOSTNAME} (added to CORS_ORIGINS and cert SAN)."
+    ok "JARVIS_TRUST_CF_CONNECTING_IP=true — rate limiting will key off the real CF-Connecting-IP header rather than the tunnel origin."
     ;;
   *)
     die "Invalid choice '$access_mode'. Expected 1, 2, or 3." \
@@ -350,6 +352,7 @@ sub_value() {
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;
     DASHBOARD_BIND_HOST)      printf '%s' "$DASHBOARD_BIND_HOST" ;;
     JARVIS_CERT_SAN)          printf '%s' "$JARVIS_CERT_SAN" ;;
+    JARVIS_TRUST_CF_CONNECTING_IP) [ -n "$CF_TRUST_OVERRIDE" ] && printf '%s' "$CF_TRUST_OVERRIDE" || return 1 ;;
     CORS_ORIGINS)
       if [ -n "$CORS_ORIGINS_OVERRIDE" ]; then
         printf '%s' "$CORS_ORIGINS_OVERRIDE"

@@ -23,8 +23,8 @@ from jarvis_common import (
 )
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import (
-    _KEEPALIVE_INTERVAL,
-    _MAX_STREAM_SECONDS,
+    KEEPALIVE_INTERVAL,
+    MAX_STREAM_SECONDS,
 )
 from pydantic import BaseModel, Field, field_validator
 
@@ -214,13 +214,13 @@ async def stream_job(
             elapsed = now - loop_start
 
             # Hard ceiling — prevent zombie streams
-            if elapsed > _MAX_STREAM_SECONDS:
+            if elapsed > MAX_STREAM_SECONDS:
                 logger.warning("SSE stream timeout for job %s after %.0fs", job_id, elapsed)
                 yield f"data: {json.dumps({'status': 'streaming_timeout'})}\n\n"
                 break
 
             # Keepalive comment to prevent proxy / browser from closing idle connection
-            if now - last_keepalive >= _KEEPALIVE_INTERVAL:
+            if now - last_keepalive >= KEEPALIVE_INTERVAL:
                 yield ": keepalive\n\n"
                 last_keepalive = now
 

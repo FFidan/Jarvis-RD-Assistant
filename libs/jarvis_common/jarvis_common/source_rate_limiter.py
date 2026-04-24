@@ -51,6 +51,10 @@ class SourceRateLimiter:
             if self.tokens < 1.0:
                 wait_time = (1.0 - self.tokens) / self.rate
                 await asyncio.sleep(wait_time)
+                # Reset after sleep: the sleep satisfied the wait, so the bucket
+                # starts fresh. Without this, the next refill would count the
+                # sleep duration as elapsed time and over-fill the bucket.
+                self.last_refill = time.monotonic()
                 self.tokens = 0.0
             else:
                 self.tokens -= 1.0

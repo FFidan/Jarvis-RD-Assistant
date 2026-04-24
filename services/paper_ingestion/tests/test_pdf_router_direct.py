@@ -305,3 +305,68 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
     call_args = fake_enqueue.await_args.args
     payload = call_kwargs.get("payload") if "payload" in call_kwargs else call_args[2]
     assert payload == {"paper_ids": [10]}
+
+
+# ---------------------------------------------------------------------------
+# PI-015: upload_pdf atomicity — dangling-file rollback on UPDATE failure
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, monkeypatch):
+    """upload_pdf must remove the renamed pdf file if the UPDATE papers fails.
+
+    PI-015: after temp_path.rename(pdf_path) the UPDATE can fail; the
+    transaction rolls back the DB insert but the file stays on disk.
+    The fix wraps the UPDATE in try/except and unlinks pdf_path on failure.
+    """
+    import io
+
+    from fastapi import UploadFile
+
+    storage_dir = tmp_path / "pdfs"
+    storage_dir.mkdir()
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+
+    # Build a minimal PDF UploadFile (valid %PDF- header)
+    pdf_content = b"%PDF-1.7\n" + b"x" * 100
+    upload_file = UploadFile(filename="paper.pdf", file=io.BytesIO(pdf_content))
+
+    # Conn: INSERT returns a row, but UPDATE raises
+    inserted_row = FakeRecord(
+        id=99,
+        external_id="local:abc123",
+        source_type="local",
+        title="Test Paper",
+        authors=[],
+        abstract=None,
+        url="local://abc123",
+        pdf_url=None,
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at=None,
+    )
+
+    conn = AsyncMock()
+    # First fetchrow → None (duplicate check), second fetchrow → inserted_row (INSERT)
+    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, RuntimeError("UPDATE exploded")])
+
+    pool = _make_pool(conn)
+    request = MagicMock()
+
+    with pytest.raises((RuntimeError, Exception)):
+        await pdf.upload_pdf.__wrapped__(
+            request,
+            file=upload_file,
+            title="Test Paper",
+            authors="",
+            abstract="",
+            db_pool=pool,
+        )
+
+    # The renamed file (storage_dir/99.pdf) must have been cleaned up
+    assert not (storage_dir / "99.pdf").exists(), (
+        "Dangling file left on disk after DB UPDATE failure"
+    )

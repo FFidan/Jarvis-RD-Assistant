@@ -134,13 +134,14 @@ async def test_discovery_fetch_sources_uses_display_order_ordering():
         recent_negative_titles=[],
     )
     async with httpx.AsyncClient() as http_client:
-        result = await discover_candidates(
+        result, source_counts = await discover_candidates(
             db_pool=pool,
             http_client=http_client,
             profile=profile,
             since=datetime(2026, 1, 1, tzinfo=UTC),
         )
     assert result == []
+    assert source_counts == {}
 
     fetch_sql = conn.fetch.call_args[0][0]
     assert "display_order" in fetch_sql.lower(), (

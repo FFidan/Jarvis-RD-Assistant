@@ -118,7 +118,7 @@ async def test_fan_out_calls_every_enabled_source():
     profile = _make_profile()
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, source_counts = await discover_candidates(
             pool, http_client, profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -126,6 +126,7 @@ async def test_fan_out_calls_every_enabled_source():
     assert stubs["openalex"].fetch_new_since_calls == 1
     assert stubs["pubmed"].fetch_new_since_calls == 1
     assert len(result) == 3
+    assert isinstance(source_counts, dict)  # source_counts keyed by plugin class name
 
 
 @pytest.mark.asyncio
@@ -150,7 +151,7 @@ async def test_graceful_source_failure():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, source_counts = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -185,7 +186,7 @@ async def test_dedup_by_doi():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -221,7 +222,7 @@ async def test_dedup_by_arxiv_id():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -252,7 +253,7 @@ async def test_dedup_by_title_hash():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -269,12 +270,13 @@ async def test_empty_when_no_enabled_sources():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
-        result = await discover_candidates(
+        result, source_counts = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
         m.assert_not_called()
 
     assert result == []
+    assert source_counts == {}
 
 
 @pytest.mark.asyncio
@@ -296,7 +298,7 @@ async def test_unknown_source_class_is_skipped():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -374,7 +376,7 @@ async def test_source_cache_used_when_provided():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool,
             MagicMock(),
             profile,

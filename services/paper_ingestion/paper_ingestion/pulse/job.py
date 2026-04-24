@@ -129,8 +129,9 @@ async def run_pulse(
         await ctx.update_progress(0.20, "Discovering candidates")
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
+    source_counts: dict[str, int] = {}
     try:
-        candidates = await discover_candidates(
+        candidates, source_counts = await discover_candidates(
             db_pool,
             http_client,
             profile,
@@ -142,6 +143,7 @@ async def run_pulse(
         logger.exception("pulse.discover failed")
         candidates = []
     stats["candidate_count"] = len(candidates)
+    stats["source_counts"] = source_counts
     logger.info("pulse.stage0", extra={"candidates": len(candidates)})
 
     # --- 3. stage 1 (embedding filter) -----------------------------------
@@ -221,10 +223,9 @@ async def run_pulse(
         deck = []
     logger.info("pulse.assembled", extra={"cards": len(deck)})
 
-    # Compute stats from in-memory values BEFORE persist so they are available even if persist fails
+    # Compute duration before persist so it is available even if persist fails
     stats["duration_s"] = round(time.monotonic() - start, 3)
     stats["deck_date"] = now.date().isoformat()
-    stats["card_count"] = len(deck)
 
     # --- 7. persist (upsert papers + persist deck in one transaction) ---
     try:
@@ -240,7 +241,7 @@ async def run_pulse(
                             exc,
                         )
                         stats["last_error"] = f"upsert_paper: {exc}"
-                deck_id = await persist_deck(
+                persisted = await persist_deck(
                     db_pool,
                     deck_date=now.date(),
                     cards=deck,
@@ -248,9 +249,11 @@ async def run_pulse(
                     degraded_reason=degraded_reason,
                     conn=conn,
                 )
-        logger.info("pulse.persisted", extra={"deck_id": deck_id, "cards": len(deck)})
+        stats["card_count"] = persisted
+        logger.info("pulse.persisted", extra={"persisted": persisted, "cards": len(deck)})
     except Exception as exc:  # broad: outer txn failure (DB unreachable); stats already captured
         stats["last_error"] = f"persist: {exc}"
+        stats["card_count"] = 0
         logger.exception("pulse.persist failed")
 
     if degraded_reason:

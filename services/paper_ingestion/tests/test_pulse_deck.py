@@ -118,17 +118,19 @@ async def test_persist_deck_inserts_deck_and_cards():
 
 
 @pytest.mark.asyncio
-async def test_persist_deck_returns_deck_id():
-    """persist_deck returns the integer deck_id."""
+async def test_persist_deck_returns_insert_count():
+    """persist_deck returns the number of successfully inserted card rows."""
     pool, conn = _make_pool_and_conn()
     deck_date = date(2024, 1, 15)
-    conn.fetchval.return_value = 99  # deck_id
+    # fetchval sequence: deck upsert → deck_id=99, card insert → inserted_id=1 (success)
+    conn.fetchval.side_effect = [99, 1]
 
     cards = [_make_scored(_make_paper(0))]
 
-    deck_id = await persist_deck(pool, deck_date, cards, stats={})
+    insert_count = await persist_deck(pool, deck_date, cards, stats={})
 
-    assert deck_id == 99
+    # 1 card successfully inserted → return value is 1
+    assert insert_count == 1
 
 
 @pytest.mark.asyncio
@@ -313,10 +315,10 @@ async def test_persist_deck_counts_actual_inserts_when_paper_missing():
     cards = [_make_scored(p, score=float(i + 1) / 3.0) for i, p in enumerate(papers)]
 
     with patch("paper_ingestion.pulse.deck.logger") as mock_logger:
-        deck_id = await persist_deck(pool, deck_date, cards, stats={"candidate_count": 50})
+        insert_count = await persist_deck(pool, deck_date, cards, stats={"candidate_count": 50})
 
-    # deck_id must be whatever the upsert returned
-    assert deck_id == 7
+    # 2 of 3 cards were successfully inserted → return value is 2
+    assert insert_count == 2
 
     # The final UPDATE must have been called with card_count=2
     update_calls = [
@@ -351,10 +353,10 @@ async def test_persist_deck_empty_cards_writes_zero_count_row():
     # Only one fetchval call: the deck upsert RETURNING id
     conn.fetchval.return_value = 55
 
-    deck_id = await persist_deck(pool, deck_date, cards=[], stats={"candidate_count": 0})
+    insert_count = await persist_deck(pool, deck_date, cards=[], stats={"candidate_count": 0})
 
-    # The deck row was upserted and its id returned
-    assert deck_id == 55
+    # 0 cards submitted → 0 successfully inserted
+    assert insert_count == 0
 
     # The UPDATE to set card_count must use 0
     update_calls = [

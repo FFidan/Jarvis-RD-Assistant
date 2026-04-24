@@ -93,7 +93,7 @@ async def test_no_openalex_key_baseline_arxiv_only():
         return _cls(arxiv_stub) if name == "arxiv" else None
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -125,7 +125,7 @@ async def test_s2_rate_limited_skipped():
         return _cls(stubs[name])
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -152,7 +152,7 @@ async def test_openalex_5xx_skipped():
         return _cls(stubs[name])
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result = await discover_candidates(
+        result, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
     assert len(result) == 1
@@ -179,7 +179,7 @@ async def test_llm_timeout_deck_still_produced():
         patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
         patch(
             "paper_ingestion.pulse.job.discover_candidates",
-            AsyncMock(return_value=[_paper(i) for i in range(3)]),
+            AsyncMock(return_value=([_paper(i) for i in range(3)], {"_Src": 3})),
         ),
         patch(
             "paper_ingestion.pulse.job.stage1_embedding_filter",
@@ -212,7 +212,7 @@ async def test_empty_discovery_empty_deck_not_error():
 
     with (
         patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_profile())),
-        patch("paper_ingestion.pulse.job.discover_candidates", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.discover_candidates", AsyncMock(return_value=([], {}))),
         patch("paper_ingestion.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
         patch("paper_ingestion.pulse.job.stage2_llm_rerank", AsyncMock(return_value=[])),
         patch("paper_ingestion.pulse.job.stage3_combine", AsyncMock(return_value=[])),

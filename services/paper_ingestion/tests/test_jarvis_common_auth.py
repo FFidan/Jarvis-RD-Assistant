@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
-from jarvis_common.auth import validate_production_config, verify_api_key
+from jarvis_common.auth import (
+    refresh_api_key_cache,
+    validate_production_config,
+    verify_api_key,
+)
 
 
 def _request(path: str):
@@ -49,6 +53,7 @@ async def test_verify_api_key_rejects_invalid_key(monkeypatch):
     """Mismatched keys raise 403."""
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
     monkeypatch.setenv("DEV_MODE", "false")
+    refresh_api_key_cache()
 
     with pytest.raises(HTTPException, match="Invalid or missing API key") as exc_info:
         await verify_api_key(_request("/api/papers"), api_key="wrong-key")
@@ -61,6 +66,7 @@ async def test_verify_api_key_accepts_valid_key(monkeypatch):
     """Matching API keys should allow authenticated requests through."""
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
     monkeypatch.setenv("DEV_MODE", "false")
+    refresh_api_key_cache()
 
     await verify_api_key(_request("/api/papers"), api_key="x" * 32)
 

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
@@ -346,3 +348,72 @@ async def test_hybrid_search_limit_applied():
         results = await embedder.hybrid_search("test", pool, limit=3)
 
     assert len(results) == 3
+
+
+# ---------------------------------------------------------------------------
+# PI-013: search_hybrid endpoint — Embedder typed non-optional
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_endpoint_raises_503_when_qdrant_unavailable():
+    """search_hybrid must raise 503 when embedder.qdrant is None (Qdrant down).
+
+    PI-013: embedder is now typed as Embedder (non-optional); only
+    embedder.qdrant is checked for availability.
+    """
+    from paper_ingestion.routers import search as search_router
+
+    embedder = _make_embedder()
+    embedder.qdrant = None  # simulate Qdrant not configured
+
+    pool = _make_pool([])
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+    body = SimpleNamespace(query="test query", max_results=10)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await search_router.search_hybrid.__wrapped__(
+            request,
+            body=body,
+            db_pool=pool,
+            embedder=embedder,
+        )
+
+    assert exc_info.value.status_code == 503
+    assert "Qdrant" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_search_hybrid_endpoint_calls_hybrid_search_when_qdrant_available():
+    """search_hybrid delegates to embedder.hybrid_search when Qdrant is ready.
+
+    PI-013: with non-optional Embedder type, the None-check path is gone;
+    verify the happy path still reaches hybrid_search().
+    """
+    from paper_ingestion.routers import search as search_router
+
+    embedder = _make_embedder()
+    # embedder.qdrant is an AsyncMock (truthy) — Qdrant is "available"
+
+    pool = _make_pool([])
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace()),
+        client=SimpleNamespace(host="127.0.0.1"),
+    )
+
+    body = SimpleNamespace(query="neural ODEs", max_results=5)
+    expected = [{"id": 1, "title": "Paper", "rrf_score": 0.5}]
+
+    with patch.object(embedder, "hybrid_search", new_callable=AsyncMock, return_value=expected):
+        result = await search_router.search_hybrid.__wrapped__(
+            request,
+            body=body,
+            db_pool=pool,
+            embedder=embedder,
+        )
+
+    assert result == expected

@@ -62,7 +62,7 @@ def patch_pipeline():
 
     patches = {
         "load_profile": AsyncMock(return_value=profile),
-        "discover_candidates": AsyncMock(return_value=candidates),
+        "discover_candidates": AsyncMock(return_value=(candidates, {"_MockSrc": len(candidates)})),
         "stage1_embedding_filter": AsyncMock(return_value=stage1_out),
         "stage2_llm_rerank": AsyncMock(return_value=stage2_out),
         "stage3_combine": AsyncMock(return_value=stage3_out),
@@ -133,7 +133,7 @@ async def test_happy_path_end_to_end(patch_pipeline):
 async def test_empty_discovery_produces_empty_deck(patch_pipeline):
     from paper_ingestion.pulse.job import run_pulse
 
-    patch_pipeline["mocks"]["discover_candidates"].return_value = []
+    patch_pipeline["mocks"]["discover_candidates"].return_value = ([], {})
     patch_pipeline["mocks"]["stage1_embedding_filter"].return_value = []
     patch_pipeline["mocks"]["stage2_llm_rerank"].return_value = []
     patch_pipeline["mocks"]["stage3_combine"].return_value = []

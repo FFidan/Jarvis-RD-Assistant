@@ -109,6 +109,42 @@ def test_job_error_without_action_link():
     assert err.action_link is None
 
 
+@pytest.mark.asyncio
+async def test_enqueue_raises_runtime_error_when_fetchrow_returns_none():
+    """JC-007: enqueue raises RuntimeError (not AssertionError) when DB returns None."""
+    from jarvis_common.jobs import enqueue
+
+    pool, conn = _make_mock_pool_returning([None])
+    conn.fetchrow = AsyncMock(return_value=None)
+
+    with pytest.raises(RuntimeError, match="enqueue returned no row"):
+        await enqueue(pool, "some.kind", {})
+
+
+def test_keepalive_interval_is_public():
+    """JC-009: KEEPALIVE_INTERVAL is importable as a public name from jarvis_common.jobs."""
+    from jarvis_common.jobs import KEEPALIVE_INTERVAL
+
+    assert isinstance(KEEPALIVE_INTERVAL, float)
+    assert KEEPALIVE_INTERVAL > 0
+
+
+def test_max_stream_seconds_is_public():
+    """JC-009: MAX_STREAM_SECONDS is importable as a public name from jarvis_common.jobs."""
+    from jarvis_common.jobs import MAX_STREAM_SECONDS
+
+    assert isinstance(MAX_STREAM_SECONDS, int)
+    assert MAX_STREAM_SECONDS > 0
+
+
+def test_keepalive_and_max_stream_exported_from_jarvis_common():
+    """JC-009: Both constants are re-exported from jarvis_common __init__."""
+    import jarvis_common
+
+    assert hasattr(jarvis_common, "KEEPALIVE_INTERVAL")
+    assert hasattr(jarvis_common, "MAX_STREAM_SECONDS")
+
+
 # ---------------------------------------------------------------------------
 # Helpers for mock-based tests (no real DB)
 # ---------------------------------------------------------------------------

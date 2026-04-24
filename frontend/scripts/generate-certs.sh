@@ -13,6 +13,10 @@ CERT_DIR="/etc/nginx/certs"
 CERT_FILE="${CERT_DIR}/selfsigned.crt"
 KEY_FILE="${CERT_DIR}/selfsigned.key"
 
+if [ "${JARVIS_SKIP_SELFSIGNED_GEN:-false}" = "true" ]; then
+    echo "Skipping self-signed cert generation (JARVIS_SKIP_SELFSIGNED_GEN=true)"
+    exit 0
+fi
 if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
     echo "TLS certificates already exist, skipping generation."
     exit 0

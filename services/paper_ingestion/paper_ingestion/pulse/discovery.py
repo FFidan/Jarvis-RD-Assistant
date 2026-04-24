@@ -60,7 +60,7 @@ async def discover_candidates(
     profile: UserProfile,
     since: datetime,
     source_cache: dict | None = None,
-) -> list[PaperCreate]:
+) -> tuple[list[PaperCreate], dict[str, int]]:
     """Fan out to all enabled sources and return a deduplicated candidate list.
 
     Parameters
@@ -82,9 +82,11 @@ async def discover_candidates(
 
     Returns
     -------
-    list[PaperCreate]
-        Deduplicated candidates, first-occurrence wins.  Returns ``[]`` if no
-        sources are enabled or if every source fails.
+    tuple[list[PaperCreate], dict[str, int]]
+        A 2-tuple of:
+        - Deduplicated candidates, first-occurrence wins.  Returns ``[]`` if no
+          sources are enabled or if every source fails.
+        - Per-plugin raw fetch counts keyed by source class name.
     """
     async with db_pool.acquire() as conn:
         source_rows = await conn.fetch(
@@ -93,7 +95,7 @@ async def discover_candidates(
         )
 
     if not source_rows:
-        return []
+        return [], {}
 
     sources: list[PaperSource] = []
     for row in source_rows:
@@ -118,7 +120,7 @@ async def discover_candidates(
             logger.exception("pulse.discover: failed to instantiate source %s", source_type)
 
     if not sources:
-        return []
+        return [], {}
 
     per_source_cap = max(
         10,
@@ -141,15 +143,19 @@ async def discover_candidates(
 
     candidates: list[PaperCreate] = []
     seen: set[tuple[str, str]] = set()
+    source_counts: dict[str, int] = {}
     total_raw = 0
     for src, result in zip(sources, results, strict=False):
+        plugin_name = src.__class__.__name__
         if isinstance(result, BaseException):
             logger.warning(
                 "pulse.discover: source %s failed: %s",
-                src.__class__.__name__,
+                plugin_name,
                 result,
             )
+            source_counts[plugin_name] = 0
             continue
+        source_counts[plugin_name] = len(result)
         total_raw += len(result)
         for paper in result:
             key = _dedupe_key(paper)
@@ -163,4 +169,4 @@ async def discover_candidates(
         total_raw,
         len(candidates),
     )
-    return candidates
+    return candidates, source_counts

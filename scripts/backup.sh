@@ -1,4 +1,20 @@
 #!/usr/bin/env bash
+# backup.sh — JARVIS PostgreSQL backup sidecar
+#
+# What it backs up:
+#   - PostgreSQL dump (pg_dump | gzip → /backups/jarvis_<timestamp>.sql.gz)
+#
+# S3 upload (optional):
+#   Set BACKUP_S3_BUCKET in .env to enable. Requires `aws` CLI in PATH.
+#   If aws is not installed the script prints a notice and exits 0 (local
+#   backup still succeeds). To add awscli to the backup sidecar image:
+#     Alpine: apk add --no-cache aws-cli
+#     pip:    pip install awscli
+#
+# Docker Compose: run under --profile backup (service: postgres-backup).
+# Env vars: BACKUP_S3_BUCKET, BACKUP_RETENTION_DAYS, BACKUP_INTERVAL_SECONDS
+#   — see .env.example for defaults.
+
 set -euo pipefail
 
 # Configuration

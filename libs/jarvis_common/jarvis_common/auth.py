@@ -15,13 +15,40 @@ _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness"})
 
 
+def _load_api_key() -> str | None:
+    """Resolve JARVIS_API_KEY once at import time.
+
+    Honours the _FILE convention (JARVIS_API_KEY_FILE) via read_secret().
+    Returns None when no key is configured so callers can use a simple truth
+    check rather than comparing against an empty string.
+    """
+    value = read_secret("JARVIS_API_KEY")
+    return value if value else None
+
+
+# Resolved once at import time; avoids a file-read per request.
+_CACHED_API_KEY: str | None = _load_api_key()
+
+
+def refresh_api_key_cache() -> None:
+    """Re-resolve the API key from env/file and update the module-level cache.
+
+    Tests that monkeypatch JARVIS_API_KEY after import must call this so the
+    cached value reflects the new environment.
+    """
+    global _CACHED_API_KEY
+    _CACHED_API_KEY = _load_api_key()
+
+
 async def verify_api_key(request: Request, api_key: str | None = Depends(_api_key_header)) -> None:
     """Validate API key.
 
     SECURITY: DEV_MODE only bypasses auth when JARVIS_API_KEY is *not set*.
     If a key is configured, it is always enforced — even in DEV_MODE.
+    Uses the module-level cached key (_CACHED_API_KEY) to avoid re-reading
+    the secret on every request.
     """
-    jarvis_api_key = read_secret("JARVIS_API_KEY")
+    jarvis_api_key = _CACHED_API_KEY
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     if request.url.path in _HEALTH_PATHS:
         return

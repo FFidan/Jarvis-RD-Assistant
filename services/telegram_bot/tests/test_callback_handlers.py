@@ -231,3 +231,35 @@ async def test_start_review_callback_delegates_to_review_start():
     called_update, called_context = mock_review_start.call_args[0]
     assert called_update is update
     assert called_context is context
+
+
+# ---------------------------------------------------------------------------
+# TG-003: start_review must NOT be registered in register_callback_handlers
+# ---------------------------------------------------------------------------
+
+
+def test_start_review_not_registered_in_callback_handler():
+    """TG-003: register_callback_handlers must NOT add a start_review handler.
+
+    The pattern ^start_review$ is exclusively owned by the ConversationHandler
+    entry_point in review_handler.py.  A duplicate registration via
+    register_callback_handlers causes ghost double-dispatch callbacks.
+    """
+    from unittest.mock import MagicMock
+
+    from telegram_bot.handlers.callback_handler import register_callback_handlers
+
+    mock_app = MagicMock()
+    register_callback_handlers(mock_app)
+
+    # Collect all patterns used in add_handler calls
+    registered_patterns = []
+    for c in mock_app.add_handler.call_args_list:
+        handler_arg = c[0][0] if c[0] else None
+        if handler_arg is not None and hasattr(handler_arg, "pattern"):
+            registered_patterns.append(str(handler_arg.pattern))
+
+    assert not any("start_review" in p for p in registered_patterns), (
+        f"start_review should NOT be registered via register_callback_handlers "
+        f"(ConversationHandler owns it). Found patterns: {registered_patterns}"
+    )

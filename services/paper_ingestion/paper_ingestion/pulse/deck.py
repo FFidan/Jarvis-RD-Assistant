@@ -51,6 +51,11 @@ async def _persist_deck_inner(
     Must be called inside an active transaction.  Separated from
     ``persist_deck`` so that callers can share a connection (and therefore
     a transaction) with other writes such as ``upsert_paper``.
+
+    Returns
+    -------
+    int
+        The number of pulse_cards rows successfully inserted.
     """
     # Upsert pulse_decks row with card_count=0 initially — returns the deck id
     deck_id = await conn.fetchval(
@@ -110,7 +115,7 @@ async def _persist_deck_inner(
         deck_id,
     )
 
-    return deck_id
+    return successes
 
 
 async def persist_deck(
@@ -151,7 +156,7 @@ async def persist_deck(
     Returns
     -------
     int
-        The pulse_decks.id of the upserted deck.
+        The number of pulse_cards rows successfully inserted.
     """
     if conn is not None:
         return await _persist_deck_inner(conn, deck_date, cards, stats, degraded_reason)

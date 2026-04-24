@@ -107,3 +107,37 @@ async def test_rate_limiter_acquire_empty_bucket_sleeps(monkeypatch):
 
     assert len(sleep_calls) == 1
     assert sleep_calls[0] > 0.0
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_bucket_reset_after_sleep(monkeypatch):
+    """JC-003: after sleeping on empty bucket, tokens==0 and last_refill is fresh.
+
+    Without the fix, last_refill was stale (set before the sleep), so the next
+    refill would count the sleep duration as elapsed time and over-fill the bucket.
+    """
+    import asyncio
+    import time
+
+    from jarvis_common.source_rate_limiter import SourceRateLimiter
+
+    async def _fake_sleep(secs: float) -> None:
+        # Don't actually sleep; just simulate the sleep completing.
+        pass
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    before = time.monotonic()
+
+    # burst=1 — first acquire drains; second hits the empty-bucket path.
+    limiter = SourceRateLimiter(rate_per_second=1.0, burst=1)
+    await limiter.acquire()  # drains tokens to 0
+    await limiter.acquire()  # sleeps (mocked), then resets
+
+    after = time.monotonic()
+
+    # After the sleep, tokens must be 0 (not refilled from stale elapsed time).
+    assert limiter.tokens == pytest.approx(0.0, abs=1e-9)
+    # last_refill must be set to the time after the sleep, not before it.
+    assert limiter.last_refill >= before
+    assert limiter.last_refill <= after + 0.1  # within a reasonable window

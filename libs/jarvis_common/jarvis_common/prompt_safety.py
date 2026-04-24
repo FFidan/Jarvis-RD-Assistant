@@ -30,6 +30,11 @@ _BIDI_ZW_RE = re.compile(
 )
 
 
+# Valid XML tag names for wrap_delimited: start with letter or underscore,
+# followed by letters, digits, or underscores only.
+_TAG_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+
+
 def _strip_bidi_zw(text: str) -> str:
     """Remove BIDI override/isolate and zero-width characters from *text*.
 
@@ -120,6 +125,7 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
     ----------
     tag:
         The XML tag name to use (e.g. ``"paper_text"``, ``"user_question"``).
+        Must match ``[a-zA-Z_][a-zA-Z0-9_]*`` to prevent delimiter injection.
     text:
         Raw untrusted input string.
     max_chars:
@@ -129,7 +135,14 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
     -------
     str
         Delimited, escaped (and optionally truncated) string.
+
+    Raises
+    ------
+    ValueError
+        If *tag* contains characters outside ``[a-zA-Z_][a-zA-Z0-9_]*``.
     """
+    if not _TAG_RE.match(tag):
+        raise ValueError(f"Invalid tag {tag!r}: must match [a-zA-Z_][a-zA-Z0-9_]*")
     body = escape_llm_text(_strip_bidi_zw(text))
     if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars]
