@@ -428,11 +428,14 @@ async def get_weekly_digest(
     days: int = Query(default=7, ge=1, le=30),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ):
     """Generate a weekly research digest grouped by topic.
 
     Groups recent papers by topic and uses LLM cross-paper synthesis
-    to identify themes across each topic cluster.
+    to identify themes across each topic cluster.  Each theme is verified
+    against the topic corpus and returned in ``verified_themes`` /
+    ``unverified_themes`` (ephemeral — not persisted to DB).
 
     Parameters
     ----------
@@ -446,4 +449,4 @@ async def get_weekly_digest(
     """
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
-    return await generate_weekly_summary(db_pool, http_client, days=days)
+    return await generate_weekly_summary(db_pool, http_client, days=days, verifier=verifier)

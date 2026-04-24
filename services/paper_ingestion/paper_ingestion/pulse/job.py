@@ -176,7 +176,7 @@ async def run_pulse(
     else:
         try:
             stage2_out = await asyncio.wait_for(
-                stage2_llm_rerank(stage1_out, profile, http_client),
+                stage2_llm_rerank(stage1_out, profile, http_client, verifier=svc.verifier),
                 timeout=_STAGE2_TIMEOUT_SECONDS,
             )
             # Count actual LLM calls: candidates where llm_relevance was set

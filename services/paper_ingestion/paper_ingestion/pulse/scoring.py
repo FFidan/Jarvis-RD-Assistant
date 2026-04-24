@@ -21,6 +21,9 @@ from jarvis_common.llm_client import (
 from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.prompts import build_scoring_prompt
+from paper_ingestion.pulse.verification import verify_pulse_reasoning
+from paper_ingestion.rag.verification import RagConfidence
+from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,8 @@ class ScoredCandidate:
     llm_novelty: int | None
     reasoning: str | None
     final_score: float | None
+    reasoning_verified: bool | None = None
+    reasoning_confidence: RagConfidence | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +215,7 @@ async def stage2_llm_rerank(
     stage1_out: list[ScoredCandidate],
     profile: UserProfile,
     http_client: httpx.AsyncClient,
+    verifier: QuoteVerifier | None = None,
 ) -> list[ScoredCandidate]:
     """Score each candidate via LLM with bounded concurrency.
 
@@ -221,6 +227,12 @@ async def stage2_llm_rerank(
         UserProfile providing topic context and rating history.
     http_client:
         Shared httpx.AsyncClient for LiteLLM requests.
+    verifier:
+        Optional :class:`QuoteVerifier` used to check the LLM-generated
+        reasoning against the candidate's title+abstract.  When ``None``
+        (legacy callers / tests) the verification step is skipped and each
+        ``ScoredCandidate`` keeps ``reasoning_verified=None`` +
+        ``reasoning_confidence=None``.
 
     Returns
     -------
@@ -271,6 +283,17 @@ async def stage2_llm_rerank(
                 new_signals["llm_relevance"] = relevance / 10.0
                 new_signals["llm_novelty"] = novelty / 10.0
 
+                # Optional reasoning verification — reuses QuoteVerifier.
+                reasoning_verified: bool | None = None
+                reasoning_confidence: RagConfidence | None = None
+                if verifier is not None and reasoning:
+                    reasoning_verified, reasoning_confidence = await verify_pulse_reasoning(
+                        reasoning,
+                        sc.paper.title,
+                        sc.paper.abstract or "",
+                        verifier,
+                    )
+
                 return ScoredCandidate(
                     paper=sc.paper,
                     signals=new_signals,
@@ -278,6 +301,8 @@ async def stage2_llm_rerank(
                     llm_novelty=novelty,
                     reasoning=reasoning,
                     final_score=sc.final_score,
+                    reasoning_verified=reasoning_verified,
+                    reasoning_confidence=reasoning_confidence,
                 )
             except (ValueError, RuntimeError, httpx.HTTPError, KeyError, TypeError):
                 logger.warning("stage2: LLM scoring failed for %r", sc.paper.title, exc_info=True)
@@ -288,6 +313,8 @@ async def stage2_llm_rerank(
                     llm_novelty=None,
                     reasoning="LLM scoring failed",
                     final_score=sc.final_score,
+                    reasoning_verified=False,
+                    reasoning_confidence=RagConfidence.UNVERIFIED,
                 )
 
     results = await asyncio.gather(*[_score_one(sc) for sc in stage1_out])
@@ -328,6 +355,8 @@ async def stage3_combine(
                 llm_novelty=sc.llm_novelty,
                 reasoning=sc.reasoning,
                 final_score=final,
+                reasoning_verified=sc.reasoning_verified,
+                reasoning_confidence=sc.reasoning_confidence,
             )
         )
     result.sort(key=lambda sc: sc.final_score or 0.0, reverse=True)

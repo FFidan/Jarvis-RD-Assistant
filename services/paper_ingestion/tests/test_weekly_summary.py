@@ -6,7 +6,9 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import pytest
 import respx
+from paper_ingestion.verification import QuoteVerifier
 from paper_ingestion.weekly_summary import generate_weekly_summary
 
 
@@ -314,3 +316,108 @@ async def test_empty_when_no_engagement():
     assert len(result["message"]) > 0
     # The LLM must NOT be called when there are no papers to summarize.
     http_client.post.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# WS-2.3: theme verification split
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_weekly_summary_splits_verified_and_unverified_themes():
+    """Themes that match the paper corpus land in verified_themes; others in unverified_themes."""
+    rows = [
+        _make_paper_row(
+            1,
+            "Attention is all you need",
+            "NLP",
+            summary_brief="Transformers use multi-head self-attention for sequence modeling.",
+        ),
+        _make_paper_row(
+            2,
+            "BERT pretraining",
+            "NLP",
+            summary_brief="BERT uses masked language modeling on large text corpora.",
+        ),
+    ]
+    db_pool = _make_pool(rows)
+
+    # Theme #1 quotes the corpus (verifiable); theme #2 is unrelated.
+    llm_themes = [
+        {
+            "theme": "Transformers use multi-head self-attention for sequence modeling",
+            "supporting_papers": [1],
+            "notes": "",
+        },
+        {
+            "theme": "Quantum annealing surpasses classical optimization on QUBO instances",
+            "supporting_papers": [2],
+            "notes": "",
+        },
+    ]
+    llm_resp = _llm_response(llm_themes, "NLP evolves.")
+    respx.post("http://litellm:4000/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=llm_resp)
+    )
+
+    verifier = QuoteVerifier()
+    async with httpx.AsyncClient() as client:
+        result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
+
+    nlp = next(t for t in result["topics"] if t["name"] == "NLP")
+    assert "verified_themes" in nlp
+    assert "unverified_themes" in nlp
+    # Theme 1 is a near-verbatim quote from the summary_brief -> verified.
+    assert any("multi-head self-attention" in t["theme"] for t in nlp["verified_themes"])
+    # Theme 2 is unrelated -> unverified.
+    assert any("Quantum annealing" in t["theme"] for t in nlp["unverified_themes"])
+    # Both splits together reconstruct the full themes list.
+    assert len(nlp["verified_themes"]) + len(nlp["unverified_themes"]) == len(nlp["themes"])
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_weekly_summary_no_verifier_treats_all_themes_unverified():
+    """With verifier=None, verified_themes is empty and all themes flow to unverified."""
+    rows = [
+        _make_paper_row(1, "Paper A", "ML", summary_brief="finding A"),
+        _make_paper_row(2, "Paper B", "ML", summary_brief="finding B"),
+    ]
+    db_pool = _make_pool(rows)
+
+    llm_themes = [{"theme": "Some claim", "supporting_papers": [1, 2], "notes": ""}]
+    llm_resp = _llm_response(llm_themes, "summary")
+    respx.post("http://litellm:4000/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json=llm_resp)
+    )
+
+    async with httpx.AsyncClient() as client:
+        result = await generate_weekly_summary(db_pool, client, days=7)  # no verifier
+
+    ml = result["topics"][0]
+    assert ml["verified_themes"] == []
+    assert len(ml["unverified_themes"]) == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_weekly_summary_llm_failure_has_empty_theme_splits():
+    """When the LLM fails, both verified_themes and unverified_themes should be empty lists."""
+    rows = [
+        _make_paper_row(1, "Paper A", "NLP", summary_brief="finding A"),
+        _make_paper_row(2, "Paper B", "NLP", summary_brief="finding B"),
+    ]
+    db_pool = _make_pool(rows)
+    respx.post("http://litellm:4000/v1/chat/completions").mock(
+        return_value=httpx.Response(500, text="err")
+    )
+
+    verifier = QuoteVerifier()
+    async with httpx.AsyncClient() as client:
+        result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
+
+    nlp = result["topics"][0]
+    assert nlp["themes"] == []
+    assert nlp["verified_themes"] == []
+    assert nlp["unverified_themes"] == []

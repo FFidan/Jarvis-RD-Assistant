@@ -11,6 +11,7 @@ This is the Model C (Complementary) guarantee: Weekly Summary reflects
 what the user actually engaged with, not the full Pulse candidate firehose.
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
@@ -27,6 +28,8 @@ from jarvis_common.llm_client import (
 )
 from jarvis_common.prompt_safety import escape_llm_text
 from jarvis_common.time_utils import utc_now_iso
+
+from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +65,7 @@ async def generate_weekly_summary(
     http_client: httpx.AsyncClient,
     litellm_url: str | None = None,
     days: int = 7,
+    verifier: QuoteVerifier | None = None,
 ) -> dict:
     """Generate per-topic digests for papers the user engaged with in the lookback window.
 
@@ -190,11 +194,45 @@ async def generate_weekly_summary(
             for p in papers[:5]
         ]
 
+        # Verify each theme title against concatenated paper title+summary_brief
+        # for the topic.  Cheap fuzzy match (~ms per theme) — ephemeral, not persisted.
+        verified_themes: list[dict] = []
+        unverified_themes: list[dict] = []
+        if themes and verifier is not None:
+            corpus_parts: list[str] = []
+            for p in papers[:10]:
+                corpus_parts.append(p.get("title") or "")
+                brief = p.get("summary_brief") or ""
+                if brief:
+                    corpus_parts.append(brief)
+            corpus = " ".join(part for part in corpus_parts if part).strip()
+
+            for theme in themes:
+                theme_text = str(theme.get("theme", "") or "").strip()
+                if not theme_text or not corpus:
+                    unverified_themes.append(theme)
+                    continue
+                try:
+                    result = await asyncio.to_thread(verifier.verify_quote, theme_text, corpus, [])
+                except Exception:
+                    logger.warning("weekly_summary: theme verification raised", exc_info=True)
+                    unverified_themes.append(theme)
+                    continue
+                if result.verified:
+                    verified_themes.append(theme)
+                else:
+                    unverified_themes.append(theme)
+        else:
+            # No verifier wired, or no themes — treat themes as unverified.
+            unverified_themes = list(themes)
+
         result_topics.append(
             {
                 "name": topic_name,
                 "paper_count": len(papers),
                 "themes": themes,
+                "verified_themes": verified_themes,
+                "unverified_themes": unverified_themes,
                 "top_papers": top_papers,
                 "summary": summary,
             }

@@ -80,12 +80,15 @@ async def _persist_deck_inner(
     # Insert new cards one by one, counting actual successes
     successes = 0
     for rank, sc in enumerate(cards, start=1):
+        reasoning_confidence_str = (
+            sc.reasoning_confidence.value if sc.reasoning_confidence is not None else None
+        )
         inserted_id = await conn.fetchval(
             """
             INSERT INTO pulse_cards
                 (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
-                 reasoning, signals)
-            SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb
+                 reasoning, signals, reasoning_verified, reasoning_confidence)
+            SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
             FROM papers p
             WHERE p.external_id = $2
             ON CONFLICT (deck_id, paper_id) DO NOTHING
@@ -99,6 +102,8 @@ async def _persist_deck_inner(
             sc.llm_novelty,
             sc.reasoning,
             sc.signals,
+            sc.reasoning_verified,
+            reasoning_confidence_str,
         )
         if inserted_id is not None:
             successes += 1
@@ -186,6 +191,8 @@ def _build_deck_response(
             llm_novelty=r.get("llm_novelty"),
             reasoning=r.get("reasoning"),
             signals=r.get("signals") or {},
+            reasoning_verified=r.get("reasoning_verified"),
+            reasoning_confidence=r.get("reasoning_confidence"),
         )
         for r in card_rows
     ]
@@ -242,7 +249,9 @@ async def load_today(db_pool: Any) -> "PulseDeckResponse | None":
                 pc.llm_relevance,
                 pc.llm_novelty,
                 pc.reasoning,
-                pc.signals
+                pc.signals,
+                pc.reasoning_verified,
+                pc.reasoning_confidence
             FROM pulse_cards pc
             JOIN papers p ON p.id = pc.paper_id
             WHERE pc.deck_id = $1
@@ -304,7 +313,9 @@ async def load_history(
                 pc.llm_relevance,
                 pc.llm_novelty,
                 pc.reasoning,
-                pc.signals
+                pc.signals,
+                pc.reasoning_verified,
+                pc.reasoning_confidence
             FROM pulse_cards pc
             JOIN papers p ON p.id = pc.paper_id
             WHERE pc.deck_id = ANY($1::int[])

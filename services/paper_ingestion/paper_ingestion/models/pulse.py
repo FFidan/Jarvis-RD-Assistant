@@ -20,6 +20,8 @@ class PulseCardResponse(BaseModel):
     llm_novelty: int | None
     reasoning: str | None
     signals: dict[str, float]
+    reasoning_verified: bool | None = None
+    reasoning_confidence: str | None = None
 
 
 class PulseDeckResponse(BaseModel):
