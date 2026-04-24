@@ -1,7 +1,10 @@
 """Tests for the cross-encoder reranker module."""
 
+import importlib
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from paper_ingestion.embedder import Embedder
 from paper_ingestion.reranker import Reranker, get_reranker
 
@@ -127,3 +130,108 @@ def test_get_reranker_returns_none_without_sentence_transformers():
         reranker_mod._reranker_state = original_state
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# ONNX backend tests
+# ---------------------------------------------------------------------------
+
+_optimum_missing = pytest.mark.skipif(
+    importlib.util.find_spec("optimum") is None or importlib.util.find_spec("onnxruntime") is None,
+    reason="optimum and onnxruntime are not installed (Docker build-time deps)",
+)
+
+
+def test_load_model_passes_onnx_backend_when_optimum_present():
+    """CrossEncoder is instantiated with backend='onnx' when optimum+onnxruntime are installed."""
+    mock_cross_encoder_cls = MagicMock(return_value=MagicMock())
+
+    # Simulate optimum + onnxruntime being importable.
+    fake_optimum = MagicMock()
+    fake_onnxruntime = MagicMock()
+
+    reranker = Reranker.__new__(Reranker)
+    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model = None
+
+    with (
+        patch("paper_ingestion.ingestion.reranker.CrossEncoder", mock_cross_encoder_cls),
+        patch.dict(sys.modules, {"optimum": fake_optimum, "onnxruntime": fake_onnxruntime}),
+    ):
+        reranker._load_model_if_needed()
+
+    # The constructor must have been called with backend="onnx".
+    call_kwargs = mock_cross_encoder_cls.call_args
+    assert call_kwargs is not None, "CrossEncoder was never called"
+    assert call_kwargs.kwargs.get("backend") == "onnx", (
+        f"Expected backend='onnx', got: {call_kwargs.kwargs}"
+    )
+    assert call_kwargs.kwargs.get("model_kwargs") == {"provider": "CPUExecutionProvider"}, (
+        f"Expected CPUExecutionProvider, got: {call_kwargs.kwargs.get('model_kwargs')}"
+    )
+
+
+def test_load_model_omits_onnx_backend_when_optimum_missing():
+    """CrossEncoder is instantiated without ONNX kwargs when optimum is not installed."""
+    mock_cross_encoder_cls = MagicMock(return_value=MagicMock())
+
+    reranker = Reranker.__new__(Reranker)
+    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model = None
+
+    # Remove optimum + onnxruntime from sys.modules so the import inside the method fails.
+    patched_modules = {k: None for k in ("optimum", "onnxruntime")}  # type: ignore[dict-item]
+
+    with (
+        patch("paper_ingestion.ingestion.reranker.CrossEncoder", mock_cross_encoder_cls),
+        patch.dict(sys.modules, patched_modules),
+    ):
+        reranker._load_model_if_needed()
+
+    call_kwargs = mock_cross_encoder_cls.call_args
+    assert call_kwargs is not None, "CrossEncoder was never called"
+    assert "backend" not in call_kwargs.kwargs, (
+        f"Expected no 'backend' kwarg, got: {call_kwargs.kwargs}"
+    )
+
+
+def test_load_model_falls_back_to_pytorch_on_onnx_export_error():
+    """Falls back to plain PyTorch CPU when ONNX export/load raises an exception."""
+    call_count = 0
+    successful_model = MagicMock()
+
+    def _side_effect(model_name: str, **kwargs: object) -> object:
+        nonlocal call_count
+        call_count += 1
+        if kwargs.get("backend") == "onnx":
+            # First CUDA attempt raises; second (cpu+onnx) also raises to trigger fallback.
+            raise RuntimeError("ONNX export failed")
+        return successful_model
+
+    mock_cross_encoder_cls = MagicMock(side_effect=_side_effect)
+
+    reranker = Reranker.__new__(Reranker)
+    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model = None
+
+    fake_optimum = MagicMock()
+    fake_onnxruntime = MagicMock()
+
+    with (
+        patch("paper_ingestion.ingestion.reranker.CrossEncoder", mock_cross_encoder_cls),
+        patch.dict(sys.modules, {"optimum": fake_optimum, "onnxruntime": fake_onnxruntime}),
+    ):
+        reranker._load_model_if_needed()
+
+    # Final successful call must be plain PyTorch CPU (no backend kwarg).
+    last_kwargs = mock_cross_encoder_cls.call_args.kwargs
+    assert "backend" not in last_kwargs, f"Fallback call still has 'backend' kwarg: {last_kwargs}"
+    assert reranker._model is successful_model
+
+
+@_optimum_missing
+def test_onnx_smoke_skips_cleanly_without_optimum():  # pragma: no cover
+    """This test body is only reached when optimum+onnxruntime are installed."""
+    # If we reach here, the marker didn't skip — verify basic import integrity.
+    import onnxruntime  # noqa: F401
+    import optimum  # noqa: F401
