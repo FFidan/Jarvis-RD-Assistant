@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/EmptyState';
+import { EvidenceSnapshot } from '@/components/shared/EvidenceSnapshot';
 
 const RATING_LABELS: Record<number, { label: string; color: string }> = {
   1: { label: 'Again', color: 'bg-red-500 hover:bg-red-600' },
@@ -100,6 +101,18 @@ export function ReviewMode() {
                     )}
                   </blockquote>
                 )}
+                {currentCard.evidence?.snapshot_path &&
+                  currentCard.paper_id != null &&
+                  currentCard.evidence.page_number != null && (
+                    <div className="mt-3 flex justify-center">
+                      <EvidenceSnapshot
+                        paperId={currentCard.paper_id}
+                        page={currentCard.evidence.page_number}
+                        altText={`Page ${currentCard.evidence.page_number} snapshot`}
+                        variant="thumbnail"
+                      />
+                    </div>
+                  )}
               </>
             )}
           </CardContent>

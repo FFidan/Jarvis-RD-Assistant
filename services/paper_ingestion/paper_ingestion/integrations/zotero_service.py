@@ -17,17 +17,29 @@ logger = logging.getLogger(__name__)
 
 
 async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
-    """Read Zotero settings from user_config. Returns dict with short keys."""
+    """Read Zotero settings from user_config. Returns dict with short keys.
+
+    Prefers encrypted_value (post-Sprint-1 UI saves) over plaintext value
+    (legacy rows written before encryption was introduced).
+    """
+    from jarvis_common.crypto import decrypt_secret
+
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'zotero.%'")
+        rows = await conn.fetch(
+            "SELECT key, value, encrypted_value FROM user_config WHERE key LIKE 'zotero.%'"
+        )
     config: dict[str, Any] = {}
     for row in rows:
         short_key = row["key"][len("zotero.") :]
-        val = row["value"]
-        # user_config values are stored as JSONB — asyncpg auto-decodes objects/arrays/booleans,
-        # but scalar strings come back as str; numbers as int/float; booleans as bool.
-        # No manual json.loads() needed (see CLAUDE.md asyncpg JSONB note).
-        config[short_key] = val
+        enc = row.get("encrypted_value")
+        if enc is not None:
+            # Post-Sprint-1 row: decrypt Fernet ciphertext stored as BYTEA.
+            config[short_key] = decrypt_secret(enc.decode("ascii"))
+        else:
+            # Legacy plaintext row (or non-secret scalar).
+            # asyncpg JSONB codec auto-decodes objects/arrays/booleans;
+            # scalar strings come back as str — no manual json.loads() needed.
+            config[short_key] = row["value"]
     return config
 
 

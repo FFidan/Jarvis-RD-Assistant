@@ -3,13 +3,15 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
+import { EvidenceSnapshot } from '@/components/shared/EvidenceSnapshot';
 import { ShieldCheck } from 'lucide-react';
 
 interface EvidenceTabProps {
   summary: Summary | null;
+  paperId?: number;
 }
 
-export function EvidenceTab({ summary }: EvidenceTabProps) {
+export function EvidenceTab({ summary, paperId }: EvidenceTabProps) {
   if (!summary) {
     return (
       <EmptyState
@@ -49,18 +51,30 @@ export function EvidenceTab({ summary }: EvidenceTabProps) {
               </div>
             </CardHeader>
             <CardContent className="space-y-2">
-              {kf.quote && (
-                <blockquote className="border-l-2 border-muted-foreground/30 pl-3 text-sm italic text-muted-foreground">
-                  <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none italic">{kf.quote}</MarkdownContent>
-                </blockquote>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {kf.page_number != null && (
-                  <Badge variant="outline" className="text-xs">Page {kf.page_number}</Badge>
+              <div className="flex gap-3">
+                {kf.snapshot_path && paperId != null && kf.page_number != null && (
+                  <EvidenceSnapshot
+                    paperId={paperId}
+                    page={kf.page_number}
+                    altText={`Page ${kf.page_number} snapshot`}
+                    variant="thumbnail"
+                  />
                 )}
-                {kf.chunk_id != null && (
-                  <Badge variant="outline" className="text-xs">Chunk #{kf.chunk_id}</Badge>
-                )}
+                <div className="flex-1 space-y-2">
+                  {kf.quote && (
+                    <blockquote className="border-l-2 border-muted-foreground/30 pl-3 text-sm italic text-muted-foreground">
+                      <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none italic">{kf.quote}</MarkdownContent>
+                    </blockquote>
+                  )}
+                  <div className="flex flex-wrap gap-2">
+                    {kf.page_number != null && (
+                      <Badge variant="outline" className="text-xs">Page {kf.page_number}</Badge>
+                    )}
+                    {kf.chunk_id != null && (
+                      <Badge variant="outline" className="text-xs">Chunk #{kf.chunk_id}</Badge>
+                    )}
+                  </div>
+                </div>
               </div>
             </CardContent>
           </Card>

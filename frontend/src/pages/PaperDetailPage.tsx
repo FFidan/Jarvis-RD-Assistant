@@ -173,7 +173,7 @@ export function PaperDetailPage() {
             </TabsContent>
 
             <TabsContent value="evidence" className="mt-4">
-              <EvidenceTab summary={summary} />
+              <EvidenceTab summary={summary} paperId={paperId} />
             </TabsContent>
 
             <TabsContent value="chunks" className="mt-4">

@@ -521,3 +521,105 @@ async def test_poll_library_updates_version():
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
     assert result["version_to"] == 42
+
+
+# ---------------------------------------------------------------------------
+# _get_zotero_config — decrypt roundtrip tests
+# ---------------------------------------------------------------------------
+
+
+async def test_get_zotero_config_encrypted_api_key(monkeypatch):
+    """_get_zotero_config decrypts encrypted_value when present."""
+    from cryptography.fernet import Fernet
+    from jarvis_common.crypto import encrypt_secret, refresh_fernet_cache
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    # Set up a temporary Fernet key for this test and bust the lru_cache.
+    test_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", test_key)
+    refresh_fernet_cache()
+
+    plaintext_key = "secret-zotero-key-abc123"
+    ciphertext = encrypt_secret(plaintext_key)
+
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": None,
+                "encrypted_value": ciphertext.encode("ascii"),
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.user_id",
+                "value": "99999",
+                "encrypted_value": None,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.library_type",
+                "value": "user",
+                "encrypted_value": None,
+            }
+        ),
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    config = await _get_zotero_config(pool)
+
+    assert config["api_key"] == plaintext_key, "encrypted api_key must be decrypted"
+    assert config["user_id"] == "99999", "plaintext fallback must be returned as-is"
+    assert config["library_type"] == "user", "plaintext fallback must be returned as-is"
+
+    # Restore cache so other tests are not affected.
+    refresh_fernet_cache()
+
+
+async def test_get_zotero_config_legacy_plaintext_fallback():
+    """_get_zotero_config returns plaintext value when encrypted_value is NULL (legacy rows)."""
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.enabled",
+                "value": True,
+                "encrypted_value": None,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": "legacy-plaintext-key",
+                "encrypted_value": None,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.user_id",
+                "value": "123456",
+                "encrypted_value": None,
+            }
+        ),
+        FakeRecord(
+            {
+                "key": "zotero.library_type",
+                "value": "user",
+                "encrypted_value": None,
+            }
+        ),
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    config = await _get_zotero_config(pool)
+
+    assert config["api_key"] == "legacy-plaintext-key"
+    assert config["enabled"] is True
+    assert config["user_id"] == "123456"
+    assert config["library_type"] == "user"

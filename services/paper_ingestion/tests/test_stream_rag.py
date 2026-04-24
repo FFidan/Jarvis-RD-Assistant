@@ -431,3 +431,75 @@ async def teststream_rag_events_sse_termination():
     # Every event should start with "data: "
     for event in events:
         assert event.startswith("data: "), f"Event does not start with 'data: ': {event!r}"
+
+
+# ---------------------------------------------------------------------------
+# Test 8: confidence event emitted between done and [DONE] when verifier provided
+# ---------------------------------------------------------------------------
+
+
+async def teststream_rag_events_confidence_event_emitted_before_done():
+    """confidence SSE event appears after done and before [DONE] when verifier+pool provided."""
+    import json
+    from unittest.mock import MagicMock
+
+    from paper_ingestion.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "Neural ODEs are powerful."}}]}',
+        "data: [DONE]",
+    ]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    sources = [{"content": "Neural ODEs are powerful.", "page_number": 1}]
+
+    # Build a stub verifier that always verifies
+    _vresult = MagicMock()
+    _vresult.verified = True
+    _vresult.match_type = "exact"
+    _vresult.match_score = 1.0
+    stub_verifier = MagicMock()
+    stub_verifier.verify_quote.return_value = _vresult
+
+    # Build a stub pool (single-paper path: no paper_id in sources → no DB fetch)
+    stub_pool = MagicMock()
+
+    valid_confidence = {"HIGH", "MEDIUM", "LOW", "UNVERIFIED"}
+
+    events: list[str] = []
+    async for event in stream_rag_events(
+        mock_client,
+        [{"role": "user", "content": "What are neural ODEs?"}],
+        sources,
+        verifier=stub_verifier,
+        db_pool=stub_pool,
+    ):
+        events.append(event)
+
+    # Parse all data events (skip [DONE] sentinel)
+    parsed: list[dict] = []
+    for ev in events:
+        data_str = ev.replace("data: ", "", 1).strip()
+        if data_str == "[DONE]":
+            continue
+        parsed.append(json.loads(data_str))
+
+    event_types = [e["type"] for e in parsed]
+
+    # Sequence: token → sources → done → confidence
+    assert "token" in event_types
+    assert event_types.index("sources") > event_types.index("token")
+    assert event_types.index("done") > event_types.index("sources")
+    assert event_types.index("confidence") > event_types.index("done")
+
+    # Last raw event is the [DONE] sentinel
+    assert events[-1].strip() == "data: [DONE]"
+
+    # Validate confidence event payload
+    conf_event = next(e for e in parsed if e["type"] == "confidence")
+    assert set(conf_event.keys()) >= {"type", "confidence", "verified_fraction", "per_sentence"}
+    assert conf_event["confidence"] in valid_confidence
+    assert isinstance(conf_event["verified_fraction"], float)
+    assert isinstance(conf_event["per_sentence"], list)

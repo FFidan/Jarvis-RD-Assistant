@@ -235,3 +235,138 @@ def test_cross_paper_ask_request_defaults():
 
     with pytest.raises(Exception):
         CrossPaperAskRequest(question="x", max_papers=100)  # le=15
+
+
+# ---------------------------------------------------------------------------
+# Test: confidence event emitted before [DONE] for cross-paper stream
+# ---------------------------------------------------------------------------
+
+
+class _FakeSSELine:
+    def __init__(self, lines: list[str]):
+        self._lines = lines
+
+    async def __aiter__(self):
+        for line in self._lines:
+            yield line
+
+
+class _FakeStreamResponse:
+    def __init__(self, lines: list[str], status_code: int = 200):
+        self._lines = lines
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        pass
+
+    def aiter_lines(self):
+        return _FakeSSELine(self._lines).__aiter__()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass
+
+
+async def test_confidence_event_emitted_before_done():
+    """Cross-paper stream: confidence SSE event appears after done and before [DONE]."""
+    import json
+
+    from paper_ingestion.streaming import stream_rag_events
+
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "Transformers use attention."}}]}',
+        "data: [DONE]",
+    ]
+
+    import httpx
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = _FakeStreamResponse(sse_lines)
+
+    # Cross-paper sources include paper_id fields
+    sources = [
+        {
+            "paper_id": 10,
+            "chunk_index": 0,
+            "content": "Transformers use attention.",
+            "page_number": 2,
+            "score": 0.88,
+            "paper_title": "Transformer Paper",
+        },
+        {
+            "paper_id": 20,
+            "chunk_index": 0,
+            "content": "Evidence about attention mechanisms.",
+            "page_number": 5,
+            "score": 0.75,
+            "paper_title": "Attention Paper",
+        },
+    ]
+
+    # Build a stub verifier that always verifies
+    _vresult = MagicMock()
+    _vresult.verified = True
+    _vresult.match_type = "exact"
+    _vresult.match_score = 1.0
+    stub_verifier = MagicMock()
+    stub_verifier.verify_quote.return_value = _vresult
+
+    # DB returns one chunk row per paper_id
+    rows_by_pid: dict[int, list[dict]] = {
+        10: [{"content": "Transformers use attention."}],
+        20: [{"content": "Evidence about attention mechanisms."}],
+    }
+
+    async def _fetch(sql, paper_id):  # noqa: ARG001
+        return rows_by_pid.get(paper_id, [])
+
+    stub_conn = AsyncMock()
+    stub_conn.fetch.side_effect = _fetch
+
+    stub_ctx = MagicMock()
+    stub_ctx.__aenter__ = AsyncMock(return_value=stub_conn)
+    stub_ctx.__aexit__ = AsyncMock(return_value=False)
+    stub_pool = MagicMock()
+    stub_pool.acquire.return_value = stub_ctx
+
+    valid_confidence = {"HIGH", "MEDIUM", "LOW", "UNVERIFIED"}
+
+    events: list[str] = []
+    async for event in stream_rag_events(
+        mock_client,
+        [{"role": "user", "content": "How do transformers work?"}],
+        sources,
+        verifier=stub_verifier,
+        db_pool=stub_pool,
+    ):
+        events.append(event)
+
+    # Parse all data events (skip [DONE] sentinel)
+    parsed: list[dict] = []
+    for ev in events:
+        data_str = ev.replace("data: ", "", 1).strip()
+        if data_str == "[DONE]":
+            continue
+        parsed.append(json.loads(data_str))
+
+    event_types = [e["type"] for e in parsed]
+
+    # Sequence checks: token → sources → done → confidence
+    assert "token" in event_types
+    assert event_types.index("sources") > event_types.index("token")
+    assert event_types.index("done") > event_types.index("sources")
+    assert event_types.index("confidence") > event_types.index("done")
+
+    # [DONE] is last raw event
+    assert events[-1].strip() == "data: [DONE]"
+
+    # Validate confidence event payload
+    conf_event = next(e for e in parsed if e["type"] == "confidence")
+    assert set(conf_event.keys()) >= {"type", "confidence", "verified_fraction", "per_sentence"}
+    assert conf_event["confidence"] in valid_confidence
+    assert isinstance(conf_event["verified_fraction"], float)
+    assert isinstance(conf_event["per_sentence"], list)
+    # Cross-paper path: at least 1 sentence (from the token stream)
+    assert len(conf_event["per_sentence"]) >= 1

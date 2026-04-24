@@ -816,3 +816,20 @@ export async function streamJob(
     await reader.cancel().catch(() => {});
   }
 }
+
+// --- Snapshots ---
+
+/**
+ * Fetch a PDF page snapshot as a blob URL.
+ *
+ * Uses apiFetchRaw to include the X-API-Key header (native <img> requests
+ * do not go through the auth interceptor).
+ *
+ * The caller is responsible for revoking the returned URL via
+ * URL.revokeObjectURL() when the component unmounts.
+ */
+export async function fetchSnapshot(paperId: number, page: number): Promise<string> {
+  const res = await apiFetchRaw(`/api/snapshots/${paperId}/${page}`);
+  const blob = await res.blob();
+  return URL.createObjectURL(blob);
+}
