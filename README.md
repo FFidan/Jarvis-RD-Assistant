@@ -98,6 +98,16 @@ docker compose up -d
 
 Then open the dashboard URL (default `https://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
 
+## Database upgrade notes
+
+If your dev DB was started from `master` between commits `7ac5af3` and the 2026-04-26 remediation, migrations 040 and 041 may be missing (the files were briefly numbered 037/038, colliding with `pulse_models` and `paper_contradictions`). Run the one-shot reconciliation script to catch up:
+
+```bash
+docker compose exec postgres psql -U jarvis jarvis < scripts/reconcile_037_038_collision.sql
+```
+
+The script is fully idempotent (uses `IF NOT EXISTS` / `OR REPLACE` guards) and registers the missing versions in `schema_migrations` so the migration runner skips them on next boot. No data is dropped.
+
 ## Upgrading
 
 `versions.env` is the source of truth for pinned image versions; every Docker image in `docker-compose.yml` uses `${VAR:-fallback}`, so committing a new pin is the upgrade. `update.sh` compares the pinned versions against what is currently running, prints a diff, and prompts before pulling. To **rollback** after a bad upgrade:
