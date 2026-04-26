@@ -103,11 +103,26 @@ def build_feed_queries(
     date_to: date | None,
     recommended: bool = False,
     include_zotero_notes: bool = False,
+    user_id: int | None = None,
 ) -> FeedQueryParts:
-    """Build the feed data and count queries for the requested filters."""
+    """Build the feed data and count queries for the requested filters.
+
+    The optional ``user_id`` filter scopes returned papers to the caller plus
+    system-owned (``papers.user_id IS NULL``) rows.  When ``user_id`` is
+    ``None`` (single-user mode) the predicate is a no-op and all papers are
+    returned.
+    """
     conditions: list[str] = []
     params: list[object] = []
     param_idx = 1
+
+    # Multi-tenant scoping: caller's papers + system-owned (NULL).  In
+    # single-user mode (user_id=None) the predicate short-circuits to TRUE.
+    conditions.append(
+        f"(${param_idx}::int IS NULL OR p.user_id IS NULL OR p.user_id = ${param_idx})"
+    )
+    params.append(user_id)
+    param_idx += 1
 
     if unread_only:
         conditions.append("COALESCE(pus.status, 'new') != 'read'")

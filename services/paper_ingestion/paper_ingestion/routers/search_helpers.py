@@ -309,11 +309,17 @@ def _build_preview_source_error(
 
 async def _load_local_library_matches(
     db_pool: asyncpg.Pool,
+    user_id: int | None = None,
 ) -> tuple[
     dict[tuple[str, Any], SearchPreviewLibraryMatch],
     dict[tuple[str, int], list[_TitleYearLibraryCandidate]],
 ]:
-    """Fetch local-library rows once and index them by every supported match key."""
+    """Fetch local-library rows once and index them by every supported match key.
+
+    The optional ``user_id`` filter scopes results to the caller's owned papers
+    plus system-owned (``user_id IS NULL``) rows.  When ``user_id`` is ``None``
+    (single-user mode) the predicate is a no-op and all rows are returned.
+    """
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -331,8 +337,10 @@ async def _load_local_library_matches(
                        WHERE pp.paper_id = p.id
                    ) AS has_project_links
             FROM papers p
+            WHERE ($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)
             ORDER BY p.id ASC
-            """
+            """,
+            user_id,
         )
 
     indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch] = {}

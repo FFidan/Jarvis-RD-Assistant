@@ -14,6 +14,8 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
 from jarvis_common import jobs as jobs_lib
+from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.db_helpers import assert_paper_ownership
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -221,6 +223,9 @@ async def extract_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue structured field extraction for a single paper."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
     job_id = await jobs_lib.enqueue(
         db_pool,
         "extraction.single",
@@ -237,7 +242,9 @@ async def get_paper_extractions(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[ExtractionResponse]:
     """Get all extractions for a paper."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         try:
             rows = await conn.fetch(
                 """SELECT id, paper_id, template_id, extractions, extraction_model, created_at
@@ -277,6 +284,10 @@ async def batch_extract_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict[str, object]:
     """Enqueue a background job to batch-extract fields for multiple papers."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        for paper_id in body.paper_ids:
+            await assert_paper_ownership(conn, paper_id, user_id)
     job_id = await jobs_lib.enqueue(
         db_pool,
         "extraction.batch",
@@ -308,6 +319,7 @@ async def get_extraction_table(
     format : str, optional
         Response format: ``json`` (default) or ``csv``.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # Fetch template fields (needed for CSV column headers)
         try:
@@ -341,9 +353,11 @@ async def get_extraction_table(
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1 AND pe.paper_id = ANY($2)
+                         AND ($3::int IS NULL OR p.user_id IS NULL OR p.user_id = $3)
                        ORDER BY p.title""",
                     template_id,
                     ids,
+                    user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
@@ -356,8 +370,10 @@ async def get_extraction_table(
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1
+                         AND ($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)
                        ORDER BY p.title""",
                     template_id,
+                    user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(

@@ -12,6 +12,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
 from jarvis_common import jobs as jobs_lib
+from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
@@ -68,6 +70,9 @@ async def summarize_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue LLM summary generation with quote verification."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
     job_id = await jobs_lib.enqueue(db_pool, "paper.summarize", {"paper_id": paper_id})
     return JobCreateResponse(job_id=job_id, status="queued")
 
@@ -93,13 +98,16 @@ async def batch_summarize_papers(
     """
     from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT p.id FROM papers p
                WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
                  AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
+                 AND ($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)
                ORDER BY p.created_at DESC LIMIT $1""",
             limit,
+            user_id,
         )
     paper_ids = [row["id"] for row in rows]
     job_id: str | None = None
@@ -147,6 +155,9 @@ async def ask_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
     messages, raw_sources = await prepare_single_paper_rag(
         embedder, db_pool, paper_id, body, http_client
     )
@@ -228,6 +239,9 @@ async def ask_paper_stream(
     body : AskRequest
         Question and optional max_chunks parameter.
     """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
     try:
         messages, raw_sources = await prepare_single_paper_rag(
             embedder, db_pool, paper_id, body, http_client

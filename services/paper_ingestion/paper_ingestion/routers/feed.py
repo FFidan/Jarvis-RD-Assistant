@@ -11,6 +11,7 @@ from datetime import date
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
+from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import row_to_feed_paper
 from paper_ingestion.deps import get_db_pool, limiter
@@ -83,6 +84,7 @@ async def list_feed_papers(
     FeedResponse
         ``{papers: [...], total: N}``
     """
+    user_id = await current_user_id_or_none(request)
     query_parts = build_feed_queries(
         unread_only=unread_only,
         sort=sort,
@@ -96,6 +98,7 @@ async def list_feed_papers(
         date_to=date_to,
         recommended=recommended,
         include_zotero_notes=include_zotero_notes,
+        user_id=user_id,
     )
 
     # Note: pool.acquire() without an explicit transaction uses auto-commit mode.

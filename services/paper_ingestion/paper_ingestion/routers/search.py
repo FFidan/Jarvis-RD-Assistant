@@ -27,6 +27,8 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.db_helpers import assert_paper_ownership
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
@@ -306,7 +308,8 @@ async def search_papers_preview(
         interleaved = _round_robin_merge(per_source)
         deduped = _dedup_papers(interleaved)
 
-    library_indexes, title_year_candidates = await _load_local_library_matches(db_pool)
+    user_id = await current_user_id_or_none(request)
+    library_indexes, title_year_candidates = await _load_local_library_matches(db_pool, user_id)
     preview_results = [
         SearchPreviewResult(
             **paper.model_dump(),
@@ -385,7 +388,9 @@ async def compute_relevance(
     embedder: Embedder | None = Depends(get_embedder),
 ):
     """Compute and store relevance score between a paper and a topic."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         # Fetch paper and topic data in one round-trip
         paper = await conn.fetchrow("SELECT title, abstract FROM papers WHERE id = $1", paper_id)
         topic = await conn.fetchrow("SELECT query_terms FROM topics WHERE id = $1", topic_id)

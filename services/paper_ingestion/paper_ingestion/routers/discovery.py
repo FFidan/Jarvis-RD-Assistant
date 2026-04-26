@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.db_helpers import assert_paper_ownership
 
 from paper_ingestion.converters import deduplicate_by_paper_id
 from paper_ingestion.deps import get_db_pool, get_embedder, limiter
@@ -53,7 +55,9 @@ async def find_similar_papers(
     list[dict]
         Similar papers with similarity scores and matching snippets.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         paper_row = await conn.fetchrow(
             "SELECT id, title, abstract FROM papers WHERE id = $1", paper_id
         )
@@ -84,8 +88,11 @@ async def find_similar_papers(
         paper_ids = [r["paper_id"] for r in sorted_results]
         if paper_ids:
             meta_rows = await conn.fetch(
-                "SELECT id, title, authors, url FROM papers WHERE id = ANY($1::int[])",
+                """SELECT id, title, authors, url FROM papers
+                   WHERE id = ANY($1::int[])
+                     AND ($2::int IS NULL OR user_id IS NULL OR user_id = $2)""",
                 paper_ids,
+                user_id,
             )
             meta_map = {row["id"]: row for row in meta_rows}
         else:
@@ -137,8 +144,11 @@ async def discover_papers(
     list[dict]
         Discovered papers with metadata and similarity scores.
     """
-    # Validate that all seed paper IDs exist
+    # Validate that all seed paper IDs exist + are owned by the caller
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        for paper_id in body.paper_ids:
+            await assert_paper_ownership(conn, paper_id, user_id)
         existing = await conn.fetch(
             "SELECT id FROM papers WHERE id = ANY($1::int[])", body.paper_ids
         )
@@ -166,8 +176,11 @@ async def discover_papers(
     paper_ids = [r["paper_id"] for r in results]
     async with db_pool.acquire() as conn:
         meta_rows = await conn.fetch(
-            "SELECT id, title, authors, url FROM papers WHERE id = ANY($1::int[])",
+            """SELECT id, title, authors, url FROM papers
+               WHERE id = ANY($1::int[])
+                 AND ($2::int IS NULL OR user_id IS NULL OR user_id = $2)""",
             paper_ids,
+            user_id,
         )
     meta_map = {row["id"]: row for row in meta_rows}
 
