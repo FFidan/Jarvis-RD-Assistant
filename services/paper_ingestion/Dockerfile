@@ -27,7 +27,10 @@ RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     chown -R appuser:appuser "$SITE_PKGS/static"
 
 COPY services/paper_ingestion/paper_ingestion/ ./paper_ingestion/
+COPY services/paper_ingestion/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 USER appuser
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["uvicorn", "paper_ingestion.main:app", "--host", "0.0.0.0", "--port", "8000"]

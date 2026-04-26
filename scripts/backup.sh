@@ -17,6 +17,12 @@
 
 set -euo pipefail
 
+# Read PGPASSWORD from Docker Secret (preferred) or fall back to env var.
+if [ -r /run/secrets/postgres_password ]; then
+  export PGPASSWORD
+  PGPASSWORD="$(cat /run/secrets/postgres_password)"
+fi
+
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"

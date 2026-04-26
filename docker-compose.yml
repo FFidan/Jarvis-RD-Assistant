@@ -8,7 +8,8 @@
 # =============================================================================
 
 x-shared-env: &shared-env
-  DATABASE_URL: postgresql://${POSTGRES_USER:-jarvis}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-jarvis}
+  # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
+  # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
   LITELLM_API_KEY: ${LITELLM_MASTER_KEY}
   QDRANT_URL: http://qdrant:6333
@@ -78,7 +79,9 @@ services:
       - DB_POSTGRESDB_PORT=5432
       - DB_POSTGRESDB_DATABASE=${POSTGRES_DB:-jarvis}
       - DB_POSTGRESDB_USER=${POSTGRES_USER:-jarvis}
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+      - DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - n8n_data:/home/node/.n8n
       - ./shared/pdf_storage:/data/pdfs
@@ -196,10 +199,13 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./litellm/entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    secrets:
+      - litellm_master_key
     command: ["--config", "/app/config.yaml"]
     mem_limit: 4g
     healthcheck:
@@ -238,6 +244,7 @@ services:
       JARVIS_CONFIG_KEY: ${JARVIS_CONFIG_KEY:-}
     secrets:
       - jarvis_api_key
+      - postgres_password
       - telegram_bot_token
     volumes:
       - ./shared/pdf_storage:/data/pdfs
@@ -288,6 +295,7 @@ services:
       <<: *shared-env
     secrets:
       - jarvis_api_key
+      - postgres_password
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
@@ -325,6 +333,7 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     secrets:
       - jarvis_api_key
+      - postgres_password
       - telegram_bot_token
     mem_limit: 1g
     healthcheck:
@@ -389,10 +398,12 @@ services:
     environment:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER:-jarvis}
-      PGPASSWORD: ${POSTGRES_PASSWORD}
+      # PGPASSWORD is NOT set here; backup.sh reads /run/secrets/postgres_password
       PGDATABASE: ${POSTGRES_DB:-jarvis}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+    secrets:
+      - postgres_password
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
       - postgres_backups:/backups
@@ -471,6 +482,8 @@ networks:
 secrets:
   postgres_password:
     file: ./secrets/postgres_password.txt
+  litellm_master_key:
+    file: ./secrets/litellm_master_key.txt
   jarvis_api_key:
     file: ./secrets/jarvis_api_key.txt
   telegram_bot_token:

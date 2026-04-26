@@ -163,6 +163,15 @@ N8N_JWT_SECRET="$(openssl rand -hex 32)"
 JARVIS_CONFIG_KEY="$(openssl rand -base64 32)"
 ok "Secrets generated."
 
+# Write secret files used by Docker Secrets mounts.
+# These are gitignored (secrets/*.txt). setup.sh is idempotent — re-running
+# overwrites and re-chmodds all files.
+mkdir -p secrets
+printf '%s' "$POSTGRES_PASSWORD" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
+printf '%s' "$LITELLM_MASTER_KEY" > secrets/litellm_master_key.txt && chmod 600 secrets/litellm_master_key.txt
+printf '%s' "$JARVIS_API_KEY"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
+ok "Docker secret files written to secrets/ (mode 600)."
+
 # -----------------------------------------------------------------------------
 # 5. Question 1 — Access mode
 # -----------------------------------------------------------------------------
