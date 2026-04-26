@@ -224,7 +224,11 @@ export const useJobStore = create<JobStore>()(
                 action: {
                   label: actionLink.label,
                   onClick: () => {
-                    window.location.href = actionLink.href;
+                    if (actionLink.href.startsWith('/') && !actionLink.href.startsWith('//')) {
+                      window.location.href = actionLink.href;
+                    } else {
+                      console.warn('Refusing non-relative action_link:', actionLink.href);
+                    }
                   },
                 },
               });

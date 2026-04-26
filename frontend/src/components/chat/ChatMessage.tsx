@@ -35,7 +35,13 @@ export function ChatMessage({ message, isLoading }: ChatMessageProps) {
                 </span>
               </div>
             )}
-            <MarkdownContent>{message.content}</MarkdownContent>
+            <MarkdownContent
+              unverifiedSentences={(message.per_sentence ?? [])
+                .filter((s) => !s.verified)
+                .map((s) => s.text)}
+            >
+              {message.content}
+            </MarkdownContent>
             {message.confidence && (
               <div className="mt-2">
                 <ConfidenceBadge

@@ -476,6 +476,138 @@ describe('JobStore', () => {
     await expect(useJobStore.getState().hydrate()).resolves.not.toThrow();
   });
 
+  // ----- action_link open-redirect guard (FE-004) -----
+
+  /**
+   * Helper: fire a 'failed' SSE event with an action_link and return
+   * the onClick handler captured from the toast.error call.
+   */
+  async function captureActionLinkClick(href: string): Promise<() => void> {
+    const { toast } = await import('sonner');
+    const toastError = vi.mocked(toast.error);
+    toastError.mockClear();
+
+    const job = makeJob({ id: 'job-action', status: 'running' });
+    useJobStore.setState({ jobs: { 'job-action': job }, activeAborts: {} });
+
+    const failEvent = JSON.stringify({
+      status: 'failed',
+      error: { message: 'Something failed', action_link: { href, label: 'Retry' } },
+    });
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([`data: ${failEvent}\n\n`]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().subscribe('job-action');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(toastError).toHaveBeenCalled();
+    const callArg = toastError.mock.calls[0][1] as { action?: { onClick: () => void } };
+    return callArg.action!.onClick;
+  }
+
+  it('test_action_link_relative_path_navigates: relative href sets window.location.href', async () => {
+    const hrefSetter = vi.fn();
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...window.location, set href(v: string) { hrefSetter(v); } },
+    });
+
+    try {
+      const onClick = await captureActionLinkClick('/papers/1');
+      onClick();
+      expect(hrefSetter).toHaveBeenCalledWith('/papers/1');
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+    }
+  });
+
+  it('test_action_link_external_url_blocked: absolute URL does NOT navigate, console.warn called', async () => {
+    const hrefSetter = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...window.location, set href(v: string) { hrefSetter(v); } },
+    });
+
+    try {
+      const onClick = await captureActionLinkClick('https://evil.com');
+      onClick();
+      expect(hrefSetter).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Refusing non-relative action_link:',
+        'https://evil.com',
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('test_action_link_protocol_relative_blocked: protocol-relative URL does NOT navigate', async () => {
+    const hrefSetter = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...window.location, set href(v: string) { hrefSetter(v); } },
+    });
+
+    try {
+      const onClick = await captureActionLinkClick('//evil.com');
+      onClick();
+      expect(hrefSetter).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Refusing non-relative action_link:',
+        '//evil.com',
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('test_action_link_javascript_blocked: javascript: URI does NOT navigate', async () => {
+    const hrefSetter = vi.fn();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const originalDescriptor = Object.getOwnPropertyDescriptor(window, 'location');
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      writable: true,
+      value: { ...window.location, set href(v: string) { hrefSetter(v); } },
+    });
+
+    try {
+      const onClick = await captureActionLinkClick('javascript:alert(1)');
+      onClick();
+      expect(hrefSetter).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Refusing non-relative action_link:',
+        'javascript:alert(1)',
+      );
+    } finally {
+      if (originalDescriptor) {
+        Object.defineProperty(window, 'location', originalDescriptor);
+      }
+      warnSpy.mockRestore();
+    }
+  });
+
   it('test_hydrate_resubscribes_queued: hydrate picks up both running and queued jobs', async () => {
     const { listJobs } = await import('@/lib/api');
     const jobA_running = makeJob({ id: 'job-running-1', kind: 'pulse.generate', status: 'running' });
