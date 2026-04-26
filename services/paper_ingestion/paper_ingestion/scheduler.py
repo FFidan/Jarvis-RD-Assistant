@@ -14,10 +14,19 @@ logger = logging.getLogger(__name__)
 
 # Re-export so callers that do ``from paper_ingestion.scheduler import run_auto_pipeline``
 # (e.g. tests) continue to work without modification.
-__all__ = ["run_auto_pipeline", "run_pulse_wrapper", "run_zotero_sync_wrapper", "start_scheduler"]
+__all__ = [
+    "run_auto_pipeline",
+    "run_pulse_classifier_training_wrapper",
+    "run_pulse_wrapper",
+    "run_weekly_digest_wrapper",
+    "run_zotero_sync_wrapper",
+    "start_scheduler",
+]
 
 
 _DEFAULT_PULSE_CRON = "0 4 * * *"
+_DEFAULT_PULSE_CLASSIFIER_CRON = "30 3 * * *"
+_DEFAULT_WEEKLY_DIGEST_CRON = "0 9 * * 1"  # Monday 09:00
 _DEFAULT_ZOTERO_CRON = "0 * * * *"  # hourly
 
 
@@ -141,6 +150,33 @@ async def run_pulse_wrapper(app: Any) -> None:
         logger.exception("pulse_overnight job failed")
 
 
+async def run_pulse_classifier_training_wrapper(app: Any) -> None:
+    """APScheduler entrypoint for Pulse classifier retraining."""
+    db_pool = app.state.db_pool
+    if not await _is_pulse_enabled(db_pool):
+        logger.info("pulse: disabled via user_config, skipping classifier retraining")
+        return
+    try:
+        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
+        await jobs_lib.enqueue(db_pool, "pulse.train_classifier", {})
+        logger.info("pulse: enqueued pulse.train_classifier job")
+    except Exception:
+        logger.exception("pulse: failed to enqueue classifier training job")
+
+
+async def run_weekly_digest_wrapper(app: Any) -> None:
+    """APScheduler entrypoint for weekly digest regeneration."""
+    db_pool = app.state.db_pool
+    try:
+        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+
+        await jobs_lib.enqueue(db_pool, "digest.weekly", {"days": 7})
+        logger.info("digest: enqueued digest.weekly job")
+    except Exception:
+        logger.exception("digest: failed to enqueue weekly digest job")
+
+
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     """Start the APScheduler and return the scheduler instance."""
 
@@ -175,6 +211,24 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         max_instances=1,
     )
 
+    # Pulse classifier training (cron-scheduled before the overnight deck; gated on pulse.enabled)
+    try:
+        scheduler.add_job(
+            run_pulse_classifier_training_wrapper,
+            trigger=CronTrigger.from_crontab(_DEFAULT_PULSE_CLASSIFIER_CRON),
+            args=[app],
+            id="pulse_classifier_training",
+            name="Pulse classifier retraining",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info(
+            "pulse_classifier_training scheduler registered (cron=%s)",
+            _DEFAULT_PULSE_CLASSIFIER_CRON,
+        )
+    except Exception:
+        logger.exception("Failed to register pulse_classifier_training job")
+
     # Pulse overnight deck (cron-scheduled, gated on pulse.enabled)
     try:
         cron_expr = await _get_pulse_cron(app.state.db_pool)
@@ -190,6 +244,21 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         logger.info("pulse_overnight scheduler registered (cron=%s)", cron_expr)
     except Exception:
         logger.exception("Failed to register pulse_overnight job")
+
+    # Weekly digest regeneration (cron-scheduled; GET /api/digest/weekly remains synchronous)
+    try:
+        scheduler.add_job(
+            run_weekly_digest_wrapper,
+            trigger=CronTrigger.from_crontab(_DEFAULT_WEEKLY_DIGEST_CRON),
+            args=[app],
+            id="weekly_digest",
+            name="Weekly digest regeneration",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("weekly_digest scheduler registered (cron=%s)", _DEFAULT_WEEKLY_DIGEST_CRON)
+    except Exception:
+        logger.exception("Failed to register weekly_digest job")
 
     # Zotero library sync (cron-scheduled, gated on zotero.poll_enabled)
     try:

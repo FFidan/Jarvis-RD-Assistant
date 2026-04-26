@@ -40,6 +40,10 @@ const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
   llm_novelty: 0.1,
   author_bonus: 0.15,
   recency: 0.05,
+  citation_pagerank: 0,
+  citation_count: 0,
+  citation_adamic_adar: 0,
+  classifier: 0,
 };
 
 type PulseWeightKey =
@@ -48,7 +52,11 @@ type PulseWeightKey =
   | 'llm_relevance'
   | 'llm_novelty'
   | 'author_bonus'
-  | 'recency';
+  | 'recency'
+  | 'citation_pagerank'
+  | 'citation_count'
+  | 'citation_adamic_adar'
+  | 'classifier';
 
 const PULSE_WEIGHT_KEYS: PulseWeightKey[] = [
   'embedding',
@@ -57,6 +65,10 @@ const PULSE_WEIGHT_KEYS: PulseWeightKey[] = [
   'llm_novelty',
   'author_bonus',
   'recency',
+  'citation_pagerank',
+  'citation_count',
+  'citation_adamic_adar',
+  'classifier',
 ];
 
 const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
@@ -66,6 +78,10 @@ const PULSE_WEIGHT_LABELS: Record<PulseWeightKey, string> = {
   llm_novelty: 'LLM novelty',
   author_bonus: 'Tracked-author bonus',
   recency: 'Recency',
+  citation_pagerank: 'Citation PageRank',
+  citation_count: 'Citation count',
+  citation_adamic_adar: 'Shared citation neighbourhood',
+  classifier: 'Personal classifier',
 };
 
 const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
@@ -81,6 +97,14 @@ const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
     'Additive bonus for papers co-authored by anyone in your tracked Authors list. High weight = always surface papers by your followed researchers.',
   recency:
     'Prefer papers published more recently. High weight = always surface the newest work, even if it scores lower on relevance.',
+  citation_pagerank:
+    'Graph centrality inside the citation neighbourhood around candidate papers. Defaults off until you have enough citation data.',
+  citation_count:
+    'Normalized citation count from source metadata. Defaults off so it does not overpower relevance.',
+  citation_adamic_adar:
+    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph.',
+  classifier:
+    'Probability from the optional per-user classifier trained from Pulse ratings. Requires enough positive and negative feedback.',
 };
 
 // ---------------------------------------------------------------------------
@@ -309,6 +333,10 @@ export function PulseSection() {
     pulseWeights.llm_novelty,
     pulseWeights.author_bonus,
     pulseWeights.recency,
+    pulseWeights.citation_pagerank,
+    pulseWeights.citation_count,
+    pulseWeights.citation_adamic_adar,
+    pulseWeights.classifier,
   ]);
 
   const handleToggle = () => {

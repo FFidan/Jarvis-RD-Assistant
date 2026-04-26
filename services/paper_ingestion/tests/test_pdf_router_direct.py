@@ -17,6 +17,7 @@ from fastapi.dependencies import utils as fastapi_dependency_utils
 fastapi_dependency_utils.ensure_multipart_is_installed = lambda: None
 
 from paper_ingestion.routers import pdf  # noqa: E402
+from paper_ingestion.services import local_pdfs  # noqa: E402
 
 
 class FakeRecord(dict):
@@ -240,10 +241,10 @@ async def test_scan_local_pdfs_skips_symlinks_and_non_pdfs(tmp_path, monkeypatch
     inserted_row = FakeRecord(id=7)
     conn.fetchrow.side_effect = [None, inserted_row]
 
-    monkeypatch.setattr(pdf, "LOCAL_PDF_SCAN_DIR", str(scan_dir))
-    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(local_pdfs, "LOCAL_PDF_SCAN_DIR", str(scan_dir))
+    monkeypatch.setattr(local_pdfs, "PDF_STORAGE_PATH", str(storage_dir))
 
-    result = await pdf.scan_local_pdfs.__wrapped__(MagicMock(), db_pool=pool)
+    result = await local_pdfs.scan_local_pdf_directory(pool)
 
     assert result["scanned"] == 3
     assert result["imported"] == 1

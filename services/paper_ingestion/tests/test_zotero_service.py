@@ -13,6 +13,7 @@ from paper_ingestion.integrations.zotero_service import (
     poll_zotero_library,
     push_paper_to_zotero,
     resync_paper_to_zotero,
+    sync_annotations_for_paper,
 )
 
 # ---------------------------------------------------------------------------
@@ -65,6 +66,12 @@ def _zotero_enabled_config_rows():
         FakeRecord({"key": "zotero.user_id", "value": "123456"}),
         FakeRecord({"key": "zotero.library_type", "value": "user"}),
     ]
+
+
+def _zotero_enabled_with_annotations_rows():
+    rows = _zotero_enabled_config_rows()
+    rows.append(FakeRecord({"key": "zotero.sync_annotations_enabled", "value": True}))
+    return rows
 
 
 def _zotero_disabled_config_rows():
@@ -521,6 +528,63 @@ async def test_poll_library_updates_version():
     assert "zotero.last_library_version" in sql
     assert "42" in str(version_arg)
     assert result["version_to"] == 42
+
+
+# ---------------------------------------------------------------------------
+# Annotation sync
+# ---------------------------------------------------------------------------
+
+
+async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently():
+    """Zotero annotation children are upserted into paper_notes by annotation key."""
+    config_conn = _make_conn(fetch=_zotero_enabled_with_annotations_rows())
+    paper_conn = _make_conn(fetchrow=FakeRecord({"id": 7, "zotero_item_key": "ITEM1234"}))
+    persist_conn = _make_conn()
+    pool = _make_pool(config_conn, paper_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+    annotations = [
+        {
+            "key": "ANN1",
+            "data": {
+                "annotationText": "Important highlighted claim",
+                "annotationComment": "Worth citing",
+                "annotationPageLabel": "5",
+            },
+        },
+        {
+            "key": "ANN2",
+            "data": {
+                "annotationText": "",
+                "annotationComment": "Standalone comment",
+                "annotationPageLabel": "appendix",
+            },
+        },
+    ]
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.get_item_children = AsyncMock(return_value=annotations)
+
+        result = await sync_annotations_for_paper(
+            paper_id=7,
+            db_pool=pool,
+            http_client=http,
+        )
+
+    assert result == {"paper_id": 7, "imported": 2, "status": "ok"}
+    assert persist_conn.execute.await_count == 2
+    first_sql = persist_conn.execute.await_args_list[0].args[0]
+    assert "ON CONFLICT (paper_id, zotero_annotation_key)" in first_sql
+    assert "verification_status" in first_sql
+    assert "promoted_at" in first_sql
+    assert persist_conn.execute.await_args_list[0].args[1:6] == (
+        7,
+        "zotero",
+        "ANN1",
+        "Worth citing",
+        "Important highlighted claim",
+    )
+    assert persist_conn.execute.await_args_list[1].args[5] is None
 
 
 # ---------------------------------------------------------------------------

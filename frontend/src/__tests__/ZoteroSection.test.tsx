@@ -54,7 +54,7 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
-const { fetchConfig, zoteroPollNow } = await import('@/lib/api');
+const { fetchConfig, setConfig, zoteroPollNow, zoteroTest } = await import('@/lib/api');
 const { useJobStore } = await import('@/stores/job-store');
 
 // Config with Zotero configured and poll enabled so the "Sync now" button renders
@@ -143,5 +143,42 @@ describe('ZoteroSection', () => {
     // Should not throw — error is swallowed
     await expect(user.click(btn)).resolves.toBeUndefined();
   });
-});
 
+  it('labels the identifier field as Group ID for group libraries', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      CONFIGURED_CONFIG.map((entry) =>
+        entry.key === 'zotero.library_type' ? { ...entry, value: 'group' } : entry,
+      ),
+    );
+
+    renderSection();
+
+    expect(await screen.findByLabelText('Group ID')).toBeInTheDocument();
+  });
+
+  it('writes Zotero boolean settings as booleans, not strings', async () => {
+    const user = userEvent.setup();
+    renderSection();
+
+    await screen.findByText('Auto-push on star');
+    const autoPush = screen.getAllByRole('switch')[0];
+    await user.click(autoPush);
+
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith('zotero.auto_push_on_star', true);
+    });
+  });
+
+  it('keeps Test connection disabled until credentials are present', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      CONFIGURED_CONFIG.map((entry) =>
+        entry.key === 'zotero.user_id' ? { ...entry, value: '' } : entry,
+      ),
+    );
+
+    renderSection();
+
+    expect(await screen.findByRole('button', { name: /test connection/i })).toBeDisabled();
+    expect(vi.mocked(zoteroTest)).not.toHaveBeenCalled();
+  });
+});

@@ -143,6 +143,45 @@ class ZoteroClient:
         new_version = int(resp.headers.get("Zotero-Last-Modified-Version", version))
         return resp.json(), new_version
 
+    async def get_item_children(
+        self,
+        item_key: str,
+        *,
+        item_type: str = "annotation",
+    ) -> list[dict]:
+        """Fetch child items for a Zotero item, paginating through all results.
+
+        Parameters
+        ----------
+        item_key:
+            Zotero item key whose children should be fetched.
+        item_type:
+            Zotero child ``itemType`` filter. Defaults to ``annotation`` for
+            imported PDF highlights/comments.
+        """
+        all_items: list[dict] = []
+        start = 0
+        while True:
+            resp = await self._http.get(
+                f"{self._base}/items/{item_key}/children",
+                params={
+                    "itemType": item_type,
+                    "format": "json",
+                    "start": start,
+                    "limit": 100,
+                },
+                headers=self._headers(),
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            items = resp.json()
+            all_items.extend(items)
+            total = int(resp.headers.get("Total-Results", "0"))
+            if len(items) < 100 or len(all_items) >= total:
+                break
+            start += 100
+        return all_items
+
     async def test_connection(self) -> bool:
         """Verify API key and user ID are valid. Returns True on success."""
         try:

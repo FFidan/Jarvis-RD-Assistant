@@ -10,7 +10,7 @@ import type { APIRequestContext, Page } from '@playwright/test';
  *
  * The frontend also requires a logged-in auth-store session before
  * `SetupGate` renders. `seedAuthedSession` writes the persisted Zustand
- * state (`localStorage["jarvis-auth"]`) before the first page load,
+ * state (`sessionStorage["jarvis-auth"]`) before the first page load,
  * bypassing the login form entirely — reliable regardless of whether
  * DEV_MODE is on or off.
  */
@@ -49,7 +49,7 @@ export async function markSetupComplete(request: APIRequestContext): Promise<voi
 }
 
 /**
- * Seed a valid auth-store session into localStorage before the first
+ * Seed a valid auth-store session into sessionStorage before the first
  * navigation. Must be called BEFORE `page.goto(...)` so the store is
  * hydrated by the time `<App/>` renders.
  */
@@ -64,6 +64,6 @@ export async function seedAuthedSession(page: Page): Promise<void> {
       },
       version: 0,
     };
-    window.localStorage.setItem('jarvis-auth', JSON.stringify(state));
+    window.sessionStorage.setItem('jarvis-auth', JSON.stringify(state));
   }, apiKey);
 }

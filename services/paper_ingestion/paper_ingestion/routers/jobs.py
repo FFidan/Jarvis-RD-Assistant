@@ -6,9 +6,6 @@ The matching worker is wired into the service lifespan in main.py.
 
 from __future__ import annotations
 
-import asyncio
-import json
-import logging
 from typing import Any
 
 import asyncpg
@@ -21,18 +18,10 @@ from jarvis_common import (
     current_user_id,
 )
 from jarvis_common import jobs as jobs_lib
-from jarvis_common.jobs import (
-    KEEPALIVE_INTERVAL,
-    MAX_STREAM_SECONDS,
-)
 from jarvis_common.settings import get_jobs_settings
 from pydantic import BaseModel, field_validator
 
 from paper_ingestion.deps import get_db_pool, limiter
-
-logger = logging.getLogger(__name__)
-
-# SSE keepalive / max-stream constants (imported from jarvis_common)
 
 # ---------------------------------------------------------------------------
 # Allowlist of job kinds that clients may create via POST /api/jobs.
@@ -198,77 +187,8 @@ async def stream_job(
     if initial.get("user_id") is not None and initial["user_id"] != user_id:
         raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
-    _terminal_statuses = frozenset({"succeeded", "failed", "cancelled"})
-
-    async def _event_generator():
-        last_key: tuple | None = None
-        loop = asyncio.get_running_loop()
-        loop_start = loop.time()
-        last_keepalive = loop_start
-
-        poll_interval = 2.0
-        idle_ticks = 0
-        last_state: tuple | None = None
-
-        while True:
-            if await request.is_disconnected():
-                logger.debug("SSE client disconnected for job %s", job_id)
-                break
-
-            now = loop.time()
-            elapsed = now - loop_start
-
-            # Hard ceiling — prevent zombie streams
-            if elapsed > MAX_STREAM_SECONDS:
-                logger.warning("SSE stream timeout for job %s after %.0fs", job_id, elapsed)
-                yield f"data: {json.dumps({'status': 'streaming_timeout'})}\n\n"
-                break
-
-            # Keepalive comment to prevent proxy / browser from closing idle connection
-            if now - last_keepalive >= KEEPALIVE_INTERVAL:
-                yield ": keepalive\n\n"
-                last_keepalive = now
-
-            row = await jobs_lib.get(pool, job_id)
-            if row is None:
-                break
-
-            # Adaptive poll backoff: reset to 2s on any row change; ramp up to 5s
-            # after 30s of no changes to reduce unnecessary DB load.
-            current_state = (row.get("progress"), row.get("progress_message"), row["status"])
-            if current_state != last_state:
-                last_state = current_state
-                idle_ticks = 0
-                poll_interval = 2.0
-            else:
-                idle_ticks += 1
-                if idle_ticks * poll_interval > 30:
-                    poll_interval = min(poll_interval + 1.0, 5.0)
-
-            key = (row.get("progress"), row.get("progress_message"), row["status"])
-            if key != last_key:
-                last_key = key
-                event_data: dict[str, Any] = {
-                    "progress": row.get("progress"),
-                    "progress_message": row.get("progress_message"),
-                    "status": row["status"],
-                }
-                if row["status"] in _terminal_statuses:
-                    if row.get("result") is not None:
-                        event_data["result"] = row["result"]
-                    if row.get("error") is not None:
-                        event_data["error"] = row["error"]
-                    if row.get("payload") is not None:
-                        event_data["payload"] = row["payload"]
-                yield f"data: {json.dumps(event_data)}\n\n"
-
-            if row["status"] in _terminal_statuses:
-                break
-
-            await asyncio.sleep(poll_interval)
-
     return StreamingResponse(
-        _event_generator(),
+        jobs_lib.stream_job_events(pool, job_id, is_disconnected=request.is_disconnected),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

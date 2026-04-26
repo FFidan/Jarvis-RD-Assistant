@@ -79,6 +79,8 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         recommendation_score=row.get("recommendation_score"),
         recommendation_reason=row.get("recommendation_reason"),
         recommendation_modes=row.get("recommendation_modes"),
+        note_match_count=row.get("note_match_count", 0) or 0,
+        note_snippet=row.get("note_snippet"),
     )
 
 

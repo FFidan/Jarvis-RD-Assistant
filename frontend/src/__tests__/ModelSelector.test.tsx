@@ -25,6 +25,9 @@ vi.mock('@/components/ui/select', () => ({
   SelectContent: ({ children }: any) => (
     <div data-testid="select-content">{children}</div>
   ),
+  SelectGroup: ({ children }: any) => <div data-testid="select-group">{children}</div>,
+  SelectLabel: ({ children }: any) => <div data-testid="select-label">{children}</div>,
+  SelectSeparator: () => <hr data-testid="select-separator" />,
   SelectItem: ({ children, value }: any) => (
     <div
       data-testid={`select-item-${value}`}
@@ -107,6 +110,7 @@ describe('ModelSelector', () => {
     // Check formatted sizes
     expect(screen.getByText('(4.1GB)')).toBeInTheDocument();
     expect(screen.getByText('(500MB)')).toBeInTheDocument();
+    expect(screen.getByText('Local (Ollama)')).toBeInTheDocument();
   });
 
   it('shows "current" badge when model matches role', async () => {
@@ -180,6 +184,33 @@ describe('ModelSelector', () => {
     await waitFor(() => {
       expect(screen.getByText('(4.1GB)')).toBeInTheDocument();
       expect(screen.getByText('(500MB)')).toBeInTheDocument();
+    });
+  });
+
+  it('groups configured cloud models by provider while preserving current badge', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      status: 'ok',
+      installed: defaultModels.installed,
+      hardware: {},
+      current: { smart_model: 'claude-sonnet-4-6' },
+      issues: {},
+    });
+
+    renderComponent({ value: 'claude-sonnet-4-6', configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Anthropic')).toBeInTheDocument();
+      expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument();
+    });
+    expect(screen.getAllByText('current')).toHaveLength(1);
+  });
+
+  it('normalizes :latest suffix when matching selected local models', async () => {
+    renderComponent({ value: 'mistral-nemo:latest', configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'mistral-nemo');
     });
   });
 });

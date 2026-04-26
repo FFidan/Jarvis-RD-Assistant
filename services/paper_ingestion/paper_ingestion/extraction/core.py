@@ -19,7 +19,7 @@ import asyncpg
 import httpx
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm
-from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 
 from paper_ingestion.models import (
     BatchExtractionResponse,
@@ -30,10 +30,27 @@ from paper_ingestion.models import (
 logger = logging.getLogger(__name__)
 
 
+def _escape_field_attr(s: object) -> str:
+    """HTML-encode angle-brackets in user-controlled field attributes.
+
+    Prevents prompt injection via crafted ``name``, ``type``, or ``description``
+    values that embed fake XML closing tags (e.g. ``</paper_text>IGNORE ABOVE``),
+    which could otherwise break out of the field-specs section in the LLM prompt.
+
+    Uses the same escaping strategy as :func:`jarvis_common.prompt_safety.safe_for_prompt`
+    (``mode='escape'``): ``<`` → ``&lt;``, ``>`` → ``&gt;``.
+    """
+    if not isinstance(s, str):
+        return str(s) if s is not None else ""
+    return safe_for_prompt(s, mode="escape")
+
+
 def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     """Build the LLM prompt for field extraction."""
     field_specs = "\n".join(
-        f'- "{f["name"]}" ({f.get("type", "text")}): {f.get("description", f["label"])}'
+        f'- "{_escape_field_attr(f["name"])}" '
+        f"({_escape_field_attr(f.get('type', 'text'))}): "
+        f"{_escape_field_attr(f.get('description', f['label']))}"
         for f in fields
     )
 

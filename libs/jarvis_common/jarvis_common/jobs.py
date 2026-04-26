@@ -12,15 +12,18 @@ Provides:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import re
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol, runtime_checkable
 
 import asyncpg
+import asyncpg_listen
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -46,12 +49,19 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
     "paper.analyze": "paper_ingestion",
     "papers.batch_process": "paper_ingestion",
     "papers.batch_summarize": "paper_ingestion",
+    "papers.scan_local": "paper_ingestion",
+    "paper.summarize": "paper_ingestion",
     "citations.batch_fetch": "paper_ingestion",
+    "digest.weekly": "paper_ingestion",
+    "extraction.single": "paper_ingestion",
     "extraction.batch": "paper_ingestion",
+    "contradictions.scan": "paper_ingestion",
     "pulse.generate": "paper_ingestion",
+    "pulse.train_classifier": "paper_ingestion",
     "zotero.push": "paper_ingestion",
     "zotero.resync": "paper_ingestion",
     "zotero.sync_from_zotero": "paper_ingestion",
+    "zotero.sync_annotations": "paper_ingestion",
     # learning_engine handlers
     "card.generate": "learning_engine",
     "card.generate_batch": "learning_engine",
@@ -81,6 +91,8 @@ HandlerFn = Callable[
 # SSE keepalive / max-stream constants shared across routers
 KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
+JOB_NOTIFY_CHANNEL = "jarvis_jobs"
+TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
 # Backward-compatible aliases (deprecated — import the public names instead)
 _KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
@@ -93,10 +105,186 @@ _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 _PATH_RE = re.compile(r"(/[^\s]+)+")
 
 
+class _PoolListenConnection:
+    """Adapter letting asyncpg-listen borrow and release a pooled connection."""
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+        self._conn: asyncpg.Connection | None = None
+        self._listeners: list[tuple[str, Callable[..., None]]] = []
+        self._released = False
+
+    @classmethod
+    async def create(cls, pool: asyncpg.Pool) -> _PoolListenConnection:
+        wrapped = cls(pool)
+        wrapped._conn = await pool.acquire()
+        return wrapped
+
+    async def add_listener(self, channel: str, callback: Callable[..., None]) -> None:
+        if self._conn is None:
+            raise RuntimeError("listen connection is not open")
+        await self._conn.add_listener(channel, callback)
+        self._listeners.append((channel, callback))
+
+    async def execute(self, *args: Any, **kwargs: Any) -> str:
+        if self._conn is None:
+            raise RuntimeError("listen connection is not open")
+        return await self._conn.execute(*args, **kwargs)
+
+    def is_closed(self) -> bool:
+        return self._released or self._conn is None or self._conn.is_closed()
+
+    async def close(self) -> None:
+        if self._conn is None or self._released:
+            return
+        for channel, callback in self._listeners:
+            with suppress(Exception):
+                await self._conn.remove_listener(channel, callback)
+        await self._pool.release(self._conn)
+        self._released = True
+        self._conn = None
+
+
 def _sanitize_error_message(raw: str) -> str:
     msg = _ANSI_RE.sub("", raw)
     msg = _PATH_RE.sub("<path>", msg)
     return msg[:500]
+
+
+async def notify_job_update(conn: asyncpg.Connection, job_id: str) -> None:
+    """Emit a best-effort PostgreSQL notification for job stream listeners."""
+    try:
+        await conn.execute("SELECT pg_notify($1, $2)", JOB_NOTIFY_CHANNEL, str(job_id))
+    except Exception:
+        logger.debug("jobs.notify failed for job %s", job_id, exc_info=True)
+
+
+def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
+    """Return the public SSE payload for a job row."""
+    event_data: dict[str, Any] = {
+        "progress": row.get("progress"),
+        "progress_message": row.get("progress_message"),
+        "status": row["status"],
+    }
+    if row["status"] in TERMINAL_STATUSES:
+        if row.get("result") is not None:
+            event_data["result"] = row["result"]
+        if row.get("error") is not None:
+            event_data["error"] = row["error"]
+        if row.get("payload") is not None:
+            event_data["payload"] = row["payload"]
+    return event_data
+
+
+async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: float) -> bool:
+    """Wait for a job-specific NOTIFY payload, returning False on fallback timeout."""
+    matched = asyncio.Event()
+
+    async def _connect() -> _PoolListenConnection:
+        return await _PoolListenConnection.create(pool)
+
+    async def _handle_notification(
+        notification: asyncpg_listen.Notification | asyncpg_listen.Timeout,
+    ) -> None:
+        if isinstance(notification, asyncpg_listen.Notification) and notification.payload == str(
+            job_id
+        ):
+            matched.set()
+
+    listener = asyncpg_listen.NotificationListener(_connect, reconnect_delay=timeout)
+    listen_task = asyncio.create_task(
+        listener.run(
+            {JOB_NOTIFY_CHANNEL: _handle_notification},
+            policy=asyncpg_listen.ListenPolicy.ALL,
+            notification_timeout=timeout,
+        )
+    )
+    wait_task = asyncio.create_task(matched.wait())
+
+    try:
+        done, _pending = await asyncio.wait(
+            {listen_task, wait_task},
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if wait_task in done:
+            return wait_task.result()
+        if listen_task in done:
+            exc = listen_task.exception()
+            if exc is not None:
+                logger.debug(
+                    "jobs.listen setup failed; falling back to polling",
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+            return False
+        return False
+    finally:
+        for task in (listen_task, wait_task):
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            else:
+                with suppress(asyncio.CancelledError, Exception):
+                    task.result()
+
+
+async def stream_job_events(
+    pool: asyncpg.Pool,
+    job_id: str,
+    *,
+    is_disconnected: Callable[[], Awaitable[bool]],
+) -> AsyncIterator[str]:
+    """Yield SSE frames for a job, using LISTEN/NOTIFY with polling fallback."""
+    last_key: tuple[Any, Any, Any] | None = None
+    loop = asyncio.get_running_loop()
+    loop_start = loop.time()
+    last_keepalive = loop_start
+
+    poll_interval = 2.0
+    idle_ticks = 0
+    last_state: tuple[Any, Any, Any] | None = None
+
+    while True:
+        if await is_disconnected():
+            logger.debug("SSE client disconnected for job %s", job_id)
+            break
+
+        now = loop.time()
+        elapsed = now - loop_start
+
+        if elapsed > MAX_STREAM_SECONDS:
+            logger.warning("SSE stream timeout for job %s after %.0fs", job_id, elapsed)
+            yield f"data: {json.dumps({'status': 'streaming_timeout'})}\n\n"
+            break
+
+        if now - last_keepalive >= KEEPALIVE_INTERVAL:
+            yield ": keepalive\n\n"
+            last_keepalive = now
+
+        row = await get(pool, job_id)
+        if row is None:
+            break
+
+        current_state = (row.get("progress"), row.get("progress_message"), row["status"])
+        if current_state != last_state:
+            last_state = current_state
+            idle_ticks = 0
+            poll_interval = 2.0
+        else:
+            idle_ticks += 1
+            if idle_ticks * poll_interval > 30:
+                poll_interval = min(poll_interval + 1.0, 5.0)
+
+        key = (row.get("progress"), row.get("progress_message"), row["status"])
+        if key != last_key:
+            last_key = key
+            yield f"data: {json.dumps(job_sse_payload(row))}\n\n"
+
+        if row["status"] in TERMINAL_STATUSES:
+            break
+
+        await _wait_for_job_notification(pool, job_id, poll_interval)
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +343,7 @@ class JobContext:
                 message,
                 self.job_id,
             )
+            await notify_job_update(conn, self.job_id)
         logger.debug("job %s progress=%.2f msg=%s", self.job_id, progress, message)
 
     async def is_cancelled(self) -> bool:
@@ -195,6 +384,8 @@ async def enqueue(
             payload or {},
             user_id,
         )
+        if row is not None:
+            await notify_job_update(conn, row["id"])
     if row is None:
         raise RuntimeError("enqueue returned no row")
     return row["id"]
@@ -271,6 +462,7 @@ async def request_cancel(pool: asyncpg.Pool, job_id: str) -> None:
             """,
             job_id,
         )
+        await notify_job_update(conn, job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -302,6 +494,7 @@ async def _finish(
             error,
             job_id,
         )
+        await notify_job_update(conn, job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +523,8 @@ async def run_job(
             """,
             job_id,
         )
+        if row is not None:
+            await notify_job_update(conn, job_id)
     if row is None:
         logger.debug("job %s already picked up or not found — skipping", job_id)
         return
@@ -418,6 +613,8 @@ async def _reap_stale_jobs(pool: asyncpg.Pool, kinds: list[str]) -> int:
             {"message": "reaped as stale (no heartbeat)", "type": "StaleJobReaped"},
             kinds,
         )
+        for row in rows:
+            await notify_job_update(conn, str(row["id"]))
     count = len(rows)
     if count:
         logger.warning("jobs.reaper reaped %d stale job(s) for kinds=%s", count, kinds)

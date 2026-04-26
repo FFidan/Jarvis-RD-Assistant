@@ -246,6 +246,123 @@ async def resync_paper_to_zotero(
     await push_paper_to_zotero(paper_id, db_pool, http_client)
 
 
+def _annotation_page_number(value: Any) -> int | None:
+    """Parse Zotero's free-form page label into a 1-indexed page number."""
+    if value is None:
+        return None
+    try:
+        page = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return page if page >= 1 else None
+
+
+async def sync_annotations_for_paper(
+    paper_id: int,
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+) -> dict[str, Any]:
+    """Import Zotero PDF annotations into ``paper_notes`` for a linked paper.
+
+    Imported annotations are stored as read-only notes with ``source='zotero'``
+    and idempotently upserted by ``(paper_id, zotero_annotation_key)``. They are
+    not copied into verified evidence or knowledge-graph tables.
+    """
+    from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
+
+    cfg = await _get_zotero_config(db_pool)
+    if not cfg.get("enabled"):
+        return {"paper_id": paper_id, "imported": 0, "status": "disabled"}
+
+    api_key = cfg.get("api_key", "")
+    user_id = cfg.get("user_id", "")
+    library_type = cfg.get("library_type", "user")
+    if not api_key or not user_id:
+        return {"paper_id": paper_id, "imported": 0, "status": "disabled"}
+
+    async with db_pool.acquire() as conn:
+        paper = await conn.fetchrow(
+            "SELECT id, zotero_item_key FROM papers WHERE id = $1",
+            paper_id,
+        )
+    if not paper:
+        return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
+    zotero_item_key = paper["zotero_item_key"]
+    if not zotero_item_key:
+        return {"paper_id": paper_id, "imported": 0, "status": "not_linked"}
+
+    client = ZoteroClient(
+        api_key=str(api_key),
+        user_id=str(user_id),
+        library_type=str(library_type),
+        http_client=http_client,
+    )
+    annotations = await client.get_item_children(str(zotero_item_key), item_type="annotation")
+
+    imported = 0
+    async with db_pool.acquire() as conn:
+        for item in annotations:
+            key = item.get("key") or item.get("data", {}).get("key")
+            data = item.get("data", {})
+            if not key:
+                continue
+            highlight = (data.get("annotationText") or "").strip() or None
+            comment = (data.get("annotationComment") or "").strip()
+            note = comment or highlight
+            if not note:
+                continue
+            page_number = _annotation_page_number(data.get("annotationPageLabel"))
+            await conn.execute(
+                """
+                INSERT INTO paper_notes
+                    (paper_id, source, zotero_annotation_key, user_note, highlight_text,
+                     page_number)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (paper_id, zotero_annotation_key) DO UPDATE
+                    SET user_note      = EXCLUDED.user_note,
+                        highlight_text = EXCLUDED.highlight_text,
+                        page_number    = EXCLUDED.page_number,
+                        verification_status =
+                            CASE
+                                WHEN paper_notes.highlight_text
+                                     IS DISTINCT FROM EXCLUDED.highlight_text
+                                THEN 'unverified'
+                                ELSE paper_notes.verification_status
+                            END,
+                        verified_quote =
+                            CASE
+                                WHEN paper_notes.highlight_text
+                                     IS DISTINCT FROM EXCLUDED.highlight_text
+                                THEN NULL
+                                ELSE paper_notes.verified_quote
+                            END,
+                        verified_page_number =
+                            CASE
+                                WHEN paper_notes.highlight_text
+                                     IS DISTINCT FROM EXCLUDED.highlight_text
+                                THEN NULL
+                                ELSE paper_notes.verified_page_number
+                            END,
+                        promoted_at =
+                            CASE
+                                WHEN paper_notes.highlight_text
+                                     IS DISTINCT FROM EXCLUDED.highlight_text
+                                THEN NULL
+                                ELSE paper_notes.promoted_at
+                            END
+                """,
+                paper_id,
+                "zotero",
+                str(key),
+                note,
+                highlight,
+                page_number,
+            )
+            imported += 1
+
+    return {"paper_id": paper_id, "imported": imported, "status": "ok"}
+
+
 async def poll_zotero_library(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -328,6 +445,18 @@ async def poll_zotero_library(
                                 "UPDATE papers SET zotero_item_key = $1 WHERE id = $2",
                                 item_key,
                                 row["id"],
+                            )
+                        try:
+                            await jobs_lib.enqueue(
+                                db_pool,
+                                "zotero.sync_annotations",
+                                {"paper_id": row["id"]},
+                            )
+                        except Exception:
+                            logger.debug(
+                                "Zotero poll: failed to enqueue annotation sync for %s",
+                                row["id"],
+                                exc_info=True,
                             )
                     linked_count += 1
                     continue
@@ -473,5 +602,20 @@ async def _zotero_sync_from_zotero_job(
     """
     await ctx.update_progress(0.1, "Starting Zotero library poll")
     result = await poll_zotero_library(pool, http_client)
+    await ctx.update_progress(1.0, "Done")
+    return result
+
+
+@job_handler("zotero.sync_annotations")
+async def _zotero_sync_annotations_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Job handler for importing Zotero annotations for a linked paper."""
+    paper_id = int(payload["paper_id"])
+    await ctx.update_progress(0.1, "Fetching Zotero annotations")
+    result = await sync_annotations_for_paper(paper_id, pool, http_client)
     await ctx.update_progress(1.0, "Done")
     return result

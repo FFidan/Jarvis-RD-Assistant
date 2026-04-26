@@ -183,6 +183,47 @@ COMMENT ON COLUMN paper_summaries.confidence IS 'HIGH, MEDIUM, or LOW based on q
 COMMENT ON COLUMN paper_summaries.llm_prompt IS 'The exact prompt sent to the LLM (audit trail).';
 COMMENT ON COLUMN paper_summaries.llm_raw_response IS 'The raw LLM response before parsing (audit trail).';
 
+CREATE TABLE IF NOT EXISTS paper_contradictions (
+    id                  SERIAL PRIMARY KEY,
+    paper_a_id          INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    paper_b_id          INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    finding_a           TEXT NOT NULL,
+    finding_b           TEXT NOT NULL,
+    quote_a             TEXT NOT NULL,
+    quote_b             TEXT NOT NULL,
+    page_a              INTEGER,
+    page_b              INTEGER,
+    contradiction_type  VARCHAR(50) NOT NULL DEFAULT 'direct'
+        CHECK (contradiction_type IN ('direct', 'methodological', 'result', 'interpretation')),
+    explanation         TEXT NOT NULL,
+    confidence          DOUBLE PRECISION NOT NULL CHECK (confidence >= 0 AND confidence <= 1),
+    status              VARCHAR(20) NOT NULL DEFAULT 'verified'
+        CHECK (status IN ('verified', 'dismissed', 'false_positive')),
+    scanner_metadata    JSONB NOT NULL DEFAULT '{}',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_paper_contradictions_distinct_papers CHECK (paper_a_id <> paper_b_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_contradictions_unique_quotes
+    ON paper_contradictions (
+        LEAST(paper_a_id, paper_b_id),
+        GREATEST(paper_a_id, paper_b_id),
+        md5(quote_a),
+        md5(quote_b)
+    );
+CREATE INDEX IF NOT EXISTS idx_paper_contradictions_paper_a
+    ON paper_contradictions (paper_a_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_contradictions_paper_b
+    ON paper_contradictions (paper_b_id, status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_contradictions_status
+    ON paper_contradictions (status, created_at DESC);
+
+COMMENT ON TABLE paper_contradictions IS
+    'Verified cross-paper contradictions. Both quotes must pass QuoteVerifier before insert.';
+COMMENT ON COLUMN paper_contradictions.scanner_metadata IS
+    'Scanner version, candidate score, model, and other non-authoritative diagnostics.';
+
 CREATE TABLE paper_user_state (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE UNIQUE,
@@ -219,12 +260,28 @@ CREATE TABLE paper_notes (
     user_note       TEXT NOT NULL,
     highlight_text  TEXT,
     page_number     INTEGER,
+    source          TEXT NOT NULL DEFAULT 'user'
+        CHECK (source IN ('user', 'zotero')),
+    zotero_annotation_key TEXT,
+    verification_status TEXT NOT NULL DEFAULT 'unverified'
+        CHECK (verification_status IN ('unverified', 'verified', 'failed')),
+    verified_quote TEXT,
+    verified_page_number INTEGER,
+    promoted_at TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
 COMMENT ON TABLE paper_notes IS 'User annotations on papers, optionally linked to a page or highlighted text.';
 
 CREATE INDEX idx_paper_notes_paper ON paper_notes(paper_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_notes_zotero_annotation
+    ON paper_notes(paper_id, zotero_annotation_key)
+    WHERE zotero_annotation_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_notes_paper_source
+    ON paper_notes(paper_id, source, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_notes_search
+    ON paper_notes
+    USING GIN (to_tsvector('english', coalesce(user_note, '') || ' ' || coalesce(highlight_text, '')));
 
 -- =============================================================================
 -- CITATION GRAPH
@@ -609,6 +666,23 @@ CREATE INDEX IF NOT EXISTS idx_pulse_ratings_paper
 CREATE INDEX IF NOT EXISTS idx_pulse_ratings_created
     ON pulse_ratings(created_at DESC);
 
+CREATE TABLE IF NOT EXISTS pulse_models (
+    id              SERIAL PRIMARY KEY,
+    user_id         INTEGER,
+    model_version   TEXT NOT NULL DEFAULT 'v1',
+    model_blob      BYTEA NOT NULL,
+    feature_names   JSONB NOT NULL DEFAULT '[]'::jsonb,
+    metrics         JSONB NOT NULL DEFAULT '{}'::jsonb,
+    is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+    trained_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pulse_models_one_active_per_user
+    ON pulse_models (coalesce(user_id, 0))
+    WHERE is_active = TRUE;
+CREATE INDEX IF NOT EXISTS idx_pulse_models_trained_at
+    ON pulse_models(trained_at DESC);
+
 -- PDF resolution cache — dedup resolver calls, supports ingestion fallback
 CREATE TABLE IF NOT EXISTS pdf_resolutions (
     id              SERIAL PRIMARY KEY,
@@ -670,7 +744,7 @@ INSERT INTO user_config (key, value) VALUES
     ('pulse.deck_size', '10'::jsonb),
     ('pulse.stage2_top_k', '50'::jsonb),
     ('pulse.weights',
-     '{"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1, "author_bonus": 0.15, "recency": 0.05}'::jsonb)
+     '{"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1, "author_bonus": 0.15, "recency": 0.05, "citation_pagerank": 0.0, "citation_count": 0.0, "citation_adamic_adar": 0.0, "classifier": 0.0}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 -- Telegram pairing — short-lived codes used by the setup wizard to link a

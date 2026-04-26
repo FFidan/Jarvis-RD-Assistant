@@ -104,6 +104,8 @@ export interface FeedPaper extends Paper {
   recommendation_score?: number | null;
   recommendation_reason?: string | null;
   recommendation_modes?: string[] | null;
+  note_match_count?: number;
+  note_snippet?: string | null;
 }
 
 export interface FeedResponse {
@@ -141,7 +143,18 @@ export interface Note {
   user_note: string;
   highlight_text: string | null;
   page_number: number | null;
+  source: 'user' | 'zotero';
+  zotero_annotation_key: string | null;
+  verification_status: 'unverified' | 'verified' | 'failed';
+  verified_quote: string | null;
+  verified_page_number: number | null;
+  promoted_at: string | null;
   created_at: string;
+}
+
+export interface JobAccepted {
+  job_id: string;
+  status: 'queued' | string;
 }
 
 // --- Topics ---
@@ -326,6 +339,32 @@ export interface SourceCountRow {
 export interface StatusCountRow {
   status: string;
   count: number;
+}
+
+export type ContradictionStatus = 'candidate' | 'verified' | 'dismissed' | string;
+
+export interface PaperContradiction {
+  id: number;
+  paper_a_id: number;
+  paper_b_id: number;
+  paper_a_title: string;
+  paper_b_title: string;
+  finding_a: string;
+  finding_b: string;
+  quote_a: string;
+  quote_b: string;
+  page_a: number | null;
+  page_b: number | null;
+  contradiction_type: string;
+  explanation: string;
+  confidence: number;
+  status: ContradictionStatus;
+  created_at: string;
+}
+
+export interface PaperContradictionsResponse {
+  contradictions: PaperContradiction[];
+  total: number;
 }
 
 // --- Extraction ---
@@ -715,4 +754,28 @@ export interface PulseDebugInfo {
   source_counts: Record<string, number>;
   topic_embeddings: PulseTopicEmbedding[];
   top_cards: PulseTopCard[];
+  classifier_available: boolean;
+  classifier_sample_count: number | null;
+  classifier_feature_names: string[];
+  classifier_auc: number | null;
+  classifier_auc_degradation_reason: string | null;
+  classifier_degradation_reason: string | null;
+}
+
+export interface MissingFoundationalPaper {
+  paper_id: number;
+  title: string;
+  authors: string[];
+  year: number | null;
+  citation_count: number;
+  cited_by_library_count: number;
+  url: string | null;
+  pdf_available: boolean;
+}
+
+export interface FetchAndProcessFoundationalResponse {
+  paper_id: number;
+  status: 'queued' | 'no_pdf';
+  job_id: string | null;
+  message: string | null;
 }

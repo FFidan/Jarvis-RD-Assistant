@@ -154,6 +154,32 @@ async def resync_paper_to_zotero(
 
 
 # ---------------------------------------------------------------------------
+# POST /api/zotero/sync-annotations/{paper_id}  — enqueue annotation import
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/zotero/sync-annotations/{paper_id}",
+    status_code=202,
+    response_model=JobEnqueuedResponse,
+)
+@limiter.limit("10/minute")
+async def sync_annotations_for_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> JobEnqueuedResponse:
+    """Enqueue Zotero annotation import for a linked paper."""
+    async with db_pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
+    if not exists:
+        raise HTTPException(status_code=404, detail="Paper not found")
+
+    job_id = await jobs_lib.enqueue(db_pool, "zotero.sync_annotations", {"paper_id": paper_id})
+    return JobEnqueuedResponse(job_id=str(job_id), status="queued")
+
+
+# ---------------------------------------------------------------------------
 # POST /api/zotero/poll  — trigger manual Zotero sync
 # ---------------------------------------------------------------------------
 

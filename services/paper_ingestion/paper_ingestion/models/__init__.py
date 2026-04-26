@@ -13,6 +13,11 @@ from paper_ingestion.models.authors import (
     TrackedAuthorResponse,
     TrackedAuthorUpdate,
 )
+from paper_ingestion.models.contradictions import (
+    ContradictionListResponse,
+    ContradictionScanRequest,
+    PaperContradictionResponse,
+)
 from paper_ingestion.models.dashboard import DashboardMetrics
 from paper_ingestion.models.extractions import (
     BatchEntityExtractResponse,
@@ -104,6 +109,7 @@ from paper_ingestion.models.rag import (
     AskRequest,
     AskResponse,
     AskSourceItem,
+    AskVerifiedSentence,
     CrossPaperAskRequest,
 )
 from paper_ingestion.models.topics import (
@@ -120,6 +126,7 @@ __all__ = [
     "AskRequest",
     "AskResponse",
     "AskSourceItem",
+    "AskVerifiedSentence",
     "AuthorCheckResponse",
     "AutoDetectResponse",
     "BatchCitationFetchResponse",
@@ -134,6 +141,8 @@ __all__ = [
     "CitationRelation",
     "Confidence",
     "ConfigEntry",
+    "ContradictionListResponse",
+    "ContradictionScanRequest",
     "CrossPaperAskRequest",
     "CrossReference",
     "DashboardMetrics",
@@ -169,6 +178,7 @@ __all__ = [
     "NudgeUpdate",
     "PaperBase",
     "PaperBriefResponse",
+    "PaperContradictionResponse",
     "PaperCreate",
     "PaperDetailResponse",
     "PaperPriorityResponse",

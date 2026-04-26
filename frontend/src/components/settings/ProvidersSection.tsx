@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Loader2, CheckCircle, CircleDashed, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import type { ConfigEntry } from '@/types';
 
@@ -33,6 +33,35 @@ function getMaskedKey(configs: ConfigEntry[], provider: CloudProvider): string {
 }
 
 type TestState = { ok: boolean; error: string | null } | null;
+
+function providerStatus(maskedValue: string, result: TestState) {
+  if (result?.ok) {
+    return {
+      icon: CheckCircle,
+      label: maskedValue ? 'Configured and tested' : 'Tested',
+      className: 'text-green-600 dark:text-green-400',
+    };
+  }
+  if (result && !result.ok) {
+    return {
+      icon: ShieldAlert,
+      label: `Configured, degraded${result.error ? `: ${result.error}` : ''}`,
+      className: 'text-destructive',
+    };
+  }
+  if (!maskedValue) {
+    return {
+      icon: CircleDashed,
+      label: 'Not configured',
+      className: 'text-muted-foreground',
+    };
+  }
+  return {
+    icon: CircleDashed,
+    label: 'Configured, not tested',
+    className: 'text-amber-700 dark:text-amber-400',
+  };
+}
 
 export function ProvidersSection() {
   const queryClient = useQueryClient();
@@ -111,10 +140,18 @@ export function ProvidersSection() {
           const draft = drafts[provider];
           const isTesting = testing[provider] ?? false;
           const result = testResults[provider] ?? null;
+          const status = providerStatus(maskedValue, result);
+          const StatusIcon = status.icon;
 
           return (
             <div key={provider} className="space-y-2">
-              <Label htmlFor={`provider-key-${provider}`}>{PROVIDER_LABELS[provider]}</Label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor={`provider-key-${provider}`}>{PROVIDER_LABELS[provider]}</Label>
+                <span className={`flex items-center gap-1 text-xs ${status.className}`}>
+                  <StatusIcon className="h-3 w-3" />
+                  {status.label}
+                </span>
+              </div>
               <div className="flex gap-2">
                 <Input
                   id={`provider-key-${provider}`}
@@ -139,16 +176,12 @@ export function ProvidersSection() {
                   {isTesting ? 'Testing…' : 'Test'}
                 </Button>
               </div>
-              {result !== null && (
+              {result !== null && result.ok && (
                 <span
-                  className={`flex items-center gap-1 text-xs ${result.ok ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}
+                  className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400"
                 >
-                  {result.ok ? (
-                    <CheckCircle className="h-3 w-3" />
-                  ) : (
-                    <XCircle className="h-3 w-3" />
-                  )}
-                  {result.ok ? 'Connected' : (result.error ?? 'Failed')}
+                  <CheckCircle className="h-3 w-3" />
+                  Connected
                 </span>
               )}
               <p className="text-xs text-muted-foreground">

@@ -19,6 +19,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
     createQuickTask: vi.fn(),
     logFocusSession: vi.fn(),
     updateTask: vi.fn(),
+    fetchMissingFoundationalPapers: vi.fn(),
+    fetchAndProcessFoundationalPaper: vi.fn(),
   };
 });
 
@@ -30,6 +32,7 @@ vi.mock('@/stores/job-store', () => ({
       activeAborts: {},
       hasRunning: () => false,
       startJob: vi.fn(),
+      trackExternalJob: vi.fn(),
     }),
   ),
 }));
@@ -91,6 +94,7 @@ describe('MyDayPage', () => {
     vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
+    vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
   });
 
   it('renders greeting and date', async () => {

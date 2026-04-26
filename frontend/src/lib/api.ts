@@ -152,6 +152,7 @@ import type {
   LlmCostRow,
   SourceCountRow,
   StatusCountRow,
+  PaperContradictionsResponse,
   ExtractionTableRow,
   PaperBrief,
   Project,
@@ -170,7 +171,6 @@ import type {
   DiscoveryResult,
   PaperDetail,
   UserState,
-  Summary,
   Note,
   CitationGraph,
   CitationRelation,
@@ -181,6 +181,9 @@ import type {
   PulseRating,
   PulseStats,
   PulseDebugInfo,
+  JobAccepted,
+  MissingFoundationalPaper,
+  FetchAndProcessFoundationalResponse,
   WhyExplanation,
   SetupStatus,
   TelegramPairing,
@@ -280,6 +283,32 @@ export const fetchPapersBySource = () =>
   apiFetch<SourceCountRow[]>('/api/analytics/papers-by-source');
 export const fetchPapersByStatus = () =>
   apiFetch<StatusCountRow[]>('/api/analytics/papers-by-status');
+
+// --- Contradictions ---
+export const fetchContradictions = (params?: {
+  paper_id?: number;
+  status?: string;
+  limit?: number;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.paper_id != null) qs.set('paper_id', String(params.paper_id));
+  if (params?.status) qs.set('status', params.status);
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  const query = qs.toString();
+  return apiFetch<PaperContradictionsResponse>(`/api/contradictions${query ? `?${query}` : ''}`);
+};
+
+export const scanContradictions = (body?: { paper_id?: number; limit?: number }) =>
+  apiFetch<JobAccepted>('/api/contradictions/scan', {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+  });
+
+export const scanPaperContradictions = (paperId: number, body?: { limit?: number }) =>
+  apiFetch<JobAccepted>(`/api/papers/${paperId}/contradictions/scan`, {
+    method: 'POST',
+    body: JSON.stringify(body ?? {}),
+  });
 
 // --- Extraction Table ---
 export const fetchPapersBrief = () =>
@@ -430,6 +459,7 @@ export const fetchFeedPapers = (params: {
   date_from?: string;
   date_to?: string;
   recommended?: boolean;
+  include_zotero_notes?: boolean;
 }) => {
   const searchParams = new URLSearchParams();
   const { recommended, ...rest } = params;
@@ -509,7 +539,7 @@ export const discoverPapers = (paperIds: number[], limit?: number) =>
   });
 
 export const scanLocalPdfs = () =>
-  apiFetch<{ imported: number; skipped: number; scanned: number }>('/api/scan-local-pdfs', { method: 'POST' });
+  apiFetch<JobAccepted>('/api/scan-local-pdfs', { method: 'POST' });
 
 export async function uploadPdf(file: File, title: string): Promise<{ id: number; title: string }> {
   const form = new FormData();
@@ -547,10 +577,10 @@ export const processPdf = (paperId: number) =>
   apiFetch<{ job_id: string; status: string }>(`/api/process-pdf/${paperId}`, { method: 'POST' });
 
 export const summarizePaper = (paperId: number) =>
-  apiFetch<Summary>(`/api/summarize/${paperId}`, { method: 'POST' });
+  apiFetch<JobAccepted>(`/api/summarize/${paperId}`, { method: 'POST' });
 
-export const fetchNotes = (paperId: number) =>
-  apiFetch<Note[]>(`/api/papers/${paperId}/notes`);
+export const fetchNotes = (paperId: number, source?: 'user' | 'zotero') =>
+  apiFetch<Note[]>(`/api/papers/${paperId}/notes${source ? `?source=${source}` : ''}`);
 
 export const createNote = (paperId: number, data: { user_note: string; highlight_text?: string | null; page_number?: number | null }) =>
   apiFetch<Note>(`/api/papers/${paperId}/notes`, {
@@ -560,6 +590,21 @@ export const createNote = (paperId: number, data: { user_note: string; highlight
 
 export const deleteNote = (noteId: number) =>
   apiFetch<{ status: string }>(`/api/notes/${noteId}`, { method: 'DELETE' });
+
+export const promoteZoteroNote = (noteId: number) =>
+  apiFetch<Note>(`/api/notes/${noteId}/promote`, { method: 'POST' });
+
+export const zoteroSyncAnnotations = (paperId: number): Promise<JobAccepted> =>
+  apiFetch(`/api/zotero/sync-annotations/${paperId}`, { method: 'POST' });
+
+export const fetchMissingFoundationalPapers = () =>
+  apiFetch<MissingFoundationalPaper[]>('/api/analytics/missing-foundational');
+
+export const fetchAndProcessFoundationalPaper = (paperId: number) =>
+  apiFetch<FetchAndProcessFoundationalResponse>('/api/analytics/fetch-and-process', {
+    method: 'POST',
+    body: JSON.stringify({ paper_id: paperId }),
+  });
 
 // --- Citation Graph ---
 export const fetchPaperCitations = (paperId: number) =>

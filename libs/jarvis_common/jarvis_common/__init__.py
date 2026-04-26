@@ -20,7 +20,7 @@ from jarvis_common.error_handlers import (
     validation_exception_handler,
 )
 from jarvis_common.http_rate_limiter import create_limiter, rate_limit_exceeded_handler
-from jarvis_common.jobs import KEEPALIVE_INTERVAL, MAX_STREAM_SECONDS
+from jarvis_common.jobs import KEEPALIVE_INTERVAL, MAX_STREAM_SECONDS, stream_job_events
 from jarvis_common.llm_client import (
     DEFAULT_LITELLM_BASE_URL,
     LITELLM_FALLBACK_ENV_NAMES,
@@ -103,4 +103,5 @@ __all__ = [
     "compute_streak",
     "KEEPALIVE_INTERVAL",
     "MAX_STREAM_SECONDS",
+    "stream_job_events",
 ]

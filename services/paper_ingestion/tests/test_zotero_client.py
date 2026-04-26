@@ -249,6 +249,36 @@ async def test_ensure_collection_single_page_no_extra_requests(client):
 
 
 # ---------------------------------------------------------------------------
+# get_item_children
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_get_item_children_paginates_annotations(client):
+    """get_item_children fetches all annotation children for a Zotero item."""
+    item_key = "ITEM1234"
+    page1 = [{"key": f"ANN{i:03d}", "data": {"itemType": "annotation"}} for i in range(100)]
+    page2 = [{"key": "ANN100", "data": {"itemType": "annotation"}}]
+    starts: list[int] = []
+
+    def side_effect(request):
+        start = int(dict(request.url.params).get("start", 0))
+        starts.append(start)
+        return httpx.Response(
+            200,
+            json=page1 if start == 0 else page2,
+            headers={"Total-Results": "101"},
+        )
+
+    respx.get(f"{BASE}/items/{item_key}/children").mock(side_effect=side_effect)
+
+    result = await client.get_item_children(item_key, item_type="annotation")
+
+    assert len(result) == 101
+    assert starts == [0, 100]
+
+
+# ---------------------------------------------------------------------------
 # fetch_bbt_citation_key
 # ---------------------------------------------------------------------------
 

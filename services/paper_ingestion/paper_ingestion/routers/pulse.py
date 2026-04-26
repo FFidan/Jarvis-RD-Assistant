@@ -29,6 +29,7 @@ from paper_ingestion.models import (
     PulseStatsResponse,
 )
 from paper_ingestion.pulse.deck import load_history, load_today
+from paper_ingestion.pulse.training import FEATURE_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -304,9 +305,21 @@ async def debug_pulse(
             WHERE key LIKE 'topic.%.embedding'
             """
         )
+        model_row = await conn.fetchrow(
+            """
+            SELECT feature_names, metrics, trained_at
+            FROM pulse_models
+            WHERE is_active = TRUE
+            ORDER BY trained_at DESC
+            LIMIT 1
+            """
+        )
 
     # Per-source candidate breakdown (from stats JSONB)
     source_counts: dict = deck_stats.get("source_counts", {})
+    classifier_stats = deck_stats.get("classifier", {}) or {}
+    has_model = bool(model_row) and "feature_names" in model_row
+    classifier_metrics = model_row["metrics"] if has_model else {}
 
     # Topic embedding sanity
     embed_dim_expected = 768
@@ -359,4 +372,15 @@ async def debug_pulse(
         source_counts=source_counts,
         topic_embeddings=topic_embeddings,
         top_cards=top_cards,
+        classifier_available=has_model or bool(classifier_stats.get("available")),
+        classifier_sample_count=classifier_metrics.get("sample_count")
+        or classifier_stats.get("sample_count"),
+        classifier_feature_names=(model_row["feature_names"] if has_model else None)
+        or classifier_stats.get("feature_names")
+        or FEATURE_NAMES,
+        classifier_auc=classifier_metrics.get("auc") if has_model else None,
+        classifier_auc_degradation_reason=(
+            classifier_metrics.get("auc_degradation_reason") if has_model else None
+        ),
+        classifier_degradation_reason=classifier_stats.get("degradation_reason"),
     )

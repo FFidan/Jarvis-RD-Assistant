@@ -27,8 +27,11 @@ __all__ = [
     "PDF_STORAGE_PATH",
     "_paper_process_job",
     "_paper_analyze_job",
+    "_paper_summarize_job",
     "_papers_batch_process_job",
     "_papers_batch_summarize_job",
+    "_papers_scan_local_job",
+    "_digest_weekly_job",
 ]
 
 
@@ -225,6 +228,30 @@ async def _paper_analyze_job(
     }
 
 
+@job_handler("paper.summarize")
+async def _paper_summarize_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Generate a quote-verified summary for a single paper."""
+    from paper_ingestion.services.summarization import generate_paper_summary
+
+    paper_id = int(payload["paper_id"])
+    verifier = svc.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
+    embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("embedder not initialized")
+
+    await ctx.update_progress(0.1, "Summarizing")
+    summary = await generate_paper_summary(paper_id, pool, http_client, verifier, embedder)
+    await ctx.update_progress(1.0, "Done")
+    return {"paper_id": paper_id, "summary_id": summary.id, "status": "summarized"}
+
+
 # ---------------------------------------------------------------------------
 # papers.batch_process handler
 # ---------------------------------------------------------------------------
@@ -293,6 +320,22 @@ async def _papers_batch_process_job(
     return {"processed": processed, "skipped": skipped, "errors": errors}
 
 
+@job_handler("papers.scan_local")
+async def _papers_scan_local_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Scan the local PDF drop directory and import new PDFs."""
+    from paper_ingestion.services.local_pdfs import scan_local_pdf_directory
+
+    await ctx.update_progress(0.05, "Scanning local PDF directory")
+    result = await scan_local_pdf_directory(pool, scan_dir=payload.get("scan_dir"))
+    await ctx.update_progress(1.0, "Done")
+    return result
+
+
 # ---------------------------------------------------------------------------
 # papers.batch_summarize handler
 # ---------------------------------------------------------------------------
@@ -342,3 +385,23 @@ async def _papers_batch_summarize_job(
 
     await ctx.update_progress(1.0, f"Done: {summarized} ok, {failed} failed")
     return {"summarized": summarized, "failed": failed, "errors": errors}
+
+
+@job_handler("digest.weekly")
+async def _digest_weekly_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Generate the weekly digest in a visible durable job."""
+    from paper_ingestion.weekly_summary import generate_weekly_summary
+
+    verifier = svc.verifier
+    if verifier is None:
+        raise RuntimeError("verifier not initialized")
+    days = int(payload.get("days", 7))
+    await ctx.update_progress(0.1, "Generating weekly digest")
+    digest = await generate_weekly_summary(pool, http_client, days=days, verifier=verifier)
+    await ctx.update_progress(1.0, "Done")
+    return digest

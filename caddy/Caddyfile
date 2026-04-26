@@ -1,0 +1,11 @@
+{
+	email {$LETSENCRYPT_EMAIL}
+}
+
+{$LETSENCRYPT_DOMAIN} {
+	reverse_proxy https://dashboard:3000 {
+		transport http {
+			tls_insecure_skip_verify
+		}
+	}
+}

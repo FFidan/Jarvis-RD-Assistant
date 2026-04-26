@@ -48,7 +48,10 @@ logger = logging.getLogger(__name__)
 if __package__:
     from scripts._db import get_dsn
 else:
-    from _db import get_dsn
+    try:
+        from _db import get_dsn
+    except ModuleNotFoundError:
+        from scripts._db import get_dsn
 
 from jarvis_common.llm_client import (
     LiteLLMConfig,

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Download, Cog, FileText, Sparkles, Wand2, CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { downloadPdf, processPdf, summarizePaper, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
-import type { Job } from '@/stores/job-store';
+import { useJobStore, type Job } from '@/stores/job-store';
 import { streamAnalyze } from '@/lib/sse';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -57,6 +57,7 @@ const TERMINAL_STATUSES: Job['status'][] = ['succeeded', 'failed', 'cancelled'];
 
 export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = false, hasSummary = false, pulseProcessButton = false }: ActionsSidebarProps) {
   const queryClient = useQueryClient();
+  const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const [deckId, setDeckId] = useState<string>('');
   const [maxCards, setMaxCards] = useState('5');
   const [actionResult, setActionResult] = useState<{ type: 'success' | 'error'; message: string; action_link?: { label: string; href: string } } | null>(null);
@@ -153,11 +154,16 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
   const processMut = useMutation({
     mutationFn: () => processPdf(paperId),
     onSuccess: (data) => {
+      trackExternalJob({
+        jobId: data.job_id,
+        kind: 'paper.process',
+        payload: { paper_id: paperId },
+        status: 'queued',
+      });
       setActionResult({
         type: 'success',
         message: `Processing queued (job ${data.job_id})`,
       });
-      queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Processing failed' });
@@ -166,9 +172,14 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
 
   const summarizeMut = useMutation({
     mutationFn: () => summarizePaper(paperId),
-    onSuccess: () => {
-      setActionResult({ type: 'success', message: 'Summary generated!' });
-      queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
+    onSuccess: (data) => {
+      trackExternalJob({
+        jobId: data.job_id,
+        kind: 'paper.summarize',
+        payload: { paper_id: paperId },
+        status: 'queued',
+      });
+      setActionResult({ type: 'success', message: `Summary queued (job ${data.job_id})` });
     },
     onError: (err) => {
       setActionResult({ type: 'error', message: err instanceof Error ? err.message : 'Summarization failed' });
@@ -310,7 +321,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
             size="sm"
             className={`w-full justify-start${pulseProcessButton ? ' animate-pulse' : ''}`}
             onClick={() => { setActionResult(null); processMut.mutate(); }}
-            disabled={anyPending}
+            disabled={anyPending || !pdfDownloaded}
           >
             <Cog className="mr-2 h-4 w-4" />
             {processMut.isPending ? 'Processing...' : 'Process PDF'}
@@ -322,7 +333,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
             size="sm"
             className="w-full justify-start"
             onClick={() => { setActionResult(null); summarizeMut.mutate(); }}
-            disabled={anyPending}
+            disabled={anyPending || !hasChunks}
           >
             <FileText className="mr-2 h-4 w-4" />
             {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
@@ -398,7 +409,7 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
           <Button
             className="w-full"
             onClick={() => { setActionResult(null); generateMut.mutate(); }}
-            disabled={!deckId || anyPending}
+            disabled={!deckId || !hasChunks || anyPending}
           >
             <Sparkles className="mr-2 h-4 w-4" />
             {isGenPending ? 'Generating…' : 'Generate Cards'}

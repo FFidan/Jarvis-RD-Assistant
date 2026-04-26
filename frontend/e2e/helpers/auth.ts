@@ -1,16 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const TEST_PASSWORD = process.env.VITE_DASHBOARD_PASSWORD || 'test-password';
+const TEST_API_KEY = process.env.JARVIS_API_KEY || process.env.VITE_DASHBOARD_PASSWORD || 'test-key';
+const AUTH_LABEL = /API Key|Password/i;
 
 export async function isAuthGateEnabled(page: Page): Promise<boolean> {
-  return page.getByLabel('Password').isVisible({ timeout: 1000 }).catch(() => false);
+  return page
+    .getByLabel(AUTH_LABEL)
+    .isVisible({ timeout: 1000 })
+    .catch(() => false);
 }
 
 export async function ensureAuthenticated(page: Page): Promise<void> {
   await page.goto('/');
 
   if (await isAuthGateEnabled(page)) {
-    await page.getByLabel('Password').fill(TEST_PASSWORD);
+    await page.getByLabel(AUTH_LABEL).fill(TEST_API_KEY);
     await page.getByRole('button', { name: 'Sign In' }).click();
   }
 

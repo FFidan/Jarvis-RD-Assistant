@@ -2,15 +2,13 @@ import { test, expect } from '@playwright/test';
 import { seedAuthedSession } from './helpers/setup';
 
 /**
- * Generate Cards on an unprocessed paper must fail with an actionable
- * error: the backend returns an `action_link` pointing the user back
- * to `?action=process`. The sidebar renders the link so clicking it
- * navigates to the same paper with the Process button pulsed.
+ * Generate Cards on an unprocessed paper (no chunks) must be disabled so
+ * the user cannot trigger card generation on a paper that hasn't been
+ * processed yet. The tooltip already explains the requirement.
  */
-test.describe('Generate Cards on unprocessed paper shows action_link @cards @jobs', () => {
+test.describe('Generate Cards on unprocessed paper is disabled @cards @jobs', () => {
   const PAPER_ID = 7;
   const DECK_ID = 1;
-  const JOB_ID = 'job-gen-7';
 
   test.beforeEach(async ({ page }) => {
     await seedAuthedSession(page);
@@ -56,44 +54,20 @@ test.describe('Generate Cards on unprocessed paper shows action_link @cards @job
       });
     });
 
-    // Kicking off the job returns job_id — the sidebar then polls.
-    await page.route(`**/api/papers/${PAPER_ID}/cards/generate-job**`, async (route) => {
+    // The Generate Cards button will be disabled (no chunks) — no POST to /api/generate
+    // should be made, but we stub it defensively to catch regressions.
+    await page.route(`**/api/generate**`, async (route) => {
       if (route.request().method() !== 'POST') return route.continue();
+      // Button is disabled — this route should never be hit.
       await route.fulfill({
-        status: 200,
+        status: 400,
         contentType: 'application/json',
-        body: JSON.stringify({ job_id: JOB_ID }),
-      });
-    });
-
-    // Job row poll returns failed with an action_link back to process.
-    await page.route(`**/api/jobs/${JOB_ID}`, async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          id: JOB_ID,
-          kind: 'card.generate',
-          status: 'failed',
-          progress: 0,
-          progress_message: null,
-          result: null,
-          error: {
-            message: 'Paper has not been processed yet. Process it first.',
-            action_link: {
-              label: 'Go process paper',
-              href: `/paper/${PAPER_ID}?action=process`,
-            },
-          },
-          created_at: new Date().toISOString(),
-          started_at: new Date().toISOString(),
-          finished_at: new Date().toISOString(),
-        }),
+        body: JSON.stringify({ detail: 'Paper not processed — button should have been disabled' }),
       });
     });
   });
 
-  test('failed job surfaces action_link that routes to ?action=process', async ({ page }) => {
+  test('Generate Cards button is disabled when paper has no chunks', async ({ page }) => {
     await page.goto(`/paper/${PAPER_ID}`);
     await page.setViewportSize({ width: 1280, height: 900 });
 
@@ -101,27 +75,15 @@ test.describe('Generate Cards on unprocessed paper shows action_link @cards @job
       timeout: 10_000,
     });
 
-    // Select the deck, then click Generate Cards.
+    // Select a deck — even with a deck selected, the button must stay disabled
+    // because the paper has no chunks (chunks: [] in the mock above).
     await page.getByRole('combobox').filter({ hasText: /select a deck|default deck/i }).first().click();
     await page.getByRole('option', { name: 'Default Deck' }).click();
 
     const generateBtn = page.getByRole('button', { name: /generate cards/i });
-    await expect(generateBtn).toBeEnabled();
-    await generateBtn.click();
+    await expect(generateBtn).toBeDisabled();
 
-    // The poll will resolve to failed — error + action_link should render.
-    await expect(
-      page.getByText(/paper has not been processed/i),
-    ).toBeVisible({ timeout: 10_000 });
-
-    const link = page.getByRole('link', { name: /go process paper/i });
-    await expect(link).toBeVisible();
-    await link.click();
-
-    await expect(page).toHaveURL(/\/paper\/7\?action=process/);
-
-    // The Process PDF button should be rendered (and pulsed, but we don't
-    // assert on the animate-pulse class — just on existence).
+    // The Process PDF button should be available for the user to act on.
     await expect(page.getByRole('button', { name: /process pdf/i })).toBeVisible({
       timeout: 10_000,
     });

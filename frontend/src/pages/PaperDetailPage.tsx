@@ -24,6 +24,7 @@ import { CrossReferencesTab } from '@/components/paper/CrossReferencesTab';
 import { NotesTab } from '@/components/paper/NotesTab';
 import { RAGChatSection } from '@/components/paper/RAGChatSection';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
+import { ContradictionsPanel } from '@/components/paper/ContradictionsPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function PaperDetailPage() {
@@ -116,6 +117,7 @@ export function PaperDetailPage() {
       />
       <UserStateForm paperId={paperId} userState={user_state} />
       <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />
+      <ContradictionsPanel paperId={paperId} />
     </div>
   );
 

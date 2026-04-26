@@ -13,6 +13,7 @@ Most content here is also summarised in the [README](../README.md); this documen
 | **Localhost** | ~5 min | none | Self-signed (localhost SAN) | All traffic is local; no proxy headers trusted | Docker Engine 24+, Docker Compose v2 |
 | **LAN** | ~10 min | `3001/tcp` (dashboard) on LAN iface | Self-signed with LAN IP SAN | Rightmost-trusted-hop XFF walk | Same + a stable LAN IP |
 | **Cloudflare Tunnel** | ~30 min | *none* (outbound-only) | Self-signed origin + Cloudflare edge TLS | `CF-Connecting-IP` when `JARVIS_TRUST_CF_CONNECTING_IP=true` | Cloudflare account + Zero-Trust access policy |
+| **Let's Encrypt / Caddy** | ~15 min after DNS | `80/tcp`, `443/tcp` | Caddy ACME edge TLS + dashboard internal HTTPS | Rightmost-trusted-hop XFF walk | Public DNS A/AAAA record to this host |
 | **Tailscale Funnel** | ~20 min | *none* on your host | Tailscale-provisioned TLS | Right-to-left XFF walk (SEC-001) | Tailscale account, approved Funnel feature |
 | **VPN (Tailscale/WireGuard)** | ~15 min | VPN ports only | Self-signed | All traffic is intra-tunnel | WG/TS on both ends |
 
@@ -90,6 +91,30 @@ DASHBOARD_PASSWORD=<strong password>
 - `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured (verified in `libs/jarvis_common/jarvis_common/auth.py`); the flag only helps unauthenticated local development.
 - `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
+### Encrypted config key rotation
+
+Provider keys stored through Settings use `user_config.encrypted_value` and are decrypted with `JARVIS_CONFIG_KEY`. On startup, paper_ingestion and learning_engine validate encrypted rows before schedulers or workers start. In non-dev mode, services fail fast when encrypted rows exist and the key is missing, malformed, or wrong.
+
+Dry-run a key rotation first:
+
+```bash
+DATABASE_URL=postgresql://jarvis:<password>@localhost:5432/jarvis \
+OLD_JARVIS_CONFIG_KEY=<old-fernet-key> \
+NEW_JARVIS_CONFIG_KEY=<new-fernet-key> \
+python scripts/rotate_config_key.py
+```
+
+Apply only after the dry run validates every encrypted row:
+
+```bash
+DATABASE_URL=postgresql://jarvis:<password>@localhost:5432/jarvis \
+OLD_JARVIS_CONFIG_KEY=<old-fernet-key> \
+NEW_JARVIS_CONFIG_KEY=<new-fernet-key> \
+python scripts/rotate_config_key.py --apply
+```
+
+The script runs in a transaction and prints counts only; it never logs plaintext or ciphertext.
+
 ---
 
 ## Mode 3 — Cloudflare Tunnel
@@ -153,46 +178,32 @@ Mesh your devices onto one network and keep JARVIS in localhost mode. No TLS har
 - Key + cert live in a named volume; `docker compose down -v dashboard` forces regeneration on next start.
 - Generator script: `frontend/scripts/generate-certs.sh` (reads `JARVIS_CERT_SAN`, falls back to localhost-only).
 
-### Let's Encrypt (manual recipe)
+### Let's Encrypt (Caddy profile)
 
-There is no automated Let's Encrypt wiring yet — that's planned in [post-R14 roadmap WS-8](plans/2026-04-24-post-r14-roadmap.md) along with a `JARVIS_SKIP_SELFSIGNED_GEN=true` flag to suppress self-signed generation when a real cert is mounted.
+The tracked `letsencrypt` profile starts a Caddy sidecar in front of the dashboard:
 
-Until then, two manual options:
+```bash
+# .env
+LETSENCRYPT_DOMAIN=jarvis.example.com
+LETSENCRYPT_EMAIL=you@example.com
+CORS_ORIGINS=https://jarvis.example.com,https://localhost:3001
 
-**Option A — Caddy sidecar (recommended).** Add a `docker-compose.override.yml` with a Caddy service in front of the dashboard. Caddy handles ACME automatically. Skeleton:
-
-```yaml
-services:
-  caddy:
-    image: caddy:2
-    ports:
-      - "443:443"
-      - "80:80"
-    volumes:
-      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - dashboard
-volumes:
-  caddy_data:
-  caddy_config:
+docker compose --profile letsencrypt up -d caddy
 ```
 
-Caddyfile:
-```
-your-host.example.com {
-    reverse_proxy dashboard:3000 {
-        transport http {
-            tls_insecure_skip_verify
-        }
+Point DNS at the host and ensure inbound ports 80/443 are reachable. Caddy terminates public TLS and proxies to the dashboard over **internal HTTPS**:
+
+```caddyfile
+reverse_proxy https://dashboard:3000 {
+    transport http {
+        tls_insecure_skip_verify
     }
 }
 ```
 
-Point your DNS at the host, ensure ports 80/443 are reachable, and `docker compose up -d caddy`.
+Keep `JARVIS_SKIP_SELFSIGNED_GEN=false` for this sidecar path unless you also mount real cert files into the dashboard container. The dashboard nginx process still needs its internal cert/key files even though browsers see the Caddy certificate.
 
-**Option B — host nginx + certbot.** Run certbot on the host, place the cert where the dashboard container can volume-mount it, and set `JARVIS_CERT_SAN` to match your real hostname. Again, when the `JARVIS_SKIP_SELFSIGNED_GEN` flag ships, enable it so the container doesn't overwrite your real cert.
+**Option B — host nginx + certbot.** Run certbot on the host, place the cert where the dashboard container can volume-mount it, set `JARVIS_CERT_SAN` to match your real hostname, and set `JARVIS_SKIP_SELFSIGNED_GEN=true` so the container doesn't overwrite your real cert.
 
 ### Importing an existing certificate
 

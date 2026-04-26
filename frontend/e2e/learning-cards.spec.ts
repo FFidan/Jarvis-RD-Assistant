@@ -1,16 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { seedAuthedSession } from './helpers/setup';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => {
-    localStorage.setItem(
-      'jarvis-auth',
-      JSON.stringify({
-        state: { isAuthenticated: true, authTime: Date.now() },
-        version: 0,
-      }),
-    );
-  });
+  await seedAuthedSession(page);
   await page.goto('/cards');
 });
 

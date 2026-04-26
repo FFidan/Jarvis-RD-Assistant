@@ -107,7 +107,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     batchSavePapers: vi.fn().mockResolvedValue([{ id: 1, title: 'Saved Paper' }]),
     markPaperRead: vi.fn().mockResolvedValue({ status: 'ok' }),
     discoverPapers: vi.fn().mockResolvedValue([]),
-    scanLocalPdfs: vi.fn().mockResolvedValue({ imported: 1, skipped: 0, scanned: 1 }),
+    scanLocalPdfs: vi.fn().mockResolvedValue({ job_id: 'job-scan', status: 'queued' }),
     batchProcessPapers: vi.fn().mockResolvedValue({
       queued: 5,
       total_unprocessed: 10,

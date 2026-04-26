@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, CheckCircle2, InboxIcon } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, InboxIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,6 +18,8 @@ export function ActionItemsCard() {
   const {
     data: savedFeed,
     isLoading,
+    isError,
+    refetch,
   } = useQuery({
     queryKey: ['action-items-unprocessed'],
     queryFn: () => fetchFeedPapers({ statuses: 'new', limit: 10 }),
@@ -62,7 +64,31 @@ export function ActionItemsCard() {
     );
   }
 
-  const isEmpty = unprocessed.length === 0 && failedJobs.length === 0;
+  if (isError) {
+    return (
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <InboxIcon className="h-5 w-5" />
+            Action Items
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <span>
+              Could not load action items.{' '}
+              <button onClick={() => refetch()} className="underline font-medium">
+                Retry
+              </button>
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const isEmpty = !isLoading && !isError && unprocessed.length === 0 && failedJobs.length === 0;
 
   return (
     <Card>

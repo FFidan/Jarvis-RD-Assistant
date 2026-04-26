@@ -1,16 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { seedAuthedSession } from './helpers/setup';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => {
-    localStorage.setItem(
-      'jarvis-auth',
-      JSON.stringify({
-        state: { isAuthenticated: true, authTime: Date.now() },
-        version: 0,
-      }),
-    );
-  });
+  await seedAuthedSession(page);
 });
 
 test.describe('Knowledge Graph Page', () => {
@@ -19,7 +11,8 @@ test.describe('Knowledge Graph Page', () => {
     await page.waitForLoadState('networkidle');
 
     // Page title should be visible
-    await expect(page.getByRole('heading', { name: 'Knowledge Graph' })).toBeVisible({
+    const main = page.locator('main');
+    await expect(main.getByRole('heading', { name: 'Knowledge Graph' })).toBeVisible({
       timeout: 5000,
     });
 
@@ -67,7 +60,7 @@ test.describe('Knowledge Graph Page', () => {
     await page.waitForLoadState('networkidle');
 
     // The entity type filter should be visible
-    const entityTypeLabel = page.getByText('Entity Type');
+    const entityTypeLabel = page.getByText('Entity Type', { exact: true });
     await expect(entityTypeLabel).toBeVisible({ timeout: 5000 });
 
     // Open the entity type dropdown

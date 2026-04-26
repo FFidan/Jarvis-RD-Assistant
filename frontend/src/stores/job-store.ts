@@ -21,14 +21,38 @@ import { queryClient } from '@/lib/query-client';
  *
  * Values are functions so paper_id etc. can be threaded through from payload.
  */
-const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
+const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
   'pulse.generate':         () => [['pulse-today'], ['pulse-history'], ['pulse-stats']],
-  'paper.process':          (j) => [['paper', String(j.payload?.paper_id)], ['action-items-unprocessed']],
+  'paper.process':          (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null
+      ? [['action-items-unprocessed']]
+      : [['paper-detail', paperId], ['action-items-unprocessed']];
+  },
+  'paper.summarize':        (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [['paper-detail', paperId]];
+  },
   'card.generate':          () => [['decks'], ['cards']],
-  'paper.analyze':          (j) => [['paper', String(j.payload?.paper_id)]],
+  'paper.analyze':          (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [['paper-detail', paperId]];
+  },
   'papers.batch_process':   () => [['papers'], ['action-items-unprocessed']],
+  'papers.scan_local':      () => [['feed'], ['papers']],
   'papers.batch_summarize': () => [['papers']],
+  'extraction.single':      (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [['extractions']] : [['paper-detail', paperId], ['extractions']];
+  },
   'extraction.batch':       () => [['extractions']],
+  'digest.weekly':          () => [['digest-weekly']],
+  'contradictions.scan':    (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null
+      ? [['contradictions']]
+      : [['contradictions', paperId, 'verified'], ['paper-detail', paperId]];
+  },
   'zotero.push':            (j) => {
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
@@ -37,7 +61,12 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => string[][]> = {
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [['zotero-linkage', paperId], ['paper-detail', paperId]];
   },
+  'zotero.sync_annotations': (j) => {
+    const paperId = getPaperIdFromJob(j);
+    return paperId == null ? [] : [['notes', paperId], ['notes', paperId, 'zotero']];
+  },
   'zotero.poll':            () => [['zotero-library']],
+  'zotero.sync_from_zotero': () => [['zotero-library']],
 };
 
 /** Terminal statuses — job will not receive more events. */

@@ -47,6 +47,7 @@ export function NewTab() {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         recommended: undefined,
+        include_zotero_notes: true,
       }),
   });
 
@@ -130,6 +131,12 @@ export function NewTab() {
                   {!paper.tldr && paper.summary_brief && (
                     <p className="mt-2 line-clamp-3 text-sm">{paper.summary_brief}</p>
                   )}
+                  {paper.note_match_count ? (
+                    <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
+                      Zotero note match{paper.note_match_count > 1 ? `es (${paper.note_match_count})` : ''}
+                      {paper.note_snippet ? `: ${paper.note_snippet}` : ''}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>

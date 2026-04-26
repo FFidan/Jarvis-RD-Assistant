@@ -26,9 +26,11 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, job_handler
 
 from paper_ingestion._state import svc
+from paper_ingestion.pulse.citation_signals import compute_citation_signals
 from paper_ingestion.pulse.deck import assemble_deck, persist_deck
 from paper_ingestion.pulse.discovery import discover_candidates
 from paper_ingestion.pulse.profile import load_profile
@@ -38,6 +40,7 @@ from paper_ingestion.pulse.scoring import (
     stage2_llm_rerank,
     stage3_combine,
 )
+from paper_ingestion.pulse.training import FEATURE_NAMES, classifier_scores
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -197,7 +200,73 @@ async def run_pulse(
     stats["stage2_scored"] = len(stage2_out)
     logger.info("pulse.stage2", extra={"scored": len(stage2_out)})
 
-    # --- 5. stage 3 (weighted combine) -----------------------------------
+    # --- 5. stage 3b/4 optional citation + classifier signals ------------
+    if ctx:
+        await ctx.update_progress(0.88, "Adding citation and classifier signals")
+        if await ctx.is_cancelled():
+            raise asyncio.CancelledError()
+    classifier_meta: dict[str, Any] = {}
+    try:
+        wants_citation = any(
+            profile.weights.get(name, 0.0) > 0
+            for name in ("citation_pagerank", "citation_count", "citation_adamic_adar")
+        )
+        citation_by_external_id = (
+            await compute_citation_signals(db_pool, [sc.paper.external_id for sc in stage2_out])
+            if wants_citation
+            else {}
+        )
+        enriched: list[ScoredCandidate] = []
+        for sc in stage2_out:
+            new_signals = dict(sc.signals)
+            new_signals.update(citation_by_external_id.get(sc.paper.external_id, {}))
+            enriched.append(
+                ScoredCandidate(
+                    paper=sc.paper,
+                    signals=new_signals,
+                    llm_relevance=sc.llm_relevance,
+                    llm_novelty=sc.llm_novelty,
+                    reasoning=sc.reasoning,
+                    final_score=sc.final_score,
+                    reasoning_verified=sc.reasoning_verified,
+                    reasoning_confidence=sc.reasoning_confidence,
+                )
+            )
+        wants_classifier = profile.weights.get("classifier", 0.0) > 0
+        if wants_classifier:
+            classifier_values, classifier_meta = await classifier_scores(
+                db_pool,
+                [sc.signals for sc in enriched],
+            )
+        else:
+            classifier_values = [0.0 for _ in enriched]
+            classifier_meta = {
+                "available": False,
+                "feature_names": FEATURE_NAMES,
+                "degradation_reason": "classifier weight is disabled",
+            }
+        stage2_out = [
+            ScoredCandidate(
+                paper=sc.paper,
+                signals={**sc.signals, "classifier": classifier_values[idx]},
+                llm_relevance=sc.llm_relevance,
+                llm_novelty=sc.llm_novelty,
+                reasoning=sc.reasoning,
+                final_score=sc.final_score,
+                reasoning_verified=sc.reasoning_verified,
+                reasoning_confidence=sc.reasoning_confidence,
+            )
+            for idx, sc in enumerate(enriched)
+        ]
+    except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
+        degraded_reason = degraded_reason or f"optional Pulse Phase 2 signals unavailable: {exc}"
+        logger.warning("pulse.optional_signals failed", exc_info=True)
+    stats["classifier"] = classifier_meta or {
+        "available": False,
+        "feature_names": FEATURE_NAMES,
+    }
+
+    # --- 6. stage 3 (weighted combine) -----------------------------------
     if ctx:
         await ctx.update_progress(0.90, "Stage 3 diversification")
         if await ctx.is_cancelled():
@@ -210,7 +279,7 @@ async def run_pulse(
         stage3_out = stage2_out
     logger.info("pulse.stage3", extra={"scored": len(stage3_out)})
 
-    # --- 6. assemble deck ------------------------------------------------
+    # --- 7. assemble deck ------------------------------------------------
     if ctx:
         await ctx.update_progress(0.93, "Assembling deck")
         if await ctx.is_cancelled():
@@ -227,7 +296,7 @@ async def run_pulse(
     stats["duration_s"] = round(time.monotonic() - start, 3)
     stats["deck_date"] = now.date().isoformat()
 
-    # --- 7. persist (upsert papers + persist deck in one transaction) ---
+    # --- 8. persist (upsert papers + persist deck in one transaction) ---
     try:
         async with db_pool.acquire() as conn:
             async with conn.transaction():
@@ -258,6 +327,13 @@ async def run_pulse(
 
     if degraded_reason:
         stats["degraded_reason"] = degraded_reason
+    if ctx:
+        try:
+            await jobs_lib.enqueue(db_pool, "pulse.train_classifier", {})
+            stats["classifier_training_enqueued"] = True
+        except Exception:
+            stats["classifier_training_enqueued"] = False
+            logger.debug("pulse: classifier training enqueue skipped", exc_info=True)
     if ctx:
         await ctx.update_progress(1.0, "Done")
     logger.info("pulse.complete", extra=stats)

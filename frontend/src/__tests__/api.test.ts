@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { apiFetch, apiFetchRaw, ApiError, searchPreview } from '@/lib/api';
+import {
+  apiFetch,
+  apiFetchRaw,
+  ApiError,
+  fetchContradictions,
+  promoteZoteroNote,
+  scanContradictions,
+  scanPaperContradictions,
+  searchPreview,
+} from '@/lib/api';
 
 describe('apiFetch', () => {
   beforeEach(() => {
@@ -115,6 +124,86 @@ describe('apiFetch', () => {
           author: null,
         }),
       }),
+    );
+  });
+
+  it('builds contradiction list and scan endpoint requests', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ contradictions: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchContradictions({ paper_id: 42, status: 'verified', limit: 20 });
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/contradictions?paper_id=42&status=verified&limit=20',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    );
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ job_id: 'job-global', status: 'queued' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await scanContradictions({ limit: 10 });
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/contradictions/scan',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ limit: 10 }),
+      }),
+    );
+
+    vi.mocked(globalThis.fetch).mockResolvedValue(
+      new Response(JSON.stringify({ job_id: 'job-paper', status: 'queued' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    await scanPaperContradictions(42, { limit: 20 });
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/papers/42/contradictions/scan',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ limit: 20 }),
+      }),
+    );
+  });
+
+  it('builds Zotero note promotion request', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 7,
+          paper_id: 42,
+          user_note: 'note',
+          highlight_text: 'quote',
+          page_number: 2,
+          source: 'zotero',
+          zotero_annotation_key: 'ANN',
+          verification_status: 'verified',
+          verified_quote: 'quote',
+          verified_page_number: 2,
+          promoted_at: '2026-01-02T00:00:00Z',
+          created_at: '2026-01-01T00:00:00Z',
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    );
+
+    await promoteZoteroNote(7);
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/notes/7/promote',
+      expect.objectContaining({ method: 'POST' }),
     );
   });
 });

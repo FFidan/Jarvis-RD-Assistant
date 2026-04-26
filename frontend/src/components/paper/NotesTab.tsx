@@ -1,14 +1,21 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchNotes, createNote, deleteNote } from '@/lib/api';
+import {
+  fetchNotes,
+  createNote,
+  deleteNote,
+  promoteZoteroNote,
+  zoteroSyncAnnotations,
+} from '@/lib/api';
 import type { Note } from '@/types';
+import { useJobStore } from '@/stores/job-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
-import { StickyNote, Trash2 } from 'lucide-react';
+import { CheckCircle, RefreshCw, ShieldCheck, StickyNote, Trash2, XCircle } from 'lucide-react';
 import { formatDate } from '@/lib/utils';
 
 interface NotesTabProps {
@@ -17,13 +24,23 @@ interface NotesTabProps {
 
 export function NotesTab({ paperId }: NotesTabProps) {
   const queryClient = useQueryClient();
+  const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const [noteText, setNoteText] = useState('');
   const [pageNumber, setPageNumber] = useState('');
   const [highlightText, setHighlightText] = useState('');
 
-  const { data: notes = [], isLoading } = useQuery({
-    queryKey: ['notes', paperId],
-    queryFn: () => fetchNotes(paperId),
+  const { data: notes = [], isLoading, isError } = useQuery({
+    queryKey: ['notes', paperId, 'user'],
+    queryFn: () => fetchNotes(paperId, 'user'),
+  });
+
+  const {
+    data: zoteroNotes = [],
+    isLoading: zoteroLoading,
+    isError: zoteroError,
+  } = useQuery({
+    queryKey: ['notes', paperId, 'zotero'],
+    queryFn: () => fetchNotes(paperId, 'zotero'),
   });
 
   const createMut = useMutation({
@@ -34,7 +51,7 @@ export function NotesTab({ paperId }: NotesTabProps) {
         page_number: pageNumber ? Number(pageNumber) : null,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes', paperId] });
+      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'user'] });
       setNoteText('');
       setPageNumber('');
       setHighlightText('');
@@ -44,9 +61,52 @@ export function NotesTab({ paperId }: NotesTabProps) {
   const deleteMut = useMutation({
     mutationFn: (noteId: number) => deleteNote(noteId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['notes', paperId] });
+      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'user'] });
     },
   });
+
+  const syncZoteroMut = useMutation({
+    mutationFn: () => zoteroSyncAnnotations(paperId),
+    onSuccess: (data) => {
+      trackExternalJob({
+        jobId: data.job_id,
+        kind: 'zotero.sync_annotations',
+        payload: { paper_id: paperId },
+        status: 'queued',
+      });
+    },
+  });
+
+  const promoteZoteroMut = useMutation({
+    mutationFn: (noteId: number) => promoteZoteroNote(noteId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notes', paperId, 'zotero'] });
+    },
+  });
+
+  const verificationLabel = (note: Note) => {
+    if (note.verification_status === 'verified') {
+      return {
+        className: 'text-green-700 dark:text-green-400',
+        icon: CheckCircle,
+        text: note.verified_page_number
+          ? `Verified evidence, page ${note.verified_page_number}`
+          : 'Verified evidence',
+      };
+    }
+    if (note.verification_status === 'failed') {
+      return {
+        className: 'text-destructive',
+        icon: XCircle,
+        text: 'Verification failed',
+      };
+    }
+    return {
+      className: 'text-muted-foreground',
+      icon: ShieldCheck,
+      text: 'Not promoted as evidence',
+    };
+  };
 
   return (
     <div className="space-y-6">
@@ -103,6 +163,8 @@ export function NotesTab({ paperId }: NotesTabProps) {
         <h3 className="text-lg font-semibold">Existing notes</h3>
         {isLoading ? (
           <p className="text-sm text-muted-foreground">Loading notes...</p>
+        ) : isError ? (
+          <p className="text-sm text-destructive">Failed to load notes.</p>
         ) : notes.length === 0 ? (
           <EmptyState
             icon={StickyNote}
@@ -135,6 +197,94 @@ export function NotesTab({ paperId }: NotesTabProps) {
                       <Trash2 className="mr-1 h-3 w-3" />
                       Delete
                     </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-lg font-semibold">Zotero highlights</h3>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => syncZoteroMut.mutate()}
+            disabled={syncZoteroMut.isPending}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {syncZoteroMut.isPending ? 'Syncing...' : 'Sync'}
+          </Button>
+        </div>
+        {syncZoteroMut.isError && (
+          <p className="text-sm text-destructive">
+            {syncZoteroMut.error instanceof Error
+              ? syncZoteroMut.error.message
+              : 'Failed to sync Zotero highlights'}
+          </p>
+        )}
+        {promoteZoteroMut.isError && (
+          <p className="text-sm text-destructive">
+            {promoteZoteroMut.error instanceof Error
+              ? promoteZoteroMut.error.message
+              : 'Failed to promote Zotero highlight'}
+          </p>
+        )}
+        {zoteroLoading ? (
+          <p className="text-sm text-muted-foreground">Loading highlights...</p>
+        ) : zoteroError ? (
+          <p className="text-sm text-destructive">Failed to load Zotero highlights.</p>
+        ) : zoteroNotes.length === 0 ? (
+          <EmptyState
+            icon={StickyNote}
+            title="No Zotero highlights"
+            description="Sync annotations after highlighting this paper in Zotero."
+          />
+        ) : (
+          <div className="space-y-3">
+            {zoteroNotes.map((note: Note) => (
+              <Card key={note.id}>
+                <CardContent className="pt-4">
+                  {note.highlight_text && (
+                    <blockquote className="border-l-2 pl-3 text-sm text-muted-foreground">
+                      {note.highlight_text}
+                    </blockquote>
+                  )}
+                  <p className="mt-2 text-sm">{note.user_note}</p>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        {[
+                          note.page_number ? `Page ${note.page_number}` : null,
+                          formatDate(note.created_at),
+                        ]
+                          .filter(Boolean)
+                          .join(' | ')}
+                      </p>
+                      {(() => {
+                        const status = verificationLabel(note);
+                        const StatusIcon = status.icon;
+                        return (
+                          <p className={`flex items-center gap-1 text-xs ${status.className}`}>
+                            <StatusIcon className="h-3 w-3" />
+                            {status.text}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                    {note.verification_status !== 'verified' && note.highlight_text && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => promoteZoteroMut.mutate(note.id)}
+                        disabled={promoteZoteroMut.isPending}
+                      >
+                        <ShieldCheck className="mr-2 h-4 w-4" />
+                        Promote verified evidence
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>

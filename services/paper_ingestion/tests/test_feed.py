@@ -173,6 +173,32 @@ class TestListFeedPapers:
         assert body["total"] == 0
         assert body["papers"] == []
 
+    def test_feed_search_can_include_zotero_notes_without_duplicate_rows(self, client):
+        """include_zotero_notes searches notes through EXISTS and exposes note metadata."""
+        test_client, mock_pool = client
+        conn = AsyncMock()
+        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        record = _make_paper_record(paper_id=1)
+        record["note_match_count"] = 2
+        record["note_snippet"] = "Important Zotero highlight"
+        conn.fetch.return_value = [_to_record(record)]
+        conn.fetchval.return_value = 1
+
+        resp = test_client.get(
+            "/api/papers/feed",
+            params={"q": "highlight", "include_zotero_notes": "true"},
+        )
+        assert resp.status_code == 200
+
+        sql = conn.fetch.call_args.args[0]
+        count_sql = conn.fetchval.call_args.args[0]
+        assert "EXISTS (SELECT 1 FROM paper_notes pn" in sql
+        assert "EXISTS (SELECT 1 FROM paper_notes pn" in count_sql
+        assert "JOIN paper_notes" not in count_sql
+        assert resp.json()["papers"][0]["note_match_count"] == 2
+
 
 class TestMarkPaperRead:
     """Tests for PUT /api/papers/{paper_id}/read."""

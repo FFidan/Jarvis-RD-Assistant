@@ -83,11 +83,11 @@ export function ZoteroSection() {
   };
 
   const handleAutoPushChange = (checked: boolean) => {
-    setMut.mutate({ key: 'zotero.auto_push_on_star', value: String(checked) });
+    setMut.mutate({ key: 'zotero.auto_push_on_star', value: checked });
   };
 
   const handlePollEnabledChange = (checked: boolean) => {
-    setMut.mutate({ key: 'zotero.poll_enabled', value: String(checked) });
+    setMut.mutate({ key: 'zotero.poll_enabled', value: checked });
   };
 
   const handleTestConnection = async () => {
@@ -159,13 +159,15 @@ export function ZoteroSection() {
           </p>
         </div>
 
-        {/* User ID */}
+        {/* Library ID */}
         <div className="space-y-2">
-          <Label htmlFor="zotero-user-id">User ID</Label>
+          <Label htmlFor="zotero-user-id">
+            {libraryType === 'group' ? 'Group ID' : 'User ID'}
+          </Label>
           <Input
             id="zotero-user-id"
             type="text"
-            placeholder="e.g. 1234567"
+            placeholder={libraryType === 'group' ? 'e.g. 987654' : 'e.g. 1234567'}
             value={draftUserId ?? userId}
             onChange={(e) => setDraftUserId(e.target.value)}
             onBlur={handleBlurUserId}
@@ -180,7 +182,9 @@ export function ZoteroSection() {
             >
               zotero.org/settings/keys
             </a>
-            {' '}next to "Your userID for use in API calls".
+            {libraryType === 'group'
+              ? ' next to the group library URL or API path.'
+              : ' next to "Your userID for use in API calls".'}
           </p>
         </div>
 

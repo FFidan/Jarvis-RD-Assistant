@@ -104,6 +104,7 @@ describe('ProvidersSection', () => {
       expect(googleInput).not.toBeNull();
       expect(googleInput.value).toBe('AIza****');
     });
+    expect(screen.getAllByText('Configured, not tested')).toHaveLength(3);
   });
 
   it('calls setProviderKey with correct provider on blur when value changed', async () => {
@@ -186,6 +187,15 @@ describe('ProvidersSection', () => {
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
+    });
+    expect(screen.getByText('Configured, degraded: Invalid API key')).toBeInTheDocument();
+  });
+
+  it('shows not configured status for blank providers', async () => {
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Not configured')).toHaveLength(3);
     });
   });
 

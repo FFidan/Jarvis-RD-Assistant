@@ -8,7 +8,13 @@ from datetime import date, datetime
 from enum import Enum
 from typing import Any, Literal
 
+from jarvis_common.crypto import mask_secret
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+# Keys whose values must never appear in plaintext in API responses.
+_SECRET_KEY_NAMES: frozenset[str] = frozenset(
+    {"api_key", "client_secret", "token", "password", "secret", "bearer"}
+)
 
 # --- Enums ---
 
@@ -261,6 +267,17 @@ class SourceResponse(BaseModel):
     display_order: int = 0
     created_at: datetime
 
+    @model_validator(mode="after")
+    def _redact_secrets(self) -> "SourceResponse":
+        """Mask known secret keys in config so they are never leaked in API responses."""
+        if isinstance(self.config, dict):
+            redacted = {
+                k: (mask_secret(str(v)) if k.lower() in _SECRET_KEY_NAMES and v else v)
+                for k, v in self.config.items()
+            }
+            object.__setattr__(self, "config", redacted)
+        return self
+
 
 class SourceUpdate(BaseModel):
     enabled: bool | None = None
@@ -286,6 +303,8 @@ class FeedPaper(PaperResponse):
     recommendation_score: float | None = None
     recommendation_reason: str | None = None
     recommendation_modes: list[str] | None = None
+    note_match_count: int = 0
+    note_snippet: str | None = None
 
 
 class FeedResponse(BaseModel):

@@ -1,16 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { seedAuthedSession } from './helpers/setup';
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => {
-    localStorage.setItem(
-      'jarvis-auth',
-      JSON.stringify({
-        state: { isAuthenticated: true, authTime: Date.now() },
-        version: 0,
-      }),
-    );
-  });
+  await seedAuthedSession(page);
 });
 
 test.describe('Citation Graph Page', () => {
@@ -19,18 +11,15 @@ test.describe('Citation Graph Page', () => {
     await page.waitForLoadState('networkidle');
 
     // Page title
-    await expect(page.getByRole('heading', { name: 'Citation Graph' })).toBeVisible({
+    const main = page.locator('main');
+    await expect(main.getByRole('heading', { name: 'Citation Graph' })).toBeVisible({
       timeout: 5000,
     });
 
-    const emptyState = page.getByText('No citations loaded');
-    const graphCanvas = page.locator('canvas');
-    const noCitationData = page.getByText('No citation data');
-    const paperSearch = page.getByPlaceholder('Search papers to add to citation graph...');
-
     await expect(
-      emptyState.or(graphCanvas).or(noCitationData).or(paperSearch),
+      main.getByPlaceholder('Search papers to add to citation graph...'),
     ).toBeVisible({ timeout: 10000 });
+    await expect(main.getByRole('heading', { name: 'No citations loaded' })).toBeVisible();
   });
 
   test('paper selector dropdown lists papers', async ({ page }) => {

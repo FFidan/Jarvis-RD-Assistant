@@ -46,6 +46,21 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                 logger.warning("Migrations directory not found, skipping migrations")
                 return
 
+            # Detect version collisions before applying anything — fail loudly so
+            # CI catches duplicates rather than silently dropping migrations.
+            seen_versions: dict[int, str] = {}
+            for sql_file in sorted(migrations_dir.glob("*.sql")):
+                try:
+                    ver = int(sql_file.name.split("_")[0])
+                except (ValueError, IndexError):
+                    continue  # non-migration file — skipped below
+                if ver in seen_versions:
+                    raise RuntimeError(
+                        f"duplicate migration version: {ver} "
+                        f"({sql_file.name} vs {seen_versions[ver]})"
+                    )
+                seen_versions[ver] = sql_file.name
+
             for sql_file in sorted(migrations_dir.glob("*.sql")):
                 try:
                     version = int(sql_file.name.split("_")[0])

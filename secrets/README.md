@@ -3,14 +3,22 @@
 These files contain credentials mounted into containers via Docker Secrets.
 They are NOT checked into git.
 
+**All secret files MUST be mode 600 to prevent accidental world-readability.** Use the commands below or run `chmod 600 secrets/*.txt` after creating them.
+
 ## Setup
 
 Create one file per secret before running `docker compose up`:
 
 ```bash
-echo "your-postgres-password" > secrets/postgres_password.txt
-echo "your-jarvis-api-key"    > secrets/jarvis_api_key.txt
-echo "your-telegram-token"    > secrets/telegram_bot_token.txt
+printf "%s" "your-postgres-password" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
+printf "%s" "your-jarvis-api-key"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
+printf "%s" "your-telegram-token"    > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+```
+
+Alternatively, batch chmod after creation:
+
+```bash
+chmod 600 secrets/*.txt
 ```
 
 ## Files

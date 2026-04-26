@@ -31,11 +31,15 @@ vi.mock('@/lib/api', async () => {
   return {
     ...actual,
     fetchPaperDetail: vi.fn(),
+    fetchContradictions: vi.fn(),
+    scanPaperContradictions: vi.fn(),
     fetchNotes: vi.fn(),
     fetchDecks: vi.fn(),
     zoteroGetLinkage: vi.fn(),
     zoteroPushPaper: vi.fn(),
     zoteroResync: vi.fn(),
+    zoteroSyncAnnotations: vi.fn(),
+    promoteZoteroNote: vi.fn(),
     upsertUserState: vi.fn(),
     createNote: vi.fn(),
     deleteNote: vi.fn(),
@@ -58,8 +62,9 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
   }),
 }));
 
-import { fetchPaperDetail, fetchNotes, fetchDecks, zoteroGetLinkage } from '@/lib/api';
+import { fetchPaperDetail, fetchContradictions, fetchNotes, fetchDecks, zoteroGetLinkage } from '@/lib/api';
 const mockFetchPaperDetail = vi.mocked(fetchPaperDetail);
+const mockFetchContradictions = vi.mocked(fetchContradictions);
 const mockFetchNotes = vi.mocked(fetchNotes);
 const mockFetchDecks = vi.mocked(fetchDecks);
 const mockZoteroGetLinkage = vi.mocked(zoteroGetLinkage);
@@ -155,6 +160,12 @@ const MOCK_NOTES = [
     user_note: 'Key insight about positional encoding.',
     highlight_text: 'sinusoidal positional encoding',
     page_number: 5,
+    source: 'user' as const,
+    zotero_annotation_key: null,
+    verification_status: 'unverified' as const,
+    verified_quote: null,
+    verified_page_number: null,
+    promoted_at: null,
     created_at: '2026-01-15T10:30:00Z',
   },
 ];
@@ -179,7 +190,10 @@ describe('PaperDetailPage', () => {
     vi.clearAllMocks();
     mockPaperDetailNoteDismissed = false;
     mockFetchDecks.mockResolvedValue([]);
-    mockFetchNotes.mockResolvedValue(MOCK_NOTES);
+    mockFetchContradictions.mockResolvedValue({ contradictions: [], total: 0 });
+    mockFetchNotes.mockImplementation((_paperId, source) =>
+      Promise.resolve(source === 'zotero' ? [] : MOCK_NOTES),
+    );
     mockZoteroGetLinkage.mockResolvedValue({
       zotero_item_key: null,
       zotero_citation_key: null,
@@ -380,6 +394,52 @@ describe('PaperDetailPage', () => {
       expect(screen.getByText('Zotero status unavailable.')).toBeInTheDocument();
     });
     expect(screen.queryByRole('button', { name: 'Send to Zotero' })).not.toBeInTheDocument();
+  });
+
+  it('shows verified contradictions in the paper sidebar', async () => {
+    mockFetchContradictions.mockResolvedValueOnce({
+      total: 1,
+      contradictions: [
+        {
+          id: 7,
+          paper_a_id: 42,
+          paper_b_id: 99,
+          paper_a_title: 'Attention Is All You Need',
+          paper_b_title: 'Recurrence Still Matters',
+          finding_a: 'Self-attention removes recurrence.',
+          finding_b: 'Recurrence is required for sequence modelling.',
+          quote_a: 'We dispense with recurrence.',
+          quote_b: 'Recurrence is required.',
+          page_a: 2,
+          page_b: 4,
+          contradiction_type: 'methodological',
+          explanation: 'The papers disagree about recurrence requirements.',
+          confidence: 0.87,
+          status: 'verified',
+          created_at: '2026-04-25T12:00:00Z',
+        },
+      ],
+    });
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+      has_project_links: true,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Recurrence Still Matters')).toBeInTheDocument();
+    });
+    expect(mockFetchContradictions).toHaveBeenCalledWith({
+      paper_id: 42,
+      status: 'verified',
+      limit: 20,
+    });
+    expect(screen.getByText('The papers disagree about recurrence requirements.')).toBeInTheDocument();
+    expect(screen.getByText(/We dispense with recurrence/)).toBeInTheDocument();
   });
 
   it('shows error state for invalid paper ID', () => {

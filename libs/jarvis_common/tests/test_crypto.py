@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from cryptography.fernet import Fernet, InvalidToken
 from jarvis_common.crypto import (
@@ -10,7 +12,23 @@ from jarvis_common.crypto import (
     mask_secret,
     refresh_fernet_cache,
     rotate_key,
+    validate_encrypted_config_rows,
 )
+
+
+class FakeRecord(dict):
+    """Small asyncpg.Record stand-in for crypto tests."""
+
+
+def _make_pool(rows: list[FakeRecord]):
+    conn = AsyncMock()
+    conn.fetch.return_value = rows
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool, conn
 
 
 @pytest.fixture()
@@ -122,3 +140,37 @@ def test_mask_secret() -> None:
     assert mask_secret("abcd") == "****"
     assert mask_secret("abcde") == "abcd****"
     assert mask_secret("supersecret") == "supe****"
+
+
+@pytest.mark.asyncio
+async def test_validate_encrypted_config_rows_accepts_decryptable_rows(valid_key) -> None:
+    ciphertext = Fernet(valid_key).encrypt(b"secret")
+    pool, conn = _make_pool(
+        [FakeRecord({"key": "llm.openai.api_key", "encrypted_value": ciphertext})]
+    )
+
+    checked = await validate_encrypted_config_rows(pool, dev_mode=False)
+
+    assert checked == 1
+    conn.fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_validate_encrypted_config_rows_fails_non_dev_on_missing_key(monkeypatch) -> None:
+    monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    refresh_fernet_cache()
+    pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
+
+    with pytest.raises(RuntimeError, match="Encrypted user_config rows exist"):
+        await validate_encrypted_config_rows(pool, dev_mode=False)
+
+
+@pytest.mark.asyncio
+async def test_validate_encrypted_config_rows_warns_in_dev_on_bad_key(monkeypatch) -> None:
+    monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    refresh_fernet_cache()
+    pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
+
+    checked = await validate_encrypted_config_rows(pool, dev_mode=True)
+
+    assert checked == 1

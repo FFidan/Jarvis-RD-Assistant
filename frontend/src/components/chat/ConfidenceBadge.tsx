@@ -8,6 +8,7 @@ import {
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
@@ -81,6 +82,9 @@ export function ConfidenceBadge({ confidence, verified_fraction: _, per_sentence
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>Answer Verification Details</DialogTitle>
+          <DialogDescription>
+            Sentence-level verification is checked against retrieved source text.
+          </DialogDescription>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
           {verifiedCount} of {totalCount} sentences verified against source documents.

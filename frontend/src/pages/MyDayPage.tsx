@@ -9,6 +9,7 @@ import { TaskList } from '@/components/my-day/TaskList';
 import { ActionItemsCard } from '@/components/my-day/ActionItemsCard';
 import { LearningCardsSummary } from '@/components/my-day/LearningCardsSummary';
 import { ProjectPulse } from '@/components/my-day/ProjectPulse';
+import { MissingFoundationalCard } from '@/components/my-day/MissingFoundationalCard';
 import { fetchMyDay } from '@/lib/api';
 import type { MyDayResponse } from '@/types';
 
@@ -56,6 +57,7 @@ export function MyDayPage() {
 
       {/* Action items triage */}
       <ActionItemsCard />
+      <MissingFoundationalCard />
 
       {/* Learning + Project pulse row */}
       <section className="grid gap-6 md:grid-cols-2">

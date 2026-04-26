@@ -30,6 +30,13 @@ class AskSourceItem(BaseModel):
     chunk_id: int | None = None
 
 
+class AskVerifiedSentence(BaseModel):
+    """Sentence-level RAG verification result."""
+
+    text: str
+    verified: bool
+
+
 class AskResponse(BaseModel):
     """Response for POST /api/papers/{paper_id}/ask and POST /api/ask."""
 
@@ -37,3 +44,4 @@ class AskResponse(BaseModel):
     sources: list[AskSourceItem] = Field(default_factory=list)
     confidence: str | None = None  # RagConfidence.value or None
     verified_fraction: float | None = None
+    per_sentence: list[AskVerifiedSentence] = Field(default_factory=list)

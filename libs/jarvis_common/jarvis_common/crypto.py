@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
+from typing import Any
 
 from cryptography.fernet import Fernet
+
+logger = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=1)
@@ -59,6 +63,61 @@ def decrypt_secret(ciphertext: str) -> str:
     return fernet.decrypt(ciphertext.encode()).decode()
 
 
+async def validate_encrypted_config_rows(
+    db_pool: Any,
+    *,
+    dev_mode: bool | None = None,
+) -> int:
+    """Validate that encrypted ``user_config`` rows are decryptable.
+
+    In non-dev mode, startup fails when encrypted rows exist but
+    ``JARVIS_CONFIG_KEY`` is missing, malformed, or unable to decrypt them.
+    In dev mode, the same condition is logged and startup continues.
+
+    Returns
+    -------
+    int
+        Number of encrypted rows checked.
+    """
+    if dev_mode is None:
+        dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT key, encrypted_value
+            FROM user_config
+            WHERE encrypted_value IS NOT NULL
+            ORDER BY key
+            """
+        )
+
+    if not rows:
+        return 0
+
+    try:
+        for row in rows:
+            encrypted_value = row["encrypted_value"]
+            if isinstance(encrypted_value, memoryview):
+                encrypted_value = encrypted_value.tobytes()
+            if isinstance(encrypted_value, bytes | bytearray):
+                ciphertext = bytes(encrypted_value).decode("ascii")
+            else:
+                ciphertext = str(encrypted_value)
+            decrypt_secret(ciphertext)
+    except Exception as exc:
+        message = (
+            "Encrypted user_config rows exist, but JARVIS_CONFIG_KEY cannot decrypt them. "
+            "Set the original Fernet key or rotate the key before starting services."
+        )
+        if dev_mode:
+            logger.warning("%s Continuing because DEV_MODE=true. Cause: %s", message, exc)
+            return len(rows)
+        raise RuntimeError(message) from exc
+
+    return len(rows)
+
+
 def mask_secret(plaintext: str) -> str:
     """Return a masked preview of *plaintext*.
 
@@ -89,4 +148,5 @@ __all__ = [
     "mask_secret",
     "rotate_key",
     "refresh_fernet_cache",
+    "validate_encrypted_config_rows",
 ]

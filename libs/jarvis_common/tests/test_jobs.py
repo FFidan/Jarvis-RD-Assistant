@@ -50,6 +50,24 @@ def test_job_handler_registration():
     assert _HANDLERS[unique_kind] is _dummy
 
 
+def test_paper_ingestion_owner_map_includes_sprint3_jobs():
+    """Sprint 3 domain job kinds are documented as paper_ingestion owned."""
+    from jarvis_common import jobs
+
+    expected = {
+        "pulse.train_classifier",
+        "zotero.sync_annotations",
+        "paper.summarize",
+        "papers.scan_local",
+        "extraction.single",
+        "digest.weekly",
+        "contradictions.scan",
+    }
+
+    assert expected <= jobs.JOB_HANDLER_OWNER.keys()
+    assert {jobs.JOB_HANDLER_OWNER[k] for k in expected} == {"paper_ingestion"}
+
+
 def test_job_handler_returns_original_fn():
     """The decorator must return the original callable unchanged."""
     from jarvis_common.jobs import job_handler
@@ -143,6 +161,93 @@ def test_keepalive_and_max_stream_exported_from_jarvis_common():
 
     assert hasattr(jarvis_common, "KEEPALIVE_INTERVAL")
     assert hasattr(jarvis_common, "MAX_STREAM_SECONDS")
+    assert hasattr(jarvis_common, "stream_job_events")
+
+
+def test_job_sse_payload_includes_terminal_details_only_for_terminal_rows():
+    """SSE payloads expose result/error/payload only after a terminal status."""
+    from jarvis_common.jobs import job_sse_payload
+
+    running = job_sse_payload(
+        {
+            "status": "running",
+            "progress": 0.5,
+            "progress_message": "halfway",
+            "result": {"ok": True},
+            "payload": {"paper_id": 1},
+        }
+    )
+    terminal = job_sse_payload(
+        {
+            "status": "succeeded",
+            "progress": 1.0,
+            "progress_message": "done",
+            "result": {"ok": True},
+            "payload": {"paper_id": 1},
+        }
+    )
+
+    assert "result" not in running
+    assert terminal["result"] == {"ok": True}
+    assert terminal["payload"] == {"paper_id": 1}
+
+
+@pytest.mark.asyncio
+async def test_notify_job_update_is_best_effort():
+    """NOTIFY failures should not break job state updates."""
+    from jarvis_common.jobs import JOB_NOTIFY_CHANNEL, notify_job_update
+
+    conn = AsyncMock()
+    conn.execute = AsyncMock(side_effect=RuntimeError("listen disabled"))
+
+    await notify_job_update(conn, "job-1")
+
+    conn.execute.assert_awaited_once_with("SELECT pg_notify($1, $2)", JOB_NOTIFY_CHANNEL, "job-1")
+
+
+@pytest.mark.asyncio
+async def test_wait_for_job_notification_uses_asyncpg_listen(monkeypatch):
+    """Job SSE waits should route through asyncpg-listen."""
+    from jarvis_common import jobs
+
+    observed: dict[str, Any] = {}
+
+    class FakeListener:
+        def __init__(self, connect, reconnect_delay=5):
+            observed["connect"] = connect
+            observed["reconnect_delay"] = reconnect_delay
+
+        async def run(self, handler_per_channel, *, policy, notification_timeout):
+            observed["policy"] = policy
+            observed["notification_timeout"] = notification_timeout
+            await handler_per_channel[jobs.JOB_NOTIFY_CHANNEL](
+                jobs.asyncpg_listen.Notification(jobs.JOB_NOTIFY_CHANNEL, "job-1")
+            )
+            await asyncio.sleep(60)
+
+    monkeypatch.setattr(jobs.asyncpg_listen, "NotificationListener", FakeListener)
+
+    assert await jobs._wait_for_job_notification(MagicMock(), "job-1", 0.01) is True
+    assert observed["reconnect_delay"] == 0.01
+    assert observed["policy"] == jobs.asyncpg_listen.ListenPolicy.ALL
+    assert observed["notification_timeout"] == 0.01
+
+
+@pytest.mark.asyncio
+async def test_wait_for_job_notification_falls_back_when_listener_fails(monkeypatch):
+    """Listener setup errors should fall back to the polling path."""
+    from jarvis_common import jobs
+
+    class FailingListener:
+        def __init__(self, _connect, reconnect_delay=5):
+            pass
+
+        async def run(self, _handler_per_channel, *, policy, notification_timeout):
+            raise RuntimeError("listen unavailable")
+
+    monkeypatch.setattr(jobs.asyncpg_listen, "NotificationListener", FailingListener)
+
+    assert await jobs._wait_for_job_notification(MagicMock(), "job-1", 0.01) is False
 
 
 # ---------------------------------------------------------------------------

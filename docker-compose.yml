@@ -359,6 +359,7 @@ services:
       - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3001}:3000"
     environment:
       JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:localhost,IP:127.0.0.1}
+      JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-false}
     volumes:
       - dashboard_certs:/etc/nginx/certs
     mem_limit: 256m
@@ -427,6 +428,31 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2.9-alpine}
+    profiles: [letsencrypt]
+    restart: unless-stopped
+    ports:
+      - "${LETSENCRYPT_HTTP_PORT:-80}:80"
+      - "${LETSENCRYPT_HTTPS_PORT:-443}:443"
+    environment:
+      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:-}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - jarvis
+
 volumes:
   postgres_data:
   n8n_data:
@@ -435,6 +461,8 @@ volumes:
   postgres_backups:
   marker_models:
   dashboard_certs:
+  caddy_data:
+  caddy_config:
 
 networks:
   jarvis:

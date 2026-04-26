@@ -22,7 +22,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     HealthCheckResponse,
     RequestIDMiddleware,
@@ -36,6 +36,7 @@ from jarvis_common import (
     validation_exception_handler,
     verify_api_key,
 )
+from jarvis_common.crypto import validate_encrypted_config_rows
 from jarvis_common.llm_client import get_litellm_config
 from jarvis_common.settings import get_core_settings
 from qdrant_client import AsyncQdrantClient
@@ -57,6 +58,14 @@ from paper_ingestion.verification import QuoteVerifier
 
 configure_logging("paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+try:
+    import orjson as _orjson  # noqa: F401
+
+    DEFAULT_RESPONSE_CLASS = ORJSONResponse
+except ImportError:
+    logger.warning("orjson is not installed; falling back to JSONResponse")
+    DEFAULT_RESPONSE_CLASS = JSONResponse
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +93,7 @@ async def lifespan(app: FastAPI):
         init=init_pg_connection,
     )
     await run_migrations(app.state.db_pool)
+    await validate_encrypted_config_rows(app.state.db_pool)
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
     )
@@ -173,12 +183,15 @@ async def lifespan(app: FastAPI):
 
     importlib.import_module("paper_ingestion.paper_jobs")
     importlib.import_module("paper_ingestion.extraction_jobs")
+    importlib.import_module("paper_ingestion.contradiction_jobs")
     importlib.import_module("paper_ingestion.citations_job")
     importlib.import_module("paper_ingestion.pulse.job")
+    importlib.import_module("paper_ingestion.pulse.training")
     importlib.import_module("paper_ingestion.integrations.zotero_service")
 
     _kinds_paper_ingestion: set[str] = {
         "pulse.generate",
+        "pulse.train_classifier",
         "paper.download",
         "paper.process",
         "paper.analyze",
@@ -189,10 +202,12 @@ async def lifespan(app: FastAPI):
         "extraction.single",
         "extraction.batch",
         "citations.batch_fetch",
+        "contradictions.scan",
         "digest.weekly",
         "zotero.push",
         "zotero.resync",
         "zotero.sync_from_zotero",
+        "zotero.sync_annotations",
     }
     _jobs_stop = asyncio.Event()
     app.state.jobs_worker_stop = _jobs_stop
@@ -235,6 +250,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     dependencies=[Depends(verify_api_key)],
+    default_response_class=DEFAULT_RESPONSE_CLASS,
 )
 
 # Middleware registration order (Starlette: last-added = outermost = runs first):
@@ -281,9 +297,11 @@ app.add_exception_handler(Exception, generic_exception_handler)
 # ---------------------------------------------------------------------------
 
 from paper_ingestion.routers import (  # noqa: E402
+    analytics,
     analyze,
     authors,
     citations,
+    contradictions,
     dashboard_api,
     extractions,
     jobs,
@@ -306,9 +324,11 @@ from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(topics.router)
 app.include_router(settings.router)
+app.include_router(analytics.router)
 app.include_router(snapshots.router)
 app.include_router(authors.router)
 app.include_router(citations.router)
+app.include_router(contradictions.router)
 app.include_router(extractions.router)
 app.include_router(knowledge_graph.router)
 app.include_router(dashboard_api.router)

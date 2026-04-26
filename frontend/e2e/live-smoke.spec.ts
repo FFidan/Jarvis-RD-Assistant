@@ -57,4 +57,26 @@ test.describe('@live-smoke Live app smoke', () => {
         .or(page.getByText('No citation data')),
     ).toBeVisible({ timeout: 10000 });
   });
+
+  test('paper detail reaches a stable contradictions panel state when papers exist', async ({ page }) => {
+    await ensureAuthenticated(page);
+
+    const feedResponse = await page.request.get('/api/papers/feed?limit=1');
+    test.skip(!feedResponse.ok(), 'live feed endpoint is unavailable');
+    const feedBody = await feedResponse.json();
+    const firstPaper = Array.isArray(feedBody) ? feedBody[0] : feedBody.papers?.[0];
+    test.skip(!firstPaper?.id, 'live stack has no papers to open');
+
+    await page.goto(`/papers/${firstPaper.id}`);
+    await expect(page.getByRole('button', { name: /Back/i })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Contradictions' })).toBeVisible({
+      timeout: 10000,
+    });
+    await expect(
+      page
+        .getByText('No verified contradictions found.')
+        .or(page.getByText('Failed to load contradictions.'))
+        .or(page.locator('section').filter({ hasText: 'Contradictions' }).getByText(/\d+%/)),
+    ).toBeVisible({ timeout: 10000 });
+  });
 });

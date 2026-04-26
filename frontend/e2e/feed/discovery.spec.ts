@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { seedAuthedSession } from '../helpers/setup';
 
 /**
  * Discover tab regression tests.
@@ -33,17 +34,7 @@ async function stubSources(page: import('@playwright/test').Page) {
 }
 
 test.beforeEach(async ({ page }) => {
-  // Set auth state in localStorage before navigating
-  await page.goto('/');
-  await page.evaluate(() => {
-    localStorage.setItem(
-      'jarvis-auth',
-      JSON.stringify({
-        state: { isAuthenticated: true, authTime: Date.now() },
-        version: 0,
-      }),
-    );
-  });
+  await seedAuthedSession(page);
   await stubSources(page);
   await page.goto('/feed');
   // Open the Search tab — SearchBar + checkbox group live here.

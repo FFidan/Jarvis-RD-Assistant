@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Upload } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { uploadPdf, processPdf } from '@/lib/api';
+import { useJobStore } from '@/stores/job-store';
 
 type FileStatus = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
@@ -21,6 +22,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
+  const trackExternalJob = useJobStore((s) => s.trackExternalJob);
 
   const updateFile = (index: number, patch: Partial<FileEntry>) =>
     setFiles(prev => prev.map((f, i) => (i === index ? { ...f, ...patch } : f)));
@@ -34,7 +36,13 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
         setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'uploading' as FileStatus } : f)));
         const paper = await uploadPdf(entry.file, entry.file.name.replace(/\.pdf$/i, ''));
         setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'processing' as FileStatus } : f)));
-        await processPdf(paper.id);
+        const job = await processPdf(paper.id);
+        trackExternalJob({
+          jobId: job.job_id,
+          kind: 'paper.process',
+          payload: { paper_id: paper.id },
+          status: 'queued',
+        });
         setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'done' as FileStatus } : f)));
         queryClient.invalidateQueries({ queryKey: ['feed'] });
         onComplete?.();
@@ -62,7 +70,13 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'uploading' as FileStatus } : f)));
             const paper = await uploadPdf(file, file.name.replace(/\.pdf$/i, ''));
             setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'processing' as FileStatus } : f)));
-            await processPdf(paper.id);
+            const job = await processPdf(paper.id);
+            trackExternalJob({
+              jobId: job.job_id,
+              kind: 'paper.process',
+              payload: { paper_id: paper.id },
+              status: 'queued',
+            });
             setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'done' as FileStatus } : f)));
           } catch (err) {
             setFiles(s =>
@@ -79,7 +93,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
       })();
       return [...prev, ...entries];
     });
-  }, [queryClient, onComplete]);
+  }, [queryClient, onComplete, trackExternalJob]);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();

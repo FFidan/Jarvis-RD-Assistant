@@ -7,7 +7,7 @@ topics, tracked authors, library centroid, config weights, and rating history.
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from paper_ingestion.models import TopicRef
 
@@ -23,6 +23,10 @@ _DEFAULT_WEIGHTS: dict[str, float] = {
     "llm_novelty": 0.1,
     "author_bonus": 0.15,
     "recency": 0.05,
+    "citation_pagerank": 0.0,
+    "citation_count": 0.0,
+    "citation_adamic_adar": 0.0,
+    "classifier": 0.0,
 }
 _RATING_HISTORY_LIMIT = 10
 
@@ -39,6 +43,7 @@ class UserProfile(BaseModel):
     stage2_top_k: int
     recent_positive_titles: list[str]
     recent_negative_titles: list[str]
+    liked_paper_ids: list[int] = Field(default_factory=list)
 
 
 async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
@@ -144,18 +149,16 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
         cfg: dict[str, Any] = {r["key"]: r["value"] for r in config_rows}
         # asyncpg JSONB auto-decodes — do NOT call json.loads()
         raw_weights = cfg.get("pulse.weights", _DEFAULT_WEIGHTS)
-        weights: dict[str, float] = (
-            {k: float(v) for k, v in raw_weights.items()}
-            if isinstance(raw_weights, dict)
-            else dict(_DEFAULT_WEIGHTS)
-        )
+        weights: dict[str, float] = dict(_DEFAULT_WEIGHTS)
+        if isinstance(raw_weights, dict):
+            weights.update({k: float(v) for k, v in raw_weights.items()})
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
         # 5. Recent rating history (top 10 positive + top 10 negative)
         positive_rows = await conn.fetch(
             """
-            SELECT p.title
+            SELECT p.id, p.title
             FROM pulse_ratings pr
             JOIN papers p ON p.id = pr.paper_id
             WHERE pr.rating IN ('up', 'save', 'open')
@@ -165,6 +168,7 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
             _RATING_HISTORY_LIMIT,
         )
         recent_positive_titles = [r["title"] for r in positive_rows][:_RATING_HISTORY_LIMIT]
+        liked_paper_ids = [r.get("id") for r in positive_rows if r.get("id") is not None]
 
         negative_rows = await conn.fetch(
             """
@@ -189,4 +193,5 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
         stage2_top_k=stage2_top_k,
         recent_positive_titles=recent_positive_titles,
         recent_negative_titles=recent_negative_titles,
+        liked_paper_ids=liked_paper_ids,
     )

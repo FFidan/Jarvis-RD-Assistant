@@ -11,20 +11,15 @@ import logging
 from datetime import UTC, datetime
 
 import asyncpg
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse
+from jarvis_common import ErrorResponse, JobCreateResponse
 from jarvis_common import jobs as jobs_lib
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
     get_db_pool,
-    get_http_client,
-    get_optional_embedder,
-    get_optional_verifier,
     limiter,
 )
-from paper_ingestion.extraction import extract_fields_for_paper
 from paper_ingestion.models import (
     BatchExtractionRequest,
     ExtractedField,
@@ -217,29 +212,21 @@ async def delete_template(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/papers/{paper_id}/extract", response_model=ExtractionResponse)
+@router.post("/papers/{paper_id}/extract", response_model=JobCreateResponse, status_code=202)
 @limiter.limit("5/minute")
 async def extract_paper(
     request: Request,
     paper_id: int,
     body: ExtractionRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    http_client: httpx.AsyncClient = Depends(get_http_client),
-    embedder=Depends(get_optional_embedder),
-    verifier=Depends(get_optional_verifier),
-) -> ExtractionResponse:
-    """Extract structured fields from a single paper."""
-    try:
-        return await extract_fields_for_paper(
-            http_client,
-            db_pool,
-            paper_id,
-            body.template_id,
-            embedder=embedder,
-            verifier=verifier,
-        )
-    except ValueError as e:
-        raise HTTPException(404, str(e)) from e
+) -> JobCreateResponse:
+    """Enqueue structured field extraction for a single paper."""
+    job_id = await jobs_lib.enqueue(
+        db_pool,
+        "extraction.single",
+        {"paper_id": paper_id, "template_id": body.template_id},
+    )
+    return JobCreateResponse(job_id=job_id, status="queued")
 
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])

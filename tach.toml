@@ -1,0 +1,41 @@
+# Incremental boundary audit for the Python service packages. This enforces the
+# coarse service rule first: application services may depend on jarvis_common,
+# while jarvis_common must remain independent from service packages.
+
+source_roots = [
+    "libs/jarvis_common",
+    "services/paper_ingestion",
+    "services/learning_engine",
+    "services/telegram_bot",
+]
+
+exclude = [
+    "**/__pycache__",
+    "services/*/tests/**",
+    "libs/*/tests/**",
+]
+
+root_module = "ignore"
+ignore_type_checking_imports = true
+
+[[modules]]
+path = "jarvis_common"
+depends_on = []
+
+[[modules]]
+path = "paper_ingestion"
+depends_on = [
+    { path = "jarvis_common" },
+]
+
+[[modules]]
+path = "learning_engine"
+depends_on = [
+    { path = "jarvis_common" },
+]
+
+[[modules]]
+path = "telegram_bot"
+depends_on = [
+    { path = "jarvis_common" },
+]

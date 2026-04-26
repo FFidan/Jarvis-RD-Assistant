@@ -105,3 +105,9 @@ class PulseDebugResponse(BaseModel):
     source_counts: dict = {}
     topic_embeddings: list[PulseDebugTopicEmbedding] = []
     top_cards: list[PulseDebugTopCard] = []
+    classifier_available: bool = False
+    classifier_sample_count: int | None = None
+    classifier_feature_names: list[str] = []
+    classifier_auc: float | None = None
+    classifier_auc_degradation_reason: str | None = None
+    classifier_degradation_reason: str | None = None

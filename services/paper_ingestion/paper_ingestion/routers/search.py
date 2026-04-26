@@ -742,6 +742,7 @@ async def list_feed_papers(
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
     recommended: bool = False,
+    include_zotero_notes: bool = Query(default=False),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
@@ -767,6 +768,8 @@ async def list_feed_papers(
         Comma-separated list of topic names.
     date_from, date_to : date, optional
         Created-at date range boundaries.
+    include_zotero_notes : bool
+        Include Zotero-imported note/highlight full-text matches when ``q`` is set.
     db_pool : asyncpg.Pool
         Injected database pool.
 
@@ -787,6 +790,7 @@ async def list_feed_papers(
         date_from=date_from,
         date_to=date_to,
         recommended=recommended,
+        include_zotero_notes=include_zotero_notes,
     )
 
     # Note: pool.acquire() without an explicit transaction uses auto-commit mode.

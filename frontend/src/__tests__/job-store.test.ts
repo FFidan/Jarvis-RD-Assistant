@@ -177,6 +177,33 @@ describe('JobStore', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['zotero-library'] });
   });
 
+  it('trackExternalJob: invalidates contradiction queries when contradiction scan succeeds', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":0.25,"progress_message":"Scanning"}\n\n',
+          'data: {"status":"succeeded","progress":1,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-contradictions',
+      kind: 'contradictions.scan',
+      payload: { paper_id: 77, limit: 20 },
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['contradictions', 77, 'verified'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['paper-detail', 77] });
+  });
+
   it('subscribe: running + [DONE] reconciles and retries external Zotero jobs', async () => {
     vi.useFakeTimers();
     const { getJob } = await import('@/lib/api');

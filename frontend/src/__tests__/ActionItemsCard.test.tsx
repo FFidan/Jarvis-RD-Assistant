@@ -107,6 +107,24 @@ describe('ActionItemsCard', () => {
     expect(link?.getAttribute('href')).toMatch(/\/paper\/1\?action=process/);
   });
 
+  it('shows error banner and not "all caught up" when query fails', async () => {
+    vi.mocked(api.fetchFeedPapers).mockRejectedValue(new Error('Network error'));
+    renderWithProviders();
+    expect(await screen.findByText(/Could not load action items/i)).toBeInTheDocument();
+    expect(screen.queryByText("You're all caught up")).not.toBeInTheDocument();
+  });
+
+  it('shows retry button in error state that re-fires the query', async () => {
+    vi.mocked(api.fetchFeedPapers)
+      .mockRejectedValueOnce(new Error('Network error'))
+      .mockResolvedValue(emptyFeed);
+    renderWithProviders();
+    const retryBtn = await screen.findByRole('button', { name: /retry/i });
+    expect(retryBtn).toBeInTheDocument();
+    fireEvent.click(retryBtn);
+    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
+  });
+
   it('Process All fires all jobs in parallel (not sequentially)', async () => {
     // startJob never resolves — so if it were sequential the second call would
     // never happen until the first settled; with Promise.all all 3 are called

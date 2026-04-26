@@ -400,6 +400,12 @@ mv "$TMP_ENV" .env
 chmod 600 .env
 ok ".env written (mode 600)."
 
+# Enforce 600 mode on any secret files that already exist
+if [ -d secrets ]; then
+  find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;
+  ok "secrets/ files enforced to mode 600."
+fi
+
 # -----------------------------------------------------------------------------
 # 8. Create shared directories for volume mounts
 # -----------------------------------------------------------------------------
@@ -519,4 +525,5 @@ printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
 printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'
+printf '  Public TLS: set LETSENCRYPT_DOMAIN and LETSENCRYPT_EMAIL, then run docker compose --profile letsencrypt up -d caddy\n'
 printf '\n'

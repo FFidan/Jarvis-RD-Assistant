@@ -14,7 +14,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     HealthCheckResponse,
     RequestIDMiddleware,
@@ -28,6 +28,7 @@ from jarvis_common import (
     validation_exception_handler,
     verify_api_key,
 )
+from jarvis_common.crypto import validate_encrypted_config_rows
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -40,6 +41,14 @@ from learning_engine.fsrs_manager import FSRSManager
 
 configure_logging("learning_engine", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
+
+try:
+    import orjson as _orjson  # noqa: F401
+
+    DEFAULT_RESPONSE_CLASS = ORJSONResponse
+except ImportError:
+    logger.warning("orjson is not installed; falling back to JSONResponse")
+    DEFAULT_RESPONSE_CLASS = JSONResponse
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +71,7 @@ async def lifespan(app: FastAPI):
         max_size=int(os.environ.get("DB_POOL_MAX", "10")),
         init=init_pg_connection,
     )
+    await validate_encrypted_config_rows(app.state.db_pool)
     app.state.http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
     )
@@ -148,6 +158,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
     dependencies=[Depends(verify_api_key)],
+    default_response_class=DEFAULT_RESPONSE_CLASS,
 )
 
 # Middleware registration order (Starlette: last-added = outermost = runs first):

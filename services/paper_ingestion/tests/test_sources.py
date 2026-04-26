@@ -1,12 +1,12 @@
 """Tests for paper source plugins and display_order behavior."""
 
-from datetime import UTC
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.models import PaperSourceConfig, SourceResponse, SourceType
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 
@@ -147,3 +147,75 @@ async def test_discovery_fetch_sources_uses_display_order_ordering():
     assert "display_order" in fetch_sql.lower(), (
         f"Expected ORDER BY display_order in discovery SQL; got: {fetch_sql!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# SEC-002: SourceResponse must redact secret config keys
+# ---------------------------------------------------------------------------
+
+_FIXED_TS = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _make_source_response(**config_overrides: object) -> SourceResponse:
+    """Helper: build a SourceResponse with the given config dict."""
+    return SourceResponse(
+        id=1,
+        source_type=SourceType.SEMANTIC_SCHOLAR,
+        enabled=True,
+        config=dict(config_overrides),
+        priority=1,
+        display_order=0,
+        created_at=_FIXED_TS,
+    )
+
+
+def test_source_response_redacts_api_key():
+    """SourceResponse must mask the api_key field in config on construction."""
+    resp = _make_source_response(api_key="REAL_SECRET_VALUE", other_setting="visible")
+
+    assert resp.config["api_key"] != "REAL_SECRET_VALUE", (
+        "api_key must not be returned in plaintext"
+    )
+    # mask_secret keeps first 4 chars + '****' for values longer than 4
+    assert resp.config["api_key"] == "REAL****"
+    # Non-secret keys are unaffected
+    assert resp.config["other_setting"] == "visible"
+
+
+def test_source_response_redacts_all_known_secret_keys():
+    """Every key in _SECRET_KEY_NAMES is masked; non-secret keys pass through."""
+    secret_keys = ["api_key", "client_secret", "token", "password", "secret", "bearer"]
+    config = {k: f"value_for_{k}" for k in secret_keys}
+    config["safe_key"] = "not-a-secret"
+
+    resp = _make_source_response(**config)
+
+    for k in secret_keys:
+        assert resp.config[k] != f"value_for_{k}", f"Key {k!r} must be redacted"
+        assert "****" in resp.config[k], f"Key {k!r} must contain mask marker"
+    assert resp.config["safe_key"] == "not-a-secret"
+
+
+def test_source_response_empty_secret_value_not_masked():
+    """Empty/falsy secret values are left as-is (no mask applied to falsy values)."""
+    resp = _make_source_response(api_key="", password=None)
+
+    # Falsy → not masked (the validator guards with `if k.lower() in _SECRET_KEY_NAMES and v`)
+    assert resp.config["api_key"] == ""
+    assert resp.config["password"] is None
+
+
+def test_source_response_empty_config_passes():
+    """SourceResponse with no config dict works without errors."""
+    resp = _make_source_response()
+    assert resp.config == {}
+
+
+def test_source_update_carries_no_redaction():
+    """SourceUpdate (input model) must NOT redact — it carries real values to the DB layer."""
+    from paper_ingestion.models import SourceUpdate
+
+    update = SourceUpdate(config={"api_key": "REAL_KEY"})
+    # Input model must preserve the real value so it can be written to the DB
+    assert update.config is not None
+    assert update.config["api_key"] == "REAL_KEY"

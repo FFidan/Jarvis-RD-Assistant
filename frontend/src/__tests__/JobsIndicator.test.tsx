@@ -66,4 +66,19 @@ describe('JobsIndicator', () => {
     const indicator = indicators[0] as HTMLElement;
     expect(indicator.style.transform).toBe('translateX(-50%)');
   });
+
+  it('labels contradiction scan jobs', async () => {
+    setupStore({
+      'job-contradictions': makeJob({
+        id: 'job-contradictions',
+        kind: 'contradictions.scan',
+      }),
+    });
+
+    render(<JobsIndicator />);
+
+    await userEvent.click(screen.getByRole('button', { name: /background jobs/i }));
+
+    expect(screen.getByText('Scanning Contradictions')).toBeInTheDocument();
+  });
 });

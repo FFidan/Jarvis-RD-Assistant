@@ -111,6 +111,20 @@ _SOURCE_JSONB_COLUMNS: frozenset[str] = frozenset({"config"})
 # --- Config key validators ---
 
 _PULSE_WEIGHT_KEYS = frozenset(
+    {
+        "embedding",
+        "topic",
+        "llm_relevance",
+        "llm_novelty",
+        "author_bonus",
+        "recency",
+        "citation_pagerank",
+        "citation_count",
+        "citation_adamic_adar",
+        "classifier",
+    }
+)
+_PULSE_REQUIRED_WEIGHT_KEYS = frozenset(
     {"embedding", "topic", "llm_relevance", "llm_novelty", "author_bonus", "recency"}
 )
 
@@ -127,9 +141,11 @@ def _validate_cron(v: Any) -> None:
 def _validate_pulse_weights(v: Any) -> None:
     if not isinstance(v, dict):
         raise ValueError("pulse.weights must be a dict")
-    if set(v.keys()) != _PULSE_WEIGHT_KEYS:
+    keys = set(v.keys())
+    if not _PULSE_REQUIRED_WEIGHT_KEYS.issubset(keys) or not keys.issubset(_PULSE_WEIGHT_KEYS):
         raise ValueError(
-            f"pulse.weights must have exactly these keys: {sorted(_PULSE_WEIGHT_KEYS)}"
+            "pulse.weights must include the core keys and only known optional keys: "
+            f"{sorted(_PULSE_WEIGHT_KEYS)}"
         )
     for k, val in v.items():
         if not isinstance(val, int | float) or isinstance(val, bool) or not (0 <= val <= 1):

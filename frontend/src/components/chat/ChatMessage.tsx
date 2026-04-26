@@ -2,7 +2,7 @@ import type { ChatMessage as ChatMessageType } from '@/types';
 import { cn } from '@/lib/utils';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { ConfidenceBadge } from '@/components/chat/ConfidenceBadge';
-import { Loader2 } from 'lucide-react';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -26,6 +26,15 @@ export function ChatMessage({ message, isLoading }: ChatMessageProps) {
           <p className="text-sm whitespace-pre-wrap">{message.content}</p>
         ) : message.content ? (
           <>
+            {message.confidence && message.confidence !== 'HIGH' && (
+              <div className="mb-2 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Some answer sentences were not verified against retrieved sources. Check the
+                  verification details before relying on them.
+                </span>
+              </div>
+            )}
             <MarkdownContent>{message.content}</MarkdownContent>
             {message.confidence && (
               <div className="mt-2">

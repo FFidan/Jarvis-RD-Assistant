@@ -22,7 +22,7 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 ### Key Design Choices
 
-- **Anti-hallucination pipeline**: Every LLM-generated finding must include an exact verbatim quote and page number. A 4-layer verification pipeline checks quotes against the source PDF. Unverifiable claims are discarded, never corrected.
+- **Anti-hallucination pipeline**: Verified summaries, flashcard evidence, KG edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. Weekly Summary separates verified from unverified themes. A conservative contradiction scanner persists only quote-backed conflicts; broader semantic contradiction detection remains future hardening.
 - **Local-first**: Runs on Ollama with no cloud dependency. LiteLLM provides a unified gateway so you can swap between local and cloud models without code changes.
 - **Hybrid search**: BM25 full-text search fused with Qdrant vector search via reciprocal rank fusion, then reranked with a cross-encoder model for high-precision retrieval.
 
@@ -116,7 +116,7 @@ The supported way to reach JARVIS from outside your LAN is **Cloudflare Tunnel**
 docker compose --profile tunnel up -d
 ```
 
-Alternatives, in rough order of simplicity: **Tailscale** (mesh VPN, zero config on every device), **Caddy + Let's Encrypt** (real public hostname, you manage the certs and DNS), or **SSH tunnel** (`ssh -L 3001:localhost:3001 user@host`, ad-hoc only). None of these are scripted — use Cloudflare Tunnel unless you have a specific reason not to.
+Alternatives, in rough order of simplicity: **Tailscale** (mesh VPN, zero config on every device), the tracked **Caddy + Let's Encrypt** compose profile (real public hostname and DNS required), or **SSH tunnel** (`ssh -L 3001:localhost:3001 user@host`, ad-hoc only). Use Cloudflare Tunnel unless you have a specific reason not to.
 
 ## Configuration
 

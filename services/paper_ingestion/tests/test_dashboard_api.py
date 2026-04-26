@@ -256,7 +256,7 @@ async def test_feed_filter_by_text(_app):
     assert resp.status_code == 200
     fetch_call = conn.fetch.call_args
     sql = fetch_call[0][0]
-    assert "plainto_tsquery" in sql
+    assert "websearch_to_tsquery" in sql
 
 
 async def test_feed_filter_by_date_range(_app):
@@ -301,7 +301,7 @@ async def test_feed_combined_filters(_app):
     assert resp.status_code == 200
     fetch_call = conn.fetch.call_args
     sql = fetch_call[0][0]
-    assert "plainto_tsquery" in sql
+    assert "websearch_to_tsquery" in sql
     assert "COALESCE(pus.status, 'new') IN" in sql
     assert "p.source_type IN" in sql
 

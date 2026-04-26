@@ -6,8 +6,10 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update
 
+from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
+from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["notes"])
@@ -15,11 +17,22 @@ router = APIRouter(prefix="/api", tags=["notes"])
 _NOTE_ALLOWED_COLUMNS: set[str] = {"user_note", "highlight_text", "page_number"}
 
 
+def _note_response(row: asyncpg.Record | dict) -> NoteResponse:
+    """Build a note response with defaults for rows created before migration 037."""
+    data = dict(row)
+    data.setdefault("verification_status", "unverified")
+    data.setdefault("verified_quote", None)
+    data.setdefault("verified_page_number", None)
+    data.setdefault("promoted_at", None)
+    return NoteResponse(**data)
+
+
 @router.get("/papers/{paper_id}/notes", response_model=list[NoteResponse])
 @limiter.limit("60/minute")
 async def list_notes(
     request: Request,
     paper_id: int,
+    source: str | None = None,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[NoteResponse]:
     """List all notes for a paper, ordered by creation time descending.
@@ -34,12 +47,23 @@ async def list_notes(
     list[NoteResponse]
         Notes for the paper.
     """
+    if source not in {None, "user", "zotero"}:
+        raise HTTPException(status_code=422, detail="source must be 'user' or 'zotero'")
+
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT * FROM paper_notes WHERE paper_id = $1 ORDER BY created_at DESC",
-            paper_id,
-        )
-    return [NoteResponse(**dict(r)) for r in rows]
+        if source is None:
+            rows = await conn.fetch(
+                "SELECT * FROM paper_notes WHERE paper_id = $1 ORDER BY created_at DESC",
+                paper_id,
+            )
+        else:
+            rows = await conn.fetch(
+                "SELECT * FROM paper_notes WHERE paper_id = $1 AND source = $2"
+                " ORDER BY created_at DESC",
+                paper_id,
+                source,
+            )
+    return [_note_response(r) for r in rows]
 
 
 @router.post(
@@ -81,7 +105,7 @@ async def create_note(
             body.highlight_text,
             body.page_number,
         )
-    return NoteResponse(**dict(row))
+    return _note_response(row)
 
 
 @router.put("/notes/{note_id}", response_model=NoteResponse)
@@ -111,6 +135,9 @@ async def update_note(
         raise HTTPException(status_code=400, detail="No fields to update")
 
     async with db_pool.acquire() as conn:
+        note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
+        if note_source == "zotero":
+            raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
         row = await dynamic_update(
             conn,
             "paper_notes",
@@ -120,7 +147,77 @@ async def update_note(
         )
     if not row:
         raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
-    return NoteResponse(**dict(row))
+    return _note_response(row)
+
+
+@router.post("/notes/{note_id}/promote", response_model=NoteResponse)
+@limiter.limit("20/minute")
+async def promote_zotero_note(
+    request: Request,
+    note_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> NoteResponse:
+    """Promote a Zotero highlight to verified evidence after quote verification.
+
+    Zotero annotations remain ordinary read-only notes until this explicit
+    action verifies their highlight text against ``paper_chunks``. Failed
+    verification is recorded on the note but does not set ``promoted_at``.
+    """
+    verifier = QuoteVerifier()
+    async with db_pool.acquire() as conn:
+        note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
+        if note is None:
+            raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+        if note["source"] != "zotero":
+            raise HTTPException(
+                status_code=400,
+                detail="Only Zotero annotation notes can be promoted",
+            )
+        highlight = str(note["highlight_text"] or "").strip()
+        if not highlight:
+            raise HTTPException(
+                status_code=400,
+                detail="Zotero note has no highlight text to verify",
+            )
+
+        chunk_rows = await conn.fetch(
+            "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
+            note["paper_id"],
+        )
+        chunks = [row_to_chunk_response(row) for row in chunk_rows]
+        full_text = "\n\n".join(chunk.content for chunk in chunks)
+        result = verifier.verify_quote(highlight, full_text, chunks)
+
+        if result.verified:
+            row = await conn.fetchrow(
+                """
+                UPDATE paper_notes
+                   SET verification_status = 'verified',
+                       verified_quote = $1,
+                       verified_page_number = $2,
+                       promoted_at = NOW()
+                 WHERE id = $3
+                 RETURNING *
+                """,
+                result.matched_text or highlight,
+                result.page_number or note["page_number"],
+                note_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                UPDATE paper_notes
+                   SET verification_status = 'failed',
+                       verified_quote = NULL,
+                       verified_page_number = NULL,
+                       promoted_at = NULL
+                 WHERE id = $1
+                 RETURNING *
+                """,
+                note_id,
+            )
+
+    return _note_response(row)
 
 
 @router.delete("/notes/{note_id}", status_code=204)
@@ -138,6 +235,9 @@ async def delete_note(
         Database ID of the note to delete.
     """
     async with db_pool.acquire() as conn:
+        note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
+        if note_source == "zotero":
+            raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
         await delete_or_404(
             conn,
             "DELETE FROM paper_notes WHERE id = $1",

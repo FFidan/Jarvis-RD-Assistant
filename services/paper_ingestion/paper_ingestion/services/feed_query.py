@@ -10,8 +10,42 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
+
+def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
+    tldr_sql = "ps.tldr" if include_tldr else "NULL AS tldr"
+    if note_query_param is None:
+        note_sql = " 0::integer AS note_match_count, NULL::text AS note_snippet,"
+    else:
+        note_sql = (
+            " (SELECT COUNT(*)::integer FROM paper_notes pn"
+            " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+            " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
+            " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
+            f" ${note_query_param})) AS note_match_count,"
+            " (SELECT NULLIF(left(coalesce(pn.highlight_text, pn.user_note), 240), '')"
+            " FROM paper_notes pn"
+            " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+            " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
+            " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
+            f" ${note_query_param})"
+            " ORDER BY pn.created_at DESC"
+            " LIMIT 1) AS note_snippet,"
+        )
+    return (
+        f"SELECT p.*, ps.summary_brief, {tldr_sql}, ps.confidence,"
+        f"{note_sql}"
+        " pus.status AS user_status, pus.rating,"
+        " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
+        " (ps.id IS NOT NULL) AS has_summary,"
+        " pr.score AS recommendation_score,"
+        " pr.explanation AS recommendation_reason,"
+        " pr.modes AS recommendation_modes"
+    )
+
+
 _BASE_SELECT = (
     "SELECT p.*, ps.summary_brief, ps.tldr, ps.confidence,"
+    " 0::integer AS note_match_count, NULL::text AS note_snippet,"
     " pus.status AS user_status, pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
     " (ps.id IS NOT NULL) AS has_summary,"
@@ -21,6 +55,7 @@ _BASE_SELECT = (
 )
 _FALLBACK_SELECT = (
     "SELECT p.*, ps.summary_brief, NULL AS tldr, ps.confidence,"
+    " 0::integer AS note_match_count, NULL::text AS note_snippet,"
     " pus.status AS user_status, pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
     " (ps.id IS NOT NULL) AS has_summary,"
@@ -67,6 +102,7 @@ def build_feed_queries(
     date_from: date | None,
     date_to: date | None,
     recommended: bool = False,
+    include_zotero_notes: bool = False,
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters."""
     conditions: list[str] = []
@@ -76,8 +112,22 @@ def build_feed_queries(
     if unread_only:
         conditions.append("COALESCE(pus.status, 'new') != 'read'")
 
+    note_query_param: int | None = None
     if q:
-        conditions.append(f"p.search_vector @@ plainto_tsquery('english', ${param_idx})")
+        if include_zotero_notes:
+            note_query_param = param_idx
+            conditions.append(
+                "("
+                f"p.search_vector @@ websearch_to_tsquery('english', ${param_idx})"
+                " OR EXISTS (SELECT 1 FROM paper_notes pn"
+                " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+                " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
+                " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
+                f" ${param_idx}))"
+                ")"
+            )
+        else:
+            conditions.append(f"p.search_vector @@ websearch_to_tsquery('english', ${param_idx})")
         params.append(q)
         param_idx += 1
 
@@ -129,12 +179,14 @@ def build_feed_queries(
     order_sql = sort_map.get(sort, " ORDER BY p.discovered_at DESC")
 
     count_params = list(params)
+    base_select = _select_sql(note_query_param=note_query_param, include_tldr=True)
+    fallback_select = _select_sql(note_query_param=note_query_param, include_tldr=False)
     data_query = (
-        f"{_BASE_SELECT}{_BASE_FROM}{where_sql}{order_sql}"
+        f"{base_select}{_BASE_FROM}{where_sql}{order_sql}"
         f" LIMIT ${param_idx} OFFSET ${param_idx + 1}"
     )
     fallback_data_query = (
-        f"{_FALLBACK_SELECT}{_BASE_FROM}{where_sql}{order_sql}"
+        f"{fallback_select}{_BASE_FROM}{where_sql}{order_sql}"
         f" LIMIT ${param_idx} OFFSET ${param_idx + 1}"
     )
     params.extend([limit, offset])

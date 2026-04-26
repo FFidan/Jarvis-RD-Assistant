@@ -10,7 +10,8 @@ import logging
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, get_smart_model
+from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
+from jarvis_common import jobs as jobs_lib
 from jarvis_common.llm_client import (
     LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
@@ -31,10 +32,8 @@ from paper_ingestion.models import (
     AskRequest,
     AskResponse,
     CrossPaperAskRequest,
-    SummaryResponse,
     WeeklyDigestResponse,
 )
-from paper_ingestion.services.summarization import generate_paper_summary
 from paper_ingestion.streaming import (
     CrossPaperRagNoResults,
     prepare_cross_paper_rag,
@@ -61,18 +60,16 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/summarize/{paper_id}", response_model=SummaryResponse)
+@router.post("/summarize/{paper_id}", response_model=JobCreateResponse, status_code=202)
 @limiter.limit("5/minute")
 async def summarize_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    http_client: httpx.AsyncClient = Depends(get_http_client),
-    verifier: QuoteVerifier = Depends(get_verifier),
-    embedder=Depends(get_embedder),
-) -> SummaryResponse:
-    """Generate an LLM summary with quote verification. Rate-limited to 5/minute."""
-    return await generate_paper_summary(paper_id, db_pool, http_client, verifier, embedder)
+) -> JobCreateResponse:
+    """Enqueue LLM summary generation with quote verification."""
+    job_id = await jobs_lib.enqueue(db_pool, "paper.summarize", {"paper_id": paper_id})
+    return JobCreateResponse(job_id=job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -181,12 +178,14 @@ async def ask_paper(
 
     confidence: str | None = None
     verified_fraction: float | None = None
+    per_sentence: list[dict[str, object]] = []
     try:
         from paper_ingestion.rag.verification import verify_answer_sentences
 
         report = await verify_answer_sentences(answer, sources, verifier, db_pool)
         confidence = report.confidence.value
         verified_fraction = report.pass_rate
+        per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
     except Exception as exc:  # noqa: BLE001
         logger.warning("RAG verification failed for paper %d: %s", paper_id, exc)
 
@@ -195,6 +194,7 @@ async def ask_paper(
         "sources": sources,
         "confidence": confidence,
         "verified_fraction": verified_fraction,
+        "per_sentence": per_sentence,
     }
 
 
@@ -329,12 +329,14 @@ async def ask_cross_paper(
 
     confidence: str | None = None
     verified_fraction: float | None = None
+    per_sentence: list[dict[str, object]] = []
     try:
         from paper_ingestion.rag.verification import verify_answer_sentences
 
         report = await verify_answer_sentences(answer, sources_list, verifier, db_pool)
         confidence = report.confidence.value
         verified_fraction = report.pass_rate
+        per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Cross-paper RAG verification failed: %s", exc)
 
@@ -343,6 +345,7 @@ async def ask_cross_paper(
         "sources": sources_list,
         "confidence": confidence,
         "verified_fraction": verified_fraction,
+        "per_sentence": per_sentence,
     }
 
 
@@ -450,3 +453,15 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     return await generate_weekly_summary(db_pool, http_client, days=days, verifier=verifier)
+
+
+@router.post("/digest/weekly", response_model=JobCreateResponse, status_code=202)
+@limiter.limit("3/hour")
+async def enqueue_weekly_digest(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=30),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> JobCreateResponse:
+    """Enqueue weekly digest regeneration while keeping GET synchronous."""
+    job_id = await jobs_lib.enqueue(db_pool, "digest.weekly", {"days": days})
+    return JobCreateResponse(job_id=job_id, status="queued")

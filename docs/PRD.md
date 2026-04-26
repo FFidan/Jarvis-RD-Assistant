@@ -299,11 +299,12 @@ The My Day page is the researcher's daily triage hub, redesigned around a mornin
 
 ### 4.1 Security
 
-- LLM credentials stored only in `.env` or Docker secrets; never logged or transmitted beyond the configured provider.
+- LLM and Zotero provider credentials are stored encrypted at rest in `user_config.encrypted_value` with `JARVIS_CONFIG_KEY`; environment variables and Docker secrets remain supported for bootstrap and gateway-level secrets.
 - Telegram bot validates `chat_id` to prevent unauthorized access.
 - No telemetry, no phoning home, no external analytics.
 - Only outbound connections to configured APIs. No inbound ports beyond the dashboard.
 - LiteLLM API keys support rotation without downtime.
+- Startup validates encrypted config rows before schedulers/workers start. Non-dev services fail fast if encrypted rows exist but `JARVIS_CONFIG_KEY` is missing, malformed, or wrong.
 
 ### 4.2 Performance
 
@@ -335,31 +336,30 @@ The My Day page is the researcher's daily triage hub, redesigned around a mornin
 This is the differentiating feature of JARVIS. Every design decision prioritizes
 verifiability over fluency.
 
-> **Current implementation status (2026-04-24):**
+> **Current implementation status (2026-04-25):**
 >
 > Per-layer status (see §5.3):
 >
 > - **Layer 1 — Grounded generation:** ✅ Implemented. LLM inputs are paper
 >   chunks + API metadata only; no untrusted free-form context.
 > - **Layer 2 — Quote verification:** ✅ Implemented for extraction fields,
->   paper summaries, flashcard evidence, and KG edges (exact + fuzzy ≥92%,
->   page numbers attached; `paper_ingestion/verification.py` `QuoteVerifier`).
->   ⚠️ **Not applied to** RAG answers (`POST /api/papers/{id}/ask`,
->   cross-paper RAG), Pulse card `reasoning` field, or weekly-summary themes —
->   these paths are retrieval-grounded but LLM prose is not quote-verified
->   before the user sees it.
+>   paper summaries, flashcard evidence, KG edges, Pulse card reasoning, and
+>   RAG answer sentences (exact + fuzzy ≥92%, page numbers attached where
+>   available; `paper_ingestion/verification.py` and `rag/verification.py`).
+>   Weekly Summary themes are split into `verified_themes` and
+>   `unverified_themes` in the current response shape; they are not yet stored
+>   as persistent per-run theme rows.
 > - **Layer 3 — PDF page snapshots:** ✅ Implemented. Renderer at
 >   `paper_ingestion/pdf_processor.py::generate_snapshots` (150 DPI via
 >   PyMuPDF); serving endpoint at `GET /api/snapshots/{paper_id}/{page}`.
 > - **Layer 4 — Cross-reference consistency:** ⚠️ Partial. Cross-reference
 >   *linking* between papers exists (`services/summarization.py::_find_cross_references`
->   using semantic similarity + keyword overlap; `CrossReference` model). But
->   **contradiction detection** — the surface called out in §5.3 — is not yet
->   implemented; the weekly-summary prompt asks the LLM to surface
->   contradictions, but there is no downstream verification of that output.
+>   using semantic similarity + keyword overlap; `CrossReference` model). A
+>   conservative contradiction scanner now persists only verified quote-backed
+>   contradictions, but embedding-based pair narrowing and explicit polarity
+>   heuristics remain future polish.
 >
-> Closing the ⚠️ gaps (Layer-2 coverage on RAG/Pulse/weekly, Layer-4
-> contradiction detection) is tracked in
+> Remaining hardening work is tracked in
 > [`docs/plans/2026-04-24-post-r14-roadmap.md`](plans/2026-04-24-post-r14-roadmap.md) WS-2
 > (anti-hallucination hardening). The aspirational requirements below remain
 > the target state.

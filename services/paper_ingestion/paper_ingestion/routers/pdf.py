@@ -1,10 +1,7 @@
 """PDF download, processing, upload, and scan endpoints."""
 
-import asyncio
 import hashlib
 import logging
-import os
-import shutil
 from pathlib import Path
 
 import asyncpg
@@ -19,22 +16,20 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from jarvis_common import JobCreateResponse
+from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor, limiter
 from paper_ingestion.models import (
     BatchProcessResponse,
     PaperResponse,
-    ScanLocalPdfsResponse,
 )
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH, PDFProcessor
 from paper_ingestion.services.pdf_workflow import run_process_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
-
-LOCAL_PDF_SCAN_DIR = os.environ.get("LOCAL_PDF_SCAN_DIR", "/data/local_pdfs")
-
 
 # ---------------------------------------------------------------------------
 # POST /api/download-pdf/{paper_id}
@@ -316,135 +311,19 @@ async def upload_pdf(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/scan-local-pdfs", response_model=ScanLocalPdfsResponse)
+@router.post("/scan-local-pdfs", response_model=JobCreateResponse, status_code=202)
 @limiter.limit("2/minute")
 async def scan_local_pdfs(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Scan a local directory for PDF files and import new ones.
+    """Enqueue a local PDF directory scan job.
 
-    Scans ``/data/local_pdfs`` for ``*.pdf`` files, computes a SHA-256 hash
-    for each, and imports any that have not already been registered.
-
-    Returns
-    -------
-    dict
-        Summary with ``scanned``, ``imported``, and ``skipped`` counts.
+    The worker performs filesystem access and returns the import summary in
+    the job result.
     """
-    scan_dir = Path(LOCAL_PDF_SCAN_DIR)
-    if not scan_dir.is_dir():
-        raise HTTPException(
-            status_code=400, detail=f"Scan directory does not exist: {LOCAL_PDF_SCAN_DIR}"
-        )
-
-    pdf_files = list(scan_dir.glob("*.pdf"))
-    scanned = len(pdf_files)
-    imported = 0
-    skipped = 0
-
-    storage_path = Path(PDF_STORAGE_PATH)
-    storage_path.mkdir(parents=True, exist_ok=True)
-
-    for pdf_file in pdf_files:
-        # H-4: reject symlinks to prevent directory traversal via symlink
-        if pdf_file.is_symlink():
-            skipped += 1
-            continue
-
-        # C-7: stat before read to avoid loading large files into RAM.
-        # Synchronous stat() is acceptable here -- local filesystem syscall, no I/O wait.
-        # asyncio.to_thread(lambda: ...) is NOT used to avoid lambda closure bugs in loops.
-        try:
-            file_size = pdf_file.stat().st_size
-        except OSError:
-            skipped += 1
-            continue
-        if file_size > MAX_PDF_SIZE:
-            skipped += 1
-            continue
-
-        # Read file for magic bytes and hashing
-        try:
-            content = await asyncio.to_thread(pdf_file.read_bytes)
-        except OSError:
-            skipped += 1
-            continue
-
-        # Check magic bytes
-        if not content.startswith(b"%PDF-"):
-            skipped += 1
-            continue
-
-        # Compute hash
-        file_hash = hashlib.sha256(content).hexdigest()
-        external_id = f"local:{file_hash[:16]}"
-
-        # Each file gets its own short-lived connection — avoids holding a pool connection
-        # across file I/O and copy operations.
-        async with db_pool.acquire() as file_conn:
-            # Check if already imported
-            existing = await file_conn.fetchrow(
-                "SELECT id FROM papers WHERE external_id = $1", external_id
-            )
-            if existing:
-                skipped += 1
-                continue
-
-            # Derive title from filename
-            title = pdf_file.stem.replace("-", " ").replace("_", " ").title()
-
-            # Copy PDF to storage first (filesystem before DB to avoid orphaned rows)
-            temp_name = f"_importing_{file_hash[:16]}.pdf"
-            dest_path = storage_path / temp_name
-            try:
-                await asyncio.to_thread(shutil.copy2, str(pdf_file), str(dest_path))
-            except OSError:
-                skipped += 1
-                continue
-
-            try:
-                async with file_conn.transaction():
-                    # Insert paper
-                    row = await file_conn.fetchrow(
-                        """
-                        INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                            url, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
-                        RETURNING *
-                        """,
-                        external_id,
-                        "local",
-                        title,
-                        [],
-                        None,
-                        f"local://{file_hash}",
-                        {},
-                    )
-                    paper_id = row["id"]
-
-                    # Rename to final path using paper_id
-                    final_path = storage_path / f"{paper_id}.pdf"
-                    dest_path.rename(final_path)
-                    dest_path = final_path
-
-                    # Mark as downloaded -- inside the same transaction so INSERT+UPDATE are atomic
-                    await file_conn.execute(
-                        """
-                        UPDATE papers SET pdf_downloaded = TRUE, pdf_local_path = $1
-                        WHERE id = $2
-                        """,
-                        str(dest_path),
-                        paper_id,
-                    )
-            except Exception:
-                dest_path.unlink(missing_ok=True)
-                skipped += 1
-                continue
-
-        imported += 1
-
-    return {"scanned": scanned, "imported": imported, "skipped": skipped}
+    job_id = await jobs_lib.enqueue(db_pool, "papers.scan_local", {})
+    return JobCreateResponse(job_id=job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------

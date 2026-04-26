@@ -20,8 +20,34 @@ from paper_ingestion._state import svc
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "_extraction_single_job",
     "_extraction_batch_job",
 ]
+
+
+@job_handler("extraction.single")
+async def _extraction_single_job(
+    pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    payload: dict[str, Any],
+    ctx: JobContext,
+) -> dict[str, Any]:
+    """Extract structured fields for one paper/template pair."""
+    from paper_ingestion.extraction import extract_fields_for_paper
+
+    paper_id = int(payload["paper_id"])
+    template_id = int(payload["template_id"])
+    await ctx.update_progress(0.1, "Extracting fields")
+    result = await extract_fields_for_paper(
+        http_client,
+        pool,
+        paper_id,
+        template_id,
+        embedder=svc.embedder,
+        verifier=svc.verifier,
+    )
+    await ctx.update_progress(1.0, "Done")
+    return result.model_dump(mode="json")
 
 
 @job_handler("extraction.batch")

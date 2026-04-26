@@ -28,8 +28,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...orig,
     downloadPdf: vi.fn().mockResolvedValue({}),
-    processPdf: vi.fn().mockResolvedValue({ chunk_count: 5 }),
-    summarizePaper: vi.fn().mockResolvedValue({}),
+    processPdf: vi.fn().mockResolvedValue({ job_id: 'job-process-001', status: 'queued' }),
+    summarizePaper: vi.fn().mockResolvedValue({ job_id: 'job-summary-001', status: 'queued' }),
     generateCardsJob: vi.fn().mockResolvedValue({ job_id: 'test-job-001', status: 'queued' }),
     getJob: vi.fn().mockResolvedValue({
       id: 'test-job-001', kind: 'card.generate', status: 'succeeded',
@@ -67,8 +67,8 @@ describe('ActionsSidebar', () => {
     mockStreamGate = null;
     // Re-apply default mocks after clearAllMocks
     vi.mocked(downloadPdf).mockResolvedValue({} as never);
-    vi.mocked(processPdf).mockResolvedValue({ chunk_count: 5 } as never);
-    vi.mocked(summarizePaper).mockResolvedValue({} as never);
+    vi.mocked(processPdf).mockResolvedValue({ job_id: 'job-process-001', status: 'queued' } as never);
+    vi.mocked(summarizePaper).mockResolvedValue({ job_id: 'job-summary-001', status: 'queued' } as never);
     vi.mocked(fetchDecks).mockResolvedValue([
       { id: 1, name: 'ML Fundamentals', description: null, card_count: 10, due_count: 0, topic_id: null, created_at: '2026-01-01T00:00:00Z' },
     ]);
@@ -202,6 +202,46 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('heading', { name: 'Generate Cards' })).toBeInTheDocument();
     expect(screen.getByText('Max cards')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Generate Cards/ })).toBeInTheDocument();
+  });
+
+  it('Generate Cards button is disabled when hasChunks=false (no deck selected)', async () => {
+    // Verify !hasChunks contributes to disabled state: even before a deck is
+    // chosen, the button's disabled expression includes !hasChunks. When hasChunks
+    // is false the button is disabled for that reason in addition to !deckId.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} hasChunks={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Target Deck');
+
+    const generateBtn = screen.getByRole('button', { name: /Generate Cards/ });
+    // Disabled because !hasChunks (and also !deckId — both conditions are true)
+    expect(generateBtn).toBeDisabled();
+    expect(generateBtn).toHaveAttribute('disabled');
+  });
+
+  it('Generate Cards button is still disabled with hasChunks=true but no deck selected', async () => {
+    // With hasChunks=true the !hasChunks condition clears, but !deckId still
+    // keeps it disabled until the user picks a deck.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} hasChunks={true} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    await screen.findByText('Target Deck');
+
+    const generateBtn = screen.getByRole('button', { name: /Generate Cards/ });
+    // Still disabled because no deck is selected (!deckId), even though hasChunks=true
+    expect(generateBtn).toBeDisabled();
   });
 
   it('renders tooltip info icons for all 5 action buttons', async () => {

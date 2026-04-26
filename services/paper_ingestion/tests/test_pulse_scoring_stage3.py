@@ -137,6 +137,31 @@ async def test_stage3_weight_not_in_signals():
 
 
 @pytest.mark.asyncio
+async def test_stage3_classifier_and_citation_signals_use_weighted_sum():
+    """Phase 2 optional signals are ordinary weighted terms, not a special blend."""
+    paper = _make_paper(0)
+    signals = {
+        "embedding": 0.2,
+        "classifier": 0.9,
+        "citation_pagerank": 0.5,
+        "citation_count": 1.0,
+    }
+    weights = {
+        "embedding": 0.1,
+        "classifier": 0.4,
+        "citation_pagerank": 0.2,
+        "citation_count": 0.3,
+    }
+    expected = 0.2 * 0.1 + 0.9 * 0.4 + 0.5 * 0.2 + 1.0 * 0.3
+    sc = _make_scored(paper, signals)
+
+    result = await stage3_combine([sc], weights)
+
+    assert abs(result[0].final_score - expected) < 1e-9
+    assert result[0].signals == signals
+
+
+@pytest.mark.asyncio
 async def test_stage3_preserves_all_candidate_data():
     """stage3_combine preserves paper, llm_relevance, llm_novelty, reasoning."""
     paper = _make_paper(0)

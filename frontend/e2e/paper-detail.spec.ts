@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { seedAuthedSession } from './helpers/setup';
 
 const mockPaperDetail = {
   paper: {
@@ -8,11 +9,15 @@ const mockPaperDetail = {
     abstract: 'The dominant sequence transduction models are based on complex architectures.',
     source_type: 'arxiv',
     url: 'https://arxiv.org/abs/1706.03762',
+    pdf_url: 'https://arxiv.org/pdf/1706.03762',
+    pdf_local_path: '/data/pdfs/1706.03762.pdf',
+    pdf_downloaded: true,
     published_date: '2017-06-12',
+    discovered_at: '2024-01-01T00:00:00Z',
     created_at: '2024-01-01T00:00:00Z',
     citation_count: 95000,
     priority_score: 0.95,
-    pdf_path: '/data/pdfs/1706.03762.pdf',
+    metadata: {},
     external_id: '1706.03762',
   },
   summary: {
@@ -61,16 +66,7 @@ const mockPaperDetail = {
 };
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/');
-  await page.evaluate(() => {
-    localStorage.setItem(
-      'jarvis-auth',
-      JSON.stringify({
-        state: { isAuthenticated: true, authTime: Date.now() },
-        version: 0,
-      }),
-    );
-  });
+  await seedAuthedSession(page);
 
   // Mock the paper detail API
   await page.route('**/api/papers/1', async (route) => {
@@ -85,8 +81,15 @@ test.beforeEach(async ({ page }) => {
     }
   });
 
-  // Mock notes API
-  await page.route('**/api/papers/1/notes**', async (route) => {
+  await page.route((url) => url.pathname === '/api/papers/1/notes' && url.searchParams.get('source') === 'user', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+
+  await page.route((url) => url.pathname === '/api/papers/1/notes' && url.searchParams.get('source') === 'zotero', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -195,6 +198,12 @@ test.describe('Paper Detail Page', () => {
             user_note: 'This is my test note',
             highlight_text: null,
             page_number: null,
+            source: 'user',
+            zotero_annotation_key: null,
+            verification_status: 'unverified',
+            verified_quote: null,
+            verified_page_number: null,
+            promoted_at: null,
             created_at: new Date().toISOString(),
           }),
         });
@@ -218,7 +227,7 @@ test.describe('Paper Detail Page', () => {
     await noteTextarea.fill('This is my test note');
 
     // The Save note button should be enabled
-    const saveButton = page.getByRole('button', { name: 'Save note' });
+    const saveButton = page.getByRole('button', { name: 'Save note', exact: true });
     await expect(saveButton).toBeEnabled();
 
     // Click save
@@ -227,7 +236,7 @@ test.describe('Paper Detail Page', () => {
 
   test('notes: edit existing note', async ({ page }) => {
     // Mock notes API returning an existing note
-    await page.route('**/api/papers/1/notes**', async (route) => {
+    await page.route((url) => url.pathname === '/api/papers/1/notes' && url.searchParams.get('source') === 'user', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -238,6 +247,12 @@ test.describe('Paper Detail Page', () => {
             user_note: 'Existing note content',
             highlight_text: 'some highlight',
             page_number: 3,
+            source: 'user',
+            zotero_annotation_key: null,
+            verification_status: 'unverified',
+            verified_quote: null,
+            verified_page_number: null,
+            promoted_at: null,
             created_at: '2024-06-01T12:00:00Z',
           },
         ]),
@@ -263,7 +278,7 @@ test.describe('Paper Detail Page', () => {
 
   test('notes: delete note', async ({ page }) => {
     // Mock notes API with an existing note
-    await page.route('**/api/papers/1/notes**', async (route) => {
+    await page.route((url) => url.pathname === '/api/papers/1/notes' && url.searchParams.get('source') === 'user', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -274,6 +289,12 @@ test.describe('Paper Detail Page', () => {
             user_note: 'Note to be deleted',
             highlight_text: null,
             page_number: null,
+            source: 'user',
+            zotero_annotation_key: null,
+            verification_status: 'unverified',
+            verified_quote: null,
+            verified_page_number: null,
+            promoted_at: null,
             created_at: '2024-06-01T12:00:00Z',
           },
         ]),
@@ -318,11 +339,16 @@ test.describe('Paper Detail Page', () => {
     await page.waitForLoadState('networkidle');
 
     // Wait for the page to load
-    await expect(page.getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({
+    await expect(page.locator('main').getByRole('heading', { name: 'Attention Is All You Need' })).toBeVisible({
       timeout: 5000,
     });
 
-    // Action buttons should be present in the sidebar
+    // The current sidebar exposes the full pipeline first and keeps manual steps collapsed.
+    await expect(page.getByRole('button', { name: /Analyze Paper/ })).toBeVisible();
+    await expect(page.getByText(/Downloading PDF/)).toBeVisible();
+    await expect(page.getByText(/Processing & embedding/)).toBeVisible();
+    await expect(page.getByText(/Generating summary/)).toBeVisible();
+    await page.getByText('Manual steps').click();
     await expect(page.getByRole('button', { name: /Download PDF/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Process PDF/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Generate Summary/ })).toBeVisible();
@@ -330,7 +356,7 @@ test.describe('Paper Detail Page', () => {
     // User state form elements
     await expect(page.getByLabel('Status')).toBeVisible();
     await expect(page.getByLabel(/Rating/)).toBeVisible();
-    await expect(page.getByLabel('Notes')).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Notes' })).toBeVisible();
     await expect(page.getByText('Flagged')).toBeVisible();
     await expect(page.getByRole('button', { name: /Save Notes/ })).toBeVisible();
   });

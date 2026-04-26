@@ -405,6 +405,96 @@ async def test_happy_path_both_null(patch_pipeline):
     assert stats.get("degraded_reason") is None
 
 
+@pytest.mark.asyncio
+async def test_optional_signals_requested_are_enriched_before_stage3(patch_pipeline):
+    """Citation and classifier weights trigger Phase 2 enrichment before combining."""
+    from paper_ingestion.pulse.job import run_pulse
+
+    patch_pipeline["profile"].weights = {
+        "embedding": 0.2,
+        "citation_pagerank": 0.2,
+        "citation_count": 0.1,
+        "citation_adamic_adar": 0.1,
+        "classifier": 0.5,
+    }
+    citation_values = {
+        sc.paper.external_id: {
+            "citation_pagerank": 0.25 + idx / 100.0,
+            "citation_count": 1.0 - idx / 100.0,
+            "citation_adamic_adar": 0.5,
+        }
+        for idx, sc in enumerate(patch_pipeline["stage2"])
+    }
+    classifier_values = [0.9 - idx / 100.0 for idx, _sc in enumerate(patch_pipeline["stage2"])]
+    captured_stage3_input: list[list[ScoredCandidate]] = []
+
+    async def stage3_impl(stage2_out, _weights):
+        captured_stage3_input.append(stage2_out)
+        return stage2_out
+
+    patch_pipeline["mocks"]["stage3_combine"].side_effect = stage3_impl
+
+    with (
+        patch(
+            "paper_ingestion.pulse.job.compute_citation_signals",
+            AsyncMock(return_value=citation_values),
+        ) as compute_citation_signals,
+        patch(
+            "paper_ingestion.pulse.job.classifier_scores",
+            AsyncMock(return_value=(classifier_values, {"available": True, "sample_count": 42})),
+        ) as classifier_scores,
+    ):
+        pool, _conn = _make_pool_and_conn()
+        stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    compute_citation_signals.assert_awaited_once_with(
+        pool,
+        [sc.paper.external_id for sc in patch_pipeline["stage2"]],
+    )
+    classifier_scores.assert_awaited_once()
+    assert classifier_scores.await_args.args[0] is pool
+    classifier_input = classifier_scores.await_args.args[1]
+    assert (
+        classifier_input[0]["citation_pagerank"]
+        == citation_values["arxiv:0000"]["citation_pagerank"]
+    )
+    assert classifier_input[0]["citation_count"] == citation_values["arxiv:0000"]["citation_count"]
+    assert (
+        classifier_input[0]["citation_adamic_adar"]
+        == citation_values["arxiv:0000"]["citation_adamic_adar"]
+    )
+
+    assert len(captured_stage3_input) == 1
+    first_signals = captured_stage3_input[0][0].signals
+    assert first_signals["citation_pagerank"] == citation_values["arxiv:0000"]["citation_pagerank"]
+    assert first_signals["citation_count"] == citation_values["arxiv:0000"]["citation_count"]
+    assert (
+        first_signals["citation_adamic_adar"]
+        == citation_values["arxiv:0000"]["citation_adamic_adar"]
+    )
+    assert first_signals["classifier"] == classifier_values[0]
+    assert stats["classifier"] == {"available": True, "sample_count": 42}
+
+
+@pytest.mark.asyncio
+async def test_optional_signals_disabled_reports_classifier_disabled(patch_pipeline):
+    """Zero optional weights skip optional calls and expose classifier metadata."""
+    from paper_ingestion.pulse.job import run_pulse
+
+    with (
+        patch("paper_ingestion.pulse.job.compute_citation_signals", AsyncMock()) as citations,
+        patch("paper_ingestion.pulse.job.classifier_scores", AsyncMock()) as classifier,
+    ):
+        pool, _conn = _make_pool_and_conn()
+        stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    citations.assert_not_awaited()
+    classifier.assert_not_awaited()
+    assert stats["classifier"]["available"] is False
+    assert stats["classifier"]["degradation_reason"] == "classifier weight is disabled"
+    assert "feature_names" in stats["classifier"]
+
+
 # ---------------------------------------------------------------------------
 # B1 — ctx progress reporting
 # ---------------------------------------------------------------------------
