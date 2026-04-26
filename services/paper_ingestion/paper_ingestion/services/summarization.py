@@ -27,6 +27,7 @@ from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_summary_response,
 )
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     Confidence,
@@ -35,7 +36,6 @@ from paper_ingestion.models import (
     SummaryResponse,
 )
 from paper_ingestion.services.pdf_workflow import advisory_lock
-from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 

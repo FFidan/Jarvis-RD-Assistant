@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING
 
 import asyncpg
 
+from paper_ingestion.extraction.verify import FUZZY_THRESHOLD, QuoteVerifier
 from paper_ingestion.models.papers import ChunkResponse
-from paper_ingestion.verification import FUZZY_THRESHOLD, QuoteVerifier
 
 if TYPE_CHECKING:
     pass

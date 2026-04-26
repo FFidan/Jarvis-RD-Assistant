@@ -273,7 +273,7 @@ async def test_confidence_event_emitted_before_done():
     """Cross-paper stream: confidence SSE event appears after done and before [DONE]."""
     import json
 
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     sse_lines = [
         'data: {"choices": [{"delta": {"content": "Transformers use attention."}}]}',

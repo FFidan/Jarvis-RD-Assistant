@@ -28,20 +28,20 @@ from paper_ingestion.deps import (
     get_verifier,
     limiter,
 )
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import (
     AskRequest,
     AskResponse,
     CrossPaperAskRequest,
     WeeklyDigestResponse,
 )
-from paper_ingestion.streaming import (
+from paper_ingestion.rag.streaming import (
     CrossPaperRagNoResults,
     prepare_cross_paper_rag,
     prepare_single_paper_rag,
     sse_error_stream,
     stream_rag_events,
 )
-from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(

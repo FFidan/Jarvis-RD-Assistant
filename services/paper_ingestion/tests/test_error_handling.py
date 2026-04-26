@@ -37,7 +37,7 @@ class FakeStreamResponseError:
 async def test_stream_cross_paper_rag_preparation_error():
     """When _prepare_cross_paper_rag raises, _sse_error_stream yields SSE error events."""
     from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.streaming import prepare_cross_paper_rag, sse_error_stream
+    from paper_ingestion.rag.streaming import prepare_cross_paper_rag, sse_error_stream
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -77,7 +77,7 @@ async def test_stream_cross_paper_rag_preparation_error():
 
 async def test_stream_rag_sanitized_error():
     """SSE error events contain user-friendly messages, not raw exception text."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     # Test with a generic exception -- should get sanitized message
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -104,7 +104,7 @@ async def test_stream_rag_sanitized_error():
 
 async def test_stream_rag_timeout_error_sanitized():
     """SSE error for TimeoutException shows user-friendly timeout message."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -123,7 +123,7 @@ async def test_stream_rag_timeout_error_sanitized():
 
 async def test_stream_rag_connect_error_sanitized():
     """SSE error for ConnectError shows user-friendly connection message."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 import pytest
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.services.contradictions import (
     ContradictionCandidate,
     VerifiedFinding,
@@ -16,7 +17,6 @@ from paper_ingestion.services.contradictions import (
     list_contradictions,
     scan_contradictions,
 )
-from paper_ingestion.verification import QuoteVerifier
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 

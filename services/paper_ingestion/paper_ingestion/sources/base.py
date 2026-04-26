@@ -4,12 +4,20 @@ All paper sources (arXiv, Semantic Scholar, etc.) must implement this interface.
 Sources are discovered via the ``@register_source`` decorator in ``registry.py``.
 """
 
+import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
+from typing import Any
 
 import httpx
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, TopicRef
+
+logger = logging.getLogger(__name__)
+
+# HTTP status codes that indicate transient server/rate-limit errors.
+# Plugins return [] / None on these codes rather than raising.
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
 
 
 class PaperSource(ABC):
@@ -33,6 +41,66 @@ class PaperSource(ABC):
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         self.config = config
         self.http_client = http_client
+
+    async def _safe_get(
+        self,
+        url: str,
+        *,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: float = 30.0,
+    ) -> httpx.Response | None:
+        """Rate-limit-safe GET that handles transient HTTP errors gracefully.
+
+        Performs a GET request and returns the :class:`httpx.Response` on success
+        (2xx after ``raise_for_status``).  Returns ``None`` — rather than raising
+        — for the following error classes:
+
+        * HTTP status in ``_TRANSIENT_STATUS_CODES`` (429, 500, 502, 503, 504):
+          logged at WARNING level; indicates rate-limiting or upstream outage.
+        * :class:`httpx.HTTPError` (connection errors, timeouts, etc.):
+          logged at WARNING level.
+
+        Any other non-2xx status still raises :class:`httpx.HTTPStatusError`
+        so callers see unexpected errors (e.g. 403 Forbidden) rather than
+        silently getting ``None``.
+
+        Parameters
+        ----------
+        url : str
+            Full URL to request.
+        params : dict | None
+            Query parameters forwarded to ``httpx.AsyncClient.get``.
+        headers : dict | None
+            Extra request headers.
+        timeout : float
+            Request timeout in seconds (default 30 s).
+
+        Returns
+        -------
+        httpx.Response | None
+            Parsed response, or ``None`` on transient / network error.
+        """
+        try:
+            response = await self.http_client.get(
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+            )
+            if response.status_code in _TRANSIENT_STATUS_CODES:
+                logger.warning(
+                    "%s _safe_get %s returned %d; returning None",
+                    self.source_type,
+                    url,
+                    response.status_code,
+                )
+                return None
+            response.raise_for_status()
+            return response
+        except httpx.HTTPError as exc:
+            logger.warning("%s _safe_get %s failed: %s", self.source_type, url, exc)
+            return None
 
     @abstractmethod
     async def search(

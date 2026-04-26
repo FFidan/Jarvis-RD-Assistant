@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from paper_ingestion.verification import QuoteVerifier
+from paper_ingestion.extraction.verify import QuoteVerifier
 
 
 @given(

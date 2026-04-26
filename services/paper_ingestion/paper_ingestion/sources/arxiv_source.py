@@ -49,11 +49,17 @@ class ArxivSource(PaperSource):
         """Enforce arXiv 3 req/sec rate limit."""
         await self._rate_limiter.acquire()
 
-    async def _fetch_xml(self, params: dict) -> Any:
-        """Rate-limited GET to the arXiv API; raises ``httpx.HTTPStatusError`` on non-2xx."""
+    async def _fetch_xml(self, params: dict) -> Any | None:
+        """Rate-limited GET to the arXiv API; returns parsed XML or None on transient errors.
+
+        Uses :meth:`PaperSource._safe_get` so that 429 / 5xx responses degrade
+        gracefully (return ``None``) instead of raising to callers.  Non-transient
+        error codes (e.g. 403) still raise :class:`httpx.HTTPStatusError`.
+        """
         await self._rate_limit()
-        response = await self.http_client.get(ARXIV_API_URL, params=params, timeout=30.0)
-        response.raise_for_status()
+        response = await self._safe_get(ARXIV_API_URL, params=params, timeout=30.0)
+        if response is None:
+            return None
         return safe_fromstring(response.text)
 
     def _parse_entry(self, entry: Any) -> PaperCreate:
@@ -192,6 +198,8 @@ class ArxivSource(PaperSource):
             "sortOrder": sort_order,
         }
         root = await self._fetch_xml(params)
+        if root is None:
+            return []
         entries = root.findall(f"{{{ATOM_NS}}}entry")
 
         papers = []
@@ -275,6 +283,9 @@ class ArxivSource(PaperSource):
             except Exception:
                 logger.warning("arXiv fetch_new_since failed for query: %s", search_query)
                 continue
+            if root is None:
+                logger.warning("arXiv fetch_new_since returned no data for query: %s", search_query)
+                continue
 
             entries = root.findall(f"{{{ATOM_NS}}}entry")
             for entry in entries:
@@ -310,6 +321,8 @@ class ArxivSource(PaperSource):
         arxiv_id = external_id.removeprefix("arxiv:")
         params = {"id_list": arxiv_id}
         root = await self._fetch_xml(params)
+        if root is None:
+            return None
         entries = root.findall(f"{{{ATOM_NS}}}entry")
 
         if not entries:

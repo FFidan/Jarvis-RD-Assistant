@@ -8,8 +8,8 @@ breaking early on a perfect (100) match for performance.
 from datetime import UTC, datetime
 from unittest.mock import patch
 
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import ChunkResponse
-from paper_ingestion.verification import QuoteVerifier
 
 _NOW = datetime.now(tz=UTC)
 
@@ -63,7 +63,7 @@ class TestFuzzyBestMatch:
         # Provide realistic scores: chunk_0 near-match (97), chunk_1 exact (100).
         # The conftest rapidfuzz stub returns a flat 80, so we override here.
         with patch(
-            "paper_ingestion.verification.fuzz.partial_ratio",
+            "paper_ingestion.extraction.verify.fuzz.partial_ratio",
             side_effect=[97, 100],
         ):
             result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
@@ -106,7 +106,8 @@ class TestFuzzyBestMatch:
             return 100.0
 
         with patch(
-            "paper_ingestion.verification.fuzz.partial_ratio", side_effect=counting_partial_ratio
+            "paper_ingestion.extraction.verify.fuzz.partial_ratio",
+            side_effect=counting_partial_ratio,
         ):
             result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
 

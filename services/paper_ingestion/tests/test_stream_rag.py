@@ -86,7 +86,7 @@ class FakeStreamResponseError:
 
 async def teststream_rag_events_format():
     """stream_rag_events yields token, sources, done, and [DONE] events."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     # Build fake SSE lines as LiteLLM would emit
     sse_lines = [
@@ -139,7 +139,7 @@ async def teststream_rag_events_format():
 
 async def teststream_rag_events_token_parsing():
     """Tokens are correctly extracted from LiteLLM delta chunks."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     # Simulate chunks with empty deltas (e.g. role-only first chunk)
     sse_lines = [
@@ -180,7 +180,7 @@ async def teststream_rag_events_token_parsing():
 
 async def teststream_rag_events_error_handling():
     """An error event is yielded when the LiteLLM stream fails."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
     mock_client.stream.return_value = FakeStreamResponseError(
@@ -206,7 +206,7 @@ async def teststream_rag_events_error_handling():
 
 async def teststream_rag_events_uses_shared_litellm_config_fallback(monkeypatch):
     """Streaming RAG should reuse the shared LiteLLM base URL and key fallback."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     monkeypatch.delenv("LITELLM_API_KEY", raising=False)
     monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
@@ -251,7 +251,7 @@ async def teststream_rag_events_uses_shared_litellm_config_fallback(monkeypatch)
 async def testprepare_single_paper_rag_returns_messages_and_sources():
     """prepare_single_paper_rag returns (messages, sources_list) tuple."""
     from paper_ingestion.models import AskRequest
-    from paper_ingestion.streaming import prepare_single_paper_rag
+    from paper_ingestion.rag.streaming import prepare_single_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -309,7 +309,7 @@ async def testprepare_single_paper_rag_returns_messages_and_sources():
 async def testprepare_cross_paper_rag_returns_messages_and_sources():
     """prepare_cross_paper_rag returns (messages, sources) with paper attribution."""
     from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.streaming import prepare_cross_paper_rag
+    from paper_ingestion.rag.streaming import prepare_cross_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -355,7 +355,7 @@ async def testprepare_cross_paper_rag_returns_messages_and_sources():
     result = await prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
     # Should return a CrossPaperRagPrep dataclass (since chunks were found)
-    from paper_ingestion.streaming import CrossPaperRagPrep
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep
 
     assert isinstance(result, CrossPaperRagPrep)
     messages = result.messages
@@ -380,7 +380,7 @@ async def testprepare_cross_paper_rag_returns_messages_and_sources():
 async def testprepare_cross_paper_rag_no_chunks_returns_dict():
     """When no chunks match, prepare_cross_paper_rag returns a canned dict."""
     from paper_ingestion.models import CrossPaperAskRequest
-    from paper_ingestion.streaming import prepare_cross_paper_rag
+    from paper_ingestion.rag.streaming import prepare_cross_paper_rag
 
     mock_http = AsyncMock(spec=httpx.AsyncClient)
     mock_qdrant = AsyncMock()
@@ -396,7 +396,7 @@ async def testprepare_cross_paper_rag_no_chunks_returns_dict():
     result = await prepare_cross_paper_rag(embedder, mock_pool, body, mock_http)
 
     # Returns CrossPaperRagNoResults dataclass when no chunks found
-    from paper_ingestion.streaming import CrossPaperRagNoResults
+    from paper_ingestion.rag.streaming import CrossPaperRagNoResults
 
     assert isinstance(result, CrossPaperRagNoResults)
     assert "No relevant information" in result.answer
@@ -410,7 +410,7 @@ async def testprepare_cross_paper_rag_no_chunks_returns_dict():
 
 async def teststream_rag_events_sse_termination():
     """Each SSE event line ends with double newline for proper SSE format."""
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     sse_lines = [
         'data: {"choices": [{"delta": {"content": "ok"}}]}',
@@ -443,7 +443,7 @@ async def teststream_rag_events_confidence_event_emitted_before_done():
     import json
     from unittest.mock import MagicMock
 
-    from paper_ingestion.streaming import stream_rag_events
+    from paper_ingestion.rag.streaming import stream_rag_events
 
     sse_lines = [
         'data: {"choices": [{"delta": {"content": "Neural ODEs are powerful."}}]}',

@@ -17,7 +17,7 @@ from paper_ingestion.deps import (
     get_optional_qdrant,
     limiter,
 )
-from paper_ingestion.entity_extractor import (
+from paper_ingestion.extraction.entities import (
     extract_entities_for_paper,
     get_knowledge_graph,
     query_knowledge_graph,

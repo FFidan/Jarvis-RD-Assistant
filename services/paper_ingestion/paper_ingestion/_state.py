@@ -27,9 +27,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from paper_ingestion.extraction.verify import QuoteVerifier
     from paper_ingestion.ingestion.embedder import Embedder
     from paper_ingestion.pdf_processor import PDFProcessor
-    from paper_ingestion.verification import QuoteVerifier
 
 
 class _ServiceState:

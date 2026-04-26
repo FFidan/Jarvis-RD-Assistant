@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 import respx
-from paper_ingestion.verification import QuoteVerifier
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.weekly_summary import generate_weekly_summary
 
 

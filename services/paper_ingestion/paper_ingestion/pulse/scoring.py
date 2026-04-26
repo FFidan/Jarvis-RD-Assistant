@@ -18,12 +18,12 @@ from jarvis_common.llm_client import (
     call_llm,
 )
 
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.prompts import build_scoring_prompt
 from paper_ingestion.pulse.verification import verify_pulse_reasoning
 from paper_ingestion.rag.verification import RagConfidence
-from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 

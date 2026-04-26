@@ -34,7 +34,7 @@ def _make_http_client_with_response(response_body: dict, status_code: int = 200)
 
 async def test_decompose_query_happy_path():
     """decompose_query parses a valid JSON array from LLM."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     sub_queries = '["What is attention?", "How do transformers work?"]'
     client = _make_http_client_with_response(_llm_response(sub_queries))
@@ -50,7 +50,7 @@ async def test_decompose_query_happy_path():
 
 async def test_decompose_query_garbage_fallback():
     """decompose_query returns [original_question] when LLM returns garbage."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     client = _make_http_client_with_response(_llm_response("I don't know"))
     question = "What are the benefits of attention?"
@@ -66,7 +66,7 @@ async def test_decompose_query_garbage_fallback():
 
 async def test_decompose_query_empty_array_fallback():
     """decompose_query returns [original_question] when LLM returns empty array."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     client = _make_http_client_with_response(_llm_response("[]"))
     question = "What is BERT?"
@@ -82,7 +82,7 @@ async def test_decompose_query_empty_array_fallback():
 
 async def test_decompose_query_non_list_fallback():
     """decompose_query returns [original_question] when LLM returns non-list JSON."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     client = _make_http_client_with_response(_llm_response('{"sub": "query"}'))
     question = "Compare BERT and GPT"
@@ -98,7 +98,7 @@ async def test_decompose_query_non_list_fallback():
 
 async def test_decompose_query_exception_fallback():
     """decompose_query returns [original_question] on HTTP exception."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     client = AsyncMock(spec=httpx.AsyncClient)
     client.post.side_effect = httpx.TimeoutException("timed out")
@@ -115,7 +115,7 @@ async def test_decompose_query_exception_fallback():
 
 async def test_decompose_query_filters_empty_strings():
     """decompose_query filters out empty strings from the parsed array."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     sub_queries = '["valid query", "", "  ", "another valid"]'
     client = _make_http_client_with_response(_llm_response(sub_queries))
@@ -126,7 +126,7 @@ async def test_decompose_query_filters_empty_strings():
 
 async def test_decompose_query_dedupes_and_caps_results():
     """decompose_query should dedupe repeated sub-queries and cap fan-out to four."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     sub_queries = '["q1", "q2", "q1", "q3", "q4", "q5"]'
     client = _make_http_client_with_response(_llm_response(sub_queries))
@@ -143,7 +143,7 @@ async def test_decompose_query_dedupes_and_caps_results():
 
 async def test_decompose_query_strips_think_tags():
     """decompose_query strips <think>...</think> blocks before parsing JSON."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     content = '<think>Let me break this down into parts</think>\n["sub1", "sub2"]'
     client = _make_http_client_with_response(_llm_response(content))
@@ -195,7 +195,7 @@ def test_merge_dedup_keeps_highest_score():
 
 async def test_concurrent_search_per_sub_query():
     """With decomposition, search_chunks_global is called once per sub-query."""
-    from paper_ingestion.decomposition import decompose_query
+    from paper_ingestion.rag.decomposition import decompose_query
 
     # Build sub-queries
     sub_queries = '["sub1", "sub2", "sub3"]'

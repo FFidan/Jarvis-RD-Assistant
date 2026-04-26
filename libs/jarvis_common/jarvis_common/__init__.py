@@ -1,5 +1,11 @@
 """Shared utilities for JARVIS microservices."""
 
+from jarvis_common.app_factory import (
+    ServiceLifespanConfig,
+    configure_lifespan,
+    configure_middleware_and_errors,
+    start_jobs_worker,
+)
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
     assert_multi_tenant_not_implemented,
@@ -67,6 +73,11 @@ from jarvis_common.streak import compute_streak
 from jarvis_common.text_utils import author_matches, normalize_author_name
 
 __all__ = [
+    # DRY-002: shared FastAPI app factory
+    "ServiceLifespanConfig",
+    "configure_lifespan",
+    "configure_middleware_and_errors",
+    "start_jobs_worker",
     "log_audit",
     "verify_api_key",
     "validate_production_config",

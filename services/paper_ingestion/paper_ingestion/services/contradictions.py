@@ -25,11 +25,11 @@ from jarvis_common.llm_client import (
 from jarvis_common.prompt_safety import wrap_delimited
 
 from paper_ingestion.converters import row_to_chunk_response
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import (
     ChunkResponse,
     PaperContradictionResponse,
 )
-from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 

@@ -29,7 +29,7 @@ from jarvis_common.llm_client import (
 from jarvis_common.prompt_safety import escape_llm_text
 from jarvis_common.time_utils import utc_now_iso
 
-from paper_ingestion.verification import QuoteVerifier
+from paper_ingestion.extraction.verify import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 

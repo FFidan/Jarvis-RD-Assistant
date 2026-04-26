@@ -42,7 +42,7 @@ def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
 @pytest.mark.asyncio
 async def test_extraction_batch_happy_path(monkeypatch):
     """Handler returns extracted/failed/skipped/total from batch_extract result."""
-    from paper_ingestion.extraction_jobs import _extraction_batch_job
+    from paper_ingestion.extraction.jobs import _extraction_batch_job
 
     fake_result = SimpleNamespace(extracted=5, failed=1, skipped=2)
     _install_fake_batch_extract(monkeypatch, fake_result)
@@ -80,7 +80,7 @@ async def test_extraction_batch_happy_path(monkeypatch):
 @pytest.mark.asyncio
 async def test_extraction_batch_missing_template_id(monkeypatch):
     """Handler raises KeyError immediately when template_id is absent from payload."""
-    from paper_ingestion.extraction_jobs import _extraction_batch_job
+    from paper_ingestion.extraction.jobs import _extraction_batch_job
 
     # batch_extract should never be called
     fake_mod = types.ModuleType("paper_ingestion.extraction")

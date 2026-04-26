@@ -8,7 +8,7 @@ function and asserts that:
 
 from __future__ import annotations
 
-from paper_ingestion.entity_extractor import build_entity_prompt
+from paper_ingestion.extraction.entities import build_entity_prompt
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.prompts import build_scoring_prompt
 

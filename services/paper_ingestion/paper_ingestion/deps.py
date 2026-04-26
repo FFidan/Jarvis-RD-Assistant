@@ -24,7 +24,26 @@ def get_pdf_processor(request: Request):
 
 
 def get_verifier(request: Request):
-    return request.app.state.verifier
+    """Return the shared ``QuoteVerifier`` from app.state.
+
+    COMPLIANCE-001: routes that need quote verification depend on this rather
+    than instantiating ``QuoteVerifier()`` per request -- this keeps a single
+    rapidfuzz-cache-warm instance live across requests and lets tests inject
+    a fake via ``app.dependency_overrides[get_verifier]``.
+
+    A test-safety fallback lazily instantiates and caches a verifier when
+    ``app.state.verifier`` is missing (e.g. when a test bypasses the lifespan
+    by importing the FastAPI app directly).  The lazy path is a no-op in
+    production because the lifespan hook always sets ``app.state.verifier``
+    before the first request can fire.
+    """
+    verifier = getattr(request.app.state, "verifier", None)
+    if verifier is None:
+        from paper_ingestion.extraction.verify import QuoteVerifier  # noqa: PLC0415
+
+        verifier = QuoteVerifier()
+        request.app.state.verifier = verifier
+    return verifier
 
 
 def get_embedder(request: Request):

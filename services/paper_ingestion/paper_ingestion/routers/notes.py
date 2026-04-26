@@ -7,9 +7,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update
 
 from paper_ingestion.converters import row_to_chunk_response
-from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.deps import get_db_pool, get_verifier, limiter
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
-from paper_ingestion.verification import QuoteVerifier
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["notes"])
@@ -156,14 +156,18 @@ async def promote_zotero_note(
     request: Request,
     note_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    verifier: QuoteVerifier = Depends(get_verifier),
 ) -> NoteResponse:
     """Promote a Zotero highlight to verified evidence after quote verification.
 
     Zotero annotations remain ordinary read-only notes until this explicit
     action verifies their highlight text against ``paper_chunks``. Failed
     verification is recorded on the note but does not set ``promoted_at``.
+
+    COMPLIANCE-001: ``verifier`` is injected from ``app.state.verifier`` (set
+    during lifespan startup).  Per-request instantiation of ``QuoteVerifier``
+    was wasteful and prevented test injection.
     """
-    verifier = QuoteVerifier()
     async with db_pool.acquire() as conn:
         note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
         if note is None:

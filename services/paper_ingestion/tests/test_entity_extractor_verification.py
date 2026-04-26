@@ -76,7 +76,7 @@ async def test_extraction_rejects_hallucinated_evidence():
     The function should NOT call conn.fetchval for the INSERT, and
     dropped_relationships must be > 0 in the returned stats.
     """
-    from paper_ingestion.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Neural ODE Paper"}
@@ -103,13 +103,13 @@ async def test_extraction_rejects_hallucinated_evidence():
     }
 
     with (
-        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
         patch(
-            "paper_ingestion.entity_extractor._find_or_create_entity",
+            "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
         ),
         patch(
-            "paper_ingestion.entity_extractor.QuoteVerifier.verify_quote",
+            "paper_ingestion.extraction.entities.QuoteVerifier.verify_quote",
             return_value=_unverified(),
         ),
     ):
@@ -129,7 +129,7 @@ async def test_extraction_persists_page_number_from_chunk():
     parameter, confirming the canonicalised quote is persisted, not the raw
     LLM string.
     """
-    from paper_ingestion.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
 
     chunk_content = "Neural ODEs are a continuous-depth model."
     matched_text = chunk_content  # exact match
@@ -158,13 +158,13 @@ async def test_extraction_persists_page_number_from_chunk():
     }
 
     with (
-        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
         patch(
-            "paper_ingestion.entity_extractor._find_or_create_entity",
+            "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
         ),
         patch(
-            "paper_ingestion.entity_extractor.QuoteVerifier.verify_quote",
+            "paper_ingestion.extraction.entities.QuoteVerifier.verify_quote",
             return_value=_verified(text=matched_text, page=3),
         ),
     ):
@@ -189,7 +189,7 @@ async def test_extraction_keeps_verified_rows():
     A good-faith quote that matches a chunk should result in
     relationships_added == 1 and dropped_relationships == 0.
     """
-    from paper_ingestion.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
 
     evidence_text = "Neural ODEs are a continuous-depth model."
 
@@ -217,13 +217,13 @@ async def test_extraction_keeps_verified_rows():
     }
 
     with (
-        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
         patch(
-            "paper_ingestion.entity_extractor._find_or_create_entity",
+            "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
         ),
         patch(
-            "paper_ingestion.entity_extractor.QuoteVerifier.verify_quote",
+            "paper_ingestion.extraction.entities.QuoteVerifier.verify_quote",
             return_value=_verified(text=evidence_text),
         ),
     ):
@@ -251,7 +251,7 @@ async def test_extraction_uses_full_text_for_verification():
     We simulate a paper whose evidence appears beyond the 12000-char mark by
     providing a long chunk whose content appears after the first 12000 chars.
     """
-    from paper_ingestion.entity_extractor import extract_entities_for_paper
+    from paper_ingestion.extraction.entities import extract_entities_for_paper
 
     # Create content that pushes evidence past the 12000-char LLM cap
     padding = "A" * 12100
@@ -298,13 +298,13 @@ async def test_extraction_uses_full_text_for_verification():
     verified_result = _verified(text=evidence_text, page=5)
 
     with (
-        patch("paper_ingestion.entity_extractor.call_llm", AsyncMock(return_value=llm_result)),
+        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
         patch(
-            "paper_ingestion.entity_extractor._find_or_create_entity",
+            "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
         ),
         patch(
-            "paper_ingestion.entity_extractor.QuoteVerifier.verify_quote",
+            "paper_ingestion.extraction.entities.QuoteVerifier.verify_quote",
             return_value=verified_result,
         ),
     ):
