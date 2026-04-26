@@ -275,7 +275,9 @@ from paper_ingestion.routers import (  # noqa: E402
     citations,
     contradictions,
     dashboard_api,
+    discovery,
     extractions,
+    feed,
     jobs,
     knowledge_graph,
     notes,
@@ -309,6 +311,8 @@ app.include_router(notes.router)
 app.include_router(priority.router)
 app.include_router(recommendations.router)
 app.include_router(search.router)
+app.include_router(discovery.router)
+app.include_router(feed.router)
 app.include_router(papers.router)
 app.include_router(pdf.router)
 app.include_router(rag.router)
