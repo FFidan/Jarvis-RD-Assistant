@@ -5,7 +5,8 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, escape_like
+from jarvis_common import ErrorResponse, assert_paper_ownership, escape_like
+from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import (
     row_to_chunk_response,
@@ -204,7 +205,9 @@ async def get_paper_detail(
     PaperDetailResponse
         Paper, optional summary, and all chunks.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         if not paper_row:
             raise HTTPException(status_code=404, detail="Paper not found")
@@ -276,7 +279,9 @@ async def mark_paper_read(
     dict
         ``{"status": "ok", "paper_id": <id>}``
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow(
             "SELECT id FROM papers WHERE id = $1",
             paper_id,
@@ -320,7 +325,9 @@ async def bookmark_paper(
     dict
         ``{"status": "ok", "paper_id": <id>}``
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow(
             "SELECT id FROM papers WHERE id = $1",
             paper_id,
@@ -389,7 +396,9 @@ async def submit_feedback(
             detail="At least one of 'rating' or 'flagged' must be provided.",
         )
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         try:
             await conn.execute(
                 """INSERT INTO paper_user_state (paper_id, rating, flagged)

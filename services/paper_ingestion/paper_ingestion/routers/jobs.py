@@ -92,12 +92,26 @@ PI_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
     }
 )
 
+
+def _extract_paper_id(payload: dict) -> int | None:
+    """Return ``payload['paper_id']`` when it is a real ``int``, else ``None``.
+
+    WS-6B-α: scopes the factory's ownership check to single-paper kinds
+    (``paper.process``, ``paper.analyze``).  Batch kinds use ``paper_ids:
+    list[int]`` and skip per-paper authorisation here — the worker validates
+    each id when it processes the batch.
+    """
+    paper_id = payload.get("paper_id")
+    return paper_id if isinstance(paper_id, int) else None
+
+
 router = build_jobs_router(
     service_name="paper_ingestion",
     public_kinds=PI_PUBLIC_JOB_KINDS,
     get_db_pool=get_db_pool,
     limiter=limiter,
     payload_schemas=PI_PAYLOAD_SCHEMAS,  # discriminated mode → 422 on shape errors
+    paper_ownership_extractor=_extract_paper_id,
 )
 
 # ---------------------------------------------------------------------------

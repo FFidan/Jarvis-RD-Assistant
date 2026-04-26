@@ -4,7 +4,8 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import delete_or_404, dynamic_update
+from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update
+from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.deps import get_db_pool, get_verifier, limiter
@@ -50,7 +51,9 @@ async def list_notes(
     if source not in {None, "user", "zotero"}:
         raise HTTPException(status_code=422, detail="source must be 'user' or 'zotero'")
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         if source is None:
             rows = await conn.fetch(
                 "SELECT * FROM paper_notes WHERE paper_id = $1 ORDER BY created_at DESC",
@@ -92,7 +95,9 @@ async def create_note(
     NoteResponse
         The newly created note.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         paper = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not paper:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
@@ -134,10 +139,18 @@ async def update_note(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
             raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
+        # WS-6B-α: ownership check — short-circuits in single-tenant mode.
+        if user_id is not None:
+            paper_id = await conn.fetchval(
+                "SELECT paper_id FROM paper_notes WHERE id = $1", note_id
+            )
+            if paper_id is not None:
+                await assert_paper_ownership(conn, paper_id, user_id)
         row = await dynamic_update(
             conn,
             "paper_notes",
@@ -168,6 +181,7 @@ async def promote_zotero_note(
     during lifespan startup).  Per-request instantiation of ``QuoteVerifier``
     was wasteful and prevented test injection.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
         if note is None:
@@ -177,7 +191,8 @@ async def promote_zotero_note(
                 status_code=400,
                 detail="Only Zotero annotation notes can be promoted",
             )
-        # TODO(Phase-2 multi-tenant): add paper-ownership check when papers.user_id lands.
+        # WS-6B-α: ownership check (short-circuits when user_id=None).
+        await assert_paper_ownership(conn, note["paper_id"], user_id)
 
         # Idempotency guard: if already verified and promoted, short-circuit —
         # re-running verification would be wasteful and non-deterministic.
@@ -271,10 +286,18 @@ async def delete_note(
     note_id : int
         Database ID of the note to delete.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
             raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
+        # WS-6B-α: ownership check — short-circuits in single-tenant mode.
+        if user_id is not None:
+            paper_id = await conn.fetchval(
+                "SELECT paper_id FROM paper_notes WHERE id = $1", note_id
+            )
+            if paper_id is not None:
+                await assert_paper_ownership(conn, paper_id, user_id)
         await delete_or_404(
             conn,
             "DELETE FROM paper_notes WHERE id = $1",

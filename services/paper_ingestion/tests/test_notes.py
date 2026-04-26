@@ -655,3 +655,38 @@ async def test_promote_falls_back_to_all_chunks_when_window_misses(_app):
     assert "BETWEEN" not in second_sql, (
         "WS-4 fallback: second fetch must be full-paper query (no BETWEEN)"
     )
+
+
+# ---------------------------------------------------------------------------
+# WS-6B-α — multi-user ownership wiring on /api/notes endpoints.
+# ---------------------------------------------------------------------------
+
+
+async def _async_user_99(_request):
+    return 99
+
+
+async def test_promote_note_403_for_other_user(_app, monkeypatch):
+    """WS-6B-α: promote endpoint enforces paper ownership when multi-user."""
+    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_99)
+    app, conn = _app
+    # First fetchrow = SELECT * FROM paper_notes WHERE id=$1 (zotero source).
+    # Second fetchrow = ownership SELECT user_id FROM papers (owner = 42).
+    conn.fetchrow.side_effect = [
+        _make_note_record(
+            note_id=5,
+            paper_id=99,
+            source="zotero",
+            zotero_annotation_key="Z1",
+            highlight_text="quote",
+        ),
+        {"user_id": 42},  # paper owned by user 42, caller is user 99 → 403
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/5/promote")
+
+    assert resp.status_code == 403
+    assert "not owned" in resp.json()["detail"]

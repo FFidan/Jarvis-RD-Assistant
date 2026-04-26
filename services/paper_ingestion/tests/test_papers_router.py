@@ -490,3 +490,48 @@ async def test_list_papers_all_filters_correct_param_indices():
     assert "LIMIT $5" in sql
     assert "OFFSET $6" in sql
     assert positional == [7, "read", "arxiv", "neural", 15, 3]
+
+
+# ---------------------------------------------------------------------------
+# WS-6B-α — multi-user ownership wiring on paper-ID endpoints.
+# Single-user mode is exercised by every other test (user_id=None bypass).
+# These tests force a multi-user caller via monkeypatch on the router-local
+# ``current_user_id_or_none`` symbol to confirm 403/200 behavior.
+# ---------------------------------------------------------------------------
+
+
+async def _async_user_99(_request):
+    return 99
+
+
+@pytest.mark.asyncio
+async def test_get_paper_detail_403_for_other_user(monkeypatch):
+    """WS-6B-α: paper owned by user 42, caller is user 99 → 403 from helper."""
+    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    pool, conn = _make_pool_and_conn()
+    # First fetchrow is the ownership check on `papers` table.
+    conn.fetchrow.return_value = FakeRecord(user_id=42)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.get_paper_detail.__wrapped__(
+            MagicMock(),
+            paper_id=1,
+            db_pool=pool,
+        )
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bookmark_paper_200_for_owner_match(monkeypatch):
+    """WS-6B-α: paper owned by user 99, caller is also 99 → bookmark succeeds."""
+    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    pool, conn = _make_pool_and_conn()
+    # fetchrow #1 = ownership check (matching owner), #2 = paper-exists check.
+    conn.fetchrow.side_effect = [FakeRecord(user_id=99), {"id": 5}]
+
+    result = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+    assert result == {"status": "ok", "paper_id": 5}

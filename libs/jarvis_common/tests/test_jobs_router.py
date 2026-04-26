@@ -290,3 +290,91 @@ async def test_discriminated_runtime_allowlist_returns_422(monkeypatch):
     # Discriminated mode preserves PI's 422 semantics for allowlist mismatches.
     assert exc.value.status_code == 422
     assert "unused.kind" in exc.value.detail
+
+
+# ---------------------------------------------------------------------------
+# WS-6B-α — paper_ownership_extractor hook wiring
+# ---------------------------------------------------------------------------
+
+
+def _build_factory_with_owner_hook(*, kinds=frozenset({"foo.bar"})):
+    """Build a router that always extracts ``payload['paper_id']`` for ownership."""
+    pool_marker = MagicMock(name="db_pool")
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool_marker.acquire.return_value = ctx
+
+    def _get_pool() -> Any:
+        return pool_marker
+
+    router = build_jobs_router(
+        service_name="test_service",
+        public_kinds=kinds,
+        get_db_pool=_get_pool,
+        limiter=_FakeLimiter(),
+        payload_schemas=None,
+        paper_ownership_extractor=lambda p: (
+            p.get("paper_id") if isinstance(p.get("paper_id"), int) else None
+        ),
+    )
+    request_model = router.create_job_request_model  # type: ignore[attr-defined]
+    handlers = {r.endpoint.__name__: r.endpoint for r in router.routes}
+    return router, request_model, pool_marker, conn, handlers
+
+
+@pytest.mark.asyncio
+async def test_create_job_skips_ownership_check_in_single_tenant_mode():
+    """WS-6B-α: user_id=None → no DB acquire even when extractor would return an int."""
+    _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
+
+    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock(return_value="j-1")):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="foo.bar", payload={"paper_id": 42}),
+            db_pool=pool,
+            user_id=None,
+        )
+    assert result.job_id == "j-1"
+    # Single-tenant mode must not even acquire a connection for the ownership probe.
+    pool.acquire.assert_not_called()
+    conn.fetchrow.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_job_403_when_paper_owned_by_other_user():
+    """WS-6B-α: caller=99, paper.user_id=42 → assert_paper_ownership raises 403."""
+    _r, request_model, pool, conn, _handlers = _build_factory_with_owner_hook()
+    # The ownership check fetches user_id from papers — return a row owned by 42.
+    conn.fetchrow.return_value = {"user_id": 42}
+    handlers = _handlers
+
+    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock()) as enqueue:
+        with pytest.raises(HTTPException) as exc:
+            await handlers["create_job"](
+                request=MagicMock(),
+                body=request_model(kind="foo.bar", payload={"paper_id": 7}),
+                db_pool=pool,
+                user_id=99,
+            )
+    assert exc.value.status_code == 403
+    enqueue.assert_not_called()  # ownership failure must abort before enqueue
+
+
+@pytest.mark.asyncio
+async def test_create_job_skips_acquire_when_extractor_returns_none():
+    """WS-6B-α: batch payload with no single paper_id → extractor returns None → no acquire."""
+    _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
+
+    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock(return_value="j-2")):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            # no paper_id key → extractor returns None → no ownership probe
+            body=request_model(kind="foo.bar", payload={"paper_ids": [1, 2, 3]}),
+            db_pool=pool,
+            user_id=99,
+        )
+    assert result.job_id == "j-2"
+    pool.acquire.assert_not_called()
+    conn.fetchrow.assert_not_called()

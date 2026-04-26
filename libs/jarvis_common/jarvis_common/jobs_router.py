@@ -50,6 +50,7 @@ from jarvis_common import (
     ErrorResponse,
     JobCreateResponse,
     JobStatusResponse,
+    assert_paper_ownership,
     current_user_id,
 )
 from jarvis_common import jobs as jobs_lib
@@ -98,6 +99,7 @@ def build_jobs_router(
     get_db_pool: Callable[..., asyncpg.Pool],
     limiter: Limiter,
     payload_schemas: dict[str, type[BaseModel]] | None = None,
+    paper_ownership_extractor: Callable[[dict[str, Any]], int | None] | None = None,
 ) -> APIRouter:
     """Build a ``/api/jobs`` router wired to the given service's deps.
 
@@ -119,6 +121,14 @@ def build_jobs_router(
         at parse time (HTTP 422).  When ``None`` (or empty), the request
         accepts ``payload: dict[str, Any]`` and only the allowlist is
         enforced (HTTP 400 for unknown kinds — see LE-002).
+    paper_ownership_extractor:
+        Optional ``payload -> paper_id | None`` callable.  When provided AND it
+        returns an ``int``, ``create_job`` calls
+        :func:`jarvis_common.db_helpers.assert_paper_ownership` before enqueue
+        so users cannot enqueue paper-scoped jobs against papers they do not
+        own.  In single-tenant mode (``user_id=None``) the helper short-circuits
+        and the call is a no-op.  ``None`` means the service has no paper-scoped
+        jobs (e.g. ``learning_engine``).
     """
     # ``service_name`` is currently informational but kept on the closure so
     # future audit/log integrations can read it without adding a parameter.
@@ -173,6 +183,16 @@ def build_jobs_router(
                 detail=f"Job kind {body.kind!r} is not allowed. "
                 f"Permitted kinds: {sorted(kinds_now)}",
             )
+        # WS-6B-α: paper-scoped ownership check before enqueue.  In
+        # single-tenant mode (user_id=None) ``assert_paper_ownership``
+        # short-circuits without acquiring a connection.
+        if paper_ownership_extractor is not None and user_id is not None:
+            paper_id_for_check = paper_ownership_extractor(body.payload)
+            if isinstance(paper_id_for_check, int):
+                async with db_pool.acquire() as conn:
+                    # PoolConnectionProxy delegates fetchrow → real Connection at
+                    # runtime; the helper signature is asyncpg.Connection.
+                    await assert_paper_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
         job_id = await jobs_lib.enqueue(
             db_pool,
             body.kind,
