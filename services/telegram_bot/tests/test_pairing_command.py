@@ -118,7 +118,7 @@ async def test_start_with_valid_pair_code_stores_chat_id():
     assert conn.fetchrow.await_count == 1
     assert conn.fetchrow.await_args.args[1] == "ABC123"
 
-    # Two execute calls: UPDATE user_config, DELETE telegram_pairing
+    # Two execute calls: INSERT … ON CONFLICT (upsert) into user_config, DELETE telegram_pairing
     assert conn.execute.await_count == 2
     upsert_call = conn.execute.await_args_list[0]
     assert "user_config" in upsert_call.args[0]
@@ -242,3 +242,40 @@ async def test_auth_check_db_string_coerced():
     config = _make_config(telegram_chat_id=None)
 
     assert await _auth_check(update, config, pool) is True
+
+
+# ---------------------------------------------------------------------------
+# Regression: pairing must INSERT (not UPDATE) so fresh installs work
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_telegram_pairing_inserts_on_fresh_install():
+    """SEC-102: pairing uses INSERT … ON CONFLICT so it works on a fresh install.
+
+    A bare UPDATE would silently update 0 rows if 'telegram.owner_chat_id'
+    doesn't exist yet (e.g. init.sql seeded it as null but a manual wipe removed
+    the row).  The correct fix is an upsert.
+    """
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    conn = _make_conn(fetchrow_return={"expires_at": future})
+    pool = _make_pool(conn)
+    update = _make_update("/start PAIR_FRESHDB", chat_id=99)
+    # fresh install: no env-var TELEGRAM_CHAT_ID configured
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    await start_command(update, context)
+
+    # The user_config write must use INSERT … ON CONFLICT, not bare UPDATE.
+    upsert_call = conn.execute.await_args_list[0]
+    sql: str = upsert_call.args[0]
+    assert "INSERT INTO user_config" in sql, (
+        f"Expected INSERT INTO user_config upsert but got: {sql!r}"
+    )
+    assert "ON CONFLICT" in sql, f"Expected ON CONFLICT clause but got: {sql!r}"
+    # The chat_id must be serialised as a JSON value
+    assert upsert_call.args[1] == json.dumps(99)
+    # Success reply must be sent
+    update.message.reply_text.assert_awaited_once()
+    reply_text = update.message.reply_text.call_args[0][0]
+    assert "Paired" in reply_text

@@ -110,7 +110,7 @@ class _PoolListenConnection:
 
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
-        self._conn: asyncpg.Connection | None = None
+        self._conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy | None = None
         self._listeners: list[tuple[str, Callable[..., None]]] = []
         self._released = False
 
@@ -151,7 +151,9 @@ def _sanitize_error_message(raw: str) -> str:
     return msg[:500]
 
 
-async def notify_job_update(conn: asyncpg.Connection, job_id: str) -> None:
+async def notify_job_update(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, job_id: str
+) -> None:
     """Emit a best-effort PostgreSQL notification for job stream listeners."""
     try:
         await conn.execute("SELECT pg_notify($1, $2)", JOB_NOTIFY_CHANNEL, str(job_id))
@@ -191,7 +193,7 @@ async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: f
         ):
             matched.set()
 
-    listener = asyncpg_listen.NotificationListener(_connect, reconnect_delay=timeout)
+    listener = asyncpg_listen.NotificationListener(_connect, reconnect_delay=timeout)  # type: ignore[arg-type]
     listen_task = asyncio.create_task(
         listener.run(
             {JOB_NOTIFY_CHANNEL: _handle_notification},
@@ -606,7 +608,7 @@ async def _reap_stale_jobs(pool: asyncpg.Pool, kinds: list[str]) -> int:
             "     error = $1::jsonb,"
             "     finished_at = NOW()"
             " WHERE status = 'running'"
-            "   AND kind = ANY($2::text[])"
+            "   AND ($2::text[] = '{}' OR kind = ANY($2::text[]))"
             "   AND COALESCE(last_heartbeat_at, started_at)"
             "       < NOW() - INTERVAL '30 minutes'"
             " RETURNING id",

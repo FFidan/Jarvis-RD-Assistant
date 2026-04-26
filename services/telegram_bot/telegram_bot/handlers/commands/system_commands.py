@@ -91,8 +91,9 @@ async def _handle_pairing(
                     await message.reply_text("Invalid or expired pairing code.")
                     return
                 await conn.execute(
-                    "UPDATE user_config SET value = $1::jsonb, updated_at = NOW() "
-                    "WHERE key = 'telegram.owner_chat_id'",
+                    "INSERT INTO user_config (key, value) "
+                    "VALUES ('telegram.owner_chat_id', $1::jsonb) "
+                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
                     json.dumps(chat.id),
                 )
                 await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)

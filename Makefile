@@ -53,8 +53,12 @@ clean-venvs:
 typecheck:
 	npx pyright
 
+## Enforce 0600 permissions on all secret files (run on first checkout and in CI)
+secure-secrets:
+	find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;
+
 ## Run all quality checks: lint + typecheck + test
-check: lint typecheck test
+check: secure-secrets lint typecheck test
 
 ## Docker shortcuts
 up:
