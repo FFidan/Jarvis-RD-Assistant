@@ -22,6 +22,7 @@ from jarvis_common.crypto import (
     validate_encrypted_config_rows,
 )
 from jarvis_common.db_helpers import (
+    assert_paper_ownership,
     delete_or_404,
     dynamic_update,
     escape_like,
@@ -93,6 +94,7 @@ __all__ = [
     "SourceRateLimiter",
     "create_limiter",
     "rate_limit_exceeded_handler",
+    "assert_paper_ownership",
     "dynamic_update",
     "delete_or_404",
     "escape_like",

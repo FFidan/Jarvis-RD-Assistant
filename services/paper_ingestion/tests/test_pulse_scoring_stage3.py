@@ -206,3 +206,35 @@ async def test_stage3_empty_weights_gives_zero():
 
     for sc in result:
         assert sc.final_score == 0.0
+
+
+# ---------------------------------------------------------------------------
+# PI-CORE-008: negative final_scores must sort below genuine zeros
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_negative_final_score_sorts_below_zero():
+    """Negative final_scores must rank below genuine 0.0 scores (PI-CORE-008).
+
+    The old `sc.final_score or 0.0` coerced negative values to 0.0 via falsy
+    semantics, making them sort identically to genuine zeros.  The fix uses
+    `if sc.final_score is not None else float('-inf')` so negatives stay negative.
+    """
+    papers = [_make_paper(i) for i in range(3)]
+    # Craft signals that produce negative, zero, and positive final_scores.
+    # Use a weight of 1.0 for a single signal so final_score == signal value.
+    weights = {"embedding": 1.0}
+    candidates = [
+        _make_scored(papers[0], {"embedding": -0.5}),  # negative
+        _make_scored(papers[1], {"embedding": 0.0}),  # genuine zero
+        _make_scored(papers[2], {"embedding": 0.3}),  # positive
+    ]
+
+    result = await stage3_combine(candidates, weights)
+
+    final_scores = [sc.final_score for sc in result]
+    # Must be descending: 0.3, 0.0, -0.5
+    assert final_scores[0] == pytest.approx(0.3)
+    assert final_scores[1] == pytest.approx(0.0)
+    assert final_scores[2] == pytest.approx(-0.5)

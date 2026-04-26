@@ -403,3 +403,85 @@ async def test_load_profile_empty_topics_produces_valid_profile():
     assert profile.stage2_top_k > 0
     # An empty-topics profile is valid — scoring stages must handle it
     assert isinstance(profile.weights, dict)
+
+
+# ---------------------------------------------------------------------------
+# PI-CORE-010: embeddings with mismatched dimensions are skipped
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_profile_skips_embeddings_with_wrong_dim():
+    """Embeddings whose dimension differs from embeddings[0] are skipped (PI-CORE-010).
+
+    The centroid must be computed only from valid-dim embeddings.  If ALL
+    embeddings are bad (impossible here since embeddings[0] is always valid),
+    centroid becomes None.  Here we test the mixed case: 2 good + 1 bad → centroid
+    from 2 vectors; and that the bad one does NOT corrupt the centroid dimensions.
+    """
+    from unittest.mock import AsyncMock
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = [
+        [],  # topics
+        [],  # tracked_authors
+        _make_paper_rows(3),  # 3 engaged papers → embedder called with 3 abstracts
+        _make_config_rows(),  # user_config
+        [],  # positive ratings
+        [],  # negative ratings
+    ]
+
+    good_vec = fake_embedding_vector(4)  # dim 4 — the "expected" dimension
+    bad_vec = fake_embedding_vector(8)  # dim 8 — mismatched
+
+    mock_embedder = AsyncMock()
+    # Return two good vectors and one bad vector (bad is in the middle)
+    mock_embedder.embed_texts.return_value = [good_vec, bad_vec, good_vec]
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    # Centroid should be computed from the two good vectors only
+    assert profile.library_centroid is not None
+    assert len(profile.library_centroid) == 4  # matches good_vec dimension
+
+    # Centroid value: mean of good_vec[i] + good_vec[i] = good_vec[i] (same vec twice)
+    for expected, actual in zip(good_vec, profile.library_centroid):
+        assert abs(actual - expected) < 1e-9, (
+            f"centroid[i]={actual} != good_vec[i]={expected}; bad embedding corrupted result"
+        )
+
+
+@pytest.mark.asyncio
+async def test_load_profile_all_embeddings_wrong_dim_gives_none_centroid():
+    """When all embeddings after the first have wrong dim, centroid uses only the first.
+
+    embeddings[0] always defines expected_dim — it is always valid.  If there are
+    no other valid vectors, centroid = embeddings[0] itself (n=1).  This test
+    verifies the boundary where n=1 still produces a centroid (not None).
+    """
+    from unittest.mock import AsyncMock
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.side_effect = [
+        [],
+        [],
+        _make_paper_rows(3),
+        _make_config_rows(),
+        [],
+        [],
+    ]
+
+    good_vec = fake_embedding_vector(4)
+    bad_vec = fake_embedding_vector(16)  # mismatched
+
+    mock_embedder = AsyncMock()
+    # First is good, remaining two are bad
+    mock_embedder.embed_texts.return_value = [good_vec, bad_vec, bad_vec]
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    # n=1 — centroid is just good_vec / 1 = good_vec
+    assert profile.library_centroid is not None
+    assert len(profile.library_centroid) == 4
+    for expected, actual in zip(good_vec, profile.library_centroid):
+        assert abs(actual - expected) < 1e-9

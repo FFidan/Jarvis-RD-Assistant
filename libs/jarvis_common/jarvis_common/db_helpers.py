@@ -225,6 +225,49 @@ async def dynamic_update(
     return row
 
 
+async def assert_paper_ownership(
+    conn: asyncpg.Connection,
+    paper_id: int,
+    user_id: int | None,
+) -> None:
+    """Raise HTTPException if the caller does not own the paper.
+
+    Ownership rules
+    ---------------
+    * Single-user mode (``user_id=None``): all papers are accessible — no check.
+    * Multi-user mode (``user_id`` is set):
+      - Paper not found → 404.
+      - Paper ``user_id`` is NULL → system-owned, accessible to all callers.
+      - Paper ``user_id`` matches caller → allowed.
+      - Paper ``user_id`` differs from caller → 403.
+
+    Parameters
+    ----------
+    conn:
+        An open ``asyncpg.Connection`` (not a pool — caller must acquire).
+    paper_id:
+        The paper primary key to check.
+    user_id:
+        The caller's user ID from ``current_user_id_or_none()``.
+        ``None`` means single-user mode; all access is allowed.
+    """
+    if user_id is None:
+        # Single-user mode: skip ownership check entirely.
+        return
+
+    row = await conn.fetchrow(
+        "SELECT user_id FROM papers WHERE id = $1",
+        paper_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="paper not found")
+
+    paper_owner: int | None = row["user_id"]
+    # NULL owner means system-owned — accessible to all authenticated users.
+    if paper_owner is not None and paper_owner != user_id:
+        raise HTTPException(status_code=403, detail="paper not owned by current user")
+
+
 async def delete_or_404(
     db_pool_or_conn: Any,
     sql: str,

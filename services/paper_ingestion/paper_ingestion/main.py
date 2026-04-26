@@ -41,6 +41,7 @@ from qdrant_client import AsyncQdrantClient
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.deps import limiter
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
@@ -48,7 +49,6 @@ from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
 from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
-from paper_ingestion.verification import QuoteVerifier
 
 # WS-6: install uvloop early so the event-loop policy is set before
 # any asyncio.get_event_loop() calls.  Guarded against pytest runs because
@@ -178,7 +178,7 @@ async def _register_job_handlers(app: FastAPI) -> None:
     import importlib  # noqa: PLC0415
 
     importlib.import_module("paper_ingestion.paper_jobs")
-    importlib.import_module("paper_ingestion.extraction_jobs")
+    importlib.import_module("paper_ingestion.extraction.jobs")
     importlib.import_module("paper_ingestion.contradiction_jobs")
     importlib.import_module("paper_ingestion.citations_jobs")
     importlib.import_module("paper_ingestion.pulse.job")

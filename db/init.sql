@@ -109,6 +109,10 @@ CREATE TABLE papers (
 
 COMMENT ON TABLE papers IS 'All ingested papers. Metadata comes from source APIs, never from LLMs.';
 
+-- Wave 6: per-user ownership column (migration 042). NULL = system-owned / single-user mode.
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_papers_user ON papers(user_id) WHERE user_id IS NOT NULL;
+
 -- Full-text search support (from migration 002)
 CREATE OR REPLACE FUNCTION papers_search_vector_update() RETURNS trigger
     LANGUAGE plpgsql AS $$
@@ -153,6 +157,10 @@ CREATE TABLE paper_chunks (
 
 COMMENT ON TABLE paper_chunks IS 'PDF text split into chunks for RAG. Each chunk maps to a Qdrant vector.';
 
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_chunks ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_chunks_user ON paper_chunks(user_id) WHERE user_id IS NOT NULL;
+
 CREATE TABLE paper_summaries (
     id                  SERIAL PRIMARY KEY,
     paper_id            INTEGER REFERENCES papers(id) ON DELETE CASCADE UNIQUE,
@@ -182,6 +190,10 @@ COMMENT ON COLUMN paper_summaries.cross_references IS
 COMMENT ON COLUMN paper_summaries.confidence IS 'HIGH, MEDIUM, or LOW based on quote verification pass rate.';
 COMMENT ON COLUMN paper_summaries.llm_prompt IS 'The exact prompt sent to the LLM (audit trail).';
 COMMENT ON COLUMN paper_summaries.llm_raw_response IS 'The raw LLM response before parsing (audit trail).';
+
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_summaries ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_summaries_user ON paper_summaries(user_id) WHERE user_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS paper_contradictions (
     id                  SERIAL PRIMARY KEY,
@@ -224,6 +236,10 @@ COMMENT ON TABLE paper_contradictions IS
 COMMENT ON COLUMN paper_contradictions.scanner_metadata IS
     'Scanner version, candidate score, model, and other non-authoritative diagnostics.';
 
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_contradictions ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_contradictions_user ON paper_contradictions(user_id) WHERE user_id IS NOT NULL;
+
 CREATE TABLE paper_user_state (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE UNIQUE,
@@ -237,6 +253,10 @@ CREATE TABLE paper_user_state (
 );
 
 COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, notes, rating, flag.';
+
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_user_state ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_user_state_user ON paper_user_state(user_id) WHERE user_id IS NOT NULL;
 COMMENT ON COLUMN paper_user_state.status IS 'One of: new, reading, read, archived, starred.';
 COMMENT ON COLUMN paper_user_state.flagged IS 'User flagged this summary as potentially inaccurate.';
 
@@ -272,6 +292,10 @@ CREATE TABLE paper_notes (
 );
 
 COMMENT ON TABLE paper_notes IS 'User annotations on papers, optionally linked to a page or highlighted text.';
+
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_notes ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_notes_user ON paper_notes(user_id) WHERE user_id IS NOT NULL;
 
 CREATE INDEX idx_paper_notes_paper ON paper_notes(paper_id);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_paper_notes_zotero_annotation
@@ -551,6 +575,10 @@ CREATE TABLE paper_extractions (
 
 COMMENT ON TABLE paper_extractions IS 'LLM-extracted structured data from papers using templates.';
 
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE paper_extractions ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_extractions_user ON paper_extractions(user_id) WHERE user_id IS NOT NULL;
+
 CREATE INDEX IF NOT EXISTS idx_paper_extractions_paper ON paper_extractions(paper_id);
 CREATE INDEX IF NOT EXISTS idx_paper_extractions_template ON paper_extractions(template_id);
 
@@ -649,6 +677,10 @@ CREATE TABLE IF NOT EXISTS pulse_cards (
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_cards_deck_rank
     ON pulse_cards(deck_id, rank);
+
+-- Wave 6: per-user ownership (migration 042).
+ALTER TABLE pulse_cards ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
+CREATE INDEX IF NOT EXISTS idx_pulse_cards_user ON pulse_cards(user_id) WHERE user_id IS NOT NULL;
 
 -- Pulse ratings — feedback loop, collected from Phase 1 onward
 CREATE TABLE IF NOT EXISTS pulse_ratings (
@@ -800,3 +832,41 @@ CREATE TABLE IF NOT EXISTS audit_log (
 CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, timestamp DESC);
+
+-- =============================================================================
+-- DB-004: shared updated_at trigger (migration 042)
+-- Keeps updated_at current on every UPDATE for tables that have the column.
+-- =============================================================================
+
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_user_config_updated_at ON user_config;
+CREATE TRIGGER trg_user_config_updated_at
+    BEFORE UPDATE ON user_config
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_paper_contradictions_updated_at ON paper_contradictions;
+CREATE TRIGGER trg_paper_contradictions_updated_at
+    BEFORE UPDATE ON paper_contradictions
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_cards_updated_at ON cards;
+CREATE TRIGGER trg_cards_updated_at
+    BEFORE UPDATE ON cards
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_projects_updated_at ON projects;
+CREATE TRIGGER trg_projects_updated_at
+    BEFORE UPDATE ON projects
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_tasks_updated_at ON tasks;
+CREATE TRIGGER trg_tasks_updated_at
+    BEFORE UPDATE ON tasks
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+DROP TRIGGER IF EXISTS trg_extraction_templates_updated_at ON extraction_templates;
+CREATE TRIGGER trg_extraction_templates_updated_at
+    BEFORE UPDATE ON extraction_templates
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

@@ -124,13 +124,21 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
         try:
             embeddings = await embedder.embed_texts(abstracts)
             if embeddings:
-                dim = len(embeddings[0])
-                centroid = [0.0] * dim
+                expected_dim = len(embeddings[0])
+                centroid = [0.0] * expected_dim
+                n = 0
                 for vec in embeddings:
+                    if len(vec) != expected_dim:
+                        logger.warning(
+                            "load_profile: skipping embedding with dim %d != expected %d",
+                            len(vec),
+                            expected_dim,
+                        )
+                        continue
                     for i, v in enumerate(vec):
                         centroid[i] += v
-                n = len(embeddings)
-                library_centroid = [v / n for v in centroid]
+                    n += 1
+                library_centroid = [v / n for v in centroid] if n > 0 else None
         except Exception:
             logger.warning("load_profile: failed to compute library centroid", exc_info=True)
             library_centroid = None
