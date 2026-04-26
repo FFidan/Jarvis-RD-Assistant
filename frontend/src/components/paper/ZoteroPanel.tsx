@@ -70,7 +70,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
           {linkage.zotero_citation_key && (
             <div className="flex items-center gap-1">
               <code className="text-xs bg-muted px-1 py-0.5 rounded">{linkage.zotero_citation_key}</code>
-              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => copyKey(linkage.zotero_citation_key!)}>
+              <Button size="icon" variant="ghost" className="h-5 w-5" onClick={() => copyKey(linkage.zotero_citation_key!)} aria-label="Copy citation key">
                 <Copy className="h-3 w-3" />
               </Button>
               {copied && <span className="text-xs text-muted-foreground">Copied!</span>}

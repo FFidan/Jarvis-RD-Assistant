@@ -131,7 +131,7 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
           <div className="flex justify-center gap-1.5">
             {Array.from({ length: targetCycles }).map((_, i) => (
               <div
-                key={i}
+                key={`cycle-dot-${i}`}
                 className={`w-2.5 h-2.5 rounded-full ${
                   i < cyclesCompleted ? 'bg-primary' : 'bg-muted'
                 }`}

@@ -75,7 +75,7 @@ export function OverviewTab({ project }: OverviewTabProps) {
             <div className="flex items-center gap-1">
               <Popover>
                 <PopoverTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-6 w-6">
+                  <Button variant="ghost" size="icon" className="h-6 w-6" aria-label="Edit deadline">
                     <Pencil className="h-3 w-3" />
                   </Button>
                 </PopoverTrigger>

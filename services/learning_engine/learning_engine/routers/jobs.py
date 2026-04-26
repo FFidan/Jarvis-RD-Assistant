@@ -93,7 +93,7 @@ async def create_job(
     public_kinds = _get_public_job_kinds()
     if body.kind not in public_kinds:
         raise HTTPException(
-            status_code=422,
+            status_code=400,
             detail=f"Job kind {body.kind!r} is not allowed. "
             f"Permitted kinds: {sorted(public_kinds)}",
         )

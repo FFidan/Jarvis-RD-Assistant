@@ -3,6 +3,19 @@
 
 from __future__ import annotations
 
-import uvloop
+import asyncio
 
-print(f"uvloop import ok: {uvloop.__version__}")
+try:
+    import importlib.metadata
+
+    import uvloop
+
+    uvloop.install()
+    loop_module = type(asyncio.new_event_loop()).__module__
+    try:
+        version = importlib.metadata.version("uvloop")
+    except importlib.metadata.PackageNotFoundError:
+        version = getattr(uvloop, "__version__", "unknown")
+    print(f"uvloop {version} installed; current loop module: {loop_module}")
+except ImportError as e:
+    print(f"uvloop NOT available: {e}")

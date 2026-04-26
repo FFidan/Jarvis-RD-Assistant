@@ -133,8 +133,19 @@ async def call_llm_json_value(
     options: ChatCompletionOptions | None = None,
     response_format: dict[str, str] | None = None,
     config: LiteLLMConfig | None = None,
+    allow_scalar: bool = False,
 ) -> Any:
-    """Call LiteLLM and parse the response content as JSON."""
+    """Call LiteLLM and parse the response content as JSON.
+
+    Parameters
+    ----------
+    allow_scalar:
+        When ``False`` (default), only JSON objects (``{``) and arrays (``[``)
+        are accepted — matches the legacy strict behaviour.  When ``True``,
+        scalar JSON values (``true``, ``false``, ``null``, numbers) are also
+        accepted.  Use this for prompts that intentionally return a single value
+        rather than a structured object.
+    """
     resolved_options = options or ChatCompletionOptions()
     if response_format is not None:
         resolved_options = resolved_options.with_response_format(response_format)
@@ -145,7 +156,16 @@ async def call_llm_json_value(
         config=config,
     )
     stripped = raw.strip()
-    if not stripped or stripped[0] not in ("{", "["):
+    _is_object_or_array = stripped and stripped[0] in ("{", "[")
+    _is_scalar = (
+        allow_scalar
+        and stripped
+        and (
+            stripped[0] in ("-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
+            or stripped in ("true", "false", "null")
+        )
+    )
+    if not (_is_object_or_array or _is_scalar):
         raise ValueError(
             f"LLM returned non-JSON content (expected '{{' or '[', got {stripped[:50]!r})"
         )

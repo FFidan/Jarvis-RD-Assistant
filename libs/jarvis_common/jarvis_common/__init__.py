@@ -1,7 +1,20 @@
 """Shared utilities for JARVIS microservices."""
 
 from jarvis_common.audit import log_audit
-from jarvis_common.auth import current_user_id, validate_production_config, verify_api_key
+from jarvis_common.auth import (
+    assert_multi_tenant_not_implemented,
+    current_user_id,
+    current_user_id_or_none,
+    validate_production_config,
+    verify_api_key,
+)
+from jarvis_common.crypto import (
+    decrypt_secret,
+    encrypt_secret,
+    mask_secret,
+    refresh_fernet_cache,
+    validate_encrypted_config_rows,
+)
 from jarvis_common.db_helpers import (
     delete_or_404,
     dynamic_update,
@@ -13,6 +26,7 @@ from jarvis_common.db_helpers import (
     init_pg_connection,
     quote_ident,
     validated_model,
+    validated_model_with_reason,
 )
 from jarvis_common.error_handlers import (
     generic_exception_handler,
@@ -57,6 +71,14 @@ __all__ = [
     "verify_api_key",
     "validate_production_config",
     "current_user_id",
+    "current_user_id_or_none",
+    "assert_multi_tenant_not_implemented",
+    # DRY-003: crypto helpers re-exported from jarvis_common top-level
+    "encrypt_secret",
+    "decrypt_secret",
+    "mask_secret",
+    "refresh_fernet_cache",
+    "validate_encrypted_config_rows",
     "SourceRateLimiter",
     "create_limiter",
     "rate_limit_exceeded_handler",
@@ -67,6 +89,7 @@ __all__ = [
     "init_pg_connection",
     "quote_ident",
     "validated_model",
+    "validated_model_with_reason",
     "get_smart_model",
     "get_fast_model",
     "get_embed_model",

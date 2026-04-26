@@ -15,12 +15,21 @@ from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
 
+# Maximum number of items enqueued per sync cycle.  When this limit is hit the
+# library version cursor is NOT advanced so the next sync resumes from the same
+# point and processes the next batch.
+MAX_ENQUEUE_PER_SYNC = 20
+
 
 async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
     """Read Zotero settings from user_config. Returns dict with short keys.
 
     Prefers encrypted_value (post-Sprint-1 UI saves) over plaintext value
     (legacy rows written before encryption was introduced).
+
+    If decryption fails (e.g. key rotation, corrupted ciphertext) the whole
+    config is treated as missing — callers will hit the "no api_key" branch
+    and skip the operation gracefully.
     """
     from jarvis_common.crypto import decrypt_secret
 
@@ -34,7 +43,11 @@ async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
         enc = row.get("encrypted_value")
         if enc is not None:
             # Post-Sprint-1 row: decrypt Fernet ciphertext stored as BYTEA.
-            config[short_key] = decrypt_secret(enc.decode("ascii"))
+            try:
+                config[short_key] = decrypt_secret(enc.decode("ascii"))
+            except Exception as exc:
+                logger.warning("Zotero config decrypt failed: %s; treating as missing", exc)
+                return {}
         else:
             # Legacy plaintext row (or non-secret scalar).
             # asyncpg JSONB codec auto-decodes objects/arrays/booleans;
@@ -57,6 +70,9 @@ async def push_paper_to_zotero(
     4. Create Zotero item with collections per linked project.
     5. Store zotero_item_key + zotero_last_pushed_at in papers table.
     6. Best-effort fetch of Better BibTeX citation key.
+
+    A single DB connection is acquired for the entire operation to avoid
+    pool exhaustion under concurrent pushes (PI-EDGE-013).
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
@@ -82,19 +98,30 @@ async def push_paper_to_zotero(
     )
 
     async with db_pool.acquire() as conn:
-        paper = await conn.fetchrow(
-            """
-            SELECT p.id, p.title, p.authors, p.metadata->>'doi' AS doi, p.url, p.abstract,
-                   p.pdf_local_path, p.zotero_item_key,
-                   array_agg(DISTINCT pp.project_id)
-                       FILTER (WHERE pp.project_id IS NOT NULL) AS project_ids
-            FROM papers p
-            LEFT JOIN project_papers pp ON pp.paper_id = p.id
-            WHERE p.id = $1
-            GROUP BY p.id
-            """,
-            paper_id,
-        )
+        await _push_paper_with_conn(paper_id, conn, client)
+
+    logger.info("Paper %d pushed to Zotero", paper_id)
+
+
+async def _push_paper_with_conn(
+    paper_id: int,
+    conn: asyncpg.Connection,
+    client: Any,
+) -> None:
+    """Internal push implementation that operates on a single DB connection."""
+    paper = await conn.fetchrow(
+        """
+        SELECT p.id, p.title, p.authors, p.metadata->>'doi' AS doi, p.url, p.abstract,
+               p.pdf_local_path, p.zotero_item_key,
+               array_agg(DISTINCT pp.project_id)
+                   FILTER (WHERE pp.project_id IS NOT NULL) AS project_ids
+        FROM papers p
+        LEFT JOIN project_papers pp ON pp.paper_id = p.id
+        WHERE p.id = $1
+        GROUP BY p.id
+        """,
+        paper_id,
+    )
 
     if not paper:
         logger.warning("Zotero push: paper %d not found", paper_id)
@@ -149,13 +176,12 @@ async def push_paper_to_zotero(
                 )
 
         # Fetch topics as Zotero tags.
-        async with db_pool.acquire() as conn:
-            topic_rows = await conn.fetch(
-                "SELECT t.name FROM topics t"
-                " JOIN paper_topics pt ON pt.topic_id = t.id"
-                " WHERE pt.paper_id = $1",
-                paper_id,
-            )
+        topic_rows = await conn.fetch(
+            "SELECT t.name FROM topics t"
+            " JOIN paper_topics pt ON pt.topic_id = t.id"
+            " WHERE pt.paper_id = $1",
+            paper_id,
+        )
         tags = [{"tag": row["name"]} for row in topic_rows]
 
         item_data: dict[str, Any] = {
@@ -174,23 +200,21 @@ async def push_paper_to_zotero(
         collection_keys: list[str] = []
         for project_id in project_ids:
             try:
-                async with db_pool.acquire() as conn:
-                    project = await conn.fetchrow(
-                        "SELECT id, name, zotero_collection_key FROM projects WHERE id = $1",
-                        project_id,
-                    )
+                project = await conn.fetchrow(
+                    "SELECT id, name, zotero_collection_key FROM projects WHERE id = $1",
+                    project_id,
+                )
                 if not project:
                     continue
                 if project["zotero_collection_key"]:
                     col_key = project["zotero_collection_key"]
                 else:
                     col_key = await client.ensure_collection(project["name"])
-                    async with db_pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE projects SET zotero_collection_key = $1 WHERE id = $2",
-                            col_key,
-                            project_id,
-                        )
+                    await conn.execute(
+                        "UPDATE projects SET zotero_collection_key = $1 WHERE id = $2",
+                        col_key,
+                        project_id,
+                    )
                 collection_keys.append(col_key)
             except Exception:
                 logger.warning(
@@ -212,27 +236,23 @@ async def push_paper_to_zotero(
             raise
 
     # Persist Zotero item key.
-    async with db_pool.acquire() as conn:
-        await conn.execute(
-            "UPDATE papers SET zotero_item_key = $1, zotero_last_pushed_at = NOW() WHERE id = $2",
-            zotero_key,
-            paper_id,
-        )
+    await conn.execute(
+        "UPDATE papers SET zotero_item_key = $1, zotero_last_pushed_at = NOW() WHERE id = $2",
+        zotero_key,
+        paper_id,
+    )
 
     # Best-effort: fetch Better BibTeX citation key from local BBT plugin.
     try:
         bbt_key = await client.fetch_bbt_citation_key(zotero_key)
         if bbt_key:
-            async with db_pool.acquire() as conn:
-                await conn.execute(
-                    "UPDATE papers SET zotero_citation_key = $1 WHERE id = $2",
-                    bbt_key,
-                    paper_id,
-                )
+            await conn.execute(
+                "UPDATE papers SET zotero_citation_key = $1 WHERE id = $2",
+                bbt_key,
+                paper_id,
+            )
     except Exception:
         logger.debug("BBT citation key fetch failed for paper %d (non-fatal)", paper_id)
-
-    logger.info("Paper %d pushed to Zotero: item_key=%s", paper_id, zotero_key)
 
 
 async def resync_paper_to_zotero(
@@ -301,64 +321,65 @@ async def sync_annotations_for_paper(
 
     imported = 0
     async with db_pool.acquire() as conn:
-        for item in annotations:
-            key = item.get("key") or item.get("data", {}).get("key")
-            data = item.get("data", {})
-            if not key:
-                continue
-            highlight = (data.get("annotationText") or "").strip() or None
-            comment = (data.get("annotationComment") or "").strip()
-            note = comment or highlight
-            if not note:
-                continue
-            page_number = _annotation_page_number(data.get("annotationPageLabel"))
-            await conn.execute(
-                """
-                INSERT INTO paper_notes
-                    (paper_id, source, zotero_annotation_key, user_note, highlight_text,
-                     page_number)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (paper_id, zotero_annotation_key) DO UPDATE
-                    SET user_note      = EXCLUDED.user_note,
-                        highlight_text = EXCLUDED.highlight_text,
-                        page_number    = EXCLUDED.page_number,
-                        verification_status =
-                            CASE
-                                WHEN paper_notes.highlight_text
-                                     IS DISTINCT FROM EXCLUDED.highlight_text
-                                THEN 'unverified'
-                                ELSE paper_notes.verification_status
-                            END,
-                        verified_quote =
-                            CASE
-                                WHEN paper_notes.highlight_text
-                                     IS DISTINCT FROM EXCLUDED.highlight_text
-                                THEN NULL
-                                ELSE paper_notes.verified_quote
-                            END,
-                        verified_page_number =
-                            CASE
-                                WHEN paper_notes.highlight_text
-                                     IS DISTINCT FROM EXCLUDED.highlight_text
-                                THEN NULL
-                                ELSE paper_notes.verified_page_number
-                            END,
-                        promoted_at =
-                            CASE
-                                WHEN paper_notes.highlight_text
-                                     IS DISTINCT FROM EXCLUDED.highlight_text
-                                THEN NULL
-                                ELSE paper_notes.promoted_at
-                            END
-                """,
-                paper_id,
-                "zotero",
-                str(key),
-                note,
-                highlight,
-                page_number,
-            )
-            imported += 1
+        async with conn.transaction():
+            for item in annotations:
+                key = item.get("key") or item.get("data", {}).get("key")
+                data = item.get("data", {})
+                if not key:
+                    continue
+                highlight = (data.get("annotationText") or "").strip() or None
+                comment = (data.get("annotationComment") or "").strip()
+                note = comment or highlight
+                if not note:
+                    continue
+                page_number = _annotation_page_number(data.get("annotationPageLabel"))
+                await conn.execute(
+                    """
+                    INSERT INTO paper_notes
+                        (paper_id, source, zotero_annotation_key, user_note, highlight_text,
+                         page_number)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (paper_id, zotero_annotation_key) DO UPDATE
+                        SET user_note      = EXCLUDED.user_note,
+                            highlight_text = EXCLUDED.highlight_text,
+                            page_number    = EXCLUDED.page_number,
+                            verification_status =
+                                CASE
+                                    WHEN paper_notes.highlight_text
+                                         IS DISTINCT FROM EXCLUDED.highlight_text
+                                    THEN 'unverified'
+                                    ELSE paper_notes.verification_status
+                                END,
+                            verified_quote =
+                                CASE
+                                    WHEN paper_notes.highlight_text
+                                         IS DISTINCT FROM EXCLUDED.highlight_text
+                                    THEN NULL
+                                    ELSE paper_notes.verified_quote
+                                END,
+                            verified_page_number =
+                                CASE
+                                    WHEN paper_notes.highlight_text
+                                         IS DISTINCT FROM EXCLUDED.highlight_text
+                                    THEN NULL
+                                    ELSE paper_notes.verified_page_number
+                                END,
+                            promoted_at =
+                                CASE
+                                    WHEN paper_notes.highlight_text
+                                         IS DISTINCT FROM EXCLUDED.highlight_text
+                                    THEN NULL
+                                    ELSE paper_notes.promoted_at
+                                END
+                    """,
+                    paper_id,
+                    "zotero",
+                    str(key),
+                    note,
+                    highlight,
+                    page_number,
+                )
+                imported += 1
 
     return {"paper_id": paper_id, "imported": imported, "status": "ok"}
 
@@ -417,8 +438,12 @@ async def poll_zotero_library(
     new_count = 0
     linked_count = 0
     enqueued_count = 0
+    capped = False  # True when we hit MAX_ENQUEUE_PER_SYNC mid-batch.
 
     for item in items:
+        if enqueued_count >= MAX_ENQUEUE_PER_SYNC:
+            capped = True
+            break
         data: dict[str, Any] = item.get("data", {})
         item_key: str = data.get("key", item.get("key", ""))
 
@@ -513,6 +538,14 @@ async def poll_zotero_library(
             )
 
     # Persist updated library version.
+    # If the enqueue cap was hit, do NOT advance the cursor — the next sync
+    # will re-fetch items starting from last_version and process the next batch.
+    if capped:
+        new_version = last_version
+        logger.info(
+            "Zotero poll: enqueue cap (%d) reached — deferring version advance to next sync",
+            MAX_ENQUEUE_PER_SYNC,
+        )
     if new_version != last_version:
         try:
             async with db_pool.acquire() as conn:

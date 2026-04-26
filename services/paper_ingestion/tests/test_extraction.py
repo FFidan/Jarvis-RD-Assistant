@@ -1,6 +1,7 @@
 """Tests for structured data extraction feature."""
 
 from datetime import UTC, datetime
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -561,8 +562,12 @@ async def test_batch_extract_job_handler(monkeypatch):
     import paper_ingestion.extraction_jobs as extraction_jobs_mod  # noqa: PLC0415
 
     # Populate svc so the handler resolves embedder/verifier.
-    _state_mod.svc.embedder = "sentinel-embedder"
-    _state_mod.svc.verifier = "sentinel-verifier"
+    # cast() satisfies pyright without importing heavyweight Embedder/QuoteVerifier classes.
+    from paper_ingestion.ingestion.embedder import Embedder  # noqa: PLC0415
+    from paper_ingestion.verification import QuoteVerifier  # noqa: PLC0415
+
+    _state_mod.svc.embedder = cast(Embedder, "sentinel-embedder")
+    _state_mod.svc.verifier = cast(QuoteVerifier, "sentinel-verifier")
 
     called = {}
 
@@ -674,3 +679,82 @@ def test_build_extraction_prompt_escapes_injection_in_name_and_type():
     # HTML-encoded forms must be present
     assert "&lt;/title&gt;INJECT" in prompt
     assert "&lt;/paper_text&gt;bad" in prompt
+
+
+# ---------------------------------------------------------------------------
+# PI-CORE-007: confidence=0.0 when verifier is None, even with a quote
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_fields_no_verifier_returns_zero_confidence():
+    """PI-CORE-007: confidence must be 0.0 (not 0.5) when verifier=None, even if LLM supplies a quote."""
+    from paper_ingestion.extraction import extract_fields_for_paper
+
+    mock_conn = AsyncMock()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conn
+    mock_cm.__aexit__.return_value = False
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = mock_cm
+
+    mock_conn.fetchrow.side_effect = [
+        # Template lookup
+        {
+            "id": 1,
+            "name": "Test",
+            "fields": [
+                {"name": "methodology", "label": "Methodology", "description": "d", "type": "text"}
+            ],
+            "is_default": True,
+        },
+        # Paper lookup
+        {"id": 10, "title": "Test Paper"},
+        # INSERT RETURNING
+        {
+            "id": 1,
+            "paper_id": 10,
+            "template_id": 1,
+            "extractions": {
+                "methodology": {
+                    "value": "survey",
+                    "quote": "We used a survey",
+                    "verified": False,
+                    "confidence": 0.0,  # expected: PI-CORE-007 fix
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
+            "extraction_model": "smart",
+            "created_at": datetime.now(tz=UTC),
+        },
+    ]
+    mock_conn.fetch.return_value = [
+        {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
+    ]
+
+    mock_http = AsyncMock()
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {
+                    # LLM returns a non-null quote — without a verifier this must NOT
+                    # produce confidence=0.5.  PI-CORE-007 demands confidence=0.0.
+                    "content": '{"methodology": {"value": "survey", "quote": "We used a survey"}}'
+                }
+            }
+        ]
+    }
+    mock_response.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_response
+
+    # Pass verifier=None explicitly — this is the PI-CORE-007 scenario.
+    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=None)
+
+    ef = result.extractions["methodology"]
+    assert ef.verified is False, "Unverified field must have verified=False"
+    assert ef.confidence == 0.0, (
+        f"PI-CORE-007: confidence must be 0.0 when verifier=None (got {ef.confidence}). "
+        "A quote without a verifier is unverified and must never receive 0.5."
+    )

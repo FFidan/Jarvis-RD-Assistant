@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -11,15 +12,31 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
-import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
-import { CitationGraphPage } from '@/pages/CitationGraphPage';
-import { KnowledgeGraphPage } from '@/pages/KnowledgeGraphPage';
 import { SetupWizard } from '@/pages/SetupWizard';
 import { getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+
+// Heavy pages lazy-loaded to reduce initial bundle size
+const KnowledgeGraphPage = lazy(() =>
+  import('@/pages/KnowledgeGraphPage').then((m) => ({ default: m.KnowledgeGraphPage })),
+);
+const CitationGraphPage = lazy(() =>
+  import('@/pages/CitationGraphPage').then((m) => ({ default: m.CitationGraphPage })),
+);
+const AnalyticsPage = lazy(() =>
+  import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
+);
+
+function PageFallback() {
+  return (
+    <div className="flex min-h-[60vh] items-center justify-center text-sm text-muted-foreground">
+      Loading...
+    </div>
+  );
+}
 
 /**
  * Gates the main AppShell behind a setup-status check. When the server reports
@@ -77,14 +94,14 @@ export function App() {
                   <Route path="/" element={<RouteErrorBoundary><HomePage /></RouteErrorBoundary>} />
                   <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
-                  <Route path="analytics" element={<RouteErrorBoundary><AnalyticsPage /></RouteErrorBoundary>} />
+                  <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><ResearchFeedPage /></RouteErrorBoundary>} />
                   <Route path="paper/:paperId" element={<RouteErrorBoundary><PaperDetailPage /></RouteErrorBoundary>} />
-                  <Route path="citations" element={<RouteErrorBoundary><CitationGraphPage /></RouteErrorBoundary>} />
-                  <Route path="knowledge" element={<RouteErrorBoundary><KnowledgeGraphPage /></RouteErrorBoundary>} />
+                  <Route path="citations" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><CitationGraphPage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="knowledge" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><KnowledgeGraphPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="*" element={<RouteErrorBoundary><NotFoundPage /></RouteErrorBoundary>} />
                 </Routes>
               </AppShell>

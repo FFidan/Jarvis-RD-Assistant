@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+from urllib.parse import urlparse
 
 import httpx
 
@@ -12,6 +14,62 @@ BBT_BASE_URL = os.getenv("BBT_BASE_URL", "http://host.docker.internal:23119")
 BBT_LOCAL_BASE = f"{BBT_BASE_URL}/better-bibtex"
 
 logger = logging.getLogger(__name__)
+
+# Hostnames that are intentionally private/docker-internal and explicitly allowed.
+_BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
+
+
+def validate_bbt_base_url(url: str = BBT_BASE_URL) -> None:
+    """Validate BBT_BASE_URL at startup to block unsafe schemes or private IPs.
+
+    Raises ``ValueError`` if the URL has an unsupported scheme (not http/https)
+    or if the hostname resolves to a private/loopback IP address and is not in
+    the explicit allow-list (``_BBT_ALLOWED_PRIVATE_HOSTS``).
+
+    ``host.docker.internal`` is intentionally allowed because it is the
+    standard Docker-Desktop hostname for reaching the host machine from inside
+    a container — it is not a general SSRF vector in a controlled Docker env.
+
+    Parameters
+    ----------
+    url:
+        The BBT base URL to validate. Defaults to the module-level constant so
+        the function can be called with no arguments at startup.
+
+    Raises
+    ------
+    ValueError
+        If the URL scheme is unsupported or the host is a private IP not in
+        the explicit allowlist.
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"BBT_BASE_URL has unsupported scheme {scheme!r}; expected 'http' or 'https'. "
+            f"Got: {url!r}"
+        )
+
+    hostname = parsed.hostname or ""
+
+    # Explicitly allow-listed docker hostnames are safe to skip IP checks.
+    if hostname in _BBT_ALLOWED_PRIVATE_HOSTS:
+        return
+
+    # Block private / loopback IP addresses (SSRF guard).
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local:
+            raise ValueError(
+                f"BBT_BASE_URL hostname {hostname!r} resolves to a private/loopback address "
+                f"which is not explicitly allowed. Add it to _BBT_ALLOWED_PRIVATE_HOSTS if "
+                f"it is intentional. Got: {url!r}"
+            )
+    except ValueError as exc:
+        # ip_address() raises ValueError for non-IP hostnames (e.g. "example.com") —
+        # those are fine; re-raise only if we set the message ourselves (SSRF block).
+        if "BBT_BASE_URL" in str(exc):
+            raise
 
 
 class ZoteroClient:
@@ -130,18 +188,33 @@ class ZoteroClient:
     async def fetch_items_since(self, version: int) -> tuple[list[dict], int]:
         """GET /items?since={version} — fetch items modified after the given library version.
 
-        Returns a tuple of (items, new_library_version). The new version is read from
-        the ``Zotero-Last-Modified-Version`` response header.
+        Paginates through all pages (100 per page) so large libraries are
+        handled correctly.
+
+        Returns a tuple of (items, new_library_version). The new version is
+        read from the ``Zotero-Last-Modified-Version`` header of the LAST
+        successful page (Zotero guarantees this header is stable for the full
+        result set of a versioned request).
         """
-        resp = await self._http.get(
-            f"{self._base}/items",
-            params={"since": version, "format": "json", "limit": 100},
-            headers=self._headers(),
-            timeout=30.0,
-        )
-        resp.raise_for_status()
-        new_version = int(resp.headers.get("Zotero-Last-Modified-Version", version))
-        return resp.json(), new_version
+        all_items: list[dict] = []
+        new_version: int = version
+        start = 0
+        while True:
+            resp = await self._http.get(
+                f"{self._base}/items",
+                params={"since": version, "format": "json", "limit": 100, "start": start},
+                headers=self._headers(),
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            page = resp.json()
+            new_version = int(resp.headers.get("Zotero-Last-Modified-Version", new_version))
+            all_items.extend(page)
+            total = int(resp.headers.get("Total-Results", "0"))
+            if len(page) < 100 or len(all_items) >= total:
+                break
+            start += 100
+        return all_items, new_version
 
     async def get_item_children(
         self,

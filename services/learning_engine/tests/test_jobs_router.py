@@ -33,7 +33,7 @@ def test_create_job_request_accepts_valid_kind():
 
 @pytest.mark.asyncio
 async def test_create_job_rejects_disallowed_kind(monkeypatch):
-    """POST /api/jobs with an unknown kind raises 422."""
+    """POST /api/jobs with an unknown kind raises 400."""
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
@@ -47,7 +47,7 @@ async def test_create_job_rejects_disallowed_kind(monkeypatch):
             db_pool=mock_pool,
         )
 
-    assert exc_info.value.status_code == 422
+    assert exc_info.value.status_code == 400
     assert "secret.internal" in exc_info.value.detail
 
 
@@ -267,3 +267,28 @@ async def test_cancel_job_str_user_id_row_rejects_wrong_int_caller():
             )
 
     assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# LE-002 (Sprint 4): unsupported job kind returns 400 (not 422)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_job_unsupported_kind_returns_400(monkeypatch):
+    """POST /api/jobs with an unsupported kind must return 400, not 422 (LE-002)."""
+    monkeypatch.delenv("DEV_MODE", raising=False)
+
+    mock_request = MagicMock()
+    mock_pool = MagicMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await jobs_router.create_job.__wrapped__(
+            mock_request,
+            body=CreateJobRequest(kind="totally.unknown.kind"),
+            user_id=None,
+            db_pool=mock_pool,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "totally.unknown.kind" in exc_info.value.detail

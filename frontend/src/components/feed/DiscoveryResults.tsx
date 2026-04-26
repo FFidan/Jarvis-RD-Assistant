@@ -30,7 +30,7 @@ export function DiscoveryResults({ results, onClear }: DiscoveryResultsProps) {
       </CardHeader>
       <CardContent className="space-y-3">
         {results.map((dr, i) => (
-          <div key={i}>
+          <div key={dr.paper_id}>
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0 flex-1">
                 <p className="font-medium leading-tight">{dr.title || 'Untitled'}</p>

@@ -328,7 +328,7 @@ services:
       - telegram_bot_token
     mem_limit: 1g
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'python.*app' || exit 1"]
+      test: ["CMD-SHELL", "pgrep -f 'telegram_bot.*app.py' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

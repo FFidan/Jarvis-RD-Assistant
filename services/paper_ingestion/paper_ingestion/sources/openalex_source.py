@@ -28,11 +28,13 @@ shared across all calls on the same instance.
 import logging
 import os
 from datetime import UTC, date, datetime
+from urllib.parse import urlparse
 
 import httpx
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import register_source
 
@@ -194,6 +196,19 @@ class OpenAlexSource(PaperSource):
         primary_location = work.get("primary_location")
         if primary_location and isinstance(primary_location, dict):
             pdf_url = primary_location.get("pdf_url") or None
+
+        # PI-EDGE-007: Validate pdf_url hostname against the SSRF allowlist before
+        # storing it — OpenAlex can return arbitrary third-party PDF URLs.
+        if pdf_url is not None:
+            hostname = urlparse(pdf_url).hostname or ""
+            if hostname not in ALLOWED_PDF_DOMAINS:
+                logger.info(
+                    "OpenAlex: pdf_url hostname %r for work %s not in ALLOWED_PDF_DOMAINS; "
+                    "discarding pdf_url",
+                    hostname,
+                    external_id,
+                )
+                pdf_url = None
 
         # Build a usable URL for this work
         url = raw_id if raw_id.startswith("http") else f"https://openalex.org/{external_id}"

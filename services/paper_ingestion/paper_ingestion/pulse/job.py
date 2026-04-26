@@ -300,16 +300,29 @@ async def run_pulse(
     try:
         async with db_pool.acquire() as conn:
             async with conn.transaction():
+                successes = 0
                 for card in deck:
                     try:
-                        await upsert_paper(conn, card.paper)
-                    except Exception as exc:  # per-card: skip failed card, not whole deck
+                        # B1.1: nested transaction issues SAVEPOINT/ROLLBACK TO SAVEPOINT
+                        # so a single-card failure cannot poison the outer transaction.
+                        async with conn.transaction():
+                            await upsert_paper(conn, card.paper)
+                        successes += 1
+                    except Exception as exc:  # per-card: roll back savepoint, keep outer txn alive
                         logger.warning(
                             "pulse.upsert_paper failed for %s: %s",
                             card.paper.external_id,
                             exc,
                         )
                         stats["last_error"] = f"upsert_paper: {exc}"
+                # B1.2: 0-card deck is observable
+                if successes == 0 and len(deck) > 0:
+                    logger.warning(
+                        "pulse.zero_card_deck: all %d upserts failed; 0-card deck will be "
+                        "persisted. last_error=%s",
+                        len(deck),
+                        stats.get("last_error"),
+                    )
                 persisted = await persist_deck(
                     db_pool,
                     deck_date=now.date(),

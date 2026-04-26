@@ -286,15 +286,19 @@ async def test_upsert_persist_atomic_on_failure(patch_pipeline):
     # 1. A single connection was acquired for the entire persist step
     pool.acquire.assert_called_once()
 
-    # 2. A single transaction was opened on that connection
-    conn.transaction.assert_called_once()
+    # 2. Outer transaction + one SAVEPOINT per card (B1.1)
+    deck_size = len(patch_pipeline["deck"])
+    # transaction() called: 1 outer + deck_size savepoints
+    assert conn.transaction.call_count == 1 + deck_size, (
+        f"Expected 1 outer + {deck_size} savepoints = {1 + deck_size} calls, "
+        f"got {conn.transaction.call_count}"
+    )
 
-    # 3. The transaction context manager was entered and exited (rollback path)
-    txn_cm.__aenter__.assert_awaited_once()
-    txn_cm.__aexit__.assert_awaited_once()
+    # 3. The outer transaction context manager was entered (rollback path on persist failure);
+    # since txn_cm is shared across all transaction() calls, we only verify at least one enter.
+    assert txn_cm.__aenter__.await_count >= 1
 
     # 4. upsert_paper was called with the shared connection
-    deck_size = len(patch_pipeline["deck"])
     assert len(upsert_conns) == deck_size
     assert all(c is conn for c in upsert_conns), "upsert_paper must use the shared conn"
 
@@ -688,3 +692,106 @@ async def test_pulse_generate_job_now_param_forwarded():
 
     assert len(captured) == 1
     assert captured[0] == expected_dt
+
+
+# ---------------------------------------------------------------------------
+# B1.1 — savepoint isolation per card
+# B1.2 — 0-card deck WARNING
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_savepoint_isolates_per_card_failure(patch_pipeline, caplog):
+    """A single-card upsert failure rolls back only its savepoint; other cards persist.
+
+    The outer transaction stays alive so persist_deck receives the 2 successful
+    cards (not 0) — the poisoned-transaction bug (PI-CORE-001) is fixed.
+    """
+    import logging
+
+    from paper_ingestion.pulse.job import run_pulse
+
+    # Override assemble_deck to return exactly 3 known cards
+    cards = [_scored(0), _scored(1), _scored(2)]
+    patch_pipeline["mocks"]["assemble_deck"].return_value = cards
+
+    # upsert_paper raises on the first call, succeeds on the rest
+    call_count = 0
+
+    async def selective_upsert(conn, paper, **_kw):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("db constraint violation on card 0")
+        return {"id": call_count, "is_insert": True}
+
+    # persist_deck records which cards it receives
+    received_cards: list = []
+
+    async def recording_persist(db_pool, deck_date, cards, stats, conn=None, **_kw):
+        received_cards.extend(cards)
+        return len(cards)
+
+    patch_pipeline["mocks"]["upsert_paper"].side_effect = selective_upsert
+    patch_pipeline["mocks"]["persist_deck"].side_effect = recording_persist
+
+    pool, _conn = _make_pool_and_conn()
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.pulse.job"):
+        stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # persist_deck must have been called (outer transaction survived)
+    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
+
+    # All 3 cards are still passed to persist_deck (deck list is unchanged — upserts that
+    # fail are skipped in the DB but the deck record still references them for UI display)
+    assert len(received_cards) == 3
+
+    # successes count: 2 cards upserted, 1 skipped
+    # last_error set from the failed card
+    assert stats.get("last_error") is not None
+    assert "db constraint violation on card 0" in stats["last_error"]
+
+    # A WARNING was logged for the failed card
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("db constraint violation on card 0" in m for m in warning_messages), (
+        f"Expected WARNING about failed card; got: {warning_messages}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_logs_warn_on_zero_card_deck(patch_pipeline, caplog):
+    """When all upserts fail, a WARNING is logged mentioning '0-card deck' and last_error."""
+    import logging
+
+    from paper_ingestion.pulse.job import run_pulse
+
+    # 2 cards, both upserts fail
+    cards = [_scored(10), _scored(11)]
+    patch_pipeline["mocks"]["assemble_deck"].return_value = cards
+
+    async def always_fail(conn, paper, **_kw):
+        raise RuntimeError("catastrophic db error")
+
+    patch_pipeline["mocks"]["upsert_paper"].side_effect = always_fail
+
+    pool, _conn = _make_pool_and_conn()
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.pulse.job"):
+        stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # persist_deck still called (outer transaction still alive)
+    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
+
+    # last_error captured from the failing upserts
+    assert stats.get("last_error") is not None
+    assert "catastrophic db error" in stats["last_error"]
+
+    # A WARNING mentioning "0-card deck" must have been emitted
+    warning_messages = [r.message for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("0-card deck" in m for m in warning_messages), (
+        f"Expected WARNING containing '0-card deck'; got: {warning_messages}"
+    )
+    # The last_error value must appear in the 0-card-deck warning
+    zero_card_warnings = [m for m in warning_messages if "0-card deck" in m]
+    assert any("catastrophic db error" in m for m in zero_card_warnings), (
+        f"Expected last_error in 0-card-deck WARNING; got: {zero_card_warnings}"
+    )

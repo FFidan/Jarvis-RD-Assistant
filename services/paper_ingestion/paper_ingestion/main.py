@@ -49,12 +49,25 @@ from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
+from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
 from paper_ingestion.models import PaperSourceConfig, SourceType
 from paper_ingestion.pdf_processor import PDFProcessor
 from paper_ingestion.services.telegram_bootstrap import refresh_telegram_bot_username
 from paper_ingestion.sources.registry import get_source_class
 from paper_ingestion.verification import QuoteVerifier
+
+# WS-6: install uvloop early so the event-loop policy is set before
+# any asyncio.get_event_loop() calls.  Guarded against pytest runs because
+# uvloop.install() mutates the global policy and breaks pytest-asyncio
+# per-test loop isolation (tests pass when isolated but fail as a suite).
+if not os.environ.get("PYTEST_CURRENT_TEST"):
+    try:
+        import uvloop  # noqa: PLC0415
+
+        uvloop.install()
+    except ImportError:
+        pass
 
 configure_logging("paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -82,6 +95,9 @@ async def lifespan(app: FastAPI):
     via ``Depends()`` in endpoints.
     """
     validate_production_config()
+    # PI-EDGE-008: validate BBT_BASE_URL at startup — blocks file:// scheme and
+    # unrecognised private IPs to prevent SSRF via Zotero BBT integration.
+    validate_bbt_base_url()
 
     database_url = os.environ["DATABASE_URL"]
     qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
@@ -184,7 +200,7 @@ async def lifespan(app: FastAPI):
     importlib.import_module("paper_ingestion.paper_jobs")
     importlib.import_module("paper_ingestion.extraction_jobs")
     importlib.import_module("paper_ingestion.contradiction_jobs")
-    importlib.import_module("paper_ingestion.citations_job")
+    importlib.import_module("paper_ingestion.citations_jobs")
     importlib.import_module("paper_ingestion.pulse.job")
     importlib.import_module("paper_ingestion.pulse.training")
     importlib.import_module("paper_ingestion.integrations.zotero_service")

@@ -198,6 +198,13 @@ export function NotesTab({ paperId }: NotesTabProps) {
                       Delete
                     </Button>
                   </div>
+                  {deleteMut.isError && deleteMut.variables === note.id && (
+                    <p className="mt-1 text-xs text-destructive" role="alert">
+                      {deleteMut.error instanceof Error
+                        ? deleteMut.error.message
+                        : 'Failed to delete note'}
+                    </p>
+                  )}
                 </CardContent>
               </Card>
             ))}

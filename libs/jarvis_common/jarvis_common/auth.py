@@ -77,8 +77,43 @@ async def current_user_id(request: Request) -> int | None:
     Placeholder: multi-user support is not implemented yet.  Always returns
     None so that user_id ownership checks are a no-op for single-tenant
     deployments while remaining forward-compatible with future multi-user work.
+
+    .. warning::
+        TODO(Wave-6): Replace this with real ownership helpers once multi-tenant
+        auth is implemented.  Do NOT add new business logic that depends on this
+        returning a real user ID — it will always be None until Wave-6 ships.
+        Use :func:`current_user_id_or_none` for new code to make the intent
+        explicit, and :func:`assert_multi_tenant_not_implemented` to guard paths
+        that must not run in single-tenant mode.
+    """
+    # SEC-108: single-tenant placeholder — always None until Wave-6.
+    return None
+
+
+async def current_user_id_or_none(request: Request) -> int | None:
+    """Safe single-tenant alias for :func:`current_user_id`.
+
+    Prefer this function for new ``Depends(...)`` injection points so that the
+    call-site intent is explicit: "I know this can be None and I handle it."
+    Returns None in all current deployments (single-tenant).
     """
     return None
+
+
+def assert_multi_tenant_not_implemented() -> None:
+    """Raise ``NotImplementedError`` to guard code paths requiring real user IDs.
+
+    Call this inside functions that MUST have a real user identity to work
+    correctly — e.g. cross-user data isolation, ownership transfer, or any
+    path that would be a privilege escalation bug if user_id is None.
+
+    Raises
+    ------
+    NotImplementedError
+        Always, until Wave-6 multi-tenant auth is implemented.
+    """
+    # TODO(Wave-6): remove this guard once multi-tenant auth ships.
+    raise NotImplementedError("multi-tenant auth not yet implemented; use Wave-6 ownership helpers")
 
 
 def validate_production_config() -> None:

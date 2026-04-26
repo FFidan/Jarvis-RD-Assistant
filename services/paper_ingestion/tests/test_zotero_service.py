@@ -55,6 +55,12 @@ def _make_conn(**kwargs):
     conn.fetchrow = AsyncMock(return_value=kwargs.get("fetchrow"))
     conn.fetch = AsyncMock(return_value=kwargs.get("fetch", []))
     conn.execute = AsyncMock(return_value=None)
+    # Support `async with conn.transaction():` — transaction() must return a sync
+    # callable that itself returns an async context manager.
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=None)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
     return conn
 
 
@@ -167,40 +173,29 @@ async def test_push_paper_no_project_links():
 
 
 async def test_push_paper_happy_path():
-    """push_paper_to_zotero creates item, stores key, and attempts BBT key fetch."""
+    """push_paper_to_zotero creates item, stores key, and attempts BBT key fetch.
+
+    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Connection sequence:
+      1. acquire() for _get_zotero_config fetch (config_conn)
+      2. acquire() for entire push body (push_conn — handles paper fetch, topics,
+         project fetch, project key update, paper key update, BBT key update)
+    """
     paper = _paper_row(project_ids=[10])
     project = _project_row(col_key=None)  # no pre-existing collection key
     topic_rows: list = []
 
-    # Connection sequence:
-    # 1. acquire() for _get_zotero_config fetch
-    # 2. acquire() for fetchrow(paper)
-    # 3. acquire() for fetch(topic_rows)
-    # 4. acquire() for fetchrow(project)
-    # 5. acquire() for execute(UPDATE projects …)
-    # 6. acquire() for execute(UPDATE papers zotero_item_key)
-    # 7. acquire() for execute(UPDATE papers zotero_citation_key)
-
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
-    conn1 = _make_conn(fetchrow=paper)
-    conn2 = _make_conn(fetch=topic_rows)
-    conn3 = _make_conn(fetchrow=project)
-    conn4 = _make_conn()
-    conn5 = _make_conn()
-    conn6 = _make_conn()
+
+    # Single connection used for all push sub-queries; configure it to return
+    # appropriate values for successive fetchrow / fetch calls.
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=topic_rows)
+    push_conn.execute = AsyncMock(return_value=None)
 
     pool = MagicMock()
-    pool.acquire = MagicMock(
-        side_effect=[
-            _cm(config_conn),
-            _cm(conn1),
-            _cm(conn2),
-            _cm(conn3),
-            _cm(conn4),
-            _cm(conn5),
-            _cm(conn6),
-        ]
-    )
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -221,12 +216,12 @@ async def test_push_paper_happy_path():
 
         mock_zotero.create_item.assert_called_once()
         mock_zotero.ensure_collection.assert_called_once_with("AI Research")
-        sql = conn1.fetchrow.await_args.args[0]
+        sql = push_conn.fetchrow.await_args_list[0].args[0]
         assert "project_papers" in sql
         assert "paper_projects" not in sql
 
-        # Check that the key was persisted
-        assert any("ABCD1234" in str(c) for c in conn5.execute.call_args_list)
+        # Check that the zotero_item_key was persisted via execute
+        assert any("ABCD1234" in str(c) for c in push_conn.execute.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -235,19 +230,23 @@ async def test_push_paper_happy_path():
 
 
 async def test_push_paper_doi_dedupe():
-    """push_paper_to_zotero reuses existing Zotero item found by DOI search."""
+    """push_paper_to_zotero reuses existing Zotero item found by DOI search.
+
+    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Connection sequence:
+      1. acquire() for _get_zotero_config fetch (config_conn)
+      2. acquire() for entire push body (push_conn — handles paper fetch + key persist)
+    """
     paper = _paper_row(project_ids=[10], doi="10.1234/test")
 
-    # Connection sequence:
-    # 1. acquire() for _get_zotero_config fetch
-    # 2. acquire() for fetchrow(paper)
-    # 3. acquire() for execute(UPDATE papers zotero_item_key) — after DOI dedupe
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
-    conn1 = _make_conn(fetchrow=paper)
-    conn2 = _make_conn()
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(return_value=paper)
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
 
     pool = MagicMock()
-    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(conn1), _cm(conn2)])
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -264,7 +263,7 @@ async def test_push_paper_doi_dedupe():
         # create_item must NOT be called when DOI match is found
         mock_zotero.create_item.assert_not_called()
         # The existing key should be persisted
-        assert any("EXISTING_KEY" in str(c) for c in conn2.execute.call_args_list)
+        assert any("EXISTING_KEY" in str(c) for c in push_conn.execute.call_args_list)
 
 
 # ---------------------------------------------------------------------------
@@ -273,27 +272,25 @@ async def test_push_paper_doi_dedupe():
 
 
 async def test_push_paper_bbt_fallback():
-    """push_paper_to_zotero succeeds even when BBT returns None (non-fatal)."""
+    """push_paper_to_zotero succeeds even when BBT returns None (non-fatal).
+
+    PI-EDGE-013: push now acquires a single connection for all sub-queries.
+    Connection sequence:
+      1. acquire() for _get_zotero_config fetch (config_conn)
+      2. acquire() for entire push body (push_conn)
+    """
     paper = _paper_row(project_ids=[10])
     project = _project_row(col_key="PRECOLL")
     topic_rows: list = []
 
-    # Connection sequence:
-    # 1. config conn
-    # 2. paper fetchrow conn
-    # 3. topic fetch conn
-    # 4. project fetchrow conn
-    # 5. UPDATE papers zotero_item_key conn
     config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
-    conn1 = _make_conn(fetchrow=paper)
-    conn2 = _make_conn(fetch=topic_rows)
-    conn3 = _make_conn(fetchrow=project)
-    conn4 = _make_conn()  # UPDATE papers zotero_item_key
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=topic_rows)
+    push_conn.execute = AsyncMock(return_value=None)
 
     pool = MagicMock()
-    pool.acquire = MagicMock(
-        side_effect=[_cm(config_conn), _cm(conn1), _cm(conn2), _cm(conn3), _cm(conn4)]
-    )
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
 
     http = AsyncMock(spec=httpx.AsyncClient)
 
@@ -315,8 +312,8 @@ async def test_push_paper_bbt_fallback():
         mock_zotero.create_item.assert_called_once()
         # zotero_citation_key update should NOT be called when bbt_key is None
         # (service only calls it when bbt_key is truthy)
-        # conn4 holds the zotero_item_key update — citation_key update is skipped
-        assert conn4.execute.called
+        # push_conn.execute should have been called for zotero_item_key update only
+        assert push_conn.execute.called
 
 
 # ---------------------------------------------------------------------------
@@ -592,6 +589,62 @@ async def test_sync_annotations_for_paper_imports_zotero_highlights_idempotently
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# PI-EDGE-003: per-sync enqueue cap
+# ---------------------------------------------------------------------------
+
+
+async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
+    """poll_zotero_library enqueues at most MAX_ENQUEUE_PER_SYNC items per cycle.
+
+    When the cap is hit the library-version cursor must NOT advance, so the
+    next sync resumes from the same starting point and processes the next batch.
+    """
+    from paper_ingestion.integrations.zotero_service import MAX_ENQUEUE_PER_SYNC
+
+    # 50 new items, none with DOI (each triggers one upsert acquire()).
+    items = [_zotero_item(key=f"BULK{i:04d}", doi="") for i in range(50)]
+
+    # Build enough upsert conns for the cap + some headroom (should only use 20).
+    upsert_conns = [_make_conn(fetchrow=FakeRecord({"id": 1000 + i})) for i in range(25)]
+
+    pool = _make_poll_pool(*upsert_conns)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        # Library version advances to 999 on the Zotero side.
+        mock_client.fetch_items_since = AsyncMock(return_value=(items, 999))
+
+        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
+            mock_jobs.enqueue = AsyncMock(return_value="job-uuid")
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    # Exactly MAX_ENQUEUE_PER_SYNC jobs must have been enqueued.
+    assert mock_jobs.enqueue.call_count == MAX_ENQUEUE_PER_SYNC, (
+        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_jobs.enqueue.call_count}"
+    )
+    assert result["enqueued"] == MAX_ENQUEUE_PER_SYNC
+
+    # Version cursor must NOT have advanced — upsert_conns used for version persist.
+    # When capped, new_version is reset to last_version (0), so the persist branch
+    # is skipped: none of the upsert_conns should have had execute called with
+    # 'zotero.last_library_version'.
+    all_execute_calls = [call for conn in upsert_conns for call in conn.execute.call_args_list]
+    version_persist_calls = [
+        c for c in all_execute_calls if "zotero.last_library_version" in str(c)
+    ]
+    assert not version_persist_calls, (
+        "Version cursor must not advance when enqueue cap is hit; "
+        f"found version-persist calls: {version_persist_calls}"
+    )
+
+    # The result version_to must match the original last_version (0), not 999.
+    assert result["version_to"] == 0, (
+        f"version_to should remain at 0 when capped, got {result['version_to']}"
+    )
+
+
 async def test_get_zotero_config_encrypted_api_key(monkeypatch):
     """_get_zotero_config decrypts encrypted_value when present."""
     from cryptography.fernet import Fernet
@@ -687,3 +740,133 @@ async def test_get_zotero_config_legacy_plaintext_fallback():
     assert config["enabled"] is True
     assert config["user_id"] == "123456"
     assert config["library_type"] == "user"
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-009: sync_annotations_for_paper — transaction rollback on mid-loop failure
+# ---------------------------------------------------------------------------
+
+
+async def test_sync_annotations_rolls_back_on_mid_loop_failure():
+    """PI-EDGE-009: if conn.execute raises mid-loop, the whole transaction rolls back.
+
+    We simulate 5 annotations where the 3rd upsert raises RuntimeError. The
+    transaction context manager should propagate the exception, rolling back all
+    previous upserts. We verify:
+      - The exception propagates out of sync_annotations_for_paper.
+      - The transaction was entered (conn.transaction called once).
+      - conn.execute was awaited exactly 3 times (annotations 1 & 2 succeed; 3rd raises).
+    """
+    import pytest
+
+    config_conn = _make_conn(fetch=_zotero_enabled_with_annotations_rows())
+    paper_conn = _make_conn(fetchrow=FakeRecord({"id": 5, "zotero_item_key": "ITEM9999"}))
+
+    # persist_conn: execute succeeds twice then raises on the 3rd call.
+    persist_conn = _make_conn()
+    execute_side_effects = [None, None, RuntimeError("DB error on 3rd upsert"), None, None]
+    persist_conn.execute = AsyncMock(side_effect=execute_side_effects)
+
+    pool = _make_pool(config_conn, paper_conn, persist_conn)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    annotations = [
+        {
+            "key": f"ANN{i}",
+            "data": {
+                "annotationText": f"Highlight {i}",
+                "annotationComment": "",
+                "annotationPageLabel": str(i),
+            },
+        }
+        for i in range(1, 6)
+    ]
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client_cls.return_value.get_item_children = AsyncMock(return_value=annotations)
+
+        with pytest.raises(RuntimeError, match="DB error on 3rd upsert"):
+            await sync_annotations_for_paper(paper_id=5, db_pool=pool, http_client=http)
+
+    # Transaction was entered exactly once.
+    persist_conn.transaction.assert_called_once()
+    # execute was awaited 3 times: annotations 1 & 2 succeed, 3rd raises.
+    assert persist_conn.execute.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-011: _get_zotero_config — decrypt failure returns {} and logs warning
+# ---------------------------------------------------------------------------
+
+
+async def test_get_zotero_config_returns_empty_dict_on_decrypt_failure(caplog):
+    """PI-EDGE-011: if decrypt_secret raises, _get_zotero_config returns {} and warns."""
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    # One encrypted row — decrypt will fail.
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": None,
+                "encrypted_value": b"bad-ciphertext",
+            }
+        )
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    # decrypt_secret is imported inside _get_zotero_config from jarvis_common.crypto.
+    with patch("jarvis_common.crypto.decrypt_secret", side_effect=ValueError("bad token")):
+        with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
+            result = await _get_zotero_config(pool)
+
+    assert result == {}, f"Expected empty dict on decrypt failure, got {result}"
+    assert any("decrypt failed" in record.message for record in caplog.records), (
+        f"Expected warning about decrypt failure; got: {[r.message for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-013: push_paper_to_zotero — single connection acquisition
+# ---------------------------------------------------------------------------
+
+
+async def test_push_paper_to_zotero_acquires_single_connection():
+    """PI-EDGE-013: push_paper_to_zotero acquires exactly one DB connection for the push body.
+
+    The config connection (_get_zotero_config) is a separate acquire that is
+    always present. The push body must use exactly one additional acquire.
+    Total expected: 2 acquires (1 config + 1 push).
+    """
+    paper = _paper_row(project_ids=[10])
+    project = _project_row(col_key="PRECOLL")
+
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, project])
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.search_by_doi = AsyncMock(return_value=None)
+        mock_zotero.create_item = AsyncMock(
+            return_value={"successful": {"0": {"key": "SINGLECONN"}}, "unchanged": {}, "failed": {}}
+        )
+        mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
+
+        await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
+
+    # Exactly 2 acquire() calls: config + push body.
+    assert pool.acquire.call_count == 2, (
+        f"Expected 2 pool.acquire() calls (config + push), got {pool.acquire.call_count}"
+    )

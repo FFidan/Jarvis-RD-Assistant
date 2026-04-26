@@ -156,7 +156,7 @@ class CreateJobRequest(BaseModel):
     """
 
     kind: str
-    payload: dict[str, Any] = {}
+    payload: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _validate_payload_for_kind(self) -> CreateJobRequest:

@@ -62,8 +62,7 @@ export function ResearchFeedPage() {
     if (externalSources.length > 0 && selectedSourceTypes.length === 0) {
       setSelectedSourceTypes(externalSources.map((s) => s.source_type));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [externalSources.length]);
+  }, [externalSources]);
 
   // Sync tab → URL when user clicks a tab
   const handleTabChange = useCallback(

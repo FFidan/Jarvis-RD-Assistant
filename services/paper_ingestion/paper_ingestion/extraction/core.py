@@ -214,11 +214,20 @@ async def extract_fields_for_paper(
                 value = None
                 quote = None
 
+        # PI-CORE-007: when there is no verifier, confidence is always 0.0
+        # regardless of whether a quote was supplied — unverified quotes must
+        # not receive a non-zero confidence score.
+        if verified:
+            confidence = 1.0
+        elif verifier and quote:
+            confidence = 0.5
+        else:
+            confidence = 0.0
         extractions[field_name] = ExtractedField(
             value=value,
             quote=quote,
             verified=verified,
-            confidence=1.0 if verified else 0.5 if quote else 0.0,
+            confidence=confidence,
             chunk_id=chunk_id,
             page_number=page_number,
         )

@@ -180,7 +180,6 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
             queryClient.invalidateQueries({ queryKey: ['cards'] });
             queryClient.invalidateQueries({ queryKey: ['decks'] });
             queryClient.invalidateQueries({ queryKey: ['card-stats'] });
-            console.info('[GenerateCardsDialog] generation succeeded', row.result);
           }
         }
       } catch (err) {

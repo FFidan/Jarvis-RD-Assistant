@@ -168,7 +168,7 @@ export function AuthorSection() {
                   <Button size="sm" variant="ghost" onClick={() => handleToggle(author)}>
                     {author.enabled ? 'Disable' : 'Enable'}
                   </Button>
-                  <Button size="icon" variant="ghost" onClick={() => handleDelete(author.id)}>
+                  <Button size="icon" variant="ghost" onClick={() => handleDelete(author.id)} aria-label="Delete author">
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>

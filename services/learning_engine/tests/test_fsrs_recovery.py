@@ -6,6 +6,8 @@ by falling back to a new Card instead of crashing.
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from fsrs import Rating
 from learning_engine.fsrs_manager import FSRSManager
@@ -112,3 +114,29 @@ class TestScheduleReviewCorruptState:
         # Both should produce structurally identical results
         assert set(fresh_result.keys()) == set(corrupt_result.keys())
         assert set(fresh_log.keys()) == set(corrupt_log.keys())
+
+    def test_fsrs_invalid_state_logs_warning_and_resets(
+        self, manager: FSRSManager, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """LE-003: corrupt fsrs_state must emit a WARNING log before resetting to new card."""
+        corrupt_state = {"garbage": True}
+        card_id = 42
+
+        with caplog.at_level(logging.WARNING, logger="learning_engine.fsrs_manager"):
+            new_state, review_log, next_due = manager.schedule_review(
+                corrupt_state, Rating.Good, card_id=card_id
+            )
+
+        # Result is still valid
+        assert isinstance(new_state, dict)
+        assert isinstance(review_log, dict)
+        assert next_due is not None
+
+        # A warning must have been emitted
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warning_records, "Expected at least one WARNING log from fsrs_manager"
+
+        warning_text = warning_records[0].getMessage()
+        # Message should mention the corrupt state repr and the card id
+        assert repr(corrupt_state) in warning_text or str(corrupt_state) in warning_text
+        assert str(card_id) in warning_text

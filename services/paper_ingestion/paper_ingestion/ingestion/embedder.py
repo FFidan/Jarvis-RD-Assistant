@@ -220,12 +220,16 @@ class Embedder:
                         # Force-split oversized paragraphs by token windows
                         if token_count(para) > CHUNK_TOKEN_LIMIT:
                             tokens = enc.encode(para)
+                            # PI-CORE-005: track char advance via decoded window lengths
+                            # instead of linear-interpolation which is inaccurate when
+                            # token lengths vary (e.g. multibyte chars, BPE tokens).
+                            char_advance = 0
                             for j in range(
                                 0, len(tokens), CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS
                             ):
                                 window = tokens[j : j + CHUNK_TOKEN_LIMIT]
                                 sub_text = enc.decode(window)
-                                sub_start = para_offset + (j * len(para) // max(len(tokens), 1))
+                                sub_start = para_offset + char_advance
                                 mid = sub_start + len(sub_text) // 2
                                 chunks.append(
                                     ChunkForEmbedding(
@@ -237,6 +241,10 @@ class Embedder:
                                     )
                                 )
                                 chunk_index += 1
+                                # Advance only by the non-overlapping stride so the
+                                # next window's start_char aligns with decoded text.
+                                stride_end = j + CHUNK_TOKEN_LIMIT - CHUNK_OVERLAP_TOKENS
+                                char_advance += len(enc.decode(tokens[j:stride_end]))
                             current_text = ""
                         else:
                             current_text = para
@@ -715,6 +723,9 @@ class Embedder:
         # ------------------------------------------------------------------
         # BM25 leg — PostgreSQL full-text search
         # ------------------------------------------------------------------
+        # PI-CORE-006: fetch limit+offset candidates so pagination works correctly
+        # after RRF fusion.  Cap at 200 to match search_chunks_global's guard.
+        candidate_limit = min(limit + offset, 200)
         bm25_sql = """
             SELECT p.id, p.title, p.authors, p.url, p.abstract,
                    p.published_date,
@@ -726,7 +737,7 @@ class Embedder:
             LIMIT $2
         """
         async with db_pool.acquire() as conn:
-            bm25_rows = await conn.fetch(bm25_sql, query, 20)
+            bm25_rows = await conn.fetch(bm25_sql, query, candidate_limit)
 
         # Build rank map (1-indexed)
         bm25_rank_map: dict[int, int] = {}
@@ -746,7 +757,9 @@ class Embedder:
         # ------------------------------------------------------------------
         # Semantic leg — Qdrant global chunk search, aggregated by paper
         # ------------------------------------------------------------------
-        chunks = await self.search_chunks_global(query, limit=30, score_threshold=0.05)
+        # PI-CORE-006: match the same candidate_limit so both legs see the full
+        # pool needed to produce correct RRF rankings before offset is applied.
+        chunks = await self.search_chunks_global(query, limit=candidate_limit, score_threshold=0.05)
 
         # Aggregate: max chunk score per paper
         paper_max_score: dict[int, float] = defaultdict(float)

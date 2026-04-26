@@ -13,6 +13,7 @@ from paper_ingestion.integrations.zotero_client import (
     BBT_LOCAL_BASE,
     ZOTERO_API_BASE,
     ZoteroClient,
+    validate_bbt_base_url,
 )
 
 # ---------------------------------------------------------------------------
@@ -311,6 +312,70 @@ async def test_fetch_bbt_citation_key_connection_error(client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# fetch_items_since — PI-EDGE-001 pagination
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_fetch_items_since_paginates(client):
+    """fetch_items_since accumulates all pages and returns version from last page.
+
+    Scenario: 350 total items across 4 pages (100 + 100 + 100 + 50).
+    Each page returns a distinct Zotero-Last-Modified-Version header;
+    the returned version must be from the 4th (final) page.
+    """
+    page_versions = {0: "1001", 100: "1002", 200: "1003", 300: "1004"}
+    starts: list[int] = []
+
+    def side_effect(request):
+        params = dict(request.url.params)
+        start = int(params.get("start", 0))
+        starts.append(start)
+        count = 100 if start < 300 else 50
+        items = [{"key": f"ITEM{start + i:04d}", "data": {}} for i in range(count)]
+        return httpx.Response(
+            200,
+            json=items,
+            headers={
+                "Total-Results": "350",
+                "Zotero-Last-Modified-Version": page_versions[start],
+            },
+        )
+
+    respx.get(f"{BASE}/items").mock(side_effect=side_effect)
+
+    items, new_version = await client.fetch_items_since(0)
+
+    assert len(items) == 350, f"Expected 350 items, got {len(items)}"
+    assert new_version == 1004, f"Expected version 1004 from last page, got {new_version}"
+    assert starts == [0, 100, 200, 300], f"Unexpected page starts: {starts}"
+
+
+@respx.mock
+async def test_fetch_items_since_single_page_no_extra_requests(client):
+    """fetch_items_since stops after one page when fewer than 100 items returned."""
+    items = [{"key": f"ITEM{i:04d}", "data": {}} for i in range(25)]
+    get_route = respx.get(f"{BASE}/items").mock(
+        return_value=httpx.Response(
+            200,
+            json=items,
+            headers={"Total-Results": "25", "Zotero-Last-Modified-Version": "99"},
+        )
+    )
+
+    result_items, new_version = await client.fetch_items_since(0)
+
+    assert len(result_items) == 25
+    assert new_version == 99
+    assert get_route.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# test_connection
+# ---------------------------------------------------------------------------
+
+
 @respx.mock
 async def test_test_connection_success(client):
     """test_connection returns True when the API responds with 200."""
@@ -329,3 +394,43 @@ async def test_test_connection_failure(client):
     result = await client.test_connection()
 
     assert result is False
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-008: validate_bbt_base_url() — scheme + private-IP guard
+# ---------------------------------------------------------------------------
+
+
+def test_validate_bbt_base_url_rejects_file_scheme():
+    """PI-EDGE-008: file:// scheme must be rejected by validate_bbt_base_url."""
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        validate_bbt_base_url("file:///etc/passwd")
+
+
+def test_validate_bbt_base_url_rejects_ftp_scheme():
+    """PI-EDGE-008: ftp:// scheme must be rejected by validate_bbt_base_url."""
+    with pytest.raises(ValueError, match="unsupported scheme"):
+        validate_bbt_base_url("ftp://host.docker.internal:23119")
+
+
+def test_validate_bbt_base_url_rejects_private_ip():
+    """PI-EDGE-008: private IP addresses not in the allow-list are rejected."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://192.168.1.1:23119")
+
+
+def test_validate_bbt_base_url_rejects_loopback_ip():
+    """PI-EDGE-008: loopback IP 127.0.0.1 is rejected (not the docker alias)."""
+    with pytest.raises(ValueError, match="private/loopback"):
+        validate_bbt_base_url("http://127.0.0.1:23119")
+
+
+def test_validate_bbt_base_url_accepts_host_docker_internal():
+    """PI-EDGE-008: host.docker.internal is explicitly allowed (Docker-Desktop standard)."""
+    # Must not raise — this is the default BBT_BASE_URL hostname.
+    validate_bbt_base_url("http://host.docker.internal:23119")
+
+
+def test_validate_bbt_base_url_accepts_https_public_host():
+    """PI-EDGE-008: https:// with a public hostname is accepted."""
+    validate_bbt_base_url("https://my-zotero-bbt.example.com:23119")

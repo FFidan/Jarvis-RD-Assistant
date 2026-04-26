@@ -57,7 +57,7 @@ export function ProjectDetail({ project, onDeleted }: ProjectDetailProps) {
             {project.status}
           </Badge>
         </div>
-        <Button variant="ghost" size="icon" onClick={() => setShowDelete(true)}>
+        <Button variant="ghost" size="icon" onClick={() => setShowDelete(true)} aria-label="Delete project">
           <Trash2 className="h-4 w-4 text-muted-foreground" />
         </Button>
       </div>

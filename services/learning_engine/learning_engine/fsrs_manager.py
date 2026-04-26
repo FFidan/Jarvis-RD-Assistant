@@ -29,7 +29,9 @@ class FSRSManager:
         card = Card()
         return dict(card.to_dict()), card.due
 
-    def schedule_review(self, fsrs_state: dict, rating: int) -> tuple[dict, dict, datetime]:
+    def schedule_review(
+        self, fsrs_state: dict, rating: int, card_id: int | str | None = None
+    ) -> tuple[dict, dict, datetime]:
         """Schedule a review and return updated state.
 
         Parameters
@@ -47,7 +49,9 @@ class FSRSManager:
         try:
             card = Card.from_dict(fsrs_state)
         except (KeyError, TypeError, ValueError):
-            logger.warning("Invalid fsrs_state, treating as new card: %s", fsrs_state)
+            logger.warning(
+                "Invalid FSRS state %s for card %s, resetting", repr(fsrs_state), card_id
+            )
             card = Card()
         fsrs_rating = Rating(rating)
         new_card, review_log = self.scheduler.review_card(card, fsrs_rating)

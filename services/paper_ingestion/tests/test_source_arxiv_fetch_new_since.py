@@ -167,7 +167,7 @@ async def test_fetch_new_since_deduplication():
 
 @respx.mock
 async def test_fetch_new_since_date_format():
-    """submittedDate filter is formatted as YYYYMMDDHHMM TO 99999999."""
+    """submittedDate filter is formatted as YYYYMMDDHHMM TO 29991231."""
     fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
     route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
 
@@ -179,4 +179,31 @@ async def test_fetch_new_since_date_format():
     called_params = dict(route.calls[0].request.url.params)
     sq = called_params.get("search_query", "")
     assert "202604091330" in sq
-    assert "99999999" in sq
+    # PI-EDGE-014: sentinel ceiling is 29991231, not the ambiguous 99999999
+    assert "29991231" in sq
+    assert "99999999" not in sq
+
+
+@respx.mock
+async def test_arxiv_no_magic_ceiling_in_query_url():
+    """PI-EDGE-014: fetch_new_since must NOT use 99999999 as submittedDate ceiling.
+
+    The magic number 99999999 is an invalid arXiv date that may be silently
+    rejected by the API.  The implementation should use a far-future sentinel
+    (29991231) with an explanatory comment instead.
+    """
+    fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
+    route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
+
+    source = _make_source()
+    since = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+
+    await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    called_params = dict(route.calls[0].request.url.params)
+    sq = called_params.get("search_query", "")
+    assert "99999999" not in sq, (
+        "Magic ceiling 99999999 must not appear in arXiv submittedDate query — "
+        "use 29991231 (year 2999) instead"
+    )
+    assert "29991231" in sq, "Expected far-future sentinel 29991231 in submittedDate range"

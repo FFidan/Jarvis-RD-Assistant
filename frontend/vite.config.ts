@@ -15,6 +15,29 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules/cytoscape')) return 'vendor-cytoscape';
+          if (id.includes('node_modules/recharts')) return 'vendor-recharts';
+          if (
+            id.includes('node_modules/react-markdown') ||
+            id.includes('node_modules/rehype') ||
+            id.includes('node_modules/remark') ||
+            id.includes('node_modules/unified') ||
+            id.includes('node_modules/mdast') ||
+            id.includes('node_modules/hast') ||
+            id.includes('node_modules/micromark') ||
+            id.includes('node_modules/vfile') ||
+            id.includes('node_modules/unist')
+          ) {
+            return 'vendor-markdown';
+          }
+        },
+      },
+    },
+  },
   server: {
     port: 3001,
     proxy: {

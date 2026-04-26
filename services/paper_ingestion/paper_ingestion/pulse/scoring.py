@@ -359,5 +359,9 @@ async def stage3_combine(
                 reasoning_confidence=sc.reasoning_confidence,
             )
         )
-    result.sort(key=lambda sc: sc.final_score or 0.0, reverse=True)
+
+    def _sort_key(sc: ScoredCandidate) -> float:
+        return sc.final_score if sc.final_score is not None else float("-inf")
+
+    result.sort(key=_sort_key, reverse=True)
     return result

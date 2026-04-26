@@ -60,7 +60,6 @@ _STOP_WORDS = {
     "with",
 }
 _WORD_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{2,}")
-_NEGATION_RE = re.compile(r"\b(no|not|never|without|fails?|failed|failure|cannot|can't|does not)\b")
 _POSITIVE_CUES = {
     "better",
     "benefit",
@@ -103,6 +102,20 @@ _NEGATIVE_CUES = {
     "worsened",
     "worsens",
 }
+# Build word-boundary regexes with longest-first alternation to prevent shorter cues
+# (e.g. "reduces") from shadowing longer multi-word cues (e.g. "reduces error").
+_POSITIVE_RE = re.compile(
+    r"(?<!\w)("
+    + "|".join(re.escape(c) for c in sorted(_POSITIVE_CUES, key=len, reverse=True))
+    + r")(?!\w)",
+    re.IGNORECASE,
+)
+_NEGATIVE_RE_CUES = re.compile(
+    r"(?<!\w)("
+    + "|".join(re.escape(c) for c in sorted(_NEGATIVE_CUES, key=len, reverse=True))
+    + r")(?!\w)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -143,11 +156,46 @@ def _jaccard(a: set[str], b: set[str]) -> float:
 
 
 def _polarity_score(text: str) -> int:
-    """Return -1, 0, or 1 from explicit negation and sentiment-like cues."""
+    """Return -1, 0, or 1 from word-boundary cue matching.
+
+    Uses a greedy non-overlapping match selection so that longer, more-specific
+    cues (e.g. the positive ``"reduces error"`` or the negative
+    ``"not significant"``) take priority over shorter sub-matches (e.g. negative
+    ``"reduces"`` or positive ``"significant"``).  This prevents two double-count
+    bugs present in the old substring ``in`` implementation:
+
+    * ``"reduces error"`` previously matched positive *and* ``"reduces"`` matched
+      negative, cancelling out.
+    * ``"not significant"`` matched negative via both ``_NEGATIVE_CUES`` (for the
+      full phrase) and a bare negation check (for ``"not"``), inflating the negative count.
+
+    Bare negation words (``"not"``, ``"no"``) are intentionally not matched separately:
+    the negative-cue set already covers ``"no benefit"``, ``"no improvement"``, and
+    ``"not significant"``; a separate bare-negation pattern would double-count every
+    phrase captured by those multi-word cues.
+    """
     lowered = text.lower()
-    positive = sum(1 for cue in _POSITIVE_CUES if cue in lowered)
-    negative = sum(1 for cue in _NEGATIVE_CUES if cue in lowered)
-    negative += len(_NEGATION_RE.findall(lowered))
+    # Collect all candidate matches from both regexes, tagged with polarity.
+    all_matches: list[tuple[int, int, int]] = []
+    for m in _POSITIVE_RE.finditer(lowered):
+        all_matches.append((m.start(), m.end(), 1))
+    for m in _NEGATIVE_RE_CUES.finditer(lowered):
+        all_matches.append((m.start(), m.end(), -1))
+    # Sort longest-first so that multi-word cues consume their span before
+    # shorter alternatives can claim the overlapping characters.
+    all_matches.sort(key=lambda x: (-(x[1] - x[0]), x[0]))
+    # Greedy non-overlapping selection.
+    used: list[tuple[int, int]] = []
+    positive = 0
+    negative = 0
+    for start, end, polarity in all_matches:
+        if any(s < end and start < e for s, e in used):
+            continue  # overlaps an already-accepted match
+        used.append((start, end))
+        if polarity == 1:
+            positive += 1
+        else:
+            negative += 1
     if positive == negative:
         return 0
     return 1 if positive > negative else -1
@@ -233,41 +281,86 @@ async def _load_verified_findings(
     return findings
 
 
+def _score_pair(
+    a: VerifiedFinding,
+    b: VerifiedFinding,
+    *,
+    cross_ref: bool,
+) -> ContradictionCandidate | None:
+    """Score a candidate (a, b) pair and return a ContradictionCandidate or None if filtered."""
+    terms_a = _terms(f"{a.title} {a.finding} {a.quote}")
+    terms_b = _terms(f"{b.title} {b.finding} {b.quote}")
+    overlap = terms_a & terms_b
+    semantic_score = _jaccard(terms_a, terms_b)
+    if not cross_ref and len(overlap) < 2 and semantic_score < 0.08:
+        return None
+    polarity_delta, polarity_reason = _polarity_adjustment(a, b)
+    lexical_score = min(len(overlap) / 10, 0.7)
+    score = lexical_score + min(semantic_score, 0.35) + (0.5 if cross_ref else 0.0)
+    score = max(0.01, score + polarity_delta)
+    reasons: list[str] = []
+    if cross_ref:
+        reasons.append("cross_reference")
+    if overlap:
+        reasons.append("term_overlap")
+    if semantic_score:
+        reasons.append(f"semantic:{semantic_score:.2f}")
+    reasons.append(polarity_reason)
+    return ContradictionCandidate(a=a, b=b, score=score, reason="|".join(reasons))
+
+
 def build_contradiction_candidates(
     findings: list[VerifiedFinding],
     *,
     paper_id: int | None = None,
     limit: int = 25,
 ) -> list[ContradictionCandidate]:
-    """Return a ranked list of likely contradiction candidates."""
+    """Return a ranked list of likely contradiction candidates.
+
+    For library-wide scans (``paper_id=None``) only cross-referenced pairs are
+    evaluated, avoiding O(n²) complexity when the library is large.  For
+    single-paper queries the full quadratic scan is kept because exhaustive
+    coverage matters more than performance there.
+    """
     candidates: list[ContradictionCandidate] = []
-    for idx, a in enumerate(findings):
-        terms_a = _terms(f"{a.title} {a.finding} {a.quote}")
-        for b in findings[idx + 1 :]:
-            if a.paper_id == b.paper_id:
-                continue
-            if paper_id is not None and paper_id not in {a.paper_id, b.paper_id}:
-                continue
-            terms_b = _terms(f"{b.title} {b.finding} {b.quote}")
-            overlap = terms_a & terms_b
-            cross_ref = b.paper_id in a.cross_reference_ids or a.paper_id in b.cross_reference_ids
-            semantic_score = _jaccard(terms_a, terms_b)
-            if not cross_ref and len(overlap) < 2 and semantic_score < 0.08:
-                continue
-            polarity_delta, polarity_reason = _polarity_adjustment(a, b)
-            lexical_score = min(len(overlap) / 10, 0.7)
-            score = lexical_score + min(semantic_score, 0.35) + (0.5 if cross_ref else 0.0)
-            score = max(0.01, score + polarity_delta)
-            reasons: list[str] = []
-            if cross_ref:
-                reasons.append("cross_reference")
-            if overlap:
-                reasons.append("term_overlap")
-            if semantic_score:
-                reasons.append(f"semantic:{semantic_score:.2f}")
-            reasons.append(polarity_reason)
-            reason = "|".join(reasons)
-            candidates.append(ContradictionCandidate(a=a, b=b, score=score, reason=reason))
+
+    if paper_id is None:
+        # --- Library-wide scan: cross-ref pre-filter only (O(n × avg_refs)) ---
+        # Build an index from paper_id → findings for that paper.
+        by_paper: dict[int, list[VerifiedFinding]] = {}
+        for f in findings:
+            by_paper.setdefault(f.paper_id, []).append(f)
+
+        # Iterate only pairs where one finding explicitly cross-references the other.
+        seen_pairs: set[tuple[int, int]] = set()
+        for a in findings:
+            for ref_id in a.cross_reference_ids:
+                for b in by_paper.get(ref_id, []):
+                    if a.paper_id == b.paper_id:
+                        continue
+                    # Canonicalise pair to avoid scoring (a,b) and (b,a) separately.
+                    pair = (min(a.paper_id, b.paper_id), max(a.paper_id, b.paper_id))
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+                    cross_ref = True
+                    candidate = _score_pair(a, b, cross_ref=cross_ref)
+                    if candidate is not None:
+                        candidates.append(candidate)
+    else:
+        # --- Single-paper query: full O(n²) scan for exhaustive coverage ---
+        for idx, a in enumerate(findings):
+            for b in findings[idx + 1 :]:
+                if a.paper_id == b.paper_id:
+                    continue
+                if paper_id not in {a.paper_id, b.paper_id}:
+                    continue
+                cross_ref = (
+                    b.paper_id in a.cross_reference_ids or a.paper_id in b.cross_reference_ids
+                )
+                candidate = _score_pair(a, b, cross_ref=cross_ref)
+                if candidate is not None:
+                    candidates.append(candidate)
 
     return sorted(candidates, key=lambda item: item.score, reverse=True)[:limit]
 
@@ -403,8 +496,8 @@ async def _persist_contradiction(
         SELECT id FROM paper_contradictions
         WHERE LEAST(paper_a_id, paper_b_id) = LEAST($1::integer, $2::integer)
           AND GREATEST(paper_a_id, paper_b_id) = GREATEST($1::integer, $2::integer)
-          AND md5(quote_a) = md5($3::text)
-          AND md5(quote_b) = md5($4::text)
+          AND quote_a = $3
+          AND quote_b = $4
         LIMIT 1
         """,
         paper_a.paper_id,

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
+export const UI_STORE_KEY = 'jarvis-ui';
+
 interface UIState {
   sidebarCollapsed: boolean;
   selectedPaperId: number | null;
@@ -40,7 +42,7 @@ export const useUIStore = create<UIState>()(
       },
     }),
     {
-      name: 'jarvis-ui',
+      name: UI_STORE_KEY,
       partialize: (state) => ({
         checklistDismissed: state.checklistDismissed,
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,

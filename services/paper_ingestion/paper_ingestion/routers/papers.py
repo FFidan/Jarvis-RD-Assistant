@@ -293,6 +293,50 @@ async def mark_paper_read(
 
 
 # ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/bookmark
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/bookmark", response_model=MarkReadResponse)
+@limiter.limit("30/minute")
+async def bookmark_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Toggle bookmark (star) state for a paper.
+
+    Parameters
+    ----------
+    request : Request
+        FastAPI request (needed by rate limiter).
+    paper_id : int
+        Database paper ID.
+    db_pool : asyncpg.Pool
+        Injected database pool.
+
+    Returns
+    -------
+    dict
+        ``{"status": "ok", "paper_id": <id>}``
+    """
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id FROM papers WHERE id = $1",
+            paper_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await conn.execute(
+            """INSERT INTO paper_user_state (paper_id, status)
+               VALUES ($1, 'starred')
+               ON CONFLICT (paper_id) DO UPDATE SET status = 'starred'""",
+            paper_id,
+        )
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
 # POST /api/papers/batch-save
 # ---------------------------------------------------------------------------
 

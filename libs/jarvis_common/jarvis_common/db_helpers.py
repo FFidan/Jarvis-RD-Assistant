@@ -77,11 +77,40 @@ def validated_model(model: str) -> str:
     LLM calls go through LiteLLM which only accepts its configured aliases.
     The user_config table stores raw Ollama model names for display in the
     Settings UI, but actual API calls must use the alias.
+
+    See Also
+    --------
+    validated_model_with_reason : Returns ``(alias, fallback_reason)`` so callers
+        can surface the original model name (e.g. via ``X-LLM-Fallback`` header).
+    """
+    alias, _ = validated_model_with_reason(model)
+    return alias
+
+
+def validated_model_with_reason(model: str) -> tuple[str, str | None]:
+    """Return ``(alias, fallback_reason)`` where *fallback_reason* is None on success.
+
+    Callers that need to surface the original model name — e.g. to set an
+    ``X-LLM-Fallback: <original>`` response header — should use this function
+    instead of :func:`validated_model`.
+
+    Parameters
+    ----------
+    model:
+        The model identifier from user config or request payload.
+
+    Returns
+    -------
+    tuple[str, str | None]
+        ``(resolved_alias, fallback_reason)`` — *fallback_reason* is ``None``
+        when *model* was already a valid alias, or a human-readable message
+        when a fallback was applied.
     """
     if model in _ALIAS_MODELS:
-        return model
+        return model, None
+    reason = f"model {model!r} is not a valid LiteLLM alias; fell back to 'smart'"
     logger.warning("Ignoring invalid model %r; falling back to 'smart'", model)
-    return "smart"
+    return "smart", reason
 
 
 def get_smart_model() -> str:

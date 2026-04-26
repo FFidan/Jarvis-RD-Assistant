@@ -48,7 +48,7 @@ async def batch_fetch_citations(
     """Enqueue a citations.batch_fetch job for papers without citations_fetched_at.
 
     The job is durable and visible in the jobs table.  The handler runs in the
-    paper_ingestion worker loop (``citations_job.py``).
+    paper_ingestion worker loop (``citations_jobs.py``).
     """
     job_id = await jobs_lib.enqueue(db_pool, "citations.batch_fetch", {})
     return BatchCitationFetchResponse(queued=1, message=f"Job {job_id} queued")

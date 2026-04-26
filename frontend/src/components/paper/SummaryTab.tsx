@@ -46,8 +46,8 @@ export function SummaryTab({ summary }: SummaryTabProps) {
         <h3 className="mb-2 text-lg font-semibold">Key Findings</h3>
         {summary.key_findings && summary.key_findings.length > 0 ? (
           <div className="space-y-3">
-            {summary.key_findings.map((kf, i) => (
-              <Card key={i}>
+            {summary.key_findings.map((kf) => (
+              <Card key={kf.finding}>
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">
                     <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none">{kf.finding}</MarkdownContent>

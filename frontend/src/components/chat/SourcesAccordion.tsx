@@ -29,7 +29,7 @@ export function SourcesAccordion({ sources }: SourcesAccordionProps) {
       {open && (
         <div className="space-y-2 p-3 pt-0">
           {sources.map((source, i) => (
-            <div key={i} className="rounded border p-2 text-xs">
+            <div key={source.chunk_id ?? `src-${i}`} className="rounded border p-2 text-xs">
               {source.paper_title && (
                 <p className="font-medium">{source.paper_title}</p>
               )}

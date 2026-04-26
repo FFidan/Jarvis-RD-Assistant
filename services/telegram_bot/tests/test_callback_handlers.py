@@ -119,15 +119,51 @@ async def test_paper_detail_api_failure():
 
 @pytest.mark.asyncio
 async def test_paper_bookmark_success():
-    """paper_bookmark callback bookmarks a paper."""
-    update, context, mock_db, _ = _make_callback_update_and_context("paper_bookmark_7")
+    """paper_bookmark callback bookmarks a paper via the HTTP endpoint."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_7")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.put.return_value = mock_resp
 
     await paper_bookmark_callback(update, context)
 
     update.callback_query.answer.assert_awaited_once()
-    mock_db.execute.assert_awaited_once()
+    mock_http.put.assert_awaited_once()
+    call_args = mock_http.put.await_args
+    assert "/api/papers/7/bookmark" in call_args[0][0]
     text = update.callback_query.message.reply_text.call_args[0][0]
     assert "bookmarked" in text.lower() or "7" in text
+
+
+@pytest.mark.asyncio
+async def test_paper_bookmark_callback_calls_http_endpoint():
+    """paper_bookmark_callback PUTs to the bookmark endpoint with correct paper_id and X-API-Key."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_42")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.put.return_value = mock_resp
+
+    await paper_bookmark_callback(update, context)
+
+    mock_http.put.assert_awaited_once()
+    call_args = mock_http.put.await_args
+    url = call_args[0][0]
+    headers = call_args[1]["headers"]
+    assert "/api/papers/42/bookmark" in url
+    assert headers.get("X-API-Key") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_paper_bookmark_callback_handles_api_failure():
+    """paper_bookmark_callback sends an error message when the HTTP call fails."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_99")
+    mock_http.put.side_effect = Exception("Connection refused")
+
+    await paper_bookmark_callback(update, context)
+
+    update.callback_query.answer.assert_awaited_once()
+    text = update.callback_query.message.reply_text.call_args[0][0]
+    assert "failed" in text.lower() or "bookmark" in text.lower()
 
 
 # ---------------------------------------------------------------------------

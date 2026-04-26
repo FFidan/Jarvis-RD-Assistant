@@ -736,3 +736,134 @@ async def test_settings_round_trip_string_no_double_encode(_app):
     except ModuleNotFoundError:
         # croniter is not installed on the host; this assertion runs in Docker.
         pass
+
+
+# ---------------------------------------------------------------------------
+# SEC-105: test_provider rate limiting + error body sanitization
+# ---------------------------------------------------------------------------
+
+
+def _make_provider_app():
+    """Build a test app with auth bypassed but rate limiter ENABLED."""
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+    from paper_ingestion.main import app
+
+    mock_pool, conn = _make_pool_and_conn()
+    app.state.db_pool = mock_pool
+    app.state.limiter.enabled = True
+    app.state.limiter.reset()
+
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    return app, conn
+
+
+@pytest.mark.asyncio
+async def test_test_provider_rate_limited_after_5_calls():
+    """POST /api/providers/{provider}/test returns 429 after 5 calls per minute (SEC-105)."""
+    from paper_ingestion.main import app
+
+    pool, conn = _make_pool_and_conn()
+    # No API key configured → returns ok=False quickly (no external HTTP needed)
+    conn.fetchrow.return_value = None
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = True
+    app.state.limiter.reset()
+
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            responses = []
+            for _ in range(6):
+                resp = await client.post("/api/providers/anthropic/test")
+                responses.append(resp.status_code)
+
+        # First 5 must succeed (200), 6th must be rate-limited (429)
+        assert responses[:5] == [200] * 5, f"Expected 5×200 but got: {responses[:5]}"
+        assert responses[5] == 429, f"Expected 429 on 6th call but got: {responses[5]}"
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = False
+        app.state.limiter.reset()
+
+
+@pytest.mark.asyncio
+async def test_test_provider_error_response_does_not_leak_upstream_body():
+    """POST /api/providers/{provider}/test sanitizes upstream error body (SEC-105).
+
+    When the upstream provider returns a non-2xx response, the error field must
+    contain a generic message like 'provider returned HTTP <status>' rather than
+    any portion of the upstream response body (which could contain sensitive
+    diagnostic information).
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from paper_ingestion.main import app
+
+    pool, conn = _make_pool_and_conn()
+    # Simulate a stored (plaintext legacy) API key so the HTTP probe fires
+    conn.fetchrow.return_value = FakeRecord(
+        key="llm.anthropic.api_key",
+        value="sk-test-key",
+        encrypted_value=None,
+    )
+
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    # Build a mock httpx response with a sensitive-looking body
+    sensitive_body = '{"error": {"message": "Invalid API key sk-test-key — account suspended"}}'
+    mock_response = MagicMock()
+    mock_response.is_success = False
+    mock_response.status_code = 401
+    mock_response.text = sensitive_body
+
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_response)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    # Build the ASGI test client BEFORE patching so httpx.AsyncClient itself is not mocked
+    # for the outer test call — only the inner call inside the router is intercepted.
+    asgi_transport = ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(
+            transport=asgi_transport, base_url="http://test"
+        ) as test_client:
+            with patch(
+                "paper_ingestion.routers.settings.httpx.AsyncClient",
+                return_value=mock_client,
+            ):
+                resp = await test_client.post("/api/providers/anthropic/test")
+
+        assert resp.status_code == 200, f"Expected 200 from endpoint, got {resp.status_code}"
+        body = resp.json()
+        assert body["ok"] is False
+        error_msg = body.get("error", "")
+        # Must not leak any portion of the upstream body
+        assert "sk-test-key" not in error_msg, "API key leaked in error response"
+        assert "suspended" not in error_msg, "Upstream body text leaked in error response"
+        assert "Invalid" not in error_msg, "Upstream body text leaked in error response"
+        # Must contain the sanitized generic message
+        assert "401" in error_msg, f"Expected HTTP status code in error, got: {error_msg!r}"
+        assert error_msg == "provider returned HTTP 401", (
+            f"Error message not sanitized: {error_msg!r}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = False

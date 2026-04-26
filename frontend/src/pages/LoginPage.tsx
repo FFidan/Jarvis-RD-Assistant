@@ -47,6 +47,7 @@ export function LoginPage() {
                   setError('');
                 }}
                 placeholder="Enter JARVIS_API_KEY"
+                autoComplete="current-password"
                 autoFocus
                 disabled={loading}
               />

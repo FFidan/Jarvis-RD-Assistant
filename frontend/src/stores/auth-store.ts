@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import { UI_STORE_KEY } from '@/stores/ui-store';
 
 /**
  * Real API-key-based authentication.
@@ -48,7 +49,7 @@ export const useAuthStore = create<AuthState>()(
       logout() {
         // Clear the UI store's persisted localStorage entry so a fresh login
         // doesn't inherit stale UI state from a previous session.
-        localStorage.removeItem('jarvis-ui');
+        localStorage.removeItem(UI_STORE_KEY);
         set({ isAuthenticated: false, authTime: null, apiKey: null });
       },
 

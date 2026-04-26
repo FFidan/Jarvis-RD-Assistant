@@ -53,7 +53,7 @@ export function KGQueryInput() {
           <CardContent className="space-y-2">
             {mutation.data.results.map((r, i) => (
               <pre
-                key={i}
+                key={`result-${i}`}
                 className="overflow-x-auto rounded bg-muted p-2 text-xs"
               >
                 {JSON.stringify(r, null, 2)}

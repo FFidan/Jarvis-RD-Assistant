@@ -66,7 +66,7 @@ export function Sidebar() {
           {!sidebarCollapsed && (
             <span className="text-lg font-bold">JARVIS</span>
           )}
-          <Button variant="ghost" size="icon" onClick={toggleSidebar} className="ml-auto">
+          <Button variant="ghost" size="icon" onClick={toggleSidebar} className="ml-auto" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
             {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </Button>
         </div>

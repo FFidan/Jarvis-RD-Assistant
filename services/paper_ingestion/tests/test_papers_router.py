@@ -326,6 +326,65 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
 
 
 @pytest.mark.asyncio
+async def test_put_paper_bookmark_creates_state_row():
+    """bookmark_paper should verify paper existence and upsert paper_user_state with 'starred'."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 5}
+
+    result = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+
+    assert result == {"status": "ok", "paper_id": 5}
+    assert conn.execute.await_count == 1
+    sql = conn.execute.await_args.args[0]
+    assert "INSERT INTO paper_user_state" in sql
+    assert "starred" in sql
+
+
+@pytest.mark.asyncio
+async def test_put_paper_bookmark_idempotent_on_repeat():
+    """bookmark_paper is idempotent — second call still returns ok and executes upsert."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 5}
+
+    # Call twice — both should succeed
+    result1 = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+    result2 = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+
+    assert result1 == {"status": "ok", "paper_id": 5}
+    assert result2 == {"status": "ok", "paper_id": 5}
+    # ON CONFLICT DO UPDATE means no error on repeat; execute called twice
+    assert conn.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_put_paper_bookmark_404_for_missing_paper():
+    """bookmark_paper raises 404 when the paper does not exist."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+
+    with pytest.raises(HTTPException, match="Paper not found") as exc_info:
+        await papers.bookmark_paper.__wrapped__(
+            MagicMock(),
+            paper_id=999,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_list_papers_no_filters_uses_limit_offset():
     """list_papers with no filters should still pass LIMIT/OFFSET as positional params."""
     pool, conn = _make_pool_and_conn()

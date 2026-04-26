@@ -66,7 +66,7 @@ export function MetricTileGrid({ metrics, isLoading }: MetricTileGridProps) {
     return (
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-          <SkeletonTile key={i} />
+          <SkeletonTile key={`skeleton-${i}`} />
         ))}
       </div>
     );

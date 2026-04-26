@@ -118,17 +118,17 @@ export function HomePage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-xl">Welcome to JARVIS Research Assistant</CardTitle>
-            <Button variant="ghost" size="icon" onClick={dismissChecklist}>
+            <Button variant="ghost" size="icon" onClick={dismissChecklist} aria-label="Dismiss checklist">
               <X className="h-4 w-4" />
             </Button>
           </CardHeader>
           <CardContent>
             <p className="mb-4 text-sm text-muted-foreground">Get started in 3 steps:</p>
             <div className="space-y-4">
-              {steps.map((step, i) => {
+              {steps.map((step) => {
                 const StepIcon = step.done ? CheckCircle2 : Circle;
                 return (
-                  <div key={i} className="flex items-start gap-3">
+                  <div key={step.label} className="flex items-start gap-3">
                     <StepIcon className={`mt-0.5 h-5 w-5 shrink-0 ${step.done ? 'text-green-500' : 'text-muted-foreground'}`} />
                     <div className="flex-1">
                       <p className={`font-medium ${step.done ? 'line-through text-muted-foreground' : ''}`}>

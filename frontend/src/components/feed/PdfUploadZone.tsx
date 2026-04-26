@@ -144,7 +144,7 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
       {files.length > 0 && (
         <ul className="space-y-1">
           {files.map((entry, i) => (
-            <li key={i} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2 text-xs">
+            <li key={`${entry.file.name}-${entry.file.size}`} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2 text-xs">
               <span className="truncate max-w-[60%] font-medium">{entry.file.name}</span>
               <span className="flex items-center gap-2">
                 <span className={statusColor[entry.status]}>

@@ -261,10 +261,11 @@ export function IngestionSection() {
                   variant="ghost"
                   onClick={saveEdit}
                   disabled={setMut.isPending}
+                  aria-label="Save setting"
                 >
                   <Check className="h-4 w-4" />
                 </Button>
-                <Button size="icon" variant="ghost" onClick={() => setEditingKey(null)}>
+                <Button size="icon" variant="ghost" onClick={() => setEditingKey(null)} aria-label="Cancel edit">
                   <X className="h-4 w-4" />
                 </Button>
               </div>
@@ -293,7 +294,7 @@ export function IngestionSection() {
                   {formatConfigValue(entry.value)}
                 </span>
               </div>
-              <Button size="icon" variant="ghost" onClick={() => startEdit(entry)}>
+              <Button size="icon" variant="ghost" onClick={() => startEdit(entry)} aria-label="Edit setting">
                 <Pencil className="h-4 w-4" />
               </Button>
             </>

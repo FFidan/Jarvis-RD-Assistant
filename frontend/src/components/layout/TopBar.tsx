@@ -34,7 +34,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   return (
     <header className="flex h-14 items-center gap-4 border-b bg-card px-6">
       {onMenuClick && (
-        <Button variant="ghost" size="icon" onClick={onMenuClick} className="md:hidden">
+        <Button variant="ghost" size="icon" onClick={onMenuClick} className="md:hidden" aria-label="Open menu">
           <Menu className="h-5 w-5" />
         </Button>
       )}

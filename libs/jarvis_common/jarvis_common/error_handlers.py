@@ -1,6 +1,7 @@
 """Shared exception handlers for FastAPI services."""
 
 import logging
+import os
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -10,6 +11,11 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from jarvis_common.logging_config import request_id_ctx
 
 logger = logging.getLogger(__name__)
+
+
+def _is_dev_mode() -> bool:
+    """Return True when DEV_MODE=true (case-insensitive)."""
+    return os.environ.get("DEV_MODE", "false").lower() == "true"
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
@@ -23,16 +29,34 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException) 
 async def validation_exception_handler(
     request: Request, exc: RequestValidationError
 ) -> JSONResponse:
+    """Handle Pydantic/FastAPI validation errors.
+
+    SEC-107: In production (DEV_MODE=false) the response body is redacted to
+    avoid leaking internal field names or input values.  Full pydantic error
+    details are logged server-side, keyed by request_id for correlation.
+    """
     request_id = request_id_ctx.get("") or None
+    if _is_dev_mode():
+        # Developer-friendly: surface field-level errors in the response.
+        return JSONResponse(
+            status_code=422,
+            content={
+                "detail": "Validation error",
+                "errors": [
+                    {k: v for k, v in e.items() if k not in ("input", "url")} for e in exc.errors()
+                ],
+                "request_id": request_id,
+            },
+        )
+    # Production: log full details server-side, return a generic message.
+    logger.warning(
+        "Validation error [request_id=%s]: %s",
+        request_id,
+        exc.errors(),
+    )
     return JSONResponse(
         status_code=422,
-        content={
-            "detail": "Validation error",
-            "errors": [
-                {k: v for k, v in e.items() if k not in ("input", "url")} for e in exc.errors()
-            ],
-            "request_id": request_id,
-        },
+        content={"detail": "Validation error", "request_id": request_id},
     )
 
 

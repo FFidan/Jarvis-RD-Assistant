@@ -193,4 +193,27 @@ describe('GenerateCardsDialog', () => {
     const isGeneratingAfterTerminal = genMutIsPending || (!!jobId && (!terminalJob || !TERMINAL.includes(terminalJob.status)));
     expect(isGeneratingAfterTerminal).toBe(false);
   });
+
+  // FE-013: console.info must NOT be called in production (or at all, since it was deleted).
+  it('test_create_card_form_no_console_in_production_build: console.info is never called when a job succeeds', async () => {
+    // The console.info('[GenerateCardsDialog] generation succeeded', ...) line was deleted.
+    // This test verifies it is not called during the succeeded-job polling path.
+    vi.useFakeTimers();
+    const consoleInfoSpy = vi.spyOn(console, 'info').mockImplementation(() => {});
+
+    const succeededJob = makeJob({ status: 'succeeded', result: { cards_created: 2 } });
+    // First poll returns succeeded immediately
+    mockGetJob.mockResolvedValue(succeededJob);
+    mockGenerateCardsJob.mockResolvedValue({ job_id: 'test-job-001', status: 'queued' });
+
+    renderDialog();
+
+    // Advance timers to allow polling to run
+    await vi.runAllTimersAsync();
+
+    expect(consoleInfoSpy).not.toHaveBeenCalled();
+
+    consoleInfoSpy.mockRestore();
+    vi.useRealTimers();
+  });
 });

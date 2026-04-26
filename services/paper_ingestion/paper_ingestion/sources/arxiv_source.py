@@ -236,7 +236,10 @@ class ArxivSource(PaperSource):
         # Normalise *since* to UTC, then format as arXiv date string YYYYMMDDHHMM
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         since_str = since_utc.strftime("%Y%m%d%H%M")
-        date_filter = f"submittedDate:[{since_str} TO 99999999]"
+        # PI-EDGE-014: arXiv submittedDate upper bound.  The API does not support
+        # an open-ended "TO ]" range; use a far-future sentinel (year 2999) instead
+        # of the ambiguous 99999999 which arXiv may reject as an invalid date.
+        date_filter = f"submittedDate:[{since_str} TO 29991231]"
 
         if not topics:
             # No topic filter — just poll by date

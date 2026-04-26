@@ -587,7 +587,9 @@ _SUPPORTED_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai", "google
 
 
 @router.post("/providers/{provider}/test", response_model=ProviderTestResponse)
+@limiter.limit("5/minute")
 async def test_provider(
+    request: Request,
     provider: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     _: None = Depends(verify_api_key),
@@ -647,4 +649,4 @@ async def test_provider(
 
     if resp.is_success:
         return ProviderTestResponse(ok=True)
-    return ProviderTestResponse(ok=False, error=resp.text[:200])
+    return ProviderTestResponse(ok=False, error=f"provider returned HTTP {resp.status_code}")

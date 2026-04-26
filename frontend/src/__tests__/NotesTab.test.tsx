@@ -22,7 +22,7 @@ vi.mock('@/lib/api', async () => {
   };
 });
 
-const { fetchNotes, promoteZoteroNote } = await import('@/lib/api');
+const { fetchNotes, promoteZoteroNote, deleteNote } = await import('@/lib/api');
 
 function makeNote(overrides: Partial<Note> = {}): Note {
   return {
@@ -60,6 +60,26 @@ describe('NotesTab', () => {
       if (source === 'zotero') return [makeNote()];
       return [];
     });
+  });
+
+  it('test_delete_error_renders_banner: shows inline error when deleteMut fails', async () => {
+    const userNote = makeNote({ id: 7, source: 'user', user_note: 'My note to delete' });
+    vi.mocked(fetchNotes).mockImplementation(async (_paperId, source) => {
+      if (source === 'user') return [userNote];
+      return [];
+    });
+    vi.mocked(deleteNote).mockRejectedValue(new Error('Network error'));
+    const user = userEvent.setup();
+    renderTab();
+
+    // Wait for the note to appear
+    const deleteBtn = await screen.findByRole('button', { name: /delete/i });
+    await user.click(deleteBtn);
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Network error');
   });
 
   it('shows Zotero highlights as unpromoted until explicit verification', async () => {

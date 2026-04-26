@@ -17,6 +17,7 @@ from pathlib import Path
 import httpx
 import respx
 from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources.openalex_source import (
     OPENALEX_API_URL,
     OpenAlexSource,
@@ -104,7 +105,8 @@ async def test_search_parses_fixture():
     assert "Alice Johnson" in p0.authors
     assert p0.abstract is not None
     assert "Deep" in p0.abstract
-    assert p0.pdf_url == "https://example.com/papers/nlp_deep.pdf"
+    # example.com is not in ALLOWED_PDF_DOMAINS → filtered out by PI-EDGE-007 validation
+    assert p0.pdf_url is None
     assert p0.published_date is not None
     assert p0.published_date.year == 2025
 
@@ -303,3 +305,57 @@ async def test_fetch_new_since_429_returns_empty():
     since = datetime(2026, 4, 1, tzinfo=UTC)
     papers = await source.fetch_new_since(since=since, topics=[], limit=10)
     assert papers == []
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-007: pdf_url validated against ALLOWED_PDF_DOMAINS allowlist
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_openalex_pdf_url_validated_against_allowlist(caplog):
+    """_parse_work: pdf_url with a hostname not in ALLOWED_PDF_DOMAINS is set to None.
+
+    Scenario A: unrecognised domain → pdf_url discarded, INFO logged.
+    Scenario B: arxiv.org (in allowlist) → pdf_url preserved.
+    """
+    allowed_host = next(iter(ALLOWED_PDF_DOMAINS))  # e.g. "arxiv.org"
+    allowed_url = f"https://{allowed_host}/pdf/1234.5678"
+    blocked_url = "https://evil.example.com/paper.pdf"
+
+    def _work(pdf_url_value: str | None) -> dict:
+        return {
+            "id": "https://openalex.org/W9000001",
+            "title": "Test Paper",
+            "display_name": "Test Paper",
+            "doi": None,
+            "publication_date": "2026-01-01",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "primary_location": {"pdf_url": pdf_url_value},
+        }
+
+    source = _make_source()
+
+    # Scenario A: blocked domain → None, INFO log emitted
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
+        respx.get(OPENALEX_API_URL).mock(
+            return_value=httpx.Response(200, json={"meta": {}, "results": [_work(blocked_url)]})
+        )
+        papers_blocked = await source.search("test")
+
+    assert papers_blocked[0].pdf_url is None
+    assert any("ALLOWED_PDF_DOMAINS" in r.message for r in caplog.records)
+
+    caplog.clear()
+
+    # Scenario B: allowed domain → pdf_url kept
+    with caplog.at_level(logging.INFO, logger="paper_ingestion.sources.openalex_source"):
+        respx.get(OPENALEX_API_URL).mock(
+            return_value=httpx.Response(200, json={"meta": {}, "results": [_work(allowed_url)]})
+        )
+        papers_allowed = await source.search("test")
+
+    assert papers_allowed[0].pdf_url == allowed_url
+    # No ALLOWED_PDF_DOMAINS log for an accepted URL
+    assert not any("ALLOWED_PDF_DOMAINS" in r.message for r in caplog.records)

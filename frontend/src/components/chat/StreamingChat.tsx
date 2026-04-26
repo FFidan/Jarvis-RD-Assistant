@@ -84,15 +84,15 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
           />
           <div className="flex flex-col gap-1">
             {isStreaming ? (
-              <Button type="button" variant="destructive" size="icon" onClick={stopStreaming}>
+              <Button type="button" variant="destructive" size="icon" onClick={stopStreaming} aria-label="Stop streaming">
                 <Square className="h-4 w-4" />
               </Button>
             ) : (
-              <Button type="submit" size="icon" disabled={!input.trim()}>
+              <Button type="submit" size="icon" disabled={!input.trim()} aria-label="Send message">
                 <Send className="h-4 w-4" />
               </Button>
             )}
-            <Button type="button" variant="ghost" size="icon" onClick={clearChat}>
+            <Button type="button" variant="ghost" size="icon" onClick={clearChat} aria-label="Clear chat">
               <Trash2 className="h-4 w-4" />
             </Button>
           </div>

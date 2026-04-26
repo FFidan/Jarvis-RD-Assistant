@@ -255,7 +255,7 @@ async def test_wait_for_job_notification_falls_back_when_listener_fails(monkeypa
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_pool_returning(rows: list[dict]):
+def _make_mock_pool_returning(rows: list[dict | None]):
     """Build an AsyncMock pool whose fetch() returns the given rows."""
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(side_effect=rows)
@@ -947,3 +947,156 @@ async def test_reaper_scopes_to_kinds(db_pool):
     assert own_row["status"] == "failed"
     assert own_row["error"] is not None
     assert own_row["error"]["message"] == "reaped as stale (no heartbeat)"
+
+
+# ---------------------------------------------------------------------------
+# WS-6 — LISTEN/NOTIFY wakes stream_job_events faster than poll interval
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not _DB_URL, reason="requires TEST_DATABASE_URL")
+async def test_listen_notify_wakes_stream_faster_than_poll():
+    """WS-6: a pg_notify after job status change should wake the SSE stream within 200ms.
+
+    This test requires TEST_DATABASE_URL and a jobs table (created by db_pool fixture).
+    It is gated so CI without a real DB skips cleanly.
+    """
+    if not _DB_URL:
+        pytest.skip("requires TEST_DATABASE_URL")
+
+    import asyncpg
+    from jarvis_common import init_pg_connection
+    from jarvis_common.jobs import enqueue, stream_job_events
+
+    try:
+        pool = await asyncpg.create_pool(
+            _DB_URL,
+            min_size=1,
+            max_size=3,
+            init=init_pg_connection,
+        )
+    except Exception as exc:
+        pytest.skip(f"Cannot connect to test DB: {exc}")
+        return
+
+    # Ensure jobs table exists (same DDL as db_pool fixture).
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS jobs (
+                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                kind            TEXT NOT NULL,
+                status          TEXT NOT NULL DEFAULT 'queued',
+                payload         JSONB NOT NULL DEFAULT '{}',
+                result          JSONB,
+                error           JSONB,
+                progress        FLOAT,
+                progress_message TEXT,
+                cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
+                user_id         TEXT,
+                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                started_at      TIMESTAMPTZ,
+                finished_at     TIMESTAMPTZ,
+                last_heartbeat_at TIMESTAMPTZ
+            )
+        """)
+        await conn.execute(
+            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ"
+        )
+
+    try:
+        # Insert a running job so stream_job_events has something to poll.
+        job_id = await enqueue(pool, "noop.test", {})
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE jobs SET status = 'running', started_at = NOW() WHERE id = $1::uuid",
+                job_id,
+            )
+
+        events_received: list[str] = []
+        stream_started = asyncio.Event()
+
+        async def _is_disconnected() -> bool:
+            return False
+
+        async def _consume_stream():
+            stream_started.set()
+            async for event in stream_job_events(pool, job_id, is_disconnected=_is_disconnected):
+                events_received.append(event)
+                # Stop after first terminal event to avoid running forever.
+                if '"status": "succeeded"' in event or '"status": "failed"' in event:
+                    break
+
+        stream_task = asyncio.create_task(_consume_stream())
+
+        # Wait for the stream to start, then after ~50ms flip the job to terminal.
+        await stream_started.wait()
+        await asyncio.sleep(0.05)
+
+        t0 = asyncio.get_event_loop().time()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE jobs SET status = 'succeeded', finished_at = NOW(), progress = 1.0"
+                " WHERE id = $1::uuid",
+                job_id,
+            )
+            # Notify explicitly — the trigger may not exist in the test schema.
+            from jarvis_common.jobs import JOB_NOTIFY_CHANNEL
+
+            await conn.execute("SELECT pg_notify($1, $2)", JOB_NOTIFY_CHANNEL, job_id)
+
+        # The stream should deliver the terminal event within 200ms (poll interval is 2s).
+        try:
+            await asyncio.wait_for(stream_task, timeout=0.5)
+        except TimeoutError:
+            stream_task.cancel()
+            pytest.fail(
+                f"stream_job_events did not deliver terminal event within 500ms "
+                f"({asyncio.get_event_loop().time() - t0:.2f}s elapsed)"
+            )
+
+        elapsed = asyncio.get_event_loop().time() - t0
+        assert elapsed < 0.2, f"LISTEN/NOTIFY must wake the stream in <200ms; took {elapsed:.3f}s"
+        assert any("succeeded" in e for e in events_received), (
+            "Stream must have emitted a 'succeeded' event"
+        )
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute("DELETE FROM jobs WHERE kind = 'noop.test'")
+        await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# JC-001 — empty kind_list triggers all-kinds mode in _reap_stale_jobs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reap_stale_jobs_all_kinds_mode():
+    """JC-001: passing an empty kind_list must reap stale jobs of any kind (all-kinds mode)."""
+    from jarvis_common.jobs import _reap_stale_jobs
+
+    # Build a fake row to simulate a stale job found by the reaper.
+    fake_row = {"id": "00000000-0000-0000-0000-000000000001"}
+    pool, conn = _make_mock_pool_returning([fake_row])
+    conn.execute = AsyncMock(return_value=None)  # notify_job_update uses execute
+
+    reaped = await _reap_stale_jobs(pool, [])
+
+    # The reaper must have issued a SQL call with an empty array (all-kinds mode).
+    assert conn.fetch.await_count == 1, "conn.fetch must be called exactly once"
+    sql_call_args = conn.fetch.await_args.args
+    # $2 parameter — should be the empty list (all-kinds sentinel)
+    kinds_param = sql_call_args[2]
+    assert kinds_param == [], (
+        f"kinds param must be empty list for all-kinds mode, got {kinds_param!r}"
+    )
+
+    # The SQL string must use the all-kinds guard, NOT the bare ANY filter.
+    sql_string = sql_call_args[0]
+    assert "$2::text[] = '{}'" in sql_string, (
+        "SQL must contain the all-kinds guard ($2::text[] = '{}')"
+    )
+
+    # The function must report the row count from conn.fetch.
+    assert reaped == 1, f"Expected 1 reaped job (from mock), got {reaped}"

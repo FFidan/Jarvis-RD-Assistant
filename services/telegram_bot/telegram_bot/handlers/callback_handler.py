@@ -66,7 +66,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 @rate_limit(max_calls=10, window_seconds=60)
 async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper."""
+    """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper via the backend API."""
     query = update.callback_query
     if query is None:
         return
@@ -83,14 +83,17 @@ async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_
         return
     paper_id = int(match.group(1))
 
-    db = get_db(context)
+    http = get_http(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
     try:
-        await db.execute(
-            "INSERT INTO paper_user_state (paper_id, status) "
-            "VALUES ($1, 'starred') "
-            "ON CONFLICT (paper_id) DO UPDATE SET status = 'starred'",
-            paper_id,
+        resp = await http.put(
+            f"{config.paper_ingestion_url}/api/papers/{paper_id}/bookmark",
+            headers=headers,
+            timeout=15.0,
         )
+        resp.raise_for_status()
         await query.message.reply_text(f"⭐ Paper <b>{paper_id}</b> bookmarked.", parse_mode="HTML")
     except Exception:
         logger.exception("Failed to bookmark paper id=%s", paper_id)
@@ -158,7 +161,12 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if query is None:
         return
     await query.answer()
+
+    # Guard against InaccessibleMessage — can arrive when the message is older
+    # than 48 hours.  A bare assignment silently casts the wrong type; instead
+    # we answer with an alert so the user gets feedback.
     if not isinstance(query.message, Message):
+        await query.answer("This message is no longer accessible", show_alert=True)
         return
 
     config = get_config(context)

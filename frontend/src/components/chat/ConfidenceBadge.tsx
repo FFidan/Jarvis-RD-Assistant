@@ -97,7 +97,7 @@ export function ConfidenceBadge({ confidence, verified_fraction: _, per_sentence
             <ul className="space-y-1 max-h-64 overflow-y-auto">
               {unverifiedSentences.map((s, i) => (
                 <li
-                  key={i}
+                  key={s.text || i}
                   className="text-sm px-3 py-2 rounded-md bg-red-50 border border-red-100 text-red-900"
                 >
                   {s.text}

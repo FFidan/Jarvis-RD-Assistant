@@ -20,6 +20,7 @@ from telegram.ext import (
 
 from telegram_bot.formatters import format_card_back, format_card_front
 from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 # ---------------------------------------------------------------------------
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle 'Show Answer' button — edit the message to reveal the card back."""
     query = update.callback_query
@@ -140,6 +142,7 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 # ---------------------------------------------------------------------------
 
 
+@rate_limit(max_calls=5, window_seconds=60)
 async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle rating callback — POST rating to learning engine then fetch and show next card."""
     query = update.callback_query

@@ -161,10 +161,10 @@ export function TopicSection() {
                           className="w-32"
                         />
                       </div>
-                      <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending}>
+                      <Button size="icon" variant="ghost" onClick={saveEdit} disabled={updateMut.isPending} aria-label="Save topic">
                         <Check className="h-4 w-4" />
                       </Button>
-                      <Button size="icon" variant="ghost" onClick={() => setEditingId(null)}>
+                      <Button size="icon" variant="ghost" onClick={() => setEditingId(null)} aria-label="Cancel edit">
                         <X className="h-4 w-4" />
                       </Button>
                     </div>
@@ -209,10 +209,10 @@ export function TopicSection() {
                       <Button size="sm" variant="ghost" onClick={() => handleToggle(topic)}>
                         {topic.enabled ? 'Disable' : 'Enable'}
                       </Button>
-                      <Button size="icon" variant="ghost" onClick={() => startEdit(topic)}>
+                      <Button size="icon" variant="ghost" onClick={() => startEdit(topic)} aria-label="Edit topic">
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button size="icon" variant="ghost" onClick={() => handleDelete(topic.id)}>
+                      <Button size="icon" variant="ghost" onClick={() => handleDelete(topic.id)} aria-label="Delete topic">
                         <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
