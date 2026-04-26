@@ -6,7 +6,7 @@ The matching worker is wired into the service lifespan in main.py.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -19,7 +19,7 @@ from jarvis_common import (
 )
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.settings import get_jobs_settings
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
 
 from paper_ingestion.deps import get_db_pool, limiter
 
@@ -69,16 +69,102 @@ router = APIRouter(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Per-kind payload schemas — one model per public job kind.
+#
+# Wire format (unchanged from before this PR):
+#   {"kind": "paper.process", "payload": {"paper_id": 42}}
+#
+# Pydantic's model_validator merges kind into the payload dict and parses it
+# through a discriminated union, so unknown kinds and missing / wrong-typed
+# required fields are rejected with 422 before create_job is even called.
+# ---------------------------------------------------------------------------
+
+
+class PulseGeneratePayload(BaseModel):
+    kind: Literal["pulse.generate"]
+    # Optional ISO timestamp used for deterministic testing only.
+    now: str | None = None
+
+
+class PaperProcessPayload(BaseModel):
+    kind: Literal["paper.process"]
+    paper_id: int
+    force: bool = False
+
+
+class PaperAnalyzePayload(BaseModel):
+    kind: Literal["paper.analyze"]
+    paper_id: int
+
+
+class PapersBatchProcessPayload(BaseModel):
+    kind: Literal["papers.batch_process"]
+    paper_ids: list[int]
+
+
+class PapersBatchSummarizePayload(BaseModel):
+    kind: Literal["papers.batch_summarize"]
+    paper_ids: list[int]
+
+
+class ExtractionBatchPayload(BaseModel):
+    kind: Literal["extraction.batch"]
+    paper_ids: list[int]
+
+
+class NoopTestPayload(BaseModel):
+    """Test-only handler — only accepted when JARVIS_ENABLE_TEST_JOBS=1."""
+
+    kind: Literal["noop.test"]
+    # Allow any extra keys so test callers can attach markers without schema changes.
+    model_config = {"extra": "allow"}
+
+
+# Discriminated union over all public kinds.  Unknown kinds produce a clear
+# 422 validation error via Pydantic's discriminator mechanism.
+_JobPayload = Annotated[
+    PulseGeneratePayload
+    | PaperProcessPayload
+    | PaperAnalyzePayload
+    | PapersBatchProcessPayload
+    | PapersBatchSummarizePayload
+    | ExtractionBatchPayload
+    | NoopTestPayload,
+    Field(discriminator="kind"),
+]
+
+
+_JOB_PAYLOAD_ADAPTER: TypeAdapter[_JobPayload] | None = None
+
+
+def _get_payload_adapter() -> TypeAdapter[_JobPayload]:
+    """Lazily create the TypeAdapter (module-level _JobPayload must be fully defined first)."""
+    global _JOB_PAYLOAD_ADAPTER  # noqa: PLW0603
+    if _JOB_PAYLOAD_ADAPTER is None:
+        _JOB_PAYLOAD_ADAPTER = TypeAdapter(_JobPayload)
+    return _JOB_PAYLOAD_ADAPTER
+
+
 class CreateJobRequest(BaseModel):
+    """Validated job-creation request.
+
+    Preserves the existing wire format ``{"kind": "...", "payload": {...}}``.
+    The model_validator merges ``kind`` into the payload dict and parses it
+    through ``_JobPayload``; Pydantic rejects unknown kinds and missing /
+    wrong-typed required fields with 422 before ``create_job`` is called.
+    """
+
     kind: str
     payload: dict[str, Any] = {}
 
-    @field_validator("kind")
-    @classmethod
-    def kind_nonempty(cls, v: str) -> str:
-        if not v or not v.strip():
-            raise ValueError("kind must be a non-empty string")
-        return v
+    @model_validator(mode="after")
+    def _validate_payload_for_kind(self) -> CreateJobRequest:
+        merged: dict[str, Any] = {**self.payload, "kind": self.kind}
+        # Raises pydantic.ValidationError (→ HTTP 422) for unknown kinds or
+        # missing / wrong-typed required fields.
+        _get_payload_adapter().validate_python(merged)
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +181,8 @@ async def create_job(
     user_id: int | None = Depends(current_user_id),
 ) -> JobCreateResponse:
     """Enqueue a new background job and return its ID."""
+    # Pydantic's discriminator already rejected unknown kinds with 422 before
+    # we get here.  The runtime allowlist check guards noop.test in production.
     public_kinds = _get_public_job_kinds()
     if body.kind not in public_kinds:
         raise HTTPException(
@@ -102,6 +190,8 @@ async def create_job(
             detail=f"Job kind {body.kind!r} is not allowed. "
             f"Permitted kinds: {sorted(public_kinds)}",
         )
+    # TODO(Phase-2 multi-tenant): replace single-user assumption with
+    # paper-ownership join when papers.user_id lands.
     job_id = await jobs_lib.enqueue(
         db_pool,
         body.kind,

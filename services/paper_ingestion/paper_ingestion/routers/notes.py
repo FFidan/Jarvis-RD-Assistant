@@ -173,6 +173,13 @@ async def promote_zotero_note(
                 status_code=400,
                 detail="Only Zotero annotation notes can be promoted",
             )
+        # TODO(Phase-2 multi-tenant): add paper-ownership check when papers.user_id lands.
+
+        # Idempotency guard: if already verified and promoted, short-circuit —
+        # re-running verification would be wasteful and non-deterministic.
+        if note["verification_status"] == "verified" and note["promoted_at"] is not None:
+            return _note_response(note)
+
         highlight = str(note["highlight_text"] or "").strip()
         if not highlight:
             raise HTTPException(
@@ -180,13 +187,39 @@ async def promote_zotero_note(
                 detail="Zotero note has no highlight text to verify",
             )
 
-        chunk_rows = await conn.fetch(
-            "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
-            note["paper_id"],
-        )
-        chunks = [row_to_chunk_response(row) for row in chunk_rows]
-        full_text = "\n\n".join(chunk.content for chunk in chunks)
-        result = verifier.verify_quote(highlight, full_text, chunks)
+        # WS-4: page-window optimisation — when the annotation carries a page
+        # number, first try a narrow ±2-page window to avoid loading the entire
+        # paper into memory just for one verification call.  If the window
+        # misses (no match found), fall back to the full chunk set.
+        note_page = note["page_number"]
+        result = None
+        if note_page is not None:
+            window_rows = await conn.fetch(
+                "SELECT * FROM paper_chunks"
+                " WHERE paper_id = $1"
+                "   AND page_number BETWEEN $2 AND $3"
+                " ORDER BY chunk_index",
+                note["paper_id"],
+                note_page - 2,
+                note_page + 2,
+            )
+            if window_rows:
+                window_chunks = [row_to_chunk_response(row) for row in window_rows]
+                window_full_text = "\n\n".join(chunk.content for chunk in window_chunks)
+                window_result = verifier.verify_quote(highlight, window_full_text, window_chunks)
+                if window_result.verified:
+                    result = window_result
+
+        if result is None:
+            # Either no page_number, window had no rows, or window verification failed —
+            # fall back to the full paper chunk set.
+            chunk_rows = await conn.fetch(
+                "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index",
+                note["paper_id"],
+            )
+            chunks = [row_to_chunk_response(row) for row in chunk_rows]
+            full_text = "\n\n".join(chunk.content for chunk in chunks)
+            result = verifier.verify_quote(highlight, full_text, chunks)
 
         if result.verified:
             row = await conn.fetchrow(

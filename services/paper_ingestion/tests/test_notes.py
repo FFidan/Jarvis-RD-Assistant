@@ -445,3 +445,213 @@ async def test_delete_note_not_found(_app):
             resp = await client.delete("/api/notes/999")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-004 — promote endpoint hardening tests
+# ---------------------------------------------------------------------------
+
+
+async def test_promote_returns_404_for_missing_note_id(_app):
+    """POST /api/notes/{id}/promote returns 404 when note does not exist."""
+    app, conn = _app
+    conn.fetchrow.return_value = None  # note not found
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/99999/promote")
+
+    assert resp.status_code == 404
+    assert "99999" in resp.json()["detail"]
+
+
+async def test_promote_already_verified_is_idempotent(_app):
+    """POST /api/notes/{id}/promote on an already-verified note returns 200 without re-verifying."""
+    app, conn = _app
+    promoted_at = datetime(2026, 1, 3, tzinfo=UTC)
+    already_verified = _make_note_record(
+        note_id=7,
+        source="zotero",
+        highlight_text="Some verified quote.",
+        verification_status="verified",
+        verified_quote="Some verified quote.",
+        verified_page_number=3,
+        promoted_at=promoted_at,
+    )
+    # fetchrow returns the already-verified note; no UPDATE should be issued.
+    conn.fetchrow.return_value = already_verified
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/7/promote")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["verification_status"] == "verified"
+    assert body["promoted_at"] is not None
+    # No UPDATE — conn.fetchrow should be called exactly once (the initial SELECT),
+    # and conn.execute / the second fetchrow for UPDATE should NOT be called.
+    assert conn.fetchrow.await_count == 1, (
+        "Idempotency guard should have short-circuited before the UPDATE fetchrow"
+    )
+
+
+async def test_promote_zero_chunks_marks_failed(_app):
+    """POST /api/notes/{id}/promote when paper has no chunks records failed status."""
+    app, conn = _app
+    # Note with a highlight, but no matching chunks in the paper.
+    conn.fetchrow.side_effect = [
+        _make_note_record(
+            note_id=8,
+            source="zotero",
+            highlight_text="Quote that cannot be found in chunks.",
+        ),
+        # Second fetchrow is the RETURNING * from the failed UPDATE.
+        _make_note_record(
+            note_id=8,
+            source="zotero",
+            highlight_text="Quote that cannot be found in chunks.",
+            verification_status="failed",
+        ),
+    ]
+    # No chunks for this paper.
+    conn.fetch.return_value = []
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/8/promote")
+
+    # Verification fails gracefully: 200 with failed status (not an exception).
+    assert resp.status_code == 200
+    assert resp.json()["verification_status"] == "failed"
+    assert resp.json()["promoted_at"] is None
+
+
+# ---------------------------------------------------------------------------
+# WS-4 — page-window optimisation for promote_zotero_note
+# ---------------------------------------------------------------------------
+
+
+async def test_promote_page_window_optimization_used(_app):
+    """WS-4: when note has page_number, first chunk fetch uses BETWEEN page-2 AND page+2."""
+    app, conn = _app
+    promoted_at = datetime(2026, 1, 4, tzinfo=UTC)
+
+    # Note on page 5 with a highlight that exists in the window.
+    note_record = _make_note_record(
+        note_id=10,
+        source="zotero",
+        highlight_text="Neural networks learn hierarchical representations.",
+        page_number=5,
+    )
+    conn.fetchrow.side_effect = [
+        note_record,
+        # UPDATE RETURNING * (verified)
+        _make_note_record(
+            note_id=10,
+            source="zotero",
+            highlight_text="Neural networks learn hierarchical representations.",
+            page_number=5,
+            verification_status="verified",
+            verified_quote="Neural networks learn hierarchical representations.",
+            verified_page_number=5,
+            promoted_at=promoted_at,
+        ),
+    ]
+
+    # Window fetch returns a matching chunk (page 5 is in the [3,7] window).
+    window_chunk = {
+        "id": 200,
+        "paper_id": 1,
+        "chunk_index": 4,
+        "content": "Neural networks learn hierarchical representations.",
+        "page_number": 5,
+        "start_char": None,
+        "end_char": None,
+        "embedding_id": None,
+        "created_at": _NOW,
+    }
+    # Return the window result on the first fetch call.
+    conn.fetch.return_value = [window_chunk]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/10/promote")
+
+    assert resp.status_code == 200
+    assert resp.json()["verification_status"] == "verified"
+
+    # The first conn.fetch call must be the page-window query.
+    assert conn.fetch.await_count >= 1, "At least one chunk fetch must occur"
+    first_fetch_args = conn.fetch.await_args_list[0].args
+    first_sql = first_fetch_args[0]
+    assert "BETWEEN" in first_sql, (
+        "WS-4: first fetch must use BETWEEN page-window SQL, got: " + first_sql
+    )
+    # Parameters: paper_id, page-2=3, page+2=7
+    assert first_fetch_args[2] == 3, f"Expected page-window low=3, got {first_fetch_args[2]}"
+    assert first_fetch_args[3] == 7, f"Expected page-window high=7, got {first_fetch_args[3]}"
+
+
+async def test_promote_falls_back_to_all_chunks_when_window_misses(_app):
+    """WS-4: when the page-window fetch finds nothing, a second all-chunks fetch is issued."""
+    app, conn = _app
+
+    # Note on page 5 but the matching chunk is on page 99 (outside the window).
+    note_record = _make_note_record(
+        note_id=11,
+        source="zotero",
+        highlight_text="This sentence only appears on page ninety nine.",
+        page_number=5,
+    )
+    conn.fetchrow.side_effect = [
+        note_record,
+        # UPDATE RETURNING * (failed — verifier can't find it in paper text either)
+        _make_note_record(
+            note_id=11,
+            source="zotero",
+            highlight_text="This sentence only appears on page ninety nine.",
+            page_number=5,
+            verification_status="failed",
+        ),
+    ]
+
+    far_chunk = {
+        "id": 300,
+        "paper_id": 1,
+        "chunk_index": 98,
+        "content": "This sentence only appears on page ninety nine.",
+        "page_number": 99,
+        "start_char": None,
+        "end_char": None,
+        "embedding_id": None,
+        "created_at": _NOW,
+    }
+
+    # First fetch (page window [3,7]) returns empty — no chunks in that range.
+    # Second fetch (all chunks) returns the far chunk.
+    conn.fetch.side_effect = [
+        [],  # window miss
+        [far_chunk],  # full-paper fallback
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/11/promote")
+
+    assert resp.status_code == 200
+    # Two fetch calls: one window (empty), one full fallback.
+    assert conn.fetch.await_count == 2, (
+        f"Expected 2 fetch calls (window + fallback), got {conn.fetch.await_count}"
+    )
+    second_fetch_args = conn.fetch.await_args_list[1].args
+    second_sql = second_fetch_args[0]
+    # The fallback SQL must NOT contain BETWEEN — it is the unrestricted query.
+    assert "BETWEEN" not in second_sql, (
+        "WS-4 fallback: second fetch must be full-paper query (no BETWEEN)"
+    )

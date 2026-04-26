@@ -83,3 +83,67 @@ async def test_scan_local_pdfs_endpoint_enqueues_job(app_with_pool):
     assert resp.status_code == 202
     assert resp.json() == {"job_id": "job-scan", "status": "queued"}
     enqueue.assert_awaited_once_with(_pool, "papers.scan_local", {})
+
+
+# ---------------------------------------------------------------------------
+# PI-EDGE-002 — discriminated-union payload validation tests
+# ---------------------------------------------------------------------------
+
+
+async def test_create_job_rejects_unknown_kind(app_with_pool):
+    """POST /api/jobs with an unknown kind returns 422."""
+    app, _pool = app_with_pool
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/jobs",
+            json={"kind": "bogus.kind", "payload": {}},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    # The service's validation-error handler puts structured errors in ``errors``.
+    errors = body.get("errors") or body.get("detail") or []
+    errors_str = str(errors)
+    # Discriminator error surfaces the invalid tag in the message.
+    assert (
+        "bogus.kind" in errors_str
+        or "union_tag_invalid" in errors_str
+        or "discriminator" in errors_str
+    )
+
+
+async def test_create_job_rejects_missing_paper_id_for_paper_process(app_with_pool):
+    """POST /api/jobs kind=paper.process with empty payload returns 422."""
+    app, _pool = app_with_pool
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/jobs",
+            json={"kind": "paper.process", "payload": {}},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    errors_str = str(body.get("errors") or body.get("detail") or [])
+    assert "paper_id" in errors_str
+
+
+async def test_create_job_rejects_string_paper_id(app_with_pool):
+    """POST /api/jobs kind=paper.process with paper_id as string returns 422."""
+    app, _pool = app_with_pool
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post(
+            "/api/jobs",
+            json={"kind": "paper.process", "payload": {"paper_id": "not-an-int"}},
+        )
+
+    assert resp.status_code == 422
+    body = resp.json()
+    errors_str = str(body.get("errors") or body.get("detail") or [])
+    # Pydantic reports the field that failed int coercion.
+    assert "paper_id" in errors_str or "int_parsing" in errors_str
