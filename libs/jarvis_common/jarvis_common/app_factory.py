@@ -169,31 +169,35 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
     async def lifespan(app: FastAPI):
         validate_production_config()
 
-        database_url = os.environ["DATABASE_URL"]
-        pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
-        app.state.db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
-
-        http_kwargs = {**_HTTP_CLIENT_DEFAULTS, **config.http_client_kwargs}
-        app.state.http_client = httpx.AsyncClient(**http_kwargs)
-
-        for hook in config.custom_init_tasks:
-            await hook(app)
-
+        db_pool = None
+        http_client = None
         try:
-            await validate_encrypted_config_rows(app.state.db_pool)
-        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
-            logger.warning(
-                "validate_encrypted_config_rows skipped: user_config table not yet available"
-                " (fresh DB before migrations run)"
-            )
+            database_url = os.environ["DATABASE_URL"]
+            pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
+            db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
+            app.state.db_pool = db_pool
 
-        _log_auth_status()
+            http_kwargs = {**_HTTP_CLIENT_DEFAULTS, **config.http_client_kwargs}
+            http_client = httpx.AsyncClient(**http_kwargs)
+            app.state.http_client = http_client
 
-        if config.jobs_worker_kinds:
-            start_jobs_worker(app, kinds=config.jobs_worker_kinds)
+            for hook in config.custom_init_tasks:
+                await hook(app)
 
-        logger.info("%s started", config.service_name)
-        try:
+            try:
+                await validate_encrypted_config_rows(db_pool)
+            except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+                logger.warning(
+                    "validate_encrypted_config_rows skipped: user_config table not yet available"
+                    " (fresh DB before migrations run)"
+                )
+
+            _log_auth_status()
+
+            if config.jobs_worker_kinds:
+                start_jobs_worker(app, kinds=config.jobs_worker_kinds)
+
+            logger.info("%s started", config.service_name)
             yield
         finally:
             await _stop_jobs_worker(app)
@@ -206,14 +210,16 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
                         "Custom teardown hook failed during %s shutdown", config.service_name
                     )
 
-            try:
-                await app.state.http_client.aclose()
-            except Exception:  # noqa: BLE001
-                logger.warning("http_client.aclose() failed", exc_info=True)
-            try:
-                await app.state.db_pool.close()
-            except Exception:  # noqa: BLE001
-                logger.warning("db_pool.close() failed", exc_info=True)
+            if http_client is not None:
+                try:
+                    await http_client.aclose()
+                except Exception:  # noqa: BLE001
+                    logger.warning("http_client.aclose() failed", exc_info=True)
+            if db_pool is not None:
+                try:
+                    await db_pool.close()
+                except Exception:  # noqa: BLE001
+                    logger.warning("db_pool.close() failed", exc_info=True)
             logger.info("%s stopped", config.service_name)
 
     return lifespan

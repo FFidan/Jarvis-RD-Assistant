@@ -6,6 +6,7 @@ import { ExternalLink, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { bookmarkPaper } from '@/lib/api';
+import { toast } from 'sonner';
 
 interface PaperHeaderProps {
   paper: Paper;
@@ -22,6 +23,9 @@ export function PaperHeader({ paper, isStarred = false }: PaperHeaderProps) {
     mutationFn: () => bookmarkPaper(paper.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['paper-detail', paper.id] });
+    },
+    onError: () => {
+      toast.error('Failed to bookmark paper');
     },
   });
 

@@ -115,6 +115,29 @@ python scripts/rotate_config_key.py --apply
 
 The script runs in a transaction and prints counts only; it never logs plaintext or ciphertext.
 
+### Docker Secrets
+
+JARVIS supports Docker Secrets for the five most sensitive credentials. Each secret is read from a file at runtime via a `_FILE`-suffixed environment variable, keeping plaintext values out of the compose environment and shell history.
+
+| Secret name | `_FILE` env var | Purpose |
+|---|---|---|
+| `jarvis_postgres_password` | `POSTGRES_PASSWORD_FILE` | PostgreSQL password for the `jarvis` user |
+| `jarvis_litellm_api_key` | `LITELLM_API_KEY_FILE` | LiteLLM master key (gateway auth) |
+| `jarvis_api_key` | `JARVIS_API_KEY_FILE` | JARVIS REST API key (frontend + Telegram) |
+| `jarvis_qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
+| `jarvis_telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (telegram profile only) |
+
+Secrets are stored as files in a `secrets/` directory at the repo root (gitignored). On first run, `setup.sh` creates them:
+
+```bash
+# setup.sh creates secrets/ and populates files automatically.
+# To rotate a secret manually:
+echo -n '<new-value>' > secrets/jarvis_api_key
+docker compose up -d paper_ingestion learning_engine   # triggers re-read on next start
+```
+
+> **Note:** `secrets/` is in `.gitignore`. Never commit secret files. Use `chmod 600 secrets/*` to restrict read access on multi-user hosts.
+
 ---
 
 ## Mode 3 — Cloudflare Tunnel
@@ -126,6 +149,22 @@ Access JARVIS from anywhere without opening any inbound ports. Traffic enters Cl
 1. A Cloudflare account with a domain on it.
 2. A Zero-Trust tenant at <https://one.dash.cloudflare.com/>.
 3. A Zero-Trust **Access Application** covering the public hostname you intend to use. Without it, the tunnel publishes your services to the open internet.
+
+### Configure Cloudflare Zero Trust Access — REQUIRED before going live
+
+> **Security gate:** The tunnel publishes your JARVIS instance to the public internet. Without a Zero Trust Access policy, anyone who discovers the tunnel hostname can reach the login page and attempt to brute-force your API key.
+
+Before running `setup.sh` option 3, configure an Access Application in the Cloudflare dashboard:
+
+1. Go to <https://one.dash.cloudflare.com/> → **Access → Applications → Add an Application → Self-hosted**.
+2. Set the **Application domain** to the public hostname you intend to use (e.g. `jarvis.example.com`).
+3. In **Policies**, add at least one rule. Recommended options:
+   - **Email OTP** — require a one-time code to the allow-listed address(es) before the browser sees JARVIS. Easy to set up; no IdP required.
+   - **SSO (Google / GitHub / Azure AD)** — requires an identity provider configured under **Settings → Authentication**.
+4. Under **CORS Settings**, leave the default (Cloudflare will pass through after identity check).
+5. Click **Save**. The policy is live immediately — Cloudflare will redirect unauthenticated browsers to the Access login page before proxying to your tunnel.
+
+Only after the Access policy is verified working should you set `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1`.
 
 ### Setup
 
@@ -141,17 +180,20 @@ echo 'JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1' >> .env
 - Set `CORS_ORIGINS=https://<tunnel-hostname>,https://localhost:3001`.
 - Set `JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1,DNS:<tunnel-hostname>`.
 - Activate `docker compose --profile tunnel` so the `cloudflared` service starts.
+- Set `JARVIS_TRUST_CF_CONNECTING_IP=true` automatically (mode 3 only).
 
 ### Cloudflare-specific trust header
 
 Cloudflare strips and replaces `X-Forwarded-For` with `CF-Connecting-IP`. JARVIS's rate limiter needs to know this to avoid rate-limiting every request as "Cloudflare":
 
 ```
-# Recommended when running behind Cloudflare Tunnel:
+# Set only in Cloudflare Tunnel mode (mode 3):
 JARVIS_TRUST_CF_CONNECTING_IP=true
 ```
 
-This flag is read by `libs/jarvis_common/jarvis_common/http_rate_limiter.py:50` and already wired as a compose placeholder (`docker-compose.yml:27`). `setup.sh` currently does **not** set it for you — set it manually. Auto-setting in tunnel mode is tracked in [post-R14 roadmap WS-8](plans/2026-04-24-post-r14-roadmap.md).
+This flag is read by `libs/jarvis_common/jarvis_common/http_rate_limiter.py:50` and already wired as a compose placeholder (`docker-compose.yml:27`). `setup.sh` sets it automatically when you pick option 3.
+
+> **Warning:** Do **not** set `JARVIS_TRUST_CF_CONNECTING_IP=true` in LAN mode (mode 2). In LAN mode, the `CF-Connecting-IP` header is not injected by any trusted intermediary — any client can forge it, bypassing rate-limit enforcement. Only enable this flag when your traffic arrives exclusively via Cloudflare's edge network.
 
 ### How the rate-limiter walks XFF
 
@@ -327,10 +369,33 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 
 ---
 
+## Key API Endpoints
+
+Key `paper_ingestion` endpoints referenced in operator workflows:
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| `GET` | `/health` | none | Service health; returns 200 OK or 503 on dependency failure |
+| `GET` | `/api/papers` | API key | Paper list with filtering and pagination |
+| `GET` | `/api/papers/{id}` | API key | Full paper detail including user state |
+| `PUT` | `/api/papers/{id}/user-state` | API key | Update paper read status |
+| `PUT` | `/api/papers/{id}/bookmark` | API key | Toggle bookmark (starred) state — flips between `starred` and prior status |
+| `POST` | `/api/papers/process` | API key | Trigger PDF parse + embed pipeline |
+| `POST` | `/api/ask/stream` | API key | SSE-streamed RAG chat |
+| `GET` | `/api/pulse/today` | API key | Today's Pulse deck |
+| `POST` | `/api/pulse/generate` | API key | Trigger overnight Pulse run on-demand |
+| `GET` | `/api/system/models` | API key | Installed Ollama models + current config |
+| `GET` | `/api/jobs/{id}/stream` | API key | SSE stream for async job progress |
+
+`learning_engine` (:8001) endpoints follow the same auth convention (`X-API-Key` header). See `services/learning_engine/paper_ingestion/routers/` for the full surface.
+
+---
+
 ## See also
 
 - [README.md](../README.md) — quick start and high-level orientation.
 - [AGENTS.md](../AGENTS.md) — repository conventions and architecture.
 - [docs/PRD.md](PRD.md) — product requirements; §4.1 security NFRs.
 - [docs/CODE_SECURITY_REVIEW_2026-04-14.md](CODE_SECURITY_REVIEW_2026-04-14.md) — security posture and known residual findings.
+- [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
 - `PERSONAL-SETUP.md` (gitignored) — your own environment notes; not committed.

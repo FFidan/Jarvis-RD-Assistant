@@ -628,6 +628,7 @@ class Embedder:
         query_text: str,
         limit: int = 30,
         score_threshold: float = 0.2,
+        user_id: int | None = None,
     ) -> list[dict]:
         """Search ALL chunks in Qdrant without a paper_id filter.
 
@@ -639,6 +640,12 @@ class Embedder:
             Maximum number of chunk results.
         score_threshold : float
             Minimum cosine similarity score.
+        user_id : int | None
+            Optional caller user ID for future multi-tenant chunk scoping.
+            Currently a no-op — chunks do not yet have a ``user_id`` payload
+            column.  When the multi-tenant schema pass adds that column, wire
+            a Qdrant payload filter here.
+            # TODO(multitenant): wire when chunks gain user_id
 
         Returns
         -------

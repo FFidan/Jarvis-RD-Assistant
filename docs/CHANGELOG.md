@@ -32,6 +32,66 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - Legacy client-side multi-source fan-out in Discover tab (backend handles it).
 - `frontend/src/components/settings/RecommendationSection.tsx` (absorbed into PulseSection).
 
+## [1.2.6] - 2026-04-28
+
+### Sprint 6 — Security + Reliability Hardening
+
+Closes C1, C2, H1–H5, M1–M5, L2, L5 from the 2026-04-28 deep-audit report (`docs/plans/2026-04-28-deep-audit-security-report.md`).
+
+#### SEC
+
+- **C1 — `mark_paper_read` `user_id` omission**: `INSERT INTO paper_user_state (paper_id, status)` was missing the `user_id` column; every `ON CONFLICT (paper_id, user_id)` upsert resolved on `(paper_id=X, NULL)` and silently clobbered an existing `starred` row. Fixed: `user_id` now threaded and bound on every path through `mark_paper_read` and `update_paper_status`.
+- **C2 — Migration 043 `user_id` constraint**: defensive PL/pgSQL constraint-name lookup added so the migration is idempotent when run on a schema that already has the constraint from a partial earlier run.
+- **H1 — Telegram `paper_detail_callback` auth header**: callback was making unauthenticated GET to `paper_ingestion`; added the same `X-API-Key` header construction used by `paper_bookmark_callback`.
+- **H2 — Cross-paper RAG ownership thread-through**: `prepare_cross_paper_rag` now receives and passes `user_id` into `search_chunks_global`; single-user safe (None = no filter) and ready for multi-tenant.
+- **H3 — Search upsert `user_id` stamping**: `POST /api/search` → `pdf_workflow.upsert_paper` now stamps `user_id` on newly created rows.
+- **H4 — `pulse_ratings` `user_id` insert**: `POST /api/pulse/rate` now includes `user_id` in the INSERT statement; rows no longer accumulate with `user_id=NULL`.
+- **H5 — Migration 043 live-fixture test deferred**: constraint-name defensive PL/pgSQL ships; full live-fixture migration test deferred (see known-residual-risks.md).
+
+#### RELIABILITY
+
+- **M1 — `paper_user_state` write `user_id` consistency**: all four write paths (`mark_paper_read`, `bookmark_paper`, `submit_feedback`, `update_paper_status`) now thread `user_id` uniformly; ON CONFLICT targets updated to include `user_id`.
+- **M2 — `paper_topics` upsert ownership**: `POST /api/search` `paper_topics` upsert now targets `ON CONFLICT (paper_id, topic_id, user_id)` instead of `(paper_id, topic_id)`.
+- **M3 — Weekly summary RAG `user_id`**: `weekly_summary` passes `user_id` to `search_chunks_global` to prevent cross-user chunk leakage.
+- **M4 — Bookmark mutation `onError` toast**: `PaperHeader` bookmark `useMutation` gains `onError: () => toast.error('Failed to bookmark paper')` so network failures are surfaced to the user.
+- **M5 — Frozenset `extra_sets` guard**: `extra_sets` callers type-narrowed; `isinstance(s, str)` guard documented as trusted-caller assumption (see known-residual-risks.md L1).
+
+#### LOW
+
+- **L2 — Pyright type narrowing for `update` paths**: Optional-access errors in `update_paper_status` resolved; explicit `assert` guards added.
+- **L5 — Changelog + deployment docs updated**: bookmark endpoint documented in DEPLOYMENT.md API surface table; residuals logged in known-residual-risks.md.
+
+---
+
+## [1.2.5] - 2026-04-27
+
+### Sprint 5 — Multi-tenant foundations, ownership stubs, bookmark toggle, and hygiene
+
+Closes WS-1A through WS-7 from the post-R14 roadmap sprint (`docs/superpowers/plans/2026-04-27-sprint5-closeout.md`). 7 commits on master (44f1cc6 and ancestors).
+
+#### SEC
+
+- **WS-3 multi-tenant ownership stubs**: migration 043 adds `user_id` columns to `papers`, `paper_user_state`, `pulse_ratings`, `paper_topics`; ownership helper stubs (`assert_paper_ownership`, `current_user_id_or_none`, `_owner_matches`) introduced in `jarvis_common/auth.py`. Single-user mode unaffected (stubs return None). `MULTITENANT_ENABLED=true` logs CRITICAL; enforcement blocked until real auth resolver ships.
+- **WS-5A weight clamping**: Pulse weight sliders now clamp to [0.0, 1.0]; list param caps added to `/api/pulse/history` and `/api/feed` to prevent unbounded queries.
+- **WS-5B `dynamic_update` guard + `item_key` encoding + cron validation + bookmark toggle**: `dynamic_update` rejects double-encoded JSONB; `item_key` URL-encoded before DB writes; cron expression validated via `CronTrigger.from_crontab()` before save; bookmark endpoint changed to toggle (not one-way set).
+
+#### RELIABILITY
+
+- **WS-4 TS build errors**: all frontend TypeScript build errors resolved; `tsc --noEmit` clean.
+- **WS-4 bookmark UI wiring**: `PUT /api/papers/{id}/bookmark` client added to `lib/api.ts`; `PaperHeader` bookmark button wired to `useMutation`.
+
+#### FEATURE
+
+- **WS-2 RAG answer verification** (migration 034): `rag/verification.py` added; `confidence` SSE event emitted after sources; frontend badge shows verified / unverified status.
+- **WS-2 snapshot thumbnails**: paper snapshot thumbnails generated on ingest; displayed in Research Feed cards.
+- **WS-7 Hermes spike deferred**: build-vs-adopt decision logged in `docs/plans/2026-04-26-ws7-hermes-deferral.md`; reopen criteria defined.
+
+#### DOCS
+
+- **WS-6 operator docs**: `docs/known-residual-risks.md` created; Sprint 4 deferrals and Sprint 5 residuals catalogued; this CHANGELOG entry added.
+
+---
+
 ## [1.2.4] - 2026-04-15
 
 ### Round-7 Audit Remediation

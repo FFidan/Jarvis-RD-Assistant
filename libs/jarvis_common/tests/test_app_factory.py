@@ -146,6 +146,53 @@ class TestConfigureLifespan:
         fake_http_client.aclose.assert_awaited_once()
         fake_pool.close.assert_awaited_once()
 
+    async def test_lifespan_closes_pool_when_init_task_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Pool and http_client are closed even when a custom_init_task raises (L2 fix)."""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
+
+        async def bad_init(app: FastAPI) -> None:
+            raise RuntimeError("init task boom")
+
+        config = ServiceLifespanConfig(
+            service_name="test_service_leak",
+            jobs_worker_kinds=set(),
+            custom_init_tasks=[bad_init],
+        )
+
+        fake_pool = AsyncMock()
+        fake_pool.close = AsyncMock()
+        fake_http_client = AsyncMock()
+        fake_http_client.aclose = AsyncMock()
+
+        with (
+            patch(
+                "jarvis_common.app_factory.asyncpg.create_pool", AsyncMock(return_value=fake_pool)
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_encrypted_config_rows",
+                AsyncMock(return_value=None),
+            ),
+            patch(
+                "jarvis_common.app_factory.validate_production_config",
+                MagicMock(return_value=None),
+            ),
+            patch(
+                "jarvis_common.app_factory.httpx.AsyncClient",
+                MagicMock(return_value=fake_http_client),
+            ),
+        ):
+            app = FastAPI()
+            lifespan = configure_lifespan(config)
+            with pytest.raises(RuntimeError, match="init task boom"):
+                async with lifespan(app):
+                    pass  # pragma: no cover -- never reached
+
+        # Both resources must be closed despite the init task raising.
+        fake_pool.close.assert_awaited_once()
+        fake_http_client.aclose.assert_awaited_once()
+
     async def test_configure_lifespan_skips_jobs_worker_when_kinds_empty(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

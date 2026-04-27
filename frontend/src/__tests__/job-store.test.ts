@@ -47,6 +47,7 @@ function makeJob(overrides: Partial<Job> = {}): Job {
     status: 'queued',
     progress: 0,
     progress_message: null,
+    payload: {},
     result: null,
     error: null,
     created_at: new Date().toISOString(),

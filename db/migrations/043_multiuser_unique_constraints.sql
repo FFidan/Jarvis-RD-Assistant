@@ -14,10 +14,30 @@
 -- paper_user_state: drop single-paper UNIQUE, add (paper_id, user_id)
 -- =============================================================================
 
--- The UNIQUE constraint on paper_id was created inline as part of the column
--- definition so PostgreSQL auto-named it paper_user_state_paper_id_key.
-ALTER TABLE paper_user_state
-    DROP CONSTRAINT IF EXISTS paper_user_state_paper_id_key;
+-- Defensive drop: introspect pg_constraint for any UNIQUE covering ONLY paper_id,
+-- regardless of auto-generated name.  Handles clusters where the constraint was
+-- created manually or given a non-default name.
+DO $$
+DECLARE
+    cons_name text;
+BEGIN
+    FOR cons_name IN
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'paper_user_state'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['paper_id']
+    LOOP
+        EXECUTE format('ALTER TABLE paper_user_state DROP CONSTRAINT %I', cons_name);
+    END LOOP;
+END $$;
 
 ALTER TABLE paper_user_state
     ADD CONSTRAINT paper_user_state_paper_id_user_id_key
@@ -27,9 +47,29 @@ ALTER TABLE paper_user_state
 -- paper_summaries: drop single-paper UNIQUE, add (paper_id, user_id)
 -- =============================================================================
 
--- Auto-named by PostgreSQL from the UNIQUE column constraint: paper_summaries_paper_id_key.
-ALTER TABLE paper_summaries
-    DROP CONSTRAINT IF EXISTS paper_summaries_paper_id_key;
+-- Defensive drop: introspect pg_constraint for any UNIQUE covering ONLY paper_id
+-- on paper_summaries, regardless of constraint name.
+DO $$
+DECLARE
+    cons_name text;
+BEGIN
+    FOR cons_name IN
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'paper_summaries'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['paper_id']
+    LOOP
+        EXECUTE format('ALTER TABLE paper_summaries DROP CONSTRAINT %I', cons_name);
+    END LOOP;
+END $$;
 
 ALTER TABLE paper_summaries
     ADD CONSTRAINT paper_summaries_paper_id_user_id_key
@@ -47,10 +87,29 @@ ALTER TABLE paper_summaries
 ALTER TABLE pulse_decks
     ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 
--- Drop the pre-existing single-user UNIQUE on deck_date before replacing it with
--- a per-user unique so multiple users can each have a deck for the same date.
-ALTER TABLE pulse_decks
-    DROP CONSTRAINT IF EXISTS pulse_decks_deck_date_key;
+-- Defensive drop: introspect pg_constraint for any UNIQUE covering ONLY deck_date
+-- on pulse_decks, regardless of constraint name.
+DO $$
+DECLARE
+    cons_name text;
+BEGIN
+    FOR cons_name IN
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'pulse_decks'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['deck_date']
+    LOOP
+        EXECUTE format('ALTER TABLE pulse_decks DROP CONSTRAINT %I', cons_name);
+    END LOOP;
+END $$;
 
 -- Per-user deck_date uniqueness: (deck_date, user_id) with NULLS NOT DISTINCT
 -- so that single-tenant rows (user_id=NULL) deduplicate correctly.

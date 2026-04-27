@@ -175,6 +175,7 @@ async def prepare_cross_paper_rag(
                     query_text=sq,
                     limit=per_query_limit,
                     score_threshold=_SEARCH_SCORE_THRESHOLD,
+                    user_id=user_id,
                 )
                 for sq in sub_queries
             )
@@ -193,6 +194,7 @@ async def prepare_cross_paper_rag(
             query_text=body.question,
             limit=body.max_chunks * 2,
             score_threshold=_SEARCH_SCORE_THRESHOLD,
+            user_id=user_id,
         )
 
     if not all_chunks:

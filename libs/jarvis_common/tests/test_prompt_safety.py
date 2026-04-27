@@ -192,6 +192,16 @@ class TestEscapeLlmTextStrippingBidi:
         assert "&lt;tag&gt;" in result
         assert "&lt;/tag&gt;" in result
 
+    def test_escape_strips_c0_control_chars(self) -> None:
+        """WS6-A3a: escape mode must strip C0/C1 control characters."""
+        # C0 control chars: U+0001 (SOH), U+001F (US), U+007F (DEL)
+        text_with_ctrl = "hello\x01\x1f\x7fworld"
+        result = escape_llm_text(text_with_ctrl)
+        assert "\x01" not in result
+        assert "\x1f" not in result
+        assert "\x7f" not in result
+        assert "helloworld" in result
+
 
 class TestSafeForPrompt:
     def test_strip_mode_removes_bidi_isolate_lri(self) -> None:

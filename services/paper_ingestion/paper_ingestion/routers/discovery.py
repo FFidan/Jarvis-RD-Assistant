@@ -15,7 +15,7 @@ from jarvis_common.db_helpers import assert_paper_ownership
 
 from paper_ingestion.converters import deduplicate_by_paper_id
 from paper_ingestion.deps import get_db_pool, get_embedder, limiter
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     DiscoverRequest,
     DiscoveryResultItem,
@@ -144,6 +144,8 @@ async def discover_papers(
     list[dict]
         Discovered papers with metadata and similarity scores.
     """
+    if body.paper_ids and len(body.paper_ids) > 200:
+        raise HTTPException(status_code=400, detail="paper_ids cannot exceed 200 items")
     # Validate that all seed paper IDs exist + are owned by the caller
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:

@@ -104,7 +104,7 @@ respx>=0.21.0                # Mock httpx for async tests
 | Ollama | `ollama/ollama:0.17.7` | Local LLM inference (GPU recommended) |
 | Ollama Bootstrap | Custom init container | One-shot model pull for Ollama (runs before ollama service starts) |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper chunk embeddings |
-| LiteLLM | `ghcr.io/berriai/litellm:main-latest` | Unified LLM gateway (pull_policy: never) |
+| LiteLLM | `docker.litellm.ai/berriai/litellm:main-stable` | Unified LLM gateway (pull_policy: never) |
 | React dashboard | `nginx:alpine` (built from `frontend/`) | Web dashboard (container port 3000; current Compose host binding 3001) |
 
 ## External APIs (free, no key required for basic usage)
@@ -232,7 +232,7 @@ Note:
 
 ## Database Migrations
 
-32 migrations currently applied in `db/migrations/` (001-032). Fresh installs get all tables via `db/init.sql`.
+43 migrations currently applied in `db/migrations/` (001-043). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
@@ -274,3 +274,44 @@ The following Python dependency was added for the Phase 1 subsystem (now present
 | `bertopic>=0.16` | paper_ingestion | Optional, for the monthly "Rising Topics" widget. Heavy dep — may be deferred further. |
 
 Phase 1 explicitly ships **without** `scikit-learn`, `networkx`, and `bertopic` to keep the Phase 1 footprint minimal. Phase 2 pulls them in only when the features that need them are implemented.
+
+## Secrets & Files
+
+JARVIS uses Docker Secrets for sensitive runtime values. Each secret is stored in a plain-text file under `./secrets/` (gitignored) and mounted read-only at `/run/secrets/<name>` inside the relevant container. The `_FILE` environment variable convention signals each service to read the secret from the mounted path rather than accepting the value inline.
+
+| Secret name | Mount path | Consuming service(s) | Env var resolved |
+|-------------|-----------|----------------------|-----------------|
+| `postgres_password` | `/run/secrets/postgres_password` | `postgres`, `n8n` | `POSTGRES_PASSWORD_FILE` |
+| `litellm_master_key` | `/run/secrets/litellm_master_key` | `litellm` (via `entrypoint.sh`) | `LITELLM_MASTER_KEY` (set in entrypoint) |
+| `jarvis_api_key` | `/run/secrets/jarvis_api_key` | `paper_ingestion`, `learning_engine` | `JARVIS_API_KEY_FILE` |
+| `qdrant_api_key` | `/run/secrets/qdrant_api_key` | `qdrant`, `paper_ingestion`, `learning_engine` | `QDRANT_API_KEY_FILE` |
+| `telegram_bot_token` | `/run/secrets/telegram_bot_token` | `telegram_bot` | `TELEGRAM_BOT_TOKEN_FILE` |
+
+All five secret files must exist (even if empty for optional services) before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager.
+
+Plain environment variable fallbacks (e.g., `JARVIS_API_KEY`, `QDRANT_API_KEY`) remain accepted for backwards compatibility and local dev without Docker Secrets.
+
+## Optional Reranker
+
+The cross-encoder reranker is an optional heavy dependency gated by two flags:
+
+1. **Build flag**: `INSTALL_OPTIONAL=true docker compose build paper_ingestion` installs `sentence-transformers`, `optimum[onnxruntime]`, and `onnxruntime` from `services/paper_ingestion/requirements-optional.txt`.
+2. **Runtime flag**: `RERANKER_ENABLED=true` in `.env` activates the reranker at startup via `_HAS_RERANKER` import guard in `paper_ingestion/ingestion/reranker.py`.
+
+Without these flags the service starts normally and falls back to RRF-only ranking. The reranker model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) is downloaded from HuggingFace Hub on first use.
+
+## Migration History (024-043)
+
+**Migrations 024-032** (2026-04-17 to 2026-04-23) cover Round-8 through Round-14 audit remediation, Zotero integration, cloud LLM key encryption, HTTPS/TLS setup, Telegram pairing hardening, and Pulse hardening. See `db/migrations/` for individual SQL files.
+
+**Migrations 033-035** (2026-04-24): WS-1 cloud LLM key encryption (migration 033), RAG answer verification metadata (migration 034), post-R14 sprint hardening (migration 035).
+
+**Migrations 036-039** (2026-04-24 to 2026-04-26): Sprint 2-Sprint 4 audit remediation covering Zotero credential encryption, Pulse deck upsert robustness, and miscellaneous schema fixes.
+
+**Migration 040** (2026-04-26): `paper_notes` verified-promotion column for anti-hallucination hardening.
+
+**Migration 041** (2026-04-27): `jobs` NOTIFY/LISTEN support for lower-latency worker dispatch.
+
+**Migration 042** (2026-04-27): `user_ownership_columns` — adds `user_id` FK columns to core tables (papers, pulse_decks, cards, projects) for multi-tenant scaffolding; writes thread `user_id` end-to-end from Sprint 6. Enforcement remains gated on the real auth resolver (see `libs/jarvis_common/jarvis_common/auth.py`).
+
+**Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. Bookmark UI and bookmark REST endpoints wired in Sprint 5.

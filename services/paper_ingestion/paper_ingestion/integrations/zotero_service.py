@@ -108,7 +108,7 @@ async def push_paper_to_zotero(
 
 async def _push_paper_with_conn(
     paper_id: int,
-    conn: asyncpg.Connection,
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     client: Any,
 ) -> None:
     """Internal push implementation that operates on a single DB connection."""

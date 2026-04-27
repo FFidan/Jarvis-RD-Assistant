@@ -11,6 +11,7 @@ QuoteVerifier from the outside.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import logging
 import re
 from dataclasses import dataclass, field
@@ -65,6 +66,8 @@ class RagVerificationReport:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+_PLACEHOLDER_DT = datetime.datetime(1970, 1, 1, tzinfo=datetime.UTC)
+
 _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 _ALPHANUM_RE = re.compile(r"[a-zA-Z0-9]")
 
@@ -107,9 +110,6 @@ def _make_chunk_responses(
     verifier only reads ``content`` and ``page_number`` from the chunk
     list for fuzzy matching.
     """
-    import datetime as _dt
-
-    _placeholder_dt = _dt.datetime(1970, 1, 1, tzinfo=_dt.UTC)
     assigned_paper_id = skip_paper_id if skip_paper_id is not None else -1
     out: list[ChunkResponse] = []
     for i, src in enumerate(chunks):
@@ -125,7 +125,7 @@ def _make_chunk_responses(
                 chunk_index=src.get("chunk_index", i),
                 content=src["content"],
                 page_number=src.get("page_number"),
-                created_at=_placeholder_dt,
+                created_at=_PLACEHOLDER_DT,
             )
         )
     return out

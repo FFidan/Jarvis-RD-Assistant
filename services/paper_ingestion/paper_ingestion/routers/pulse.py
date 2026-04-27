@@ -13,7 +13,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, current_user_id, log_audit
+from jarvis_common import ErrorResponse, current_user_id, current_user_id_or_none, log_audit
 from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -136,8 +136,10 @@ async def rate_card(
                 """SELECT 1 FROM pulse_cards pc
                    JOIN pulse_decks pd ON pc.deck_id = pd.id
                    WHERE pc.paper_id = $1
+                     AND pd.user_id IS NOT DISTINCT FROM $2
                    LIMIT 1""",
                 body.paper_id,
+                user_id,
             )
             if not member:
                 raise HTTPException(status_code=404, detail="Paper not found in your pulse deck")
@@ -160,24 +162,32 @@ async def rate_card(
 # ---------------------------------------------------------------------------
 # GET /api/pulse/explain/{card_id}
 # ---------------------------------------------------------------------------
-
-
 @router.get("/explain/{card_id}", response_model=PulseExplainResponse)
 @limiter.limit("30/minute")
 async def explain_card(
     request: Request,
     card_id: int,
+    user_id: int | None = Depends(current_user_id_or_none),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseExplainResponse:
-    """Return the reasoning + signal breakdown for a single Pulse card."""
+    """Return the reasoning + signal breakdown for a single Pulse card.
+
+    Ownership is enforced via a JOIN to pulse_decks filtered by user_id so that
+    sequential-id enumeration (IDOR) is prevented.  ``IS NOT DISTINCT FROM``
+    matches NULL-user decks in single-tenant stub mode and real user_id values
+    once multi-tenant auth is active.
+    """
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            SELECT id, reasoning, signals, llm_relevance, llm_novelty
-            FROM pulse_cards
-            WHERE id = $1
+            SELECT pc.id, pc.reasoning, pc.signals, pc.llm_relevance, pc.llm_novelty
+            FROM pulse_cards pc
+            JOIN pulse_decks pd ON pc.deck_id = pd.id
+            WHERE pc.id = $1
+              AND pd.user_id IS NOT DISTINCT FROM $2
             """,
             card_id,
+            user_id,
         )
     if row is None:
         raise HTTPException(status_code=404, detail="Pulse card not found")

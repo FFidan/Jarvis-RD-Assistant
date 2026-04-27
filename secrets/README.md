@@ -30,6 +30,21 @@ chmod 600 secrets/*.txt
 | `litellm_master_key.txt` | `litellm` | LiteLLM master key for the gateway API |
 | `jarvis_api_key.txt` | `paper_ingestion`, `learning_engine`, `telegram_bot` | JARVIS REST API key (min 32 chars) |
 | `telegram_bot_token.txt` | `paper_ingestion`, `telegram_bot` | Telegram Bot API token from @BotFather |
+| `qdrant_api_key.txt` | `qdrant`, `paper_ingestion` | Qdrant vector database API key |
+
+## Mode Bits Reminder
+
+**Every secret file must have mode 600** to prevent accidental world-readability. Verify with:
+
+```bash
+ls -la secrets/*.txt
+```
+
+All files should show `-rw-------` (mode 600). If any are world-readable, fix them:
+
+```bash
+chmod 600 secrets/*.txt
+```
 
 ## How it works
 
@@ -38,3 +53,13 @@ Services read the `*_FILE` environment variable first (Docker Secrets mount path
 can run without secrets files in development by setting values in `.env` as usual.
 
 The helper is `jarvis_common.secrets.read_secret(name)`.
+
+## Rotation & Hot-Reload
+
+Secret file changes require a container restart:
+
+```bash
+docker compose down && docker compose up -d
+```
+
+There is **no hot-reload**; the `*_FILE` environment variables are read only at container startup.

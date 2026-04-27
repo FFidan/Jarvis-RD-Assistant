@@ -330,6 +330,7 @@ async def test_put_paper_bookmark_creates_state_row():
     """bookmark_paper should verify paper existence and upsert paper_user_state with 'starred'."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 5}
+    conn.fetchval = AsyncMock(return_value=None)  # no prior state → will star
 
     result = await papers.bookmark_paper.__wrapped__(
         MagicMock(),
@@ -341,7 +342,9 @@ async def test_put_paper_bookmark_creates_state_row():
     assert conn.execute.await_count == 1
     sql = conn.execute.await_args.args[0]
     assert "INSERT INTO paper_user_state" in sql
-    assert "starred" in sql
+    # new_status='starred' is passed as $3 parameter, not hardcoded in SQL
+    execute_args = conn.execute.await_args.args
+    assert "starred" in execute_args  # third positional arg is the status
 
 
 @pytest.mark.asyncio
@@ -349,6 +352,7 @@ async def test_put_paper_bookmark_idempotent_on_repeat():
     """bookmark_paper is idempotent — second call still returns ok and executes upsert."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 5}
+    conn.fetchval = AsyncMock(return_value=None)  # no prior state
 
     # Call twice — both should succeed
     result1 = await papers.bookmark_paper.__wrapped__(
@@ -373,6 +377,7 @@ async def test_put_paper_bookmark_404_for_missing_paper():
     """bookmark_paper raises 404 when the paper does not exist."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = None
+    conn.fetchval = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException, match="Paper not found") as exc_info:
         await papers.bookmark_paper.__wrapped__(
@@ -382,6 +387,42 @@ async def test_put_paper_bookmark_404_for_missing_paper():
         )
 
     assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_bookmark_paper_toggles_between_starred_and_read():
+    """H15-schema: bookmark_paper toggles starred ↔ read on successive calls.
+
+    First call (no prior state) → status becomes 'starred'.
+    Second call (prior status = 'starred') → status becomes 'read'.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 5}
+
+    # --- First call: no prior state → should star ---
+    conn.fetchval = AsyncMock(return_value=None)
+    result1 = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+    assert result1 == {"status": "ok", "paper_id": 5}
+    first_args = conn.execute.await_args.args
+    assert "starred" in first_args, f"Expected 'starred' in execute args, got: {first_args}"
+
+    # --- Second call: prior state = 'starred' → should set to 'read' ---
+    conn.execute.reset_mock()
+    conn.fetchval = AsyncMock(return_value="starred")
+    result2 = await papers.bookmark_paper.__wrapped__(
+        MagicMock(),
+        paper_id=5,
+        db_pool=pool,
+    )
+    assert result2 == {"status": "ok", "paper_id": 5}
+    second_args = conn.execute.await_args.args
+    assert "read" in second_args, (
+        f"Expected 'read' in execute args after toggle from 'starred', got: {second_args}"
+    )
 
 
 @pytest.mark.asyncio

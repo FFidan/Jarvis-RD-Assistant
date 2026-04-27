@@ -296,12 +296,13 @@ class CardGenerator:
              "verified_count": int, "total_count": int}
         """
         full_text = " ".join(c["content"] for c in chunks)
-        full_text = full_text.replace("{", "{{").replace("}", "}}")
+        # Escape braces ONLY for str.format(); keep raw full_text for verification
+        escaped_text = full_text.replace("{", "{{").replace("}", "}}")
 
         prompt = CARD_GENERATION_PROMPT.format(
             title=wrap_delimited("title", title),
             authors=wrap_delimited("authors", ", ".join(authors)),
-            text=wrap_delimited("paper_text", full_text, max_chars=50000),
+            text=wrap_delimited("paper_text", escaped_text, max_chars=50000),
             max_cards=max_cards,
         )
 

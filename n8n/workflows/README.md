@@ -1,8 +1,8 @@
 # n8n Workflow Reference
 
-JARVIS uses Python-based orchestration inside the `telegram_bot` service by default
-(APScheduler + `orchestration/` modules). If you prefer n8n's visual workflow editor,
-you can recreate the workflows manually.
+**n8n is OPTIONAL.** All core scheduling is handled by APScheduler in the Python services (`paper_ingestion` and `learning_engine`). The workflows below are reference templates only, not the production critical path.
+
+If you prefer n8n's visual workflow editor over Python APScheduler jobs, you can recreate the workflows manually in the n8n UI (`docker compose --profile n8n up`).
 
 ## Workflow 1: Daily Briefing
 
@@ -44,7 +44,19 @@ you can recreate the workflows manually.
 
 ## Workflow 5: Research Pulse (Full Pipeline)
 
-**Trigger:** Cron — `0 9 * * *`
+**STATUS: SUPERSEDED** — Use APScheduler `pulse_overnight` job instead.
+
+**Trigger (n8n):** Cron — `0 9 * * *`
+
+The production equivalent runs in `services/paper_ingestion/paper_ingestion/scheduler.py` as `pulse_overnight_job()`, triggered by the configurable `pulse.cron` setting (read from `user_config` table). This job:
+
+1. Fetches topics from `topics` table
+2. Runs discovery via source plugins (arXiv, PubMed, OpenAlex, S2)
+3. Ranks candidates via Pulse recommender
+4. Generates a daily deck stored in `pulse_decks`
+5. Emits results to Telegram via `/api/pulse_now` endpoint (if configured)
+
+If you want n8n coverage anyway, the workflow would be:
 
 1. **Postgres** node: `SELECT * FROM topics WHERE enabled = TRUE`
 2. **Loop** over topics and their query_terms:
@@ -57,9 +69,23 @@ you can recreate the workflows manually.
 4. **Function** node: Format briefing
 5. **Telegram** node: Send briefing
 
+## APScheduler Equivalents (Production)
+
+The following workflows are handled by APScheduler in Python services and do **not** require n8n:
+
+| Workflow | APScheduler Job | Location | Config |
+|----------|-----------------|----------|--------|
+| Research Pulse | `pulse_overnight_job` | `paper_ingestion/scheduler.py` | `pulse.cron` (user_config) |
+| Weekly Digest | `weekly_digest_job` | `paper_ingestion/scheduler.py` | `_DEFAULT_WEEKLY_DIGEST_CRON` = `0 8 * * 1` |
+| Auto-Fetch Papers | `auto_fetch_job` | `paper_ingestion/scheduler.py` | `AUTO_FETCH_INTERVAL_HOURS` env var |
+| Zotero Library Sync | `zotero_library_sync_job` | `paper_ingestion/scheduler.py` | `zotero.poll_enabled` + `zotero.poll_cron` |
+| Pulse Classifier Training | `pulse_classifier_training_job` | `paper_ingestion/scheduler.py` | `pulse.enabled` + `_DEFAULT_PULSE_CLASSIFIER_CRON` |
+
+All APScheduler jobs use `@job_handler` registry from `jarvis_common.jobs` for async background execution.
+
 ## Notes
 
 - All HTTP Request nodes should include header `X-API-Key: {{$env.JARVIS_API_KEY}}`
 - Postgres nodes connect to the shared `jarvis` database
 - Error handling: add Error Trigger nodes to send failure alerts via Telegram
-- These workflows are equivalent to the Python orchestration in `services/telegram_bot/app/orchestration/`
+- For scheduled nudges (SMS, pushes), see `telegram_bot/scheduler.py` which reads `scheduled_nudges` table and uses APScheduler's `CronTrigger`

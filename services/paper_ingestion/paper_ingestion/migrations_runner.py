@@ -14,6 +14,28 @@ import asyncpg
 
 logger = logging.getLogger(__name__)
 
+_TXN_LINE_RE = re.compile(r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", re.IGNORECASE)
+
+
+def _strip_outer_transaction_control(sql: str) -> str:
+    """Drop standalone BEGIN/COMMIT/ROLLBACK lines outside dollar-quoted blocks.
+
+    PL/pgSQL function bodies (`CREATE FUNCTION ... AS $$ BEGIN ... END $$`) and
+    DO blocks (`DO $$ BEGIN ... END $$`) have their own bare `BEGIN`/`END;` that
+    must not be stripped — only the outer transaction-control statements should.
+    """
+    out: list[str] = []
+    in_dollar = False
+    for line in sql.splitlines(keepends=True):
+        # Toggle on every `$$` occurrence in the line. Migrations in this repo
+        # use bare `$$` (no tagged dollar-quotes); revisit if `$tag$` appears.
+        for _ in range(line.count("$$")):
+            in_dollar = not in_dollar
+        if not in_dollar and _TXN_LINE_RE.match(line):
+            continue
+        out.append(line)
+    return "".join(out)
+
 
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply unapplied SQL migrations from db/migrations/ on startup."""
@@ -75,12 +97,9 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                 # conflict with the outer asyncpg transaction (savepoint) wrapper.
                 # asyncpg runs each migration inside a savepoint; nested explicit
                 # transaction commands cause "can't run BEGIN inside a transaction".
-                cleaned_sql = re.sub(
-                    r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
-                    "",
-                    sql,
-                    flags=re.IGNORECASE | re.MULTILINE,
-                )
+                # Skip stripping inside $$-quoted blocks (PL/pgSQL function bodies
+                # and DO blocks legitimately use `BEGIN`/`END` on their own lines).
+                cleaned_sql = _strip_outer_transaction_control(sql)
                 async with conn.transaction():
                     await conn.execute(cleaned_sql)
                     await conn.execute(

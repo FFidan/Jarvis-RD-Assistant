@@ -67,21 +67,25 @@ def _make_conn(**kwargs):
 def _zotero_enabled_config_rows():
     """Simulate user_config rows for an enabled Zotero config."""
     return [
-        FakeRecord({"key": "zotero.enabled", "value": True}),
-        FakeRecord({"key": "zotero.api_key", "value": "test_api_key"}),
-        FakeRecord({"key": "zotero.user_id", "value": "123456"}),
-        FakeRecord({"key": "zotero.library_type", "value": "user"}),
+        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
+        FakeRecord({"key": "zotero.api_key", "value": "test_api_key", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.user_id", "value": "123456", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.library_type", "value": "user", "encrypted_value": None}),
     ]
 
 
 def _zotero_enabled_with_annotations_rows():
     rows = _zotero_enabled_config_rows()
-    rows.append(FakeRecord({"key": "zotero.sync_annotations_enabled", "value": True}))
+    rows.append(
+        FakeRecord(
+            {"key": "zotero.sync_annotations_enabled", "value": True, "encrypted_value": None}
+        )
+    )
     return rows
 
 
 def _zotero_disabled_config_rows():
-    return [FakeRecord({"key": "zotero.enabled", "value": False})]
+    return [FakeRecord({"key": "zotero.enabled", "value": False, "encrypted_value": None})]
 
 
 def _paper_row(
@@ -355,12 +359,12 @@ async def test_resync_clears_and_repushes():
 def _zotero_poll_enabled_config_rows():
     """user_config rows for an enabled Zotero config with polling on."""
     return [
-        FakeRecord({"key": "zotero.enabled", "value": True}),
-        FakeRecord({"key": "zotero.api_key", "value": "test_api_key"}),
-        FakeRecord({"key": "zotero.user_id", "value": "123456"}),
-        FakeRecord({"key": "zotero.library_type", "value": "user"}),
-        FakeRecord({"key": "zotero.poll_enabled", "value": True}),
-        FakeRecord({"key": "zotero.last_library_version", "value": 0}),
+        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
+        FakeRecord({"key": "zotero.api_key", "value": "test_api_key", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.user_id", "value": "123456", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.library_type", "value": "user", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.poll_enabled", "value": True, "encrypted_value": None}),
+        FakeRecord({"key": "zotero.last_library_version", "value": 0, "encrypted_value": None}),
     ]
 
 
@@ -430,10 +434,10 @@ async def test_poll_library_disabled():
 async def test_poll_library_poll_disabled():
     """Returns poll_disabled status when zotero.poll_enabled is false."""
     config_rows = [
-        FakeRecord({"key": "zotero.enabled", "value": True}),
-        FakeRecord({"key": "zotero.api_key", "value": "key"}),
-        FakeRecord({"key": "zotero.user_id", "value": "123"}),
-        FakeRecord({"key": "zotero.poll_enabled", "value": False}),
+        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
+        FakeRecord({"key": "zotero.api_key", "value": "key", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.user_id", "value": "123", "encrypted_value": None}),
+        FakeRecord({"key": "zotero.poll_enabled", "value": False, "encrypted_value": None}),
     ]
     config_conn = _make_conn(fetch=config_rows)
     pool = MagicMock()

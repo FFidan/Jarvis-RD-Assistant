@@ -187,6 +187,10 @@ async def dynamic_update(
             "'id' column cannot be updated via dynamic_update — use a dedicated SQL statement"
         )
 
+    if extra_sets is not None and not all(isinstance(s, str) for s in extra_sets):
+        bad_types = [type(s).__name__ for s in extra_sets]
+        raise TypeError(f"dynamic_update extra_sets must all be str, got {bad_types}")
+
     if not updates and not extra_sets:
         raise ValueError("No updates to apply")
 

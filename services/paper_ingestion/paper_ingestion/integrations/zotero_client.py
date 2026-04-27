@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import urllib.parse
 from urllib.parse import urlparse
 
 import httpx
@@ -174,8 +175,9 @@ class ZoteroClient:
         Returns None if unavailable (BBT not installed or not running).
         """
         try:
+            encoded_key = urllib.parse.quote(item_key, safe="")
             resp = await self._http.get(
-                f"{BBT_LOCAL_BASE}/export/item?itemKey={item_key}&translator=csljson",
+                f"{BBT_LOCAL_BASE}/export/item?itemKey={encoded_key}&translator=csljson",
                 timeout=3.0,
             )
             if resp.status_code == 200:
@@ -236,7 +238,7 @@ class ZoteroClient:
         start = 0
         while True:
             resp = await self._http.get(
-                f"{self._base}/items/{item_key}/children",
+                f"{self._base}/items/{urllib.parse.quote(item_key, safe='')}/children",
                 params={
                     "itemType": item_type,
                     "format": "json",

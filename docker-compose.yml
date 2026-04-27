@@ -18,8 +18,6 @@ x-shared-env: &shared-env
   # JARVIS_API_KEY is injected via Docker Secret (_FILE convention); plain env var kept as fallback
   JARVIS_API_KEY: ${JARVIS_API_KEY:-}
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
-  # QDRANT_API_KEY is injected via Docker Secret (_FILE convention)
-  QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost:3001}
@@ -244,6 +242,8 @@ services:
       SNAPSHOT_STORAGE_PATH: /data/snapshots
       AUTO_FETCH_INTERVAL_HOURS: ${AUTO_FETCH_INTERVAL_HOURS:-0}
       TELEGRAM_BOT_TOKEN_FILE: /run/secrets/telegram_bot_token
+      # QDRANT_API_KEY is injected via Docker Secret (_FILE convention)
+      QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       JARVIS_CONFIG_KEY: ${JARVIS_CONFIG_KEY:-}
     secrets:

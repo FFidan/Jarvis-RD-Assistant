@@ -4,12 +4,14 @@ No live PostgreSQL is available in the host test environment.  Strategy:
 
 1. Assert the SQL file exists.
 2. Assert it contains the required DDL via regex — structural contract tests.
-3. Assert idempotence guards (DROP CONSTRAINT IF EXISTS, ADD COLUMN IF NOT EXISTS,
-   CREATE INDEX IF NOT EXISTS).
-4. Assert UNIQUE NULLS NOT DISTINCT is used (PostgreSQL 15+ syntax).
+3. Assert defensive PL/pgSQL blocks introspect pg_constraint for any UNIQUE
+   covering the legacy single column, regardless of auto-generated name (H5 fix).
+4. Assert idempotence guards (ADD COLUMN IF NOT EXISTS, CREATE INDEX IF NOT EXISTS).
+5. Assert UNIQUE NULLS NOT DISTINCT is used (PostgreSQL 15+ syntax).
 
 The semantic test (two users with the same paper_id do NOT conflict) is described
 as a docstring; it requires a live DB and runs in Docker integration tests.
+Live-fixture migration test (pytest-postgresql) is deferred to a future sprint.
 """
 
 import re
@@ -46,12 +48,27 @@ def test_migration_file_exists():
 
 
 def test_drops_paper_user_state_single_paper_key(sql_text):
-    """Must DROP the auto-named single-paper unique constraint."""
+    """Must use a defensive PL/pgSQL block to drop any UNIQUE covering only paper_id.
+
+    The block must introspect pg_constraint so it works regardless of the
+    auto-generated constraint name (H5 fix — diverged constraint names).
+    """
+    assert "pg_constraint" in sql_text, "Missing pg_constraint introspection block"
     assert re.search(
-        r"ALTER TABLE paper_user_state\s+DROP CONSTRAINT IF EXISTS paper_user_state_paper_id_key",
+        r"con\.contype\s*=\s*'u'",
         sql_text,
-        re.IGNORECASE | re.DOTALL,
-    ), "Missing DROP CONSTRAINT IF EXISTS paper_user_state_paper_id_key"
+        re.IGNORECASE,
+    ), "Missing con.contype = 'u' filter in PL/pgSQL block"
+    assert re.search(
+        r"rel\.relname\s*=\s*'paper_user_state'",
+        sql_text,
+        re.IGNORECASE,
+    ), "Missing rel.relname = 'paper_user_state' filter in PL/pgSQL block"
+    assert re.search(
+        r"ARRAY\['paper_id'\]",
+        sql_text,
+        re.IGNORECASE,
+    ), "Missing ARRAY['paper_id'] column filter for paper_user_state block"
 
 
 def test_adds_paper_user_state_composite_unique(sql_text):
@@ -69,12 +86,19 @@ def test_adds_paper_user_state_composite_unique(sql_text):
 
 
 def test_drops_paper_summaries_single_paper_key(sql_text):
-    """Must DROP the auto-named single-paper unique constraint on paper_summaries."""
+    """Must use a defensive PL/pgSQL block to drop any UNIQUE covering only paper_id
+    on paper_summaries, regardless of auto-generated constraint name (H5 fix).
+    """
     assert re.search(
-        r"ALTER TABLE paper_summaries\s+DROP CONSTRAINT IF EXISTS paper_summaries_paper_id_key",
+        r"rel\.relname\s*=\s*'paper_summaries'",
         sql_text,
-        re.IGNORECASE | re.DOTALL,
-    ), "Missing DROP CONSTRAINT IF EXISTS paper_summaries_paper_id_key"
+        re.IGNORECASE,
+    ), "Missing rel.relname = 'paper_summaries' filter in PL/pgSQL block"
+    assert re.search(
+        r"ALTER TABLE paper_summaries DROP CONSTRAINT",
+        sql_text,
+        re.IGNORECASE,
+    ), "Missing EXECUTE DROP CONSTRAINT for paper_summaries in PL/pgSQL block"
 
 
 def test_adds_paper_summaries_composite_unique(sql_text):
@@ -101,12 +125,24 @@ def test_pulse_decks_user_id_column_added(sql_text):
 
 
 def test_pulse_decks_drops_single_date_key(sql_text):
-    """Must drop old UNIQUE(deck_date) constraint from pulse_decks."""
+    """Must use a defensive PL/pgSQL block to drop any UNIQUE covering only deck_date
+    on pulse_decks, regardless of auto-generated constraint name (H5 fix).
+    """
     assert re.search(
-        r"ALTER TABLE pulse_decks\s+DROP CONSTRAINT IF EXISTS pulse_decks_deck_date_key",
+        r"rel\.relname\s*=\s*'pulse_decks'",
         sql_text,
-        re.IGNORECASE | re.DOTALL,
-    ), "Missing DROP CONSTRAINT IF EXISTS pulse_decks_deck_date_key"
+        re.IGNORECASE,
+    ), "Missing rel.relname = 'pulse_decks' filter in PL/pgSQL block"
+    assert re.search(
+        r"ARRAY\['deck_date'\]",
+        sql_text,
+        re.IGNORECASE,
+    ), "Missing ARRAY['deck_date'] column filter for pulse_decks block"
+    assert re.search(
+        r"ALTER TABLE pulse_decks DROP CONSTRAINT",
+        sql_text,
+        re.IGNORECASE,
+    ), "Missing EXECUTE DROP CONSTRAINT for pulse_decks in PL/pgSQL block"
 
 
 def test_pulse_decks_composite_unique(sql_text):
@@ -165,16 +201,21 @@ def test_migration_043_allows_two_users_same_paper_user_state():
     paper_id with two different user_id values must NOT violate the unique constraint.
 
     This is validated at the SQL-structure level above:
-    - The old UNIQUE(paper_id) constraint is dropped.
+    - The old UNIQUE(paper_id) constraint is dropped via defensive PL/pgSQL that
+      introspects pg_constraint — name-agnostic (H5 fix).
     - A new UNIQUE NULLS NOT DISTINCT (paper_id, user_id) is added.
 
     With two rows (paper_id=1, user_id=1) and (paper_id=1, user_id=2), the
     composite key differs so no conflict is raised.  The live integration test
-    runs this inside Docker where a real PostgreSQL 16 instance is available.
+    (pytest-postgresql fixture) is deferred to a future sprint and runs inside
+    Docker where a real PostgreSQL 16 instance is available.
     """
-    # Structural assertion: composite constraint replaces the per-paper one.
+    # Structural assertion: defensive PL/pgSQL block targets paper_user_state
+    # and composite constraint replaces the per-paper one.
     sql = _MIGRATION_FILE.read_text(encoding="utf-8")
-    assert "paper_user_state_paper_id_key" in sql, "Old constraint name not referenced"
+    assert re.search(r"rel\.relname\s*=\s*'paper_user_state'", sql), (
+        "PL/pgSQL block for paper_user_state not found"
+    )
     assert "UNIQUE NULLS NOT DISTINCT (paper_id, user_id)" in sql or re.search(
         r"UNIQUE NULLS NOT DISTINCT\s*\(paper_id,\s*user_id\)", sql
     ), "Composite UNIQUE NULLS NOT DISTINCT not found"

@@ -32,7 +32,7 @@ from jarvis_common.db_helpers import assert_paper_ownership
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
-from paper_ingestion.embedder import Embedder
+from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     HybridSearchResult,
     PaperCreate,

@@ -1,5 +1,7 @@
 # Known Residual Risks
 
+_Last updated: 2026-04-28_
+
 This document tracks acknowledged-but-deferred risks. Each entry links the originating audit ID and the rationale for deferring the full fix.
 
 ## PI-EDGE-002 / PI-EDGE-004 — paper-ownership row enforcement — CLOSED (Sprint 4)
@@ -77,6 +79,34 @@ Fixed in commits 72577e1 (DB-003: `BEGIN`/`COMMIT` added) and 0cff746 (DB-004: `
 **Why deferred:** wall-clock budgeting adds complexity (cancellation, partial-result semantics); sequential LLM calls are predictable. No observed timeout on current library sizes.
 
 **Reopen criteria:** when contradiction scan wall-clock exceeds 60 seconds on real data, measured by adding a timer log in `scan_contradictions`.
+
+---
+
+## Sprint 6 deferrals (2026-04-28)
+
+### M1 — `pulse_ratings` and `paper_user_state` null `user_id` backfill
+
+**`pulse_ratings` and `paper_user_state` writes do not stamp `user_id`.** The `current_user_id_or_none` stub returns None today, so rows accumulate with `user_id=NULL`. Before enabling multi-tenant, a backfill migration must assign all NULL `user_id` rows to a sentinel system user. Tracked as M1 in 2026-04-28 audit.
+
+**Reopen criteria:** before `MULTITENANT_ENABLED=true` is enforced with a real auth resolver.
+
+### H5 — Migration 043 live-fixture test deferred
+
+Migration 043 uses defensive PL/pgSQL constraint-name lookup (Sprint 6 fix). The live-fixture migration test is deferred to a future sprint with proper test infra.
+
+**Reopen criteria:** when a migration test harness with a real ephemeral Postgres instance is available.
+
+### L1 — Frozenset whitelist for `extra_sets` not enforced
+
+Frozenset whitelist for `extra_sets` not yet enforced — current guard is `isinstance(s, str)`. Treat all callers as trusted. A future hardening pass should add an allowlist of known-safe set names.
+
+**Reopen criteria:** if `extra_sets` accepts caller-controlled input from any untrusted surface.
+
+### L4 — S3 backup encryption relies on bucket SSE only
+
+S3 backup encryption relies on bucket SSE only — openssl pipeline ships in next infra sprint. Backups are encrypted at rest by S3 server-side encryption, but not client-side encrypted before upload.
+
+**Reopen criteria:** when compliance requirements mandate end-to-end encryption of backup files.
 
 ---
 

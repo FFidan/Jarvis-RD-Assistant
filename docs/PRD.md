@@ -1,7 +1,7 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
-**Version:** 1.3
-**Date:** 2026-04-17
+**Version:** 1.4
+**Date:** 2026-04-28
 **Status:** Active
 
 > Implementation status note (2026-04-10):
@@ -261,6 +261,35 @@ These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent au
 - **Local-paper analyze fix**: locally-uploaded PDFs skip the download step in "Analyze Paper" instead of erroring with "no PDF URL".
 - **Generate Cards error link**: "no processed chunks" error in Generate Cards is now a clickable link to Process PDF.
 - **Sidebar label**: "Feed" renamed to "Research Feed" throughout navigation.
+
+### Shipped in Sprint 5 (2026-04-27)
+
+These features shipped in the Sprint 5 hardening pass (commits up to `4b4805d`):
+
+- **Bookmark UI + REST** (migration 043): full bookmark toggle wired end-to-end — frontend button, `PATCH /api/papers/{id}/bookmark` REST endpoint, `papers.is_bookmarked` column, and per-user uniqueness constraints from migration 043 (`multiuser_unique_constraints`). Replaces the earlier stub implementation.
+- **Pulse weight clamping**: scoring signal weights are now validated and clamped to [0.0, 1.0] on write; malformed weight vectors no longer silently corrupt the scoring pipeline.
+- **Sub-hourly cron guard**: `pulse.cron` values with intervals shorter than 1 hour are rejected at the settings layer with a clear validation error.
+- **Migration 043**: `multiuser_unique_constraints` — unique constraints scoped by `user_id` on `pulse_decks`, `papers`, `cards`, and related tables; groundwork for multi-tenant enforcement.
+- **Docker Secrets**: five secrets wired end-to-end — `postgres_password`, `litellm_master_key`, `jarvis_api_key`, `qdrant_api_key`, `telegram_bot_token` — all consumed via `_FILE` env var convention. See `docs/REQUIREMENTS.md § Secrets & Files`.
+
+### Shipped in Sprint 6 (2026-04-28)
+
+These features shipped in the Sprint 6 remediation pass (audit findings C1/C2/H1/H2/H3/H4/H5 + selected mediums/lows):
+
+- **Multi-tenant write threading (C1/C2)**: all write paths in `paper_ingestion` and `learning_engine` now thread `user_id` end-to-end — `INSERT`, `UPDATE`, and ownership-scoped `SELECT` queries carry `user_id` from the request context. Read-side IDOR is closed for Pulse endpoints. Enforcement of cross-user access at the read layer remains gated on the real auth resolver (see `CLAUDE.md § Multi-tenant status`).
+- **Brace-escape verification fix**: the quote verifier no longer mismatches f-string brace literals (`{{`, `}}`) against source text, eliminating a class of false-negative verification failures on templated extractions.
+- **Embedder shim cleanup**: stale `_COMPAT_SHIM` path in `paper_ingestion/ingestion/embedder.py` removed; all callers use the canonical `embed_texts()` interface.
+- **Migration 043 robustness**: duplicate-key handling added to the migration runner for constraint-already-exists errors so that re-running migrations on partially-applied databases does not abort startup.
+
+### Multi-Tenant Status
+
+Multi-tenancy is **scaffolded, not enforced**. Current state as of Sprint 6:
+
+- Migrations 042-043 add `user_id` FK columns and per-user unique constraints across core tables.
+- Sprint 6 threads `user_id` through all write paths; Pulse read-side IDOR is closed.
+- `current_user_id_or_none()` in `libs/jarvis_common/jarvis_common/auth.py` always returns `None` — a stub. Every ownership check short-circuits to pass-through.
+- Setting `MULTITENANT_ENABLED=true` logs CRITICAL but does not enforce anything.
+- Full enforcement is blocked until a real auth resolver (JWT / session lookup) replaces the stubs.
 
 ### 3.5 Zotero Integration
 

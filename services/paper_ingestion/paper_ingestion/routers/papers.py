@@ -289,10 +289,11 @@ async def mark_paper_read(
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
         await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, status)
-               VALUES ($1, 'read')
+            """INSERT INTO paper_user_state (paper_id, user_id, status)
+               VALUES ($1, $2, 'read')
                ON CONFLICT (paper_id, user_id) DO UPDATE SET status = 'read'""",
             paper_id,
+            user_id,
         )
     return {"status": "ok", "paper_id": paper_id}
 
@@ -334,11 +335,23 @@ async def bookmark_paper(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, status)
-               VALUES ($1, 'starred')
-               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = 'starred'""",
+        # Toggle: starred → read, anything-else (including no prior state) → starred.
+        # Note: a dedicated `starred` boolean column is the cleaner long-term fix;
+        # deferred to the multi-tenant schema pass.
+        current = await conn.fetchval(
+            "SELECT status FROM paper_user_state"
+            " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
+            user_id,
+        )
+        new_status = "read" if current == "starred" else "starred"
+        await conn.execute(
+            """INSERT INTO paper_user_state (paper_id, user_id, status)
+               VALUES ($1, $2, $3)
+               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = $3""",
+            paper_id,
+            user_id,
+            new_status,
         )
     return {"status": "ok", "paper_id": paper_id}
 
@@ -401,12 +414,13 @@ async def submit_feedback(
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
             await conn.execute(
-                """INSERT INTO paper_user_state (paper_id, rating, flagged)
-                VALUES ($1, $2, $3)
+                """INSERT INTO paper_user_state (paper_id, user_id, rating, flagged)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                    rating = COALESCE($2, paper_user_state.rating),
-                    flagged = COALESCE($3, paper_user_state.flagged)""",
+                    rating = COALESCE($3, paper_user_state.rating),
+                    flagged = COALESCE($4, paper_user_state.flagged)""",
                 paper_id,
+                user_id,
                 rating,
                 flagged,
             )
@@ -415,8 +429,10 @@ async def submit_feedback(
 
         # Fetch the current state to return accurate values
         row = await conn.fetchrow(
-            "SELECT rating, flagged FROM paper_user_state WHERE paper_id = $1",
+            "SELECT rating, flagged FROM paper_user_state"
+            " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
+            user_id,
         )
 
     return {

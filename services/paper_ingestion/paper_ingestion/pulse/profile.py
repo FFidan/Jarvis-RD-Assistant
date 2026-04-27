@@ -165,6 +165,11 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         weights: dict[str, float] = dict(_DEFAULT_WEIGHTS)
         if isinstance(raw_weights, dict):
             weights.update({k: float(v) for k, v in raw_weights.items()})
+        # M11: clamp weights to [0, 1]; negative weights invert ranking, weights >1 swamp scoring.
+        out_of_range = any(w < 0.0 or w > 1.0 for w in weights.values())
+        weights = {k: min(1.0, max(0.0, w)) for k, w in weights.items()}
+        if out_of_range:
+            logger.warning("pulse profile weights had values outside [0, 1]; clamped")
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 

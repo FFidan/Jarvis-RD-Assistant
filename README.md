@@ -20,6 +20,8 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Discovery & Pulse** -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day preview and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Pulse settings (enable/schedule/scoring weights/diagnostics) live in Settings → Pulse tab.
 
+- **Bookmarks** -- One-click bookmark toggle via `PUT /api/papers/{id}/bookmark`. Bookmarked papers are surfaced in the Research Feed and are accessible via the 💾 button in Telegram paper listings and Pulse cards.
+
 ### Key Design Choices
 
 - **Anti-hallucination pipeline**: Verified summaries, flashcard evidence, KG edges, Pulse reasoning, and RAG answer sentences are checked against retrieved source text. Weekly Summary separates verified from unverified themes. A conservative contradiction scanner persists only quote-backed conflicts; broader semantic contradiction detection remains future hardening.
@@ -163,6 +165,10 @@ Alternatives, in rough order of simplicity: **Tailscale** (mesh VPN, zero config
 
 See [`.env.example`](.env.example) for the full list with comments.
 
+### Docker Secrets (production)
+
+For production deployments you can pass sensitive values via Docker Secrets instead of plain environment variables. The supported `_FILE` variants are `POSTGRES_PASSWORD_FILE`, `LITELLM_API_KEY_FILE`, `JARVIS_API_KEY_FILE`, `QDRANT_API_KEY_FILE`, and `TELEGRAM_BOT_TOKEN_FILE`. See [`secrets/README.md`](secrets/README.md) for setup instructions.
+
 ### Telegram Bot Setup (optional)
 
 The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 rating buttons, and answers RAG questions over your library from your phone. It uses **long-polling**, so no inbound port needs to be opened on the host.
@@ -197,9 +203,10 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 | `/tasks` | List open tasks across all projects. | per-user default | Paired chat only |
 | `/done <task_id>` | Mark a task done. | per-user default | Paired chat only |
 | `/newproject <name>` | Create a new project. | per-user default | Paired chat only |
-| `/focus <project_id>` | Set the current focus project (scopes later commands). | per-user default | Paired chat only |
-| `/next` | Show the next recommended task in the focus project. | per-user default | Paired chat only |
-| `/pulse_now` | Generate today's Pulse deck on demand. | **5-minute cooldown** | Paired chat only |
+| `/focus [minutes]` | Start a Pomodoro focus session (default 25 min). Sends an alarm message when the timer expires and logs the session. Cancel a running session by calling `/focus` again with a new duration. | 3 per 60s | Paired chat only |
+| `/next` | Show the highest-scored paper recommendation from `paper_recommendations` that has not been dismissed. | per-user default | Paired chat only |
+| `/pulse_now` | Generate today's Pulse deck on demand. | 1 per 60s; 300s cooldown | Paired chat only |
+| `/review` | Begin an FSRS flashcard review session. Shows cards one at a time with Again / Hard / Good / Easy inline buttons. Session continues until no cards remain or you send `/cancel`. | None on entry | Paired chat only |
 
 > `/cancel` is only valid during an active `/review` conversation (it is a `ConversationHandler` fallback, not a standalone command). See `services/telegram_bot/telegram_bot/handlers/review_handler.py`.
 
@@ -333,7 +340,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-032)
+│   └── migrations/             # Versioned schema changes (001-043)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services

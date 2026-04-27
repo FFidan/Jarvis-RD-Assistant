@@ -133,9 +133,15 @@ def _validate_cron(v: Any) -> None:
     if not isinstance(v, str):
         raise ValueError("pulse.cron must be a string")
     try:
-        CronTrigger.from_crontab(v)
+        trigger = CronTrigger.from_crontab(v)
     except Exception as exc:
         raise ValueError(f"invalid cron expression: {exc}") from exc
+    # Reject sub-hourly schedules — pulse runs are expensive; once per hour is the minimum.
+    base = datetime.now()
+    t1 = trigger.get_next_fire_time(None, base)
+    t2 = trigger.get_next_fire_time(t1, t1)
+    if t1 is not None and t2 is not None and (t2 - t1) < timedelta(hours=1):
+        raise ValueError("Pulse cron must fire no more than once per hour")
 
 
 def _validate_pulse_weights(v: Any) -> None:
@@ -179,6 +185,21 @@ def _validate_library_type(v: Any) -> None:
         raise ValueError("zotero.library_type must be 'user' or 'group'")
 
 
+async def _reload_telegram_nudges() -> None:
+    """Best-effort POST to telegram_bot /internal/reload-nudges."""
+    telegram_url = get_telegram_settings().url_or_none
+    if not telegram_url:
+        logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
+        return
+    with contextlib.suppress(Exception):
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                f"{telegram_url}/internal/reload-nudges",
+                headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
+                timeout=2.0,
+            )
+
+
 def _validate_zotero_cron(v: Any) -> None:
     if not isinstance(v, str):
         raise ValueError("zotero.poll_cron must be a string")
@@ -196,6 +217,10 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.enabled": _validate_bool,
     "setup.completed": _validate_bool,
     "telegram.owner_chat_id": _validate_optional_int,
+    # LLM model role assignments
+    "llm.smart_model": _validate_nonempty_str,
+    "llm.fast_model": _validate_nonempty_str,
+    "llm.embed_model": _validate_nonempty_str,
     # Zotero
     "zotero.api_key": _validate_nonempty_str,
     "zotero.user_id": _validate_nonempty_str,
@@ -273,12 +298,6 @@ async def set_config(
 ) -> ConfigEntry:
     if key not in _ALLOWED_CONFIG_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
-    if key in ROLE_TO_ALIAS:
-        if not isinstance(body.value, str):
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model name must be a string, got {type(body.value).__name__}",
-            )
     validator = _CONFIG_VALIDATORS.get(key)
     if validator is not None:
         try:
@@ -374,10 +393,10 @@ async def set_config(
         except HTTPException:
             raise
         except Exception:
-            logger.warning(
-                "pulse_overnight live reschedule failed (job may not exist yet)",
-                exc_info=True,
-            )
+            # Let scheduler update failures propagate — silencing them hides broken schedules.
+            # The only expected benign failure is "job not found yet" during first-boot;
+            # callers should handle that by ensuring the job is registered before saving config.
+            raise
     if key == "zotero.poll_cron":
         try:
             if scheduler is not None:
@@ -393,17 +412,7 @@ async def set_config(
             )
     if key == "user.timezone":
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
-        telegram_url = get_telegram_settings().url_or_none
-        if not telegram_url:
-            logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
-        else:
-            with contextlib.suppress(Exception):
-                async with httpx.AsyncClient() as client:
-                    await client.post(
-                        f"{telegram_url}/internal/reload-nudges",
-                        headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
-                        timeout=2.0,
-                    )
+        await _reload_telegram_nudges()
     display_value = mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value
     return ConfigEntry(key=key, value=display_value)
 
@@ -441,9 +450,9 @@ async def update_nudge(
 
         if "cron_expression" in updates:
             try:
-                CronTrigger.from_crontab(updates["cron_expression"])
-            except Exception as exc:
-                raise HTTPException(status_code=422, detail="invalid cron expression") from exc
+                _validate_zotero_cron(updates["cron_expression"])
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         row = await dynamic_update(
             conn,
@@ -455,17 +464,7 @@ async def update_nudge(
         )
 
     # Best-effort: notify telegram_bot to reload its nudge jobs
-    telegram_url = get_telegram_settings().url_or_none
-    if not telegram_url:
-        logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
-    else:
-        with contextlib.suppress(Exception):
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    f"{telegram_url}/internal/reload-nudges",
-                    headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
-                    timeout=2.0,
-                )
+    await _reload_telegram_nudges()
 
     return NudgeResponse(**dict(row))
 
