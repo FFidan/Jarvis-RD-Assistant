@@ -147,8 +147,17 @@ async def prepare_cross_paper_rag(
     db_pool: asyncpg.Pool,
     body: CrossPaperAskRequest,
     http_client: httpx.AsyncClient,
+    *,
+    user_id: int | None = None,
 ) -> "CrossPaperRagPrep | CrossPaperRagNoResults":
     """Retrieve chunks across papers, rerank, and build LLM messages.
+
+    Parameters
+    ----------
+    user_id:
+        Optional caller user ID for future multi-tenant chunk scoping.
+        Currently threaded through but not used in the search calls — single-
+        user mode passes None from all call sites (H20/WS-6C).
 
     Returns a :class:`CrossPaperRagPrep` on success, or a
     :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are

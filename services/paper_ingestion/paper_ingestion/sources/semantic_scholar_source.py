@@ -86,6 +86,9 @@ class SemanticScholarSource(PaperSource):
         response = await self.http_client.get(
             url, params=params, headers=self._build_headers(), timeout=30.0
         )
+        if response.status_code in (429, 500, 502, 503, 504):
+            logger.warning("S2 transient %d — returning empty", response.status_code)
+            return {}
         response.raise_for_status()
         return response.json()
 

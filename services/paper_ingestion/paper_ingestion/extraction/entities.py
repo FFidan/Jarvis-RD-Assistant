@@ -396,6 +396,7 @@ async def extract_entities_for_paper(
                 confidence = 1.0
 
             # --- Anti-hallucination: verify evidence quote before persisting ---
+            vr = None
             if evidence:
                 # Always verify against the FULL text — not the truncated llm_text —
                 # so evidence in the tail of long papers is not silently lost.

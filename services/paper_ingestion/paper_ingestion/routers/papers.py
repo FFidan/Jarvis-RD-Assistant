@@ -291,7 +291,7 @@ async def mark_paper_read(
         await conn.execute(
             """INSERT INTO paper_user_state (paper_id, status)
                VALUES ($1, 'read')
-               ON CONFLICT (paper_id) DO UPDATE SET status = 'read'""",
+               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = 'read'""",
             paper_id,
         )
     return {"status": "ok", "paper_id": paper_id}
@@ -337,7 +337,7 @@ async def bookmark_paper(
         await conn.execute(
             """INSERT INTO paper_user_state (paper_id, status)
                VALUES ($1, 'starred')
-               ON CONFLICT (paper_id) DO UPDATE SET status = 'starred'""",
+               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = 'starred'""",
             paper_id,
         )
     return {"status": "ok", "paper_id": paper_id}
@@ -403,7 +403,7 @@ async def submit_feedback(
             await conn.execute(
                 """INSERT INTO paper_user_state (paper_id, rating, flagged)
                 VALUES ($1, $2, $3)
-                ON CONFLICT (paper_id) DO UPDATE SET
+                ON CONFLICT (paper_id, user_id) DO UPDATE SET
                     rating = COALESCE($2, paper_user_state.rating),
                     flagged = COALESCE($3, paper_user_state.flagged)""",
                 paper_id,

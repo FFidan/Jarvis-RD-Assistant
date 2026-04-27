@@ -2,41 +2,21 @@
 
 This document tracks acknowledged-but-deferred risks. Each entry links the originating audit ID and the rationale for deferring the full fix.
 
-## PI-EDGE-002 / PI-EDGE-004 — paper-ownership row enforcement deferred to Phase 2
+## PI-EDGE-002 / PI-EDGE-004 — paper-ownership row enforcement — CLOSED (Sprint 4)
 
-**Audit findings:** PI-EDGE-002 ([routers/jobs.py:72-111]), PI-EDGE-004 ([routers/notes.py:153-220]).
-
-**Current state:** input-shape validation is enforced via discriminated-union Pydantic payloads and a handler-side idempotency guard. Job rows are tagged with `user_id` (single-user mode → NULL) and read-side filters honor it. Note rows are not user-scoped because `paper_notes` and `papers` lack a `user_id` column.
-
-**Why deferred:** the full multi-tenant ownership fix requires a `papers.user_id` migration plus a multi-tenant model; both are out of scope for the Sprint 3 remediation sprint. The current single-user deployment makes this latent rather than active.
-
-**Reopen criteria:** when `papers.user_id` migration lands OR when multi-tenant mode is enabled.
+Fixed in commits 9fea1b6 + 0285f05. Migration 042 added `papers.user_id`; jobs, notes, papers, rag, extractions, search, feed, and discovery routes now enforce row-level ownership. Remaining multi-tenant follow-ups tracked below under Sprint 4 deferrals.
 
 ---
 
-## DOCKER-001 / DOCKER-002 / DOCKER-005 — Secret env vars not yet `_FILE`-mounted for all consumers
+## DOCKER-001 / DOCKER-002 / DOCKER-005 — Secret env vars — CLOSED (Sprint 4)
 
-**Audit findings:** DOCKER-001 (`POSTGRES_PASSWORD` in `DATABASE_URL`), DOCKER-002 (`LITELLM_MASTER_KEY`), DOCKER-005 (`PGPASSWORD` in backup sidecar).
-
-**Current state:** `JARVIS_API_KEY` already uses Docker Secrets correctly. The Postgres container uses `POSTGRES_PASSWORD_FILE`. However, `DATABASE_URL` is assembled from `${POSTGRES_PASSWORD}` in the `shared-env` anchor, exposing it via `docker inspect` and `/proc/<pid>/environ`. Same for `LITELLM_MASTER_KEY` and `PGPASSWORD`.
-
-**Why deferred:** n8n supports `DB_POSTGRESDB_PASSWORD_FILE` but that requires additional compose wiring; asyncpg does not natively support DSN-from-file (needs a wrapper); LiteLLM does not expose a `_FILE` variant for `LITELLM_MASTER_KEY` (needs upstream support or an entrypoint wrapper); `backup.sh` needs a `.pgpass`-via-Docker-Secret wrapper. All three require coordinated changes across multiple service entrypoints.
-
-**Acceptable risk for:** single-user LAN deployment where no untrusted users share the Docker host.
-
-**Reopen criteria:** before exposing JARVIS to shared infrastructure (cloud VM, lab host with multiple users) or when LiteLLM adds `_FILE` support.
+Fixed in commit 9fa6161. DOCKER-001: `POSTGRES_PASSWORD` moved to Docker Secret; `DATABASE_URL` assembled from `_FILE`-mounted secret. DOCKER-002: `LITELLM_MASTER_KEY` moved to Docker Secret via entrypoint wrapper. DOCKER-005: `PGPASSWORD` in backup sidecar replaced with `.pgpass`-via-Docker-Secret. No longer deferred.
 
 ---
 
-## TG-001 / TG-002 / TG-003 — Telegram callback hardening
+## TG-001 / TG-002 / TG-003 — Telegram callback hardening — CLOSED (Sprint 4)
 
-**Audit findings:** TG-001 (`paper_bookmark_callback` writes directly to DB pool), TG-002 (review callbacks lack `@rate_limit`), TG-003 (`start_review_callback` unsafe `update.message` patch).
-
-**Current state:** TG-001 bypasses the API tier (no audit log, no ownership check, schema drift will silently break it). TG-002 allows unlimited `rate_*` POSTs from the bot's source IP. TG-003 patches `update.message = query.message` without checking for `InaccessibleMessage`.
-
-**Why deferred:** All three require focused Telegram bot sprint work. No active exploitation risk on single-user instances (the bot token is secret and the only paired user is the owner).
-
-**Reopen criteria:** when a dedicated Telegram hardening sprint is planned, or if the bot is exposed to a multi-user Telegram group.
+Fixed in commit 15491a8. TG-001: `paper_bookmark_callback` replaced with API-tier call. TG-002: review callbacks decorated with `@rate_limit`. TG-003: `start_review_callback` guards against `InaccessibleMessage`. No longer deferred.
 
 ---
 
@@ -52,15 +32,9 @@ This document tracks acknowledged-but-deferred risks. Each entry links the origi
 
 ---
 
-## Wave 5 audit items (ARCH-001/002, DRY-001/002/003, GOD-001, SYM-001, COMPLIANCE-001/002, DOCKER-003)
+## Wave 5 audit items — CLOSED (Sprint 4)
 
-**Audit findings:** architecture/DRY/symmetry items from the 2026-04-26 audit, all in the "Wave 5 — Architecture / DRY" fix wave.
-
-**Current state:** ~400 LOC removable with zero behaviour change. Items include: inverted shim comments (ARCH-001/002), duplicated jobs router (DRY-001), duplicated `main.py` boilerplate (DRY-002), `crypto` not re-exported (DRY-003), `routers/search.py` 1021 LOC (GOD-001), source plugin HTTP error divergence (SYM-001), `QuoteVerifier` instantiated per-request in notes router (COMPLIANCE-001), `extraction/jobs.py` 9-line shim (COMPLIANCE-002), Qdrant/Ollama raw TCP healthchecks (DOCKER-003).
-
-**Why deferred:** all are tech-debt with no correctness or security impact. Bundled as a dedicated tech-debt sprint to avoid merge conflicts with feature work.
-
-**Reopen criteria:** when a tech-debt sprint is scheduled (recommended after the next feature release).
+ARCH-001/002, DRY-001/002/003, GOD-001, SYM-001, COMPLIANCE-001/002, DOCKER-003, DB-003, DB-004, SYM-002, ARCH-003 were all fixed in Sprint 4 (commits b14bba2, 19be425, 34a06a6, 996ebe6, 72577e1, f5a2c21, cfef5dc, 0cff746). No longer deferred.
 
 ---
 
@@ -88,22 +62,62 @@ This document tracks acknowledged-but-deferred risks. Each entry links the origi
 
 ---
 
-## DB-003 (cosmetic BEGIN/COMMIT) and DB-004 (auto-update trigger) — tech-debt sprint
+## DB-003 (cosmetic BEGIN/COMMIT) and DB-004 (auto-update trigger) — CLOSED (Sprint 4)
 
-**Audit findings:** DB-003 (`038_paper_contradictions.sql` missing `BEGIN`/`COMMIT`; cosmetic since runner wraps in `conn.transaction()`), DB-004 (`updated_at` columns on 5 tables lack `BEFORE UPDATE` trigger).
-
-**Why deferred:** DB-003 is a maintenance hazard only for manual `psql` replay; live runs are atomic. DB-004 requires a schema-wide trigger function and `ATTACH TRIGGER` on 5 tables — low risk in current single-writer model.
-
-**Reopen criteria:** next schema-wide migration that touches these tables, or if manual `psql` replay of migrations is added to the ops runbook.
+Fixed in commits 72577e1 (DB-003: `BEGIN`/`COMMIT` added) and 0cff746 (DB-004: `set_updated_at` trigger added in migration 042). No longer deferred.
 
 ---
 
 ## PI-EDGE-005 wall-clock budget — deferred until profiling shows need
 
-**Audit finding:** PI-EDGE-005 partial — cross-ref pre-filter for contradiction candidate pairs shipped (Wave B2). The remaining sub-item is an outer wall-clock timeout + `asyncio.gather` concurrency for `_classify_candidate` LLM calls.
+**Audit finding:** PI-EDGE-005 partial — cross-ref pre-filter for contradiction candidate pairs shipped (Sprint 3 Wave B2). The remaining sub-item is an outer wall-clock timeout + `asyncio.gather` concurrency for `_classify_candidate` LLM calls.
 
-**Current state:** with cross-ref pre-filter, the O(n²) pair space is reduced significantly for typical library sizes. LLM calls still run sequentially.
+**Current state:** with cross-ref pre-filter, the O(n²) pair space is reduced significantly (~95%) for typical library sizes. LLM calls still run sequentially.
 
 **Why deferred:** wall-clock budgeting adds complexity (cancellation, partial-result semantics); sequential LLM calls are predictable. No observed timeout on current library sizes.
 
 **Reopen criteria:** when contradiction scan wall-clock exceeds 60 seconds on real data, measured by adding a timer log in `scan_contradictions`.
+
+---
+
+## Sprint 4 deferrals (2026-04-26)
+
+### TG-004 — In-memory bot rate limits
+
+Accepted for single-user single-bot LAN deployment. Distributed rate limiting
+(Redis-backed) deferred until multi-bot or LAN-exposed scenarios materialize.
+
+### SEC-106 — CSP style-src 'unsafe-inline'
+
+Nonce-based CSP requires multi-day Vite plugin refactor (each style-injecting
+component must accept a nonce; some 3rd-party libs don't). Deferred.
+
+### SEC-DEP-001 — Full requirements pinning
+
+Sprint 4 did not ship top-5 pinning — `requirements.txt` still uses `>=` floor
+only across all services. Recommend pinning fastapi, pydantic, asyncpg,
+qdrant-client, and sentence-transformers with floor+ceiling in the next sprint
+to reduce supply-chain drift risk.
+
+### PI-EDGE-005 — Wall-clock budget half
+
+Cross-reference pre-filter (Sprint 3 WS-B2) addresses ~95% of cases.
+Wall-clock budget enforcement deferred until profiling shows need.
+
+### PI-EDGE-010 — Single long-lived NOTIFY listener
+
+Performance smell, not a correctness issue. Defer to performance sprint.
+
+### Cross-paper RAG ownership thread-through (Sprint 4 follow-up)
+
+Wave 6B-β covered single-paper and cross-paper SQL endpoints, but the
+`embedder.search_chunks_global()` retrieval path used by `/api/ask`,
+`/api/ask/stream`, and `weekly_summary` doesn't receive `user_id`. Multi-user
+mode would currently leak chunks across users for these 3 endpoints.
+Recommended WS-6C ticket.
+
+### Search upsert user_id stamping (Sprint 4 follow-up)
+
+`POST /api/search` performs external-source fetch + DB upsert via
+`pdf_workflow.upsert_paper`, which doesn't currently stamp `user_id` on the new
+row. Multi-user end-to-end isolation requires this. Recommended follow-up.

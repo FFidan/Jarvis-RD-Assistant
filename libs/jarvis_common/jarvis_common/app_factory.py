@@ -26,6 +26,7 @@ remain in the service so the factory does not need to know about them.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -43,7 +44,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from jarvis_common.auth import validate_production_config
+from jarvis_common.auth import refresh_api_key_cache, validate_production_config
 from jarvis_common.crypto import validate_encrypted_config_rows
 from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.error_handlers import (
@@ -124,7 +125,13 @@ def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
 
 
 def _log_auth_status() -> None:
-    """Log the API-key/DEV_MODE configuration once at startup."""
+    """Log the API-key/DEV_MODE configuration once at startup.
+
+    Also refreshes the module-level API-key cache so that any key rotation that
+    happened between import time and startup (e.g. Docker secret mount settling)
+    takes effect without a service restart.
+    """
+    refresh_api_key_cache()
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     api_key = read_secret("JARVIS_API_KEY")
     if api_key:
@@ -165,13 +172,20 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         database_url = os.environ["DATABASE_URL"]
         pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
         app.state.db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
-        await validate_encrypted_config_rows(app.state.db_pool)
 
         http_kwargs = {**_HTTP_CLIENT_DEFAULTS, **config.http_client_kwargs}
         app.state.http_client = httpx.AsyncClient(**http_kwargs)
 
         for hook in config.custom_init_tasks:
             await hook(app)
+
+        try:
+            await validate_encrypted_config_rows(app.state.db_pool)
+        except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
+            logger.warning(
+                "validate_encrypted_config_rows skipped: user_config table not yet available"
+                " (fresh DB before migrations run)"
+            )
 
         _log_auth_status()
 
@@ -238,6 +252,8 @@ async def _stop_jobs_worker(app: FastAPI) -> None:
     except (TimeoutError, asyncio.CancelledError):
         logger.warning("jobs worker did not stop in time -- cancelling task")
         task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 def configure_middleware_and_errors(

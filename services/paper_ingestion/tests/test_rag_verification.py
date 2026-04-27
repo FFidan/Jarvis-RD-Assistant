@@ -18,6 +18,7 @@ from paper_ingestion.rag.verification import (
     RagConfidence,
     RagVerificationReport,
     VerifiedSentence,
+    _make_chunk_responses,
     verify_answer_sentences,
 )
 
@@ -300,3 +301,36 @@ async def test_memoization_single_paper_fulltext_fetch():
     call_args = conn.fetch.call_args
     # Second positional arg is paper_id
     assert call_args.args[1] == paper_id
+
+
+# ---------------------------------------------------------------------------
+# M7: consolidated _make_chunk_responses
+# ---------------------------------------------------------------------------
+
+
+def test_make_chunk_responses_consolidated_optional_skip():
+    """M7: consolidated _make_chunk_responses with and without skip_paper_id."""
+    sources = [
+        {"paper_id": 1, "chunk_index": 0, "content": "chunk for paper 1", "page_number": 1},
+        {"paper_id": 2, "chunk_index": 0, "content": "chunk for paper 2", "page_number": 2},
+        {"content": "chunk without paper_id", "page_number": 3},
+    ]
+
+    # --- No skip_paper_id → no-pid path: all sources with "content" included, paper_id=-1 ---
+    no_skip = _make_chunk_responses(sources)
+    assert len(no_skip) == 3
+    assert all(c.paper_id == -1 for c in no_skip)
+    contents_no_skip = [c.content for c in no_skip]
+    assert "chunk for paper 1" in contents_no_skip
+    assert "chunk for paper 2" in contents_no_skip
+    assert "chunk without paper_id" in contents_no_skip
+
+    # --- skip_paper_id=1 → keep only sources whose paper_id matches 1
+    #     (or sources with no paper_id set); assigned paper_id == 1 ---
+    with_pid = _make_chunk_responses(sources, skip_paper_id=1)
+    # paper_id=2 source should be filtered out; paper_id=1 and no-pid source are kept
+    contents_with_pid = [c.content for c in with_pid]
+    assert "chunk for paper 1" in contents_with_pid
+    assert "chunk for paper 2" not in contents_with_pid
+    assert "chunk without paper_id" in contents_with_pid
+    assert all(c.paper_id == 1 for c in with_pid)

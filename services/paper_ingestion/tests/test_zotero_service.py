@@ -824,9 +824,97 @@ async def test_get_zotero_config_returns_empty_dict_on_decrypt_failure(caplog):
         with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
             result = await _get_zotero_config(pool)
 
-    assert result == {}, f"Expected empty dict on decrypt failure, got {result}"
+    assert result == {"_decrypt_error": True}, (
+        f"Expected {{'_decrypt_error': True}} on decrypt failure, got {result}"
+    )
     assert any("decrypt failed" in record.message for record in caplog.records), (
         f"Expected warning about decrypt failure; got: {[r.message for r in caplog.records]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# H10: poll loop cursor protection on item failure
+# ---------------------------------------------------------------------------
+
+
+async def test_poll_does_not_advance_cursor_when_items_fail():
+    """H10: if any item raises during upsert/enqueue, cursor stays at last_version.
+
+    One item triggers an exception in the upsert path.  The library version
+    returned by fetch_items_since (999) must NOT be persisted — version_to
+    in the result should equal the original last_version (0).
+    """
+    bad_item = _zotero_item(key="BADITEM1", doi="")
+
+    # Simulate a DB error on acquire for the upsert path.
+    bad_cm = MagicMock()
+    bad_cm.__aenter__ = AsyncMock(side_effect=RuntimeError("DB exploded"))
+    bad_cm.__aexit__ = AsyncMock(return_value=False)
+
+    pool = _make_poll_pool(bad_cm)
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.fetch_items_since = AsyncMock(return_value=([bad_item], 999))
+
+        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
+            mock_jobs.enqueue = AsyncMock()
+            result = await poll_zotero_library(db_pool=pool, http_client=http)
+
+    # Cursor must NOT have advanced — version_to should remain at last_version (0).
+    assert result["version_to"] == 0, (
+        f"Expected version_to=0 (cursor pinned), got {result['version_to']}"
+    )
+    assert result["status"] == "ok"
+    # No jobs should have been enqueued for the failed item.
+    mock_jobs.enqueue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# H12: _get_zotero_config decrypt warning must not log exc string
+# ---------------------------------------------------------------------------
+
+
+async def test_get_zotero_config_does_not_log_exc_string(caplog):
+    """H12: decrypt warning uses %r short_key form, not exc — no ciphertext leakage.
+
+    The original exc object (which may contain ciphertext fragments) must NOT
+    appear in any warning log record.  The short_key repr must appear.
+    """
+    import logging
+
+    from paper_ingestion.integrations.zotero_service import _get_zotero_config
+
+    rows = [
+        FakeRecord(
+            {
+                "key": "zotero.api_key",
+                "value": None,
+                "encrypted_value": b"bad-ciphertext",
+            }
+        )
+    ]
+
+    conn = _make_conn(fetch=rows)
+    pool = _make_pool(conn)
+
+    exc_message = "token has incorrect padding or is corrupted — secret_fragment_xyz"
+
+    with patch("jarvis_common.crypto.decrypt_secret", side_effect=ValueError(exc_message)):
+        with caplog.at_level(logging.WARNING, logger="paper_ingestion.integrations.zotero_service"):
+            result = await _get_zotero_config(pool)
+
+    # Result must be the sentinel dict (H11).
+    assert result == {"_decrypt_error": True}, f"Expected {{'_decrypt_error': True}}, got {result}"
+
+    # The raw exc message string must NOT appear in any log record.
+    for record in caplog.records:
+        assert exc_message not in record.message, f"exc string leaked into log: {record.message!r}"
+
+    # The short_key repr ('api_key') MUST appear in a warning record.
+    assert any("api_key" in record.message for record in caplog.records), (
+        f"Expected short_key in log warning; got: {[r.message for r in caplog.records]}"
     )
 
 

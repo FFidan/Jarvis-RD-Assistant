@@ -296,6 +296,7 @@ class CardGenerator:
              "verified_count": int, "total_count": int}
         """
         full_text = " ".join(c["content"] for c in chunks)
+        full_text = full_text.replace("{", "{{").replace("}", "}}")
 
         prompt = CARD_GENERATION_PROMPT.format(
             title=wrap_delimited("title", title),

@@ -161,6 +161,38 @@ class TestWrapDelimitedTagValidation:
         assert result.startswith("<paper_text>")
 
 
+class TestEscapeLlmTextStrippingBidi:
+    def test_escape_llm_text_strips_bidi_override_characters(self) -> None:
+        """H19: escape_llm_text (via safe_for_prompt mode='escape') must strip BIDI/ZW chars."""
+        # U+202E = RIGHT-TO-LEFT OVERRIDE, a classic BIDI injection character
+        text_with_bidi = "safe text ‮ injected override"
+        result = escape_llm_text(text_with_bidi)
+        # BIDI override char must be stripped
+        assert "‮" not in result
+        # The surrounding safe text must be preserved
+        assert "safe text" in result
+        assert "injected override" in result
+
+    def test_escape_llm_text_strips_zero_width_space(self) -> None:
+        """H19: zero-width space (U+200B) must be stripped in escape mode."""
+        result = escape_llm_text("word​split")
+        assert "​" not in result
+        assert "wordsplit" in result
+
+    def test_escape_llm_text_strips_bom(self) -> None:
+        """H19: BOM/zero-width no-break space (U+FEFF) must be stripped in escape mode."""
+        result = escape_llm_text("﻿start of text")
+        assert "﻿" not in result
+        assert "start of text" in result
+
+    def test_escape_llm_text_html_escaping_still_works_after_bidi_strip(self) -> None:
+        """H19: HTML escaping of < and > must still work after BIDI stripping."""
+        result = escape_llm_text("<tag>‮</tag>")
+        assert "‮" not in result
+        assert "&lt;tag&gt;" in result
+        assert "&lt;/tag&gt;" in result
+
+
 class TestSafeForPrompt:
     def test_strip_mode_removes_bidi_isolate_lri(self) -> None:
         # U+2066 = LEFT-TO-RIGHT ISOLATE
@@ -181,12 +213,13 @@ class TestSafeForPrompt:
         assert result == "beforeevilafter"
         assert "\u2068" not in result
 
-    def test_escape_mode_with_bidi_isolate(self) -> None:
-        # escape mode leaves BIDI isolates untouched (only escapes < and >)
+    def test_escape_mode_strips_bidi_isolate(self) -> None:
+        # H19: escape mode now strips BIDI override/isolate chars before HTML-escaping
         result = safe_for_prompt("\u2066text\u2069", mode="escape")
-        # BIDI isolates should remain (escape mode doesn't strip them)
-        assert "\u2066" in result
-        assert "\u2069" in result
+        # BIDI isolates must be removed (H19 fix: _strip_bidi_zw applied first)
+        assert "\u2066" not in result
+        assert "\u2069" not in result
+        assert "text" in result
 
     def test_strip_mode_removes_multiple_bidi_isolates(self) -> None:
         # Test with multiple BIDI isolates in one string

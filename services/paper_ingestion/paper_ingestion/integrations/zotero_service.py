@@ -45,9 +45,12 @@ async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
             # Post-Sprint-1 row: decrypt Fernet ciphertext stored as BYTEA.
             try:
                 config[short_key] = decrypt_secret(enc.decode("ascii"))
-            except Exception as exc:
-                logger.warning("Zotero config decrypt failed: %s; treating as missing", exc)
-                return {}
+            except Exception:
+                logger.warning(
+                    "Zotero config decrypt failed for key %r; treating Zotero config as missing",
+                    short_key,
+                )
+                return {"_decrypt_error": True}
         else:
             # Legacy plaintext row (or non-secret scalar).
             # asyncpg JSONB codec auto-decodes objects/arrays/booleans;
@@ -439,6 +442,7 @@ async def poll_zotero_library(
     linked_count = 0
     enqueued_count = 0
     capped = False  # True when we hit MAX_ENQUEUE_PER_SYNC mid-batch.
+    failed_keys: list[str] = []
 
     for item in items:
         if enqueued_count >= MAX_ENQUEUE_PER_SYNC:
@@ -536,6 +540,17 @@ async def poll_zotero_library(
             logger.error(
                 "Zotero poll: failed to upsert/enqueue paper for key %s", item_key, exc_info=True
             )
+            failed_keys.append(item_key)
+
+    # If any items failed, log a summary error and pin the cursor so the next
+    # poll retries the entire batch from the same starting version.
+    if failed_keys:
+        logger.error(
+            "Zotero poll: %d items failed; first 5: %s",
+            len(failed_keys),
+            failed_keys[:5],
+        )
+        new_version = last_version
 
     # Persist updated library version.
     # If the enqueue cap was hit, do NOT advance the cursor — the next sync

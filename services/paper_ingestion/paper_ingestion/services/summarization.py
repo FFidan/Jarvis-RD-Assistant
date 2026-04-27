@@ -328,7 +328,7 @@ async def generate_paper_summary(
                 cross_references, llm_model, llm_prompt, llm_raw_response,
                 summary_verified
             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-            ON CONFLICT (paper_id) DO UPDATE SET
+            ON CONFLICT (paper_id, user_id) DO UPDATE SET
                 summary_brief = EXCLUDED.summary_brief,
                 summary_detailed = EXCLUDED.summary_detailed,
                 tldr = EXCLUDED.tldr,

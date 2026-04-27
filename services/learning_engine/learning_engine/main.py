@@ -26,6 +26,7 @@ from jarvis_common import (
     configure_middleware_and_errors,
     verify_api_key,
 )
+from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.card_generator import CardGenerator
@@ -47,6 +48,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 # Lifespan custom hooks (DRY-002 — orchestrated by jarvis_common.app_factory)
 # ---------------------------------------------------------------------------
+
+
+async def _warn_multitenant_stub(app: FastAPI) -> None:
+    """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
+    if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
+        logger.critical(
+            "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
+        )
 
 
 async def _init_fsrs_and_generators(app: FastAPI) -> None:
@@ -103,6 +112,7 @@ _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     jobs_worker_kinds=_LEARNING_ENGINE_JOB_KINDS,
     custom_init_tasks=[
+        _warn_multitenant_stub,
         _init_fsrs_and_generators,
         _register_le_job_handlers,
         _log_le_started,
@@ -118,7 +128,9 @@ app = FastAPI(
     default_response_class=DEFAULT_RESPONSE_CLASS,
 )
 
-configure_middleware_and_errors(app, limiter=limiter, trusted_proxy_hosts="*")
+configure_middleware_and_errors(
+    app, limiter=limiter, trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list
+)
 
 # ---------------------------------------------------------------------------
 # Router registration

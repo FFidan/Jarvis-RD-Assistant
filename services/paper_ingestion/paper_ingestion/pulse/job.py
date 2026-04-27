@@ -112,7 +112,8 @@ async def run_pulse(
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
     try:
-        profile = await load_profile(db_pool, embedder=embedder)
+        # H20/WS-6C: pass user_id=None explicitly — system job, single-tenant mode.
+        profile = await load_profile(db_pool, embedder=embedder, user_id=None)
     except Exception as exc:  # broad: touches DB + embedder; any failure is fatal for this run
         stats["last_error"] = f"load_profile: {exc}"
         logger.exception("pulse.load_profile failed")

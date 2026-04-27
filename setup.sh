@@ -170,6 +170,9 @@ mkdir -p secrets
 printf '%s' "$POSTGRES_PASSWORD" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
 printf '%s' "$LITELLM_MASTER_KEY" > secrets/litellm_master_key.txt && chmod 600 secrets/litellm_master_key.txt
 printf '%s' "$JARVIS_API_KEY"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
+# Generate and write Qdrant API key secret (used by both Qdrant service and app services via _FILE)
+QDRANT_API_KEY="$(openssl rand -hex 24)"
+printf '%s' "$QDRANT_API_KEY"   > secrets/qdrant_api_key.txt && chmod 600 secrets/qdrant_api_key.txt
 ok "Docker secret files written to secrets/ (mode 600)."
 
 # -----------------------------------------------------------------------------
@@ -324,6 +327,7 @@ if [ -n "${tg_try// }" ]; then
     TELEGRAM_BOT_TOKEN="$tg_try"
     USE_TELEGRAM_PROFILE=1
     ok "Telegram token accepted."
+    printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
   else
     warn "That didn't look like a valid Telegram token (format: <digits>:<20+ chars>). Try again or press Enter to skip."
     tg_try2="$(prompt_telegram)"
@@ -331,6 +335,7 @@ if [ -n "${tg_try// }" ]; then
       TELEGRAM_BOT_TOKEN="$tg_try2"
       USE_TELEGRAM_PROFILE=1
       ok "Telegram token accepted."
+      printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
     else
       warn "Skipping Telegram — bot will not start. Add TELEGRAM_BOT_TOKEN to .env later to enable."
     fi

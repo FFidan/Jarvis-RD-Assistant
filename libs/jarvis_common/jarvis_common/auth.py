@@ -86,6 +86,10 @@ async def current_user_id(request: Request) -> int | None:
         explicit, and :func:`assert_multi_tenant_not_implemented` to guard paths
         that must not run in single-tenant mode.
     """
+    # STUB — returns None until real auth resolver ships.
+    # Every downstream check (assert_paper_ownership, _owner_matches, feed scoping)
+    # short-circuits as a no-op.  Single-user mode works correctly because the
+    # stubs are no-ops.  Multi-tenant is blocked until a real resolver replaces this.
     # SEC-108: single-tenant placeholder — always None until Wave-6.
     return None
 
@@ -97,6 +101,9 @@ async def current_user_id_or_none(request: Request) -> int | None:
     call-site intent is explicit: "I know this can be None and I handle it."
     Returns None in all current deployments (single-tenant).
     """
+    # STUB — returns None until real auth resolver ships.
+    # All ownership guards (assert_paper_ownership, _owner_matches) treat None
+    # as "single-user mode" and allow access unconditionally.
     return None
 
 

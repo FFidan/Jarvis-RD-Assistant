@@ -116,7 +116,7 @@ describe('ZoteroSection', () => {
       trackExternalJob,
       jobs: {},
       activeAborts: {},
-    } as ReturnType<typeof useJobStore.getState>);
+    } as unknown as ReturnType<typeof useJobStore.getState>);
 
     const user = userEvent.setup();
     renderSection();

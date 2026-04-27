@@ -113,7 +113,7 @@ async def upsert_user_state(
                 """
                 INSERT INTO paper_user_state (paper_id, status, rating, user_notes, flagged)
                 VALUES ($1, $2, $3, $4, $5)
-                ON CONFLICT (paper_id) DO UPDATE SET
+                ON CONFLICT (paper_id, user_id) DO UPDATE SET
                     status   = COALESCE($2, paper_user_state.status),
                     rating   = COALESCE($3, paper_user_state.rating),
                     user_notes = COALESCE($4, paper_user_state.user_notes),

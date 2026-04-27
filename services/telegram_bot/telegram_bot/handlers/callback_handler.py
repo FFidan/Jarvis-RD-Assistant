@@ -46,9 +46,13 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     paper_id = int(match.group(1))
 
     http = get_http(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}",
+            headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()

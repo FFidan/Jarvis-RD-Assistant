@@ -48,7 +48,7 @@ class FSRSManager:
         """
         try:
             card = Card.from_dict(fsrs_state)
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, AttributeError):
             logger.warning(
                 "Invalid FSRS state %s for card %s, resetting", repr(fsrs_state), card_id
             )

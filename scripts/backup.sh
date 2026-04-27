@@ -34,6 +34,9 @@ mkdir -p "$BACKUP_DIR"
 echo "[$(date -Iseconds)] Starting backup..."
 pg_dump -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" -d "${PGDATABASE:-jarvis}" \
   --no-owner --no-acl | gzip > "$BACKUP_FILE"
+# Restrict archive permissions so only root/owner can read it.
+# For at-rest encryption, pipe through openssl enc -aes-256-cbc -kfile <secret>
+chmod 600 "$BACKUP_FILE"
 echo "[$(date -Iseconds)] Backup saved to $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 
 # Optional S3 upload

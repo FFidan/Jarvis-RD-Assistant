@@ -79,6 +79,14 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+async def _warn_multitenant_stub(app: FastAPI) -> None:
+    """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
+    if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
+        logger.critical(
+            "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
+        )
+
+
 async def _validate_bbt_url_hook(app: FastAPI) -> None:
     """PI-EDGE-008: validate ``BBT_BASE_URL`` to block file:// + unknown private IPs.
 
@@ -235,6 +243,7 @@ _lifespan_config = ServiceLifespanConfig(
     },
     jobs_worker_kinds=_PAPER_INGESTION_JOB_KINDS,
     custom_init_tasks=[
+        _warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
         _init_qdrant_and_pdf_pipeline,

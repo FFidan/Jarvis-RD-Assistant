@@ -140,3 +140,32 @@ class TestScheduleReviewCorruptState:
         # Message should mention the corrupt state repr and the card id
         assert repr(corrupt_state) in warning_text or str(corrupt_state) in warning_text
         assert str(card_id) in warning_text
+
+    def test_fsrs_attr_error_falls_back_gracefully(self, manager: FSRSManager) -> None:
+        """M10: AttributeError from Card.from_dict must be caught and reset gracefully.
+
+        Some corrupt FSRS state shapes trigger AttributeError inside the fsrs
+        library (e.g. when an attribute is accessed on a wrong type). The
+        except clause must now include AttributeError so these states reset
+        to a new Card instead of propagating the exception.
+        """
+        from unittest.mock import patch
+
+        with patch("learning_engine.fsrs_manager.Card") as mock_card:
+            # Make Card.from_dict raise AttributeError (corrupt state triggers
+            # attribute access on a non-Card object inside the fsrs library)
+            mock_card.from_dict.side_effect = AttributeError(
+                "'NoneType' object has no attribute 'state'"
+            )
+            # Card() (fallback) must return a real Card so the scheduler works
+            from fsrs import Card as RealCard
+
+            mock_card.return_value = RealCard()
+
+            new_state, review_log, next_due = manager.schedule_review(
+                {"state": None}, rating=3, card_id=99
+            )
+
+        assert isinstance(new_state, dict)
+        assert isinstance(review_log, dict)
+        assert next_due is not None

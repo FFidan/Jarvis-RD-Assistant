@@ -141,7 +141,6 @@ describe('ChatMessage confidence badge integration', () => {
     const message: ChatMessageType = {
       role: 'user',
       content: 'A user question.',
-      // @ts-expect-error: confidence not expected on user messages but guard anyway
       confidence: 'HIGH',
     };
     render(<ChatMessage message={message} />);

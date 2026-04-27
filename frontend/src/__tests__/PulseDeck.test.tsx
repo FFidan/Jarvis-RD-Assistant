@@ -53,6 +53,8 @@ function makeDeck(overrides: Partial<PulseDeckType> = {}): PulseDeckType {
         llm_relevance: 8,
         llm_novelty: 7,
         reasoning: 'first reasoning',
+        reasoning_verified: null,
+        reasoning_confidence: null,
         signals: {},
       },
       {
@@ -66,6 +68,8 @@ function makeDeck(overrides: Partial<PulseDeckType> = {}): PulseDeckType {
         llm_relevance: 7,
         llm_novelty: 6,
         reasoning: 'second reasoning',
+        reasoning_verified: null,
+        reasoning_confidence: null,
         signals: {},
       },
     ],

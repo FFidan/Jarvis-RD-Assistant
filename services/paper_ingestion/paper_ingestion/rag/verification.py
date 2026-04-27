@@ -87,23 +87,41 @@ def _build_confidence(pass_rate: float, total: int) -> RagConfidence:
     return RagConfidence.UNVERIFIED
 
 
-def _make_chunk_responses(sources: list[dict], paper_id: int) -> list[ChunkResponse]:
-    """Convert source dicts for a given paper_id into ChunkResponse objects.
+def _make_chunk_responses(
+    chunks: list[dict], *, skip_paper_id: int | None = None
+) -> list[ChunkResponse]:
+    """Build ChunkResponse objects from source dicts.
 
-    Uses a synthetic ``id`` of 0 because the verifier only reads ``content``
-    and ``page_number`` from the chunk list for fuzzy matching.
+    Parameters
+    ----------
+    chunks:
+        Source dicts, each with at least a ``"content"`` key.
+    skip_paper_id:
+        When *None* (default), no paper-id filtering is applied and
+        the synthetic ``paper_id=-1`` is used (single-paper / no-pid path).
+        When set, only chunks whose ``paper_id`` matches this value are
+        included; the ``paper_id`` field in the returned objects is set to
+        this value (cross-paper path).
+
+    Uses a synthetic ``id`` equal to the enumeration index because the
+    verifier only reads ``content`` and ``page_number`` from the chunk
+    list for fuzzy matching.
     """
     import datetime as _dt
 
     _placeholder_dt = _dt.datetime(1970, 1, 1, tzinfo=_dt.UTC)
+    assigned_paper_id = skip_paper_id if skip_paper_id is not None else -1
     out: list[ChunkResponse] = []
-    for i, src in enumerate(sources):
-        if src.get("paper_id") is not None and src["paper_id"] != paper_id:
+    for i, src in enumerate(chunks):
+        if "content" not in src:
             continue
+        if skip_paper_id is not None:
+            if src.get("paper_id") is not None and src["paper_id"] != skip_paper_id:
+                continue
         out.append(
             ChunkResponse(
                 id=i,
-                paper_id=paper_id,
+                paper_id=assigned_paper_id,
                 chunk_index=src.get("chunk_index", i),
                 content=src["content"],
                 page_number=src.get("page_number"),
@@ -203,9 +221,9 @@ async def verify_answer_sentences(
     for pid in paper_ids:
         if pid == -1:
             # Synthetic path: one ChunkResponse per source entry
-            chunks_by_paper[-1] = _make_chunk_responses_no_pid(sources)
+            chunks_by_paper[-1] = _make_chunk_responses(sources)
         else:
-            chunks_by_paper[pid] = _make_chunk_responses(sources, pid)
+            chunks_by_paper[pid] = _make_chunk_responses(sources, skip_paper_id=pid)
 
     # Per-sentence verification
     _batch_size = 10
@@ -239,22 +257,3 @@ async def verify_answer_sentences(
         confidence=_build_confidence(pass_rate, total),
         per_sentence=per_sentence,
     )
-
-
-def _make_chunk_responses_no_pid(sources: list[dict]) -> list[ChunkResponse]:
-    """Build ChunkResponse objects from sources that lack a paper_id."""
-    import datetime as _dt
-
-    _placeholder_dt = _dt.datetime(1970, 1, 1, tzinfo=_dt.UTC)
-    return [
-        ChunkResponse(
-            id=i,
-            paper_id=-1,
-            chunk_index=src.get("chunk_index", i),
-            content=src["content"],
-            page_number=src.get("page_number"),
-            created_at=_placeholder_dt,
-        )
-        for i, src in enumerate(sources)
-        if "content" in src
-    ]

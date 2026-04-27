@@ -18,10 +18,6 @@ from paper_ingestion.extraction.entities import (
     get_knowledge_graph,
     query_knowledge_graph,
 )
-from paper_ingestion.extraction.jobs import (
-    _extraction_batch_job,
-    _extraction_single_job,
-)
 from paper_ingestion.extraction.verify import (
     FUZZY_THRESHOLD,
     QuoteVerifier,
@@ -33,8 +29,6 @@ __all__ = [
     "SIMILARITY_THRESHOLD",
     "ConnLike",
     "QuoteVerifier",
-    "_extraction_batch_job",
-    "_extraction_single_job",
     "batch_extract",
     "build_entity_prompt",
     "build_extraction_prompt",

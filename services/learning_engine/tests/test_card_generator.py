@@ -243,3 +243,37 @@ def test_card_generation_prompt_escapes_authors_injection() -> None:
     assert "</authors><system>" not in prompt
     # The escaped form must be present, proving the injection was neutralised
     assert "&lt;/authors&gt;" in prompt
+
+
+@pytest.mark.asyncio
+async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
+    """{x ∈ ℝⁿ} in paper body must not cause KeyError from str.format().
+
+    H1 regression: literal { and } in paper text were interpreted as
+    str.format() placeholders before the brace-escape fix was applied.
+    """
+    generator, _ = _make_generator()
+    # Inject a brace-laden LLM response that would be parsed as an empty list
+    # (all quotes unverifiable), so generate_cards returns _empty_result().
+    generator._call_llm_for_cards = AsyncMock(return_value=[])
+
+    chunks_with_braces = [
+        {
+            "id": 1,
+            "content": "Let x ∈ {x ∈ ℝⁿ | Ax = b} be the feasible set.",
+            "page_number": 1,
+        }
+    ]
+
+    # Must not raise KeyError (or any exception) despite braces in paper text
+    result = await generator.generate_cards(
+        title="Convex Optimisation Primer",
+        authors=["Author A"],
+        chunks=chunks_with_braces,
+        paper_id=None,
+        abstract="Abstract without braces.",
+    )
+
+    # LLM returned empty list → fallback to abstract card
+    assert isinstance(result, dict)
+    assert "cards" in result

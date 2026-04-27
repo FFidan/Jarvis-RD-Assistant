@@ -163,7 +163,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_chunks_user ON paper_chunks(user_id) WHERE 
 
 CREATE TABLE paper_summaries (
     id                  SERIAL PRIMARY KEY,
-    paper_id            INTEGER REFERENCES papers(id) ON DELETE CASCADE UNIQUE,
+    paper_id            INTEGER REFERENCES papers(id) ON DELETE CASCADE,
     summary_brief       TEXT NOT NULL,
     summary_detailed    TEXT NOT NULL,
     tldr                TEXT,
@@ -194,6 +194,10 @@ COMMENT ON COLUMN paper_summaries.llm_raw_response IS 'The raw LLM response befo
 -- Wave 6: per-user ownership (migration 042).
 ALTER TABLE paper_summaries ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_summaries_user ON paper_summaries(user_id) WHERE user_id IS NOT NULL;
+-- Migration 043: (paper_id, user_id) unique replaces single-paper UNIQUE.
+ALTER TABLE paper_summaries
+    ADD CONSTRAINT paper_summaries_paper_id_user_id_key
+    UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
 
 CREATE TABLE IF NOT EXISTS paper_contradictions (
     id                  SERIAL PRIMARY KEY,
@@ -242,7 +246,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_contradictions_user ON paper_contradictions
 
 CREATE TABLE paper_user_state (
     id              SERIAL PRIMARY KEY,
-    paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE UNIQUE,
+    paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE,
     status          VARCHAR(20) DEFAULT 'new' CHECK (status IN ('new', 'reading', 'read', 'archived', 'starred')),
     user_notes      TEXT,
     rating          SMALLINT CHECK (rating BETWEEN 1 AND 5),
@@ -257,6 +261,10 @@ COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, note
 -- Wave 6: per-user ownership (migration 042).
 ALTER TABLE paper_user_state ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_user_state_user ON paper_user_state(user_id) WHERE user_id IS NOT NULL;
+-- Migration 043: (paper_id, user_id) unique replaces single-paper UNIQUE.
+ALTER TABLE paper_user_state
+    ADD CONSTRAINT paper_user_state_paper_id_user_id_key
+    UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
 COMMENT ON COLUMN paper_user_state.status IS 'One of: new, reading, read, archived, starred.';
 COMMENT ON COLUMN paper_user_state.flagged IS 'User flagged this summary as potentially inaccurate.';
 
@@ -654,12 +662,22 @@ COMMENT ON COLUMN topics.description IS
 -- Pulse decks — one row per day per user, holds the curated card set
 CREATE TABLE IF NOT EXISTS pulse_decks (
     id              SERIAL PRIMARY KEY,
-    deck_date       DATE NOT NULL UNIQUE,  -- single-user system
+    deck_date       DATE NOT NULL,  -- uniqueness per (deck_date, user_id) — see constraint below
     card_count      INTEGER NOT NULL DEFAULT 0,
     generated_at    TIMESTAMPTZ DEFAULT NOW(),
     stats           JSONB DEFAULT '{}'::jsonb,  -- candidate count, LLM calls, duration, etc.
-    degraded_reason TEXT
+    degraded_reason TEXT,
+    -- Migration 043: nullable user_id for future per-user deck segregation.
+    user_id         INTEGER NULL
 );
+-- (deck_date, user_id) UNIQUE NULLS NOT DISTINCT: single-tenant rows (user_id=NULL)
+-- deduplicate correctly while multi-user rows are isolated per user.
+-- Requires PostgreSQL 15+ (project uses PG 16).
+ALTER TABLE pulse_decks
+    ADD CONSTRAINT pulse_decks_deck_date_user_id_key
+    UNIQUE NULLS NOT DISTINCT (deck_date, user_id);
+CREATE INDEX IF NOT EXISTS idx_pulse_decks_user
+    ON pulse_decks(user_id) WHERE user_id IS NOT NULL;
 
 -- Pulse cards — the papers in each deck with score metadata
 CREATE TABLE IF NOT EXISTS pulse_cards (
@@ -673,13 +691,12 @@ CREATE TABLE IF NOT EXISTS pulse_cards (
     reasoning       TEXT,         -- one-sentence explanation from LLM
     signals         JSONB NOT NULL DEFAULT '{}'::jsonb,  -- {embedding: 0.82, topic: 0.74, author: 1, ...}
     created_at      TIMESTAMPTZ DEFAULT NOW(),
+    -- Migration 042/043: nullable user_id for per-user ownership.
+    user_id         INTEGER NULL,
     UNIQUE (deck_id, paper_id)
 );
 CREATE INDEX IF NOT EXISTS idx_pulse_cards_deck_rank
     ON pulse_cards(deck_id, rank);
-
--- Wave 6: per-user ownership (migration 042).
-ALTER TABLE pulse_cards ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_pulse_cards_user ON pulse_cards(user_id) WHERE user_id IS NOT NULL;
 
 -- Pulse ratings — feedback loop, collected from Phase 1 onward

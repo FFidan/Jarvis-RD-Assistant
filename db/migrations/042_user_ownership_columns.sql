@@ -1,7 +1,7 @@
 -- Wave 6 multi-tenant groundwork.
 -- Single-user mode keeps user_id NULL (system-owned, accessible to all).
 -- Multi-user mode (future) writes integer user_id; rows with NULL stay public.
-BEGIN;
+-- (migrations_runner.py wraps every migration in a savepoint — no BEGIN/COMMIT here.)
 
 ALTER TABLE papers              ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 ALTER TABLE paper_notes         ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
@@ -31,8 +31,11 @@ CREATE INDEX IF NOT EXISTS idx_paper_extractions_user
 
 -- DB-004: shared updated_at trigger function (idempotent).
 -- Attaches to tables that have an updated_at column; keeps it current on UPDATE.
+-- NOTE: BEGIN/END kept inline to avoid migrations_runner.py's standalone
+-- BEGIN-line stripper from chewing the PL/pgSQL function body.
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
-BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$ LANGUAGE plpgsql;
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+$$ LANGUAGE plpgsql;
 
 -- user_config
 DROP TRIGGER IF EXISTS trg_user_config_updated_at ON user_config;
@@ -69,5 +72,3 @@ DROP TRIGGER IF EXISTS trg_extraction_templates_updated_at ON extraction_templat
 CREATE TRIGGER trg_extraction_templates_updated_at
     BEFORE UPDATE ON extraction_templates
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
-COMMIT;

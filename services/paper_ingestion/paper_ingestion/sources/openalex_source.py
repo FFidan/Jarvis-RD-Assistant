@@ -137,13 +137,15 @@ class OpenAlexSource(PaperSource):
 
         ``OPENALEX_EMAIL`` is sent as the ``mailto`` query parameter which
         places this client in OpenAlex's polite pool (higher rate limits,
-        better cache behaviour).  ``OPENALEX_API_KEY``, when set, is sent as a
-        Bearer token via the ``Authorization`` header (handled separately in
-        each request) — it is not mixed into the query params.
+        better cache behaviour).  ``OPENALEX_API_KEY``, when set, is sent as
+        the ``api_key`` query parameter (the correct OpenAlex auth mechanism —
+        Bearer header auth is not supported by the OpenAlex API).
         """
         params: dict = {}
         if self._email:
             params["mailto"] = self._email
+        if self._api_key:
+            params["api_key"] = self._api_key
         if extra:
             params.update(extra)
         return params
@@ -197,16 +199,19 @@ class OpenAlexSource(PaperSource):
         if primary_location and isinstance(primary_location, dict):
             pdf_url = primary_location.get("pdf_url") or None
 
-        # PI-EDGE-007: Validate pdf_url hostname against the SSRF allowlist before
-        # storing it — OpenAlex can return arbitrary third-party PDF URLs.
+        # PI-EDGE-007: Validate pdf_url scheme + hostname against the SSRF allowlist
+        # before storing it — OpenAlex can return arbitrary third-party PDF URLs.
         if pdf_url is not None:
-            hostname = urlparse(pdf_url).hostname or ""
-            if hostname not in ALLOWED_PDF_DOMAINS:
+            _parsed = urlparse(pdf_url)
+            hostname = _parsed.hostname or ""
+            if _parsed.scheme not in ("http", "https") or hostname not in ALLOWED_PDF_DOMAINS:
                 logger.info(
-                    "OpenAlex: pdf_url hostname %r for work %s not in ALLOWED_PDF_DOMAINS; "
-                    "discarding pdf_url",
-                    hostname,
+                    "OpenAlex: pdf_url %r for work %s rejected "
+                    "(scheme=%r, hostname=%r not in ALLOWED_PDF_DOMAINS); discarding pdf_url",
+                    pdf_url,
                     external_id,
+                    _parsed.scheme,
+                    _parsed.hostname,
                 )
                 pdf_url = None
 
@@ -284,11 +289,8 @@ class OpenAlexSource(PaperSource):
             extra["sort"] = "publication_date:desc"
 
         params = self._build_params(extra)
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            response = await self.http_client.get(
-                OPENALEX_API_URL, params=params, headers=headers, timeout=30.0
-            )
+            response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning(
                     "OpenAlex search returned %d; returning empty list",
@@ -335,9 +337,8 @@ class OpenAlexSource(PaperSource):
         await self._rate_limit()
         url = f"{OPENALEX_API_URL}/{oa_id}"
         params = self._build_params()
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
         try:
-            response = await self.http_client.get(url, params=params, headers=headers, timeout=30.0)
+            response = await self.http_client.get(url, params=params, timeout=30.0)
             if response.status_code == 404:
                 return None
             if response.status_code in (429, 500, 502, 503, 504):
@@ -404,7 +405,6 @@ class OpenAlexSource(PaperSource):
         seen_ids: set[str] = set()
         papers: list[PaperCreate] = []
         per_q = max(1, limit // max(len(queries), 1))
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
 
         for q in queries:
             if len(papers) >= limit:
@@ -415,9 +415,7 @@ class OpenAlexSource(PaperSource):
                 params["search"] = q
 
             try:
-                response = await self.http_client.get(
-                    OPENALEX_API_URL, params=params, headers=headers, timeout=30.0
-                )
+                response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
                 if response.status_code in (429, 500, 502, 503, 504):
                     logger.warning(
                         "OpenAlex fetch_new_since returned %d; skipping query",

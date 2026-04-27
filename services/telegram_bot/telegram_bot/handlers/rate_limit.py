@@ -61,6 +61,10 @@ def rate_limit(
                         await update.message.reply_text(
                             f"Please wait {remaining}s before using this command again."
                         )
+                    elif update.callback_query:
+                        await update.callback_query.answer(
+                            text="Rate limit exceeded — try again later", show_alert=True
+                        )
                     return None
 
             # --- sliding window check ---
@@ -77,6 +81,10 @@ def rate_limit(
                 if update.message:
                     await update.message.reply_text(
                         f"Rate limit exceeded — max {max_calls} calls per {window_seconds}s."
+                    )
+                elif update.callback_query:
+                    await update.callback_query.answer(
+                        text="Rate limit exceeded — try again later", show_alert=True
                     )
                 return None
 

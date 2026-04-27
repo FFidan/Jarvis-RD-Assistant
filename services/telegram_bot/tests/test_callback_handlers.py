@@ -112,6 +112,26 @@ async def test_paper_detail_api_failure():
     assert "Failed" in text or "failed" in text.lower()
 
 
+@pytest.mark.asyncio
+async def test_paper_detail_callback_includes_api_key_header():
+    """H7: paper_detail_callback passes X-API-Key header to the GET request."""
+    update, context, _, mock_http = _make_callback_update_and_context("paper_detail_99")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "paper": {"title": "Test Paper", "authors": [], "published_date": None, "url": None},
+        "summary": None,
+    }
+    mock_http.get.return_value = mock_resp
+
+    await paper_detail_callback(update, context)
+
+    mock_http.get.assert_awaited_once()
+    call_kwargs = mock_http.get.await_args[1]
+    headers = call_kwargs["headers"]
+    assert headers.get("X-API-Key") == "test-key"
+
+
 # ---------------------------------------------------------------------------
 # Tests: paper_bookmark
 # ---------------------------------------------------------------------------

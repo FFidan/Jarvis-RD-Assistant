@@ -76,7 +76,7 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     if text is None:
         text = ""
     if mode == "escape":
-        return text.replace("<", "&lt;").replace(">", "&gt;")
+        return _strip_bidi_zw(text).replace("<", "&lt;").replace(">", "&gt;")
     if mode == "strip":
         return _CTRL_RE.sub("", text)
     if mode == "delimit":

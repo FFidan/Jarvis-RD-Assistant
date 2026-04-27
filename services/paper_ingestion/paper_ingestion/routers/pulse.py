@@ -62,7 +62,9 @@ async def generate_pulse(
     prevent runaway LLM usage from accidental mass clicks.
     """
     logger.info("pulse.generate: enqueueing job")
-    job_id = await jobs_lib.enqueue(db_pool, "pulse.generate", payload={})
+    # H16: system job — user_id=None until real auth resolver lands.
+    # pulse.generate is a system-level cron job, not user-owned.
+    job_id = await jobs_lib.enqueue(db_pool, "pulse.generate", payload={}, user_id=None)
     await log_audit(
         db_pool,
         action="pulse_generate_enqueued",

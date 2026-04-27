@@ -274,6 +274,11 @@ describe('JobStore', () => {
       vi.mocked(useAuthStore.getState).mockReturnValue({
         getApiKey: vi.fn(() => 'test-key'),
         logout,
+        isAuthenticated: true,
+        authTime: null,
+        apiKey: 'test-key',
+        login: vi.fn(),
+        checkSession: vi.fn(() => true),
       });
 
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: statusCode }));

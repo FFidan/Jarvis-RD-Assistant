@@ -244,10 +244,14 @@ def test_migration_runner_strips_begin_commit_in_real_migrations():
             sql,
             flags=re.IGNORECASE | re.MULTILINE,
         )
-        # After stripping, the essential DDL statements must still be present
-        assert "BEGIN" not in cleaned or "BEGIN" in cleaned.split("BEGIN")[1].lstrip()[:3], (
-            f"{sql_file.name}: BEGIN not fully stripped"
-        )
+        # After stripping, no standalone BEGIN/COMMIT/ROLLBACK lines should remain.
+        # Inline BEGIN inside dollar-quoted PL/pgSQL function bodies (e.g.,
+        # `BEGIN NEW.updated_at = NOW(); RETURN NEW; END;`) is fine and stays.
+        assert not re.search(
+            r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$",
+            cleaned,
+            re.IGNORECASE | re.MULTILINE,
+        ), f"{sql_file.name}: standalone BEGIN/COMMIT/ROLLBACK not fully stripped"
         assert len(cleaned.strip()) > 0, f"{sql_file.name}: stripped to empty"
         cleaned_count += 1
 

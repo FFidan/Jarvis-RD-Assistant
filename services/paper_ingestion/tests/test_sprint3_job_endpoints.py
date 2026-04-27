@@ -17,6 +17,13 @@ def _mock_pool() -> MagicMock:
     return pool
 
 
+@pytest.fixture(autouse=True)
+def _dev_mode_for_validation_assertions(monkeypatch):
+    """SEC-107 redacts pydantic loc/errors in production mode; tests in this
+    file assert on those details, so force DEV_MODE=true."""
+    monkeypatch.setenv("DEV_MODE", "true")
+
+
 @pytest.fixture()
 def app_with_pool():
     """Create the paper_ingestion app with DB/auth dependencies overridden."""

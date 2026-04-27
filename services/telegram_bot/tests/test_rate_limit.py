@@ -122,3 +122,41 @@ async def test_rate_limit_cooldown_blocks_rapid_repeat():
     second = await _heavy(update, context)
     assert second is None
     update.message.reply_text.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_notifies_via_callback_answer_when_message_is_none():
+    """H8: rate-limit falls back to callback_query.answer when update.message is None.
+
+    Verifies the elif branch added to both sliding-window and cooldown checks.
+    """
+    _timestamps.clear()
+
+    chat_id = 99004
+
+    @rate_limit(max_calls=1, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        return "ok"
+
+    # Build an update with callback_query but NO message
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = chat_id
+    update.message = None
+    callback_query = MagicMock()
+    callback_query.answer = AsyncMock()
+    update.callback_query = callback_query
+
+    context = _make_context()
+
+    # First call — passes through
+    first = await _guarded(update, context)
+    assert first == "ok"
+
+    # Second call — hits sliding window; must use callback_query.answer
+    second = await _guarded(update, context)
+    assert second is None
+    callback_query.answer.assert_awaited_once()
+    call_kwargs = callback_query.answer.await_args[1]
+    assert call_kwargs.get("show_alert") is True
+    assert "Rate limit" in call_kwargs.get("text", "")

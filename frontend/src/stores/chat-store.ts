@@ -68,9 +68,9 @@ export const useChatStore = create<ChatState>()((set) => ({
       const messages = state.chats[chatId];
       if (!messages || messages.length === 0) return state;
       // Find the last assistant message
-      const lastAssistantIdx = [...messages].map((m, i) => ({ m, i }))
-        .filter(({ m }) => m.role === 'assistant')
-        .at(-1)?.i;
+      const assistantItems = [...messages].map((m, i) => ({ m, i }))
+        .filter(({ m }) => m.role === 'assistant');
+      const lastAssistantIdx = assistantItems.length > 0 ? assistantItems[assistantItems.length - 1].i : undefined;
       if (lastAssistantIdx === undefined) return state;
       const updated = [...messages];
       updated[lastAssistantIdx] = {

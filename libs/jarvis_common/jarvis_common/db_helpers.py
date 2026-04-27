@@ -264,7 +264,9 @@ async def assert_paper_ownership(
 
     paper_owner: int | None = row["user_id"]
     # NULL owner means system-owned — accessible to all authenticated users.
-    if paper_owner is not None and paper_owner != user_id:
+    # H18: use str() coercion to tolerate asyncpg str/int type mismatches
+    # (matches the _owner_matches pattern in jarvis_common/jobs_router.py).
+    if paper_owner is not None and str(paper_owner) != str(user_id):
         raise HTTPException(status_code=403, detail="paper not owned by current user")
 
 

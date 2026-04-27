@@ -46,7 +46,7 @@ class UserProfile(BaseModel):
     liked_paper_ids: list[int] = Field(default_factory=list)
 
 
-async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
+async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = None) -> UserProfile:
     """Load all user context from the database and compute the library centroid.
 
     Parameters
@@ -56,6 +56,11 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
     embedder:
         Embedder instance whose embed_texts() method is used for centroid
         computation and is passed through to the scoring stages.
+    user_id:
+        Optional caller user ID.  When provided, rating history is filtered to
+        rows matching this user (``pr.user_id IS NOT DISTINCT FROM $N``).
+        When None (single-user / system mode), no user_id filter is applied and
+        all ratings are returned — preserving the existing single-tenant behaviour.
 
     Returns
     -------
@@ -164,31 +169,61 @@ async def load_profile(db_pool: Any, *, embedder: Any) -> UserProfile:
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
         # 5. Recent rating history (top 10 positive + top 10 negative)
-        positive_rows = await conn.fetch(
-            """
-            SELECT p.id, p.title
-            FROM pulse_ratings pr
-            JOIN papers p ON p.id = pr.paper_id
-            WHERE pr.rating IN ('up', 'save', 'open')
-            ORDER BY pr.created_at DESC
-            LIMIT $1
-            """,
-            _RATING_HISTORY_LIMIT,
-        )
+        # H20/WS-6C: when user_id is provided, filter to that user's ratings.
+        # When user_id is None (single-user / system mode), return all ratings.
+        if user_id is not None:
+            positive_rows = await conn.fetch(
+                """
+                SELECT p.id, p.title
+                FROM pulse_ratings pr
+                JOIN papers p ON p.id = pr.paper_id
+                WHERE pr.rating IN ('up', 'save', 'open')
+                  AND pr.user_id IS NOT DISTINCT FROM $2
+                ORDER BY pr.created_at DESC
+                LIMIT $1
+                """,
+                _RATING_HISTORY_LIMIT,
+                user_id,
+            )
+            negative_rows = await conn.fetch(
+                """
+                SELECT p.title
+                FROM pulse_ratings pr
+                JOIN papers p ON p.id = pr.paper_id
+                WHERE pr.rating IN ('down', 'dismiss')
+                  AND pr.user_id IS NOT DISTINCT FROM $2
+                ORDER BY pr.created_at DESC
+                LIMIT $1
+                """,
+                _RATING_HISTORY_LIMIT,
+                user_id,
+            )
+        else:
+            positive_rows = await conn.fetch(
+                """
+                SELECT p.id, p.title
+                FROM pulse_ratings pr
+                JOIN papers p ON p.id = pr.paper_id
+                WHERE pr.rating IN ('up', 'save', 'open')
+                ORDER BY pr.created_at DESC
+                LIMIT $1
+                """,
+                _RATING_HISTORY_LIMIT,
+            )
+            negative_rows = await conn.fetch(
+                """
+                SELECT p.title
+                FROM pulse_ratings pr
+                JOIN papers p ON p.id = pr.paper_id
+                WHERE pr.rating IN ('down', 'dismiss')
+                ORDER BY pr.created_at DESC
+                LIMIT $1
+                """,
+                _RATING_HISTORY_LIMIT,
+            )
         recent_positive_titles = [r["title"] for r in positive_rows][:_RATING_HISTORY_LIMIT]
         liked_paper_ids = [r.get("id") for r in positive_rows if r.get("id") is not None]
 
-        negative_rows = await conn.fetch(
-            """
-            SELECT p.title
-            FROM pulse_ratings pr
-            JOIN papers p ON p.id = pr.paper_id
-            WHERE pr.rating IN ('down', 'dismiss')
-            ORDER BY pr.created_at DESC
-            LIMIT $1
-            """,
-            _RATING_HISTORY_LIMIT,
-        )
         recent_negative_titles = [r["title"] for r in negative_rows][:_RATING_HISTORY_LIMIT]
 
     return UserProfile(
