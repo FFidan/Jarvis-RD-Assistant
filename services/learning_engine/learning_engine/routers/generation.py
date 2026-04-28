@@ -5,14 +5,12 @@ jobs handled by the jobs worker wired in main.py lifespan.  The old
 in-memory ``app.jobs`` module is no longer used by this router.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, JobError, job_handler
@@ -261,7 +259,7 @@ async def _card_generate_batch_job(
 @limiter.limit("5/minute")
 async def generate_cards(
     request: Request,
-    body: GenerateCardsRequest,
+    body: GenerateCardsRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
@@ -281,7 +279,7 @@ async def generate_cards(
 @limiter.limit("2/minute")
 async def batch_generate_cards(
     request: Request,
-    body: BatchGenerateRequest,
+    body: BatchGenerateRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue batch card generation; returns 202 immediately with a *job_id* to poll."""

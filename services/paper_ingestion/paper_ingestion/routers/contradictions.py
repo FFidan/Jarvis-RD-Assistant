@@ -1,9 +1,7 @@
 """API routes for verified cross-paper contradiction detection."""
 
-from __future__ import annotations
-
 import asyncpg
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Body, Depends, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
 from jarvis_common import jobs as jobs_lib
 
@@ -46,7 +44,7 @@ async def get_contradictions(
 @limiter.limit("5/minute")
 async def scan_contradictions(
     request: Request,
-    body: ContradictionScanRequest | None = None,
+    body: ContradictionScanRequest | None = Body(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue a bounded cross-paper contradiction scan."""
@@ -64,7 +62,7 @@ async def scan_contradictions(
 async def scan_paper_contradictions(
     request: Request,
     paper_id: int,
-    body: ContradictionScanRequest | None = None,
+    body: ContradictionScanRequest | None = Body(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue a contradiction scan focused on one paper."""

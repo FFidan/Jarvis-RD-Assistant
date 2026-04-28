@@ -7,12 +7,10 @@ Thin orchestration layer — the heavy lifting lives in ``paper_ingestion.pulse.
 ``paper_ingestion.pulse.deck``, and the scoring stages.
 """
 
-from __future__ import annotations
-
 import logging
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id, current_user_id_or_none, log_audit
 from jarvis_common import jobs as jobs_lib
 
@@ -117,7 +115,7 @@ async def get_history(
 @limiter.limit("60/minute")
 async def rate_card(
     request: Request,
-    body: PulseRateRequest,
+    body: PulseRateRequest = Body(...),
     user_id: int | None = Depends(current_user_id),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseRateResponse:

@@ -103,7 +103,10 @@ async def generate_weekly_summary(
                   EXISTS (
                       SELECT 1 FROM paper_user_state pus
                       WHERE pus.paper_id = p.id
-                        AND pus.status IN ('starred', 'reading', 'read')
+                        AND (
+                            COALESCE(pus.starred, FALSE)
+                            OR pus.status IN ('starred', 'reading', 'read')
+                        )
                   )
                   OR
                   EXISTS (

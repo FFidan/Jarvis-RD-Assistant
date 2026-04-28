@@ -186,6 +186,29 @@ def test_dashboard_metrics_uses_shared_pool_dependency() -> None:
     assert get_db_pool in dependency_calls
 
 
+async def test_dashboard_metrics_excludes_legacy_archived_from_unread(_app):
+    """Unread aggregate should treat legacy status='archived' as not unread."""
+    app, conn = _app
+    conn.fetchrow.return_value = FakeRecord(
+        total_papers=1,
+        unread_papers=0,
+        pending_papers=0,
+        due_cards=0,
+        active_projects=0,
+        topic_count=1,
+        nudge_count=0,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/dashboard/metrics")
+
+    assert resp.status_code == 200
+    sql = conn.fetchrow.await_args.args[0]
+    assert "pus.status = 'archived'" in sql
+
+
 def test_feed_route_precedes_dynamic_paper_detail_route() -> None:
     """Static feed route must be registered before /api/papers/{paper_id}."""
     from paper_ingestion.main import app
@@ -221,7 +244,9 @@ async def test_feed_filter_by_status(_app):
     # Verify SQL contains IN clause for status filter
     fetch_call = conn.fetch.call_args
     sql = fetch_call[0][0]
-    assert "COALESCE(pus.status, 'new') IN" in sql
+    assert "COALESCE(pus.archived, FALSE)" in sql
+    assert "pus.status = 'archived'" in sql
+    assert "COALESCE(pus.status, 'new') END IN" in sql
 
 
 async def test_feed_filter_by_source(_app):
@@ -302,7 +327,9 @@ async def test_feed_combined_filters(_app):
     fetch_call = conn.fetch.call_args
     sql = fetch_call[0][0]
     assert "websearch_to_tsquery" in sql
-    assert "COALESCE(pus.status, 'new') IN" in sql
+    assert "COALESCE(pus.archived, FALSE)" in sql
+    assert "pus.status = 'archived'" in sql
+    assert "COALESCE(pus.status, 'new') END IN" in sql
     assert "p.source_type IN" in sql
 
 
@@ -363,7 +390,13 @@ async def test_user_state_create(_app):
     """PUT /api/papers/{id}/user-state creates new user state."""
     app, conn = _app
     conn.fetchrow.return_value = FakeRecord(
-        status="reading", rating=None, user_notes="Starting to read", flagged=False
+        status="reading",
+        starred=False,
+        archived=False,
+        preference="none",
+        rating=None,
+        user_notes="Starting to read",
+        flagged=False,
     )
 
     async with httpx.AsyncClient(
@@ -384,7 +417,13 @@ async def test_user_state_update(_app):
     """PUT /api/papers/{id}/user-state updates existing state."""
     app, conn = _app
     conn.fetchrow.return_value = FakeRecord(
-        status="read", rating=5, user_notes="Excellent paper", flagged=True
+        status="read",
+        starred=False,
+        archived=False,
+        preference="none",
+        rating=5,
+        user_notes="Excellent paper",
+        flagged=True,
     )
 
     async with httpx.AsyncClient(

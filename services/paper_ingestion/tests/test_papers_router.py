@@ -91,6 +91,8 @@ async def test_list_papers_with_new_status_uses_left_join_filter():
     sql = conn.fetch.await_args.args[0]
     assert "LEFT JOIN paper_user_state pus" in sql
     assert "pus.paper_id IS NULL" in sql
+    assert "COALESCE(pus.starred, FALSE)" not in sql
+    assert "COALESCE(pus.archived, FALSE)" in sql
 
 
 @pytest.mark.asyncio
@@ -287,9 +289,7 @@ async def test_submit_feedback_requires_rating_or_flagged():
     """submit_feedback should reject empty updates instead of writing blank state."""
     from paper_ingestion.models import FeedbackRequest
 
-    with pytest.raises(
-        HTTPException, match="At least one of 'rating' or 'flagged' must be provided."
-    ):
+    with pytest.raises(HTTPException, match="At least one of 'rating', 'preference', or 'flagged'"):
         await papers.submit_feedback.__wrapped__(
             SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=MagicMock()))),
             paper_id=7,
@@ -327,7 +327,7 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
 
 @pytest.mark.asyncio
 async def test_put_paper_bookmark_creates_state_row():
-    """bookmark_paper should verify paper existence and upsert paper_user_state with 'starred'."""
+    """bookmark_paper should verify paper existence and set the starred flag."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 5}
     conn.fetchval = AsyncMock(return_value=None)  # no prior state → will star
@@ -342,9 +342,9 @@ async def test_put_paper_bookmark_creates_state_row():
     assert conn.execute.await_count == 1
     sql = conn.execute.await_args.args[0]
     assert "INSERT INTO paper_user_state" in sql
-    # new_status='starred' is passed as $3 parameter, not hardcoded in SQL
     execute_args = conn.execute.await_args.args
-    assert "starred" in execute_args  # third positional arg is the status
+    assert execute_args[1:] == (5, None, True)
+    assert "starred" in sql
 
 
 @pytest.mark.asyncio
@@ -390,11 +390,11 @@ async def test_put_paper_bookmark_404_for_missing_paper():
 
 
 @pytest.mark.asyncio
-async def test_bookmark_paper_toggles_between_starred_and_read():
-    """H15-schema: bookmark_paper toggles starred ↔ read on successive calls.
+async def test_bookmark_paper_toggles_starred_without_read_status_clobber():
+    """bookmark_paper toggles the starred flag without changing reading status.
 
-    First call (no prior state) → status becomes 'starred'.
-    Second call (prior status = 'starred') → status becomes 'read'.
+    First call (no prior star) → starred TRUE.
+    Second call (prior star) → starred FALSE.
     """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 5}
@@ -408,11 +408,11 @@ async def test_bookmark_paper_toggles_between_starred_and_read():
     )
     assert result1 == {"status": "ok", "paper_id": 5}
     first_args = conn.execute.await_args.args
-    assert "starred" in first_args, f"Expected 'starred' in execute args, got: {first_args}"
+    assert first_args[1:] == (5, None, True)
 
-    # --- Second call: prior state = 'starred' → should set to 'read' ---
+    # --- Second call: prior starred flag true → should clear it ---
     conn.execute.reset_mock()
-    conn.fetchval = AsyncMock(return_value="starred")
+    conn.fetchval = AsyncMock(return_value=True)
     result2 = await papers.bookmark_paper.__wrapped__(
         MagicMock(),
         paper_id=5,
@@ -420,9 +420,88 @@ async def test_bookmark_paper_toggles_between_starred_and_read():
     )
     assert result2 == {"status": "ok", "paper_id": 5}
     second_args = conn.execute.await_args.args
-    assert "read" in second_args, (
-        f"Expected 'read' in execute args after toggle from 'starred', got: {second_args}"
+    assert second_args[1:] == (5, None, False)
+    assert "WHEN paper_user_state.status = 'starred' THEN 'read'" in second_args[0]
+
+
+@pytest.mark.asyncio
+async def test_archive_paper_sets_archived_flag():
+    """archive_paper should set archived without changing reading status."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 8}
+
+    result = await papers.archive_paper.__wrapped__(
+        MagicMock(),
+        paper_id=8,
+        db_pool=pool,
     )
+
+    assert result == {"status": "ok", "paper_id": 8}
+    sql = conn.execute.await_args.args[0]
+    assert "archived" in sql
+    assert conn.execute.await_args.args[1:] == (8, None)
+
+
+@pytest.mark.asyncio
+async def test_archive_paper_404_for_missing_paper():
+    """archive_paper raises 404 when the paper does not exist."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+
+    with pytest.raises(HTTPException, match="Paper not found") as exc_info:
+        await papers.archive_paper.__wrapped__(
+            MagicMock(),
+            paper_id=999,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_paper_detail_does_not_collapse_status_under_starred():
+    # Status='reading' AND starred=True must surface as status='reading'
+    # plus starred=True; it must NOT collapse to status='starred' (the
+    # response-layer regression that would re-introduce the migration-044
+    # clobber).
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        _paper_row(id=42),
+        None,
+        {
+            "status": "reading",
+            "starred": True,
+            "archived": False,
+            "preference": "none",
+            "rating": None,
+            "user_notes": None,
+            "flagged": False,
+        },
+    ]
+    conn.fetch.return_value = []
+    conn.fetchval = AsyncMock(return_value=0)
+
+    paper_model = PaperResponse(
+        id=42,
+        external_id="paper-42",
+        source_type=SourceType.ARXIV,
+        title="Paper 42",
+        authors=["Ada"],
+        url="https://example.com/papers/42",
+        created_at=datetime.now(UTC),
+    )
+
+    with patch.object(papers, "row_to_paper_response", return_value=paper_model):
+        result = await papers.get_paper_detail.__wrapped__(
+            MagicMock(),
+            paper_id=42,
+            db_pool=pool,
+        )
+
+    assert result.user_state is not None
+    assert result.user_state.status == "reading"
+    assert result.user_state.starred is True
+    assert result.user_state.archived is False
 
 
 @pytest.mark.asyncio

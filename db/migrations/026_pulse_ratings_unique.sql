@@ -17,12 +17,22 @@ WHERE a.id > b.id
   AND a.paper_id = b.paper_id
   AND a.user_id IS NOT DISTINCT FROM b.user_id;
 
--- 3. Add unique constraint (NULLS NOT DISTINCT means two NULLs are equal,
---    so single-tenant NULL user_id rows are deduplicated per paper_id)
---    Wrapped in DO/EXCEPTION for idempotency: init.sql may have already defined it
-DO $$ BEGIN
-  ALTER TABLE pulse_ratings
-      ADD CONSTRAINT pulse_ratings_paper_user_uniq
-      UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
-EXCEPTION WHEN duplicate_object THEN NULL;
+-- 3. Add unique constraint (NULLS NOT DISTINCT means two NULLs are equal, so
+--    single-tenant NULL user_id rows are deduplicated per paper_id). Fresh
+--    installs already define this in init.sql, so guard by pg_constraint.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'pulse_ratings'
+      AND con.conname = 'pulse_ratings_paper_user_uniq'
+  ) THEN
+    ALTER TABLE pulse_ratings
+        ADD CONSTRAINT pulse_ratings_paper_user_uniq
+        UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+  END IF;
 END $$;

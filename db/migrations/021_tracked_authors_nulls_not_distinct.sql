@@ -10,9 +10,39 @@ BEGIN;
 -- Drop the old partial unique index (name was defined in migration 008)
 DROP INDEX IF EXISTS idx_tracked_authors_name_no_s2;
 
--- Add the replacement: one UNIQUE constraint covering both cases.
-ALTER TABLE tracked_authors
-  ADD CONSTRAINT tracked_authors_name_s2_unique
-  UNIQUE NULLS NOT DISTINCT (author_name, s2_author_id);
+-- Existing databases could have duplicates because the old partial index only
+-- protected the NULL s2_author_id case. Keep the oldest row per logical author.
+WITH ranked AS (
+  SELECT
+    ctid,
+    ROW_NUMBER() OVER (
+      PARTITION BY author_name, s2_author_id
+      ORDER BY created_at ASC NULLS LAST, id ASC
+    ) AS rn
+  FROM tracked_authors
+)
+DELETE FROM tracked_authors ta
+USING ranked r
+WHERE ta.ctid = r.ctid
+  AND r.rn > 1;
+
+-- Add the replacement: one UNIQUE constraint covering both cases. Fresh
+-- installs already have this constraint from init.sql, so guard by name.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'tracked_authors'
+      AND con.conname = 'tracked_authors_name_s2_unique'
+  ) THEN
+    ALTER TABLE tracked_authors
+      ADD CONSTRAINT tracked_authors_name_s2_unique
+      UNIQUE NULLS NOT DISTINCT (author_name, s2_author_id);
+  END IF;
+END $$;
 
 COMMIT;

@@ -34,7 +34,15 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     return (
         f"SELECT p.*, ps.summary_brief, {tldr_sql}, ps.confidence,"
         f"{note_sql}"
-        " pus.status AS user_status, pus.rating,"
+        " CASE"
+        "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+        "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
+        "   ELSE pus.status"
+        " END AS user_status,"
+        " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
+        " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
+        " COALESCE(pus.preference, 'none') AS preference,"
+        " pus.rating,"
         " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
         " (ps.id IS NOT NULL) AS has_summary,"
         " pr.score AS recommendation_score,"
@@ -46,7 +54,15 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
 _BASE_SELECT = (
     "SELECT p.*, ps.summary_brief, ps.tldr, ps.confidence,"
     " 0::integer AS note_match_count, NULL::text AS note_snippet,"
-    " pus.status AS user_status, pus.rating,"
+    " CASE"
+    "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+    "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
+    "   ELSE pus.status"
+    " END AS user_status,"
+    " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
+    " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
+    " COALESCE(pus.preference, 'none') AS preference,"
+    " pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
     " (ps.id IS NOT NULL) AS has_summary,"
     " pr.score AS recommendation_score,"
@@ -56,7 +72,15 @@ _BASE_SELECT = (
 _FALLBACK_SELECT = (
     "SELECT p.*, ps.summary_brief, NULL AS tldr, ps.confidence,"
     " 0::integer AS note_match_count, NULL::text AS note_snippet,"
-    " pus.status AS user_status, pus.rating,"
+    " CASE"
+    "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+    "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
+    "   ELSE pus.status"
+    " END AS user_status,"
+    " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
+    " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
+    " COALESCE(pus.preference, 'none') AS preference,"
+    " pus.rating,"
     " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
     " (ps.id IS NOT NULL) AS has_summary,"
     " pr.score AS recommendation_score,"
@@ -66,7 +90,8 @@ _FALLBACK_SELECT = (
 _BASE_FROM = (
     " FROM papers p"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
-    " LEFT JOIN paper_user_state pus ON p.id = pus.paper_id"
+    " LEFT JOIN paper_user_state pus"
+    " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
     " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
 )
 
@@ -125,7 +150,10 @@ def build_feed_queries(
     param_idx += 1
 
     if unread_only:
-        conditions.append("COALESCE(pus.status, 'new') != 'read'")
+        conditions.append(
+            "COALESCE(pus.status, 'new') != 'read'"
+            " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')"
+        )
 
     note_query_param: int | None = None
     if q:
@@ -149,7 +177,13 @@ def build_feed_queries(
     status_list = split_csv_filter(statuses)
     if status_list:
         placeholders = ", ".join(f"${param_idx + i}" for i in range(len(status_list)))
-        conditions.append(f"COALESCE(pus.status, 'new') IN ({placeholders})")
+        conditions.append(
+            "CASE"
+            " WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+            " WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
+            " ELSE COALESCE(pus.status, 'new')"
+            f" END IN ({placeholders})"
+        )
         params.extend(status_list)
         param_idx += len(status_list)
 

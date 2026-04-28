@@ -1,4 +1,12 @@
 repos:
+  - repo: local
+    hooks:
+      - id: check-python-deps
+        name: check Python dependency exports
+        entry: bash scripts/check-python-deps.sh
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock|scripts/(export-service-requirements|check-python-deps)\.sh|services/.*/(requirements|constraints).*[.]txt)$
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.10
     hooks:

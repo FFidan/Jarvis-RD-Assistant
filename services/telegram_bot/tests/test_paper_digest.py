@@ -132,3 +132,20 @@ async def test_run_paper_digest_falls_back_to_simple_digest():
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
     simple_digest.assert_awaited_once_with(db_pool, bot, config, 1234)
+
+
+@pytest.mark.asyncio
+async def test_simple_digest_query_includes_starred_boolean_or_clause():
+    # Migration 044 introduced the per-user `starred` boolean. The digest must
+    # include papers UI-starred via the new bookmark toggle (which writes
+    # starred=TRUE while preserving the prior reading status), not only the
+    # legacy status='starred' rows.
+    db_pool = AsyncMock()
+    db_pool.fetch.return_value = []
+    bot = AsyncMock()
+
+    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234)
+
+    sql = db_pool.fetch.await_args.args[0]
+    assert "COALESCE(pus.starred, FALSE)" in sql
+    assert "pus.status IN ('starred', 'reading', 'read')" in sql

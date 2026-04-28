@@ -7,13 +7,13 @@ ARG INSTALL_OPTIONAL=false
 WORKDIR /app
 
 COPY libs/jarvis_common/ ./libs/jarvis_common/
-RUN pip install --no-cache-dir ./libs/jarvis_common/
-
-COPY services/paper_ingestion/requirements.txt services/paper_ingestion/requirements-optional.txt ./
-RUN pip install --no-cache-dir -r requirements.txt \
+COPY services/paper_ingestion/requirements.txt services/paper_ingestion/constraints.txt \
+     services/paper_ingestion/requirements-optional.txt services/paper_ingestion/constraints-optional.txt ./
+RUN pip install --no-cache-dir -c constraints.txt ./libs/jarvis_common/ \
+    && pip install --no-cache-dir -c constraints.txt -r requirements.txt \
     && if [ "$INSTALL_OPTIONAL" = "true" ]; then \
          pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cu124 \
-         && pip install --no-cache-dir -r requirements-optional.txt; \
+         && pip install --no-cache-dir -c constraints-optional.txt -r requirements-optional.txt; \
        fi
 
 RUN adduser --disabled-password --no-create-home appuser

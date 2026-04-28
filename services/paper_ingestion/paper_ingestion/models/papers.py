@@ -161,6 +161,9 @@ class UserStateResponse(BaseModel):
     """User reading state for a paper."""
 
     status: str = "new"
+    starred: bool = False
+    archived: bool = False
+    preference: Literal["none", "up", "down"] = "none"
     rating: int | None = None
     user_notes: str | None = None
     flagged: bool = False
@@ -170,6 +173,9 @@ class UserStateUpsert(BaseModel):
     """Request body for creating/updating user state on a paper."""
 
     status: Literal["new", "reading", "read", "archived", "starred"] | None = None
+    starred: bool | None = None
+    archived: bool | None = None
+    preference: Literal["none", "up", "down"] | None = None
     rating: int | None = Field(None, ge=1, le=5)
     user_notes: str | None = None
     flagged: bool | None = None
@@ -296,6 +302,9 @@ class FeedPaper(PaperResponse):
     tldr: str | None = None
     confidence: Confidence | None = None
     user_status: str | None = None
+    starred: bool = False
+    archived: bool = False
+    preference: Literal["none", "up", "down"] = "none"
     rating: int | None = None
     priority_level: str | None = None
     has_chunks: bool = False
@@ -433,6 +442,7 @@ class FeedbackRequest(BaseModel):
     """
 
     rating: int | None = Field(default=None, ge=1, le=5)
+    preference: Literal["none", "up", "down"] | None = None
     flagged: bool | None = None
 
 
@@ -441,6 +451,7 @@ class FeedbackResponse(BaseModel):
 
     paper_id: int
     rating: int | None = None
+    preference: Literal["none", "up", "down"] | None = None
     flagged: bool | None = None
     status: str
 

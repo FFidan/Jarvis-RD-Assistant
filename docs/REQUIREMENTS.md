@@ -30,44 +30,34 @@
 
 ## Per-Service Python Dependencies
 
-### services/paper_ingestion/requirements.txt
+Root `pyproject.toml` dependency groups are the canonical source for Python
+dependency constraints. The per-service `requirements.txt` files contain direct
+service dependencies generated from those groups, while per-service
+`constraints.txt` files contain lock-derived transitive pins for Docker's
+`pip install -c constraints.txt ...` build path. `libs/jarvis_common` dependencies
+live in the shared `jarvis-common` group, which is included by each service group
+so Docker and host `uv` resolve the shared library through the same lock. Do not
+edit generated requirements or constraints files by hand.
+
+Use:
 
 ```
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-httpx>=0.27.0
-PyMuPDF>=1.24.0              # PDF parsing, page rendering, text extraction
-pydantic>=2.0
-asyncpg>=0.30.0              # Async PostgreSQL driver
-qdrant-client>=1.12.0        # Vector store client
-rapidfuzz>=3.0.0             # Fast fuzzy matching (quote verification; replaced fuzzywuzzy)
-tiktoken>=0.7.0              # Token counting for text chunking
-slowapi>=0.1.9               # Rate limiting middleware
-apscheduler>=3.10.0          # Automated fetch→embed pipeline scheduling
-marker-pdf>=1.0.0              # Advanced PDF parsing with OCR
-sentence-transformers>=3.0.0   # Cross-encoder reranking model
+bash scripts/export-service-requirements.sh  # regenerate service requirements
+bash scripts/check-python-deps.sh            # verify lock + requirements parity
 ```
 
-### services/learning_engine/requirements.txt
+The service groups are:
 
-```
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-httpx>=0.27.0                # HTTP client for LiteLLM calls
-pydantic>=2.0
-asyncpg>=0.30.0
-fsrs>=4.0.0                  # Free Spaced Repetition Scheduler (py-fsrs)
-slowapi>=0.1.9               # Rate limiting middleware
-genanki>=0.13.0              # Anki deck export
-```
+| Group | Output |
+|---|---|
+| `jarvis-common` | Included by all service groups; no standalone requirements file |
+| `paper-ingestion` | `services/paper_ingestion/requirements.txt`, `services/paper_ingestion/constraints.txt` |
+| `paper-ingestion-optional` | `services/paper_ingestion/requirements-optional.txt`, `services/paper_ingestion/constraints-optional.txt` |
+| `learning-engine` | `services/learning_engine/requirements.txt`, `services/learning_engine/constraints.txt` |
+| `telegram-bot` | `services/telegram_bot/requirements.txt`, `services/telegram_bot/constraints.txt` |
 
-### services/telegram_bot/requirements.txt
-
-```
-python-telegram-bot>=21.0    # Async Telegram bot framework
-httpx>=0.27.0                # HTTP client for internal service calls
-asyncpg>=0.30.0
-```
+FastAPI is intentionally capped below `0.117.0` until the Docker runtime is
+upgraded in a dedicated compatibility pass.
 
 ### frontend/package.json (React dashboard — PRIMARY)
 
@@ -178,7 +168,7 @@ Managed via the root `Makefile`. In Docker, each service has its own isolated Py
 
 ### libs/jarvis_common
 
-Installed as editable dependency (`pip install -e libs/jarvis_common`) in each service.
+Installed into each Docker service with that service's generated constraints.
 Contains cross-cutting utilities shared by paper_ingestion, learning_engine, and telegram_bot:
 
 - `auth.py` -- API key verification via `X-API-Key` header (`verify_api_key`)

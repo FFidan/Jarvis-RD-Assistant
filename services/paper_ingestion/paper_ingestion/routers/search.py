@@ -17,8 +17,6 @@ that monkeypatch ``paper_ingestion.routers.search`` (e.g.
 ``_round_robin_merge`` directly from this module).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from datetime import date
@@ -26,7 +24,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
 
@@ -120,7 +118,7 @@ __all__ = [
 @limiter.limit("30/minute")
 async def search_papers(
     request: Request,
-    body: SearchRequest,
+    body: SearchRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> MultiSourceSearchResponse:
@@ -229,7 +227,7 @@ async def search_papers(
 @limiter.limit("30/minute")
 async def search_papers_preview(
     request: Request,
-    body: SearchRequest,
+    body: SearchRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
 ) -> SearchPreviewResponse:
@@ -342,7 +340,7 @@ async def search_papers_preview(
 @limiter.limit("30/minute")
 async def search_hybrid(
     request: Request,
-    body: SearchRequest,
+    body: SearchRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder: Embedder = Depends(get_embedder),
 ) -> list[dict]:

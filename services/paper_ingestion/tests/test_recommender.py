@@ -172,6 +172,18 @@ class TestFilterUnread:
         # second positional arg is the paper_ids list
         assert [5, 6, 7] in args.args or [5, 6, 7] == args.args[-1]
 
+    @pytest.mark.asyncio
+    async def test_starred_papers_remain_eligible_for_recommendation(self) -> None:
+        # Sprint 7 B4: starred papers stay eligible. The SQL must NOT exclude
+        # status='starred' or COALESCE(starred, FALSE).
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _filter_unread(conn, [1])
+        sql = conn.fetch.await_args.args[0]
+        assert "status = 'read'" in sql
+        assert "archived" in sql
+        assert "starred" not in sql, "starred state must not gate recommendation eligibility"
+
 
 # ===========================================================================
 # 4. refresh_recommendations — integration (fully mocked DB + embedder)

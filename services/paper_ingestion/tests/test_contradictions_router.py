@@ -31,8 +31,15 @@ def app_with_pool():
     pool, conn = _mock_pool()
     app.state.db_pool = pool
     app.state.limiter.enabled = False
-    app.dependency_overrides[get_db_pool] = lambda: pool
-    app.dependency_overrides[verify_api_key] = lambda: None
+
+    async def override_db_pool():
+        return pool
+
+    async def override_api_key():
+        return None
+
+    app.dependency_overrides[get_db_pool] = override_db_pool
+    app.dependency_overrides[verify_api_key] = override_api_key
     yield app, pool, conn
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True

@@ -3,10 +3,9 @@ FROM python:3.12.9-slim
 WORKDIR /app
 
 COPY libs/jarvis_common/ ./libs/jarvis_common/
-RUN pip install --no-cache-dir ./libs/jarvis_common/
-
-COPY services/learning_engine/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY services/learning_engine/requirements.txt services/learning_engine/constraints.txt ./
+RUN pip install --no-cache-dir -c constraints.txt ./libs/jarvis_common/ \
+    && pip install --no-cache-dir -c constraints.txt -r requirements.txt
 
 RUN adduser --disabled-password --no-create-home appuser
 

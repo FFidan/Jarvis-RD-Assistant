@@ -153,7 +153,10 @@ async def _simple_digest(
                  EXISTS (
                      SELECT 1 FROM paper_user_state pus
                      WHERE pus.paper_id = p.id
-                       AND pus.status IN ('starred', 'reading', 'read')
+                       AND (
+                           COALESCE(pus.starred, FALSE)
+                           OR pus.status IN ('starred', 'reading', 'read')
+                       )
                  )
                  OR EXISTS (
                      SELECT 1 FROM pulse_ratings pr

@@ -1,43 +1,38 @@
 SERVICES = services/paper_ingestion services/learning_engine services/telegram_bot
 
-.PHONY: setup setup-service test test-service lint clean typecheck check
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke
 
-## Create all virtual environments and install dependencies
+## Create/update the root uv environment from uv.lock
 setup:
-	@for dir in $(SERVICES); do \
-		echo "=== Setting up $$dir ==="; \
-		cd $$dir && python3 -m venv .venv && \
-		.venv/bin/pip install --upgrade pip && \
-		.venv/bin/pip install -e $(CURDIR)/libs/jarvis_common && \
-		.venv/bin/pip install -r requirements.txt && \
-		cd $(CURDIR); \
-	done
-	@echo "=== All services set up ==="
+	uv sync
 
-## Setup a single service: make setup-service SERVICE=services/paper_ingestion
+## Deprecated: host development now uses the root uv environment
 setup-service:
-	cd $(SERVICE) && python3 -m venv .venv && \
-	.venv/bin/pip install --upgrade pip && \
-	.venv/bin/pip install -r requirements.txt
+	@echo "Use 'make setup'. Service requirements are generated from uv.lock."
+
+## Export Docker/pip requirements from uv.lock
+deps-export:
+	bash scripts/export-service-requirements.sh
+
+## Verify uv.lock and generated requirements are in sync
+deps-check:
+	bash scripts/check-python-deps.sh
 
 ## Run all tests
 test:
-	@for dir in $(SERVICES); do \
-		echo "=== Testing $$dir ===" && \
-		(cd $$dir && .venv/bin/pytest tests/ -v) || exit 1; \
-	done
+	uv run pytest -v
 
 ## Test a single service: make test-service SERVICE=services/learning_engine
 test-service:
-	cd $(SERVICE) && .venv/bin/pytest tests/ -v
+	uv run pytest $(SERVICE)/tests/ -v
 
 ## Lint all Python code
 lint:
-	ruff check services/ libs/ scripts/
+	uv run ruff check services/ libs/ scripts/
 
 ## Format all Python code
 format:
-	ruff format services/ libs/ scripts/
+	uv run ruff format services/ libs/ scripts/
 
 ## Remove all generated files
 clean:
@@ -57,8 +52,12 @@ typecheck:
 secure-secrets:
 	find secrets -maxdepth 1 -type f -name "*.txt" -exec chmod 600 {} \;
 
-## Run all quality checks: lint + typecheck + test
-check: secure-secrets lint typecheck test
+## Boot core Docker services with disposable secrets and probe health endpoints
+ci-smoke:
+	bash scripts/ci-smoke.sh
+
+## Run all quality checks: dependency parity + lint + typecheck + test
+check: secure-secrets deps-check lint typecheck test
 
 ## Docker shortcuts
 up:

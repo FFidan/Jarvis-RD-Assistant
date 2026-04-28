@@ -8,7 +8,9 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from jarvis_common import assert_paper_ownership
 from jarvis_common import jobs as jobs_lib
+from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import DashboardMetrics, UserStateResponse, UserStateUpsert
@@ -39,9 +41,14 @@ async def get_dashboard_metrics(
             SELECT
                 (SELECT COUNT(*) FROM papers) AS total_papers,
                 (SELECT COUNT(*) FROM papers p
-                 WHERE NOT EXISTS (
-                   SELECT 1 FROM paper_user_state pus
-                   WHERE pus.paper_id = p.id AND pus.status = 'read'
+                   WHERE NOT EXISTS (
+                     SELECT 1 FROM paper_user_state pus
+                   WHERE pus.paper_id = p.id
+                     AND (
+                       pus.status = 'read'
+                       OR COALESCE(pus.archived, FALSE)
+                       OR pus.status = 'archived'
+                     )
                  )) AS unread_papers,
                 (SELECT COUNT(*) FROM papers p
                  LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
@@ -107,21 +114,33 @@ async def upsert_user_state(
     Uses ``INSERT ... ON CONFLICT DO UPDATE`` so partial updates work:
     only non-null fields in the request body overwrite existing values.
     """
+    user_id = await current_user_id_or_none(request)
     async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
         try:
             row = await conn.fetchrow(
                 """
-                INSERT INTO paper_user_state (paper_id, status, rating, user_notes, flagged)
-                VALUES ($1, $2, $3, $4, $5)
+                INSERT INTO paper_user_state
+                    (paper_id, user_id, status, starred, archived,
+                     preference, rating, user_notes, flagged)
+                VALUES ($1, $2, $3, COALESCE($4, FALSE), COALESCE($5, FALSE),
+                        COALESCE($6, 'none'), $7, $8, $9)
                 ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                    status   = COALESCE($2, paper_user_state.status),
-                    rating   = COALESCE($3, paper_user_state.rating),
-                    user_notes = COALESCE($4, paper_user_state.user_notes),
-                    flagged  = COALESCE($5, paper_user_state.flagged)
-                RETURNING status, rating, user_notes, flagged
+                    status     = COALESCE($3, paper_user_state.status),
+                    starred    = COALESCE($4, paper_user_state.starred),
+                    archived   = COALESCE($5, paper_user_state.archived),
+                    preference = COALESCE($6, paper_user_state.preference),
+                    rating     = COALESCE($7, paper_user_state.rating),
+                    user_notes = COALESCE($8, paper_user_state.user_notes),
+                    flagged    = COALESCE($9, paper_user_state.flagged)
+                RETURNING status, starred, archived, preference, rating, user_notes, flagged
                 """,
                 paper_id,
+                user_id,
                 body.status,
+                body.starred,
+                body.archived,
+                body.preference,
                 body.rating,
                 body.user_notes,
                 body.flagged,
@@ -134,7 +153,7 @@ async def upsert_user_state(
 
     # Trigger Zotero push when a paper is newly starred and has project links.
     # The job handler checks Zotero config at runtime and returns early if disabled.
-    if body.status == "starred":
+    if body.status == "starred" or body.starred is True:
         try:
             async with pool.acquire() as conn:
                 project_count = await conn.fetchval(
@@ -153,6 +172,9 @@ async def upsert_user_state(
 
     return UserStateResponse(
         status=row["status"],
+        starred=row["starred"],
+        archived=row["archived"],
+        preference=row["preference"],
         rating=row["rating"],
         user_notes=row["user_notes"],
         flagged=row["flagged"],

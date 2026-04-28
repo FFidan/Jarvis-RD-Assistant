@@ -1,4 +1,5 @@
 #!/bin/sh
 set -eu
-export LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
+key_file="${LITELLM_MASTER_KEY_FILE:-/run/secrets/litellm_master_key}"
+export LITELLM_MASTER_KEY="$(cat "$key_file")"
 exec litellm "$@"

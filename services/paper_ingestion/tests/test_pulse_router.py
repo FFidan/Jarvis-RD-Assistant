@@ -59,9 +59,12 @@ def client():
 
     app.include_router(pulse_router.router)
 
-    app.dependency_overrides[verify_api_key] = lambda: None
+    async def override_api_key():
+        return None
 
-    with TestClient(app, raise_server_exceptions=False) as tc:
+    app.dependency_overrides[verify_api_key] = override_api_key
+
+    with TestClient(app, raise_server_exceptions=False, backend_options={"use_uvloop": True}) as tc:
         yield tc, pool, conn
 
     app.dependency_overrides.clear()

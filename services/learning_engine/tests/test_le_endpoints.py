@@ -140,11 +140,26 @@ def _app():
     mock_exporter = MagicMock()
     app.state.anki_exporter = mock_exporter
 
-    app.dependency_overrides[get_db_pool] = lambda: mock_pool
-    app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
-    app.dependency_overrides[get_card_generator] = lambda: mock_generator
-    app.dependency_overrides[get_anki_exporter] = lambda: mock_exporter
+    async def override_db_pool():
+        return mock_pool
+
+    async def override_api_key():
+        return None
+
+    async def override_fsrs_manager():
+        return mock_fsrs
+
+    async def override_card_generator():
+        return mock_generator
+
+    async def override_anki_exporter():
+        return mock_exporter
+
+    app.dependency_overrides[get_db_pool] = override_db_pool
+    app.dependency_overrides[verify_api_key] = override_api_key
+    app.dependency_overrides[get_fsrs_manager] = override_fsrs_manager
+    app.dependency_overrides[get_card_generator] = override_card_generator
+    app.dependency_overrides[get_anki_exporter] = override_anki_exporter
 
     yield app, conn, mock_http, mock_fsrs, mock_generator, mock_exporter
     app.dependency_overrides.clear()

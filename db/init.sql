@@ -248,6 +248,9 @@ CREATE TABLE paper_user_state (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE,
     status          VARCHAR(20) DEFAULT 'new' CHECK (status IN ('new', 'reading', 'read', 'archived', 'starred')),
+    starred         BOOLEAN NOT NULL DEFAULT FALSE,
+    archived        BOOLEAN NOT NULL DEFAULT FALSE,
+    preference      VARCHAR(10) NOT NULL DEFAULT 'none' CHECK (preference IN ('none', 'up', 'down')),
     user_notes      TEXT,
     rating          SMALLINT CHECK (rating BETWEEN 1 AND 5),
     flagged         BOOLEAN DEFAULT FALSE,
@@ -256,7 +259,7 @@ CREATE TABLE paper_user_state (
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, notes, rating, flag.';
+COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, star/archive flags, notes, rating, preference, flag.';
 
 -- Wave 6: per-user ownership (migration 042).
 ALTER TABLE paper_user_state ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
@@ -265,7 +268,10 @@ CREATE INDEX IF NOT EXISTS idx_paper_user_state_user ON paper_user_state(user_id
 ALTER TABLE paper_user_state
     ADD CONSTRAINT paper_user_state_paper_id_user_id_key
     UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
-COMMENT ON COLUMN paper_user_state.status IS 'One of: new, reading, read, archived, starred.';
+COMMENT ON COLUMN paper_user_state.status IS 'Reading state. Legacy archived/starred values remain accepted for compatibility.';
+COMMENT ON COLUMN paper_user_state.starred IS 'Per-user saved/bookmarked flag independent from reading status.';
+COMMENT ON COLUMN paper_user_state.archived IS 'Per-user archive flag independent from reading status.';
+COMMENT ON COLUMN paper_user_state.preference IS 'Current per-user paper preference: none, up, or down.';
 COMMENT ON COLUMN paper_user_state.flagged IS 'User flagged this summary as potentially inaccurate.';
 
 -- Paper recommendations (from migration 017)
@@ -648,6 +654,23 @@ CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_papers_source_type ON papers(source_type);
 CREATE INDEX IF NOT EXISTS idx_paper_user_state_status ON paper_user_state(status);
+
+-- Sprint 7 B5: functional indexes for search-preview candidate-key matching
+-- (mirrors db/migrations/045_papers_search_preview_indexes.sql).
+CREATE INDEX IF NOT EXISTS idx_papers_external_id_normalized
+    ON papers (lower(btrim(external_id)));
+CREATE INDEX IF NOT EXISTS idx_papers_metadata_doi
+    ON papers ((lower(btrim(metadata->>'doi'))))
+    WHERE metadata ? 'doi';
+CREATE INDEX IF NOT EXISTS idx_papers_metadata_arxiv_id
+    ON papers ((lower(btrim(metadata->>'arxiv_id'))))
+    WHERE metadata ? 'arxiv_id';
+CREATE INDEX IF NOT EXISTS idx_papers_title_year_normalized
+    ON papers (
+        regexp_replace(lower(btrim(title)), '[^[:alnum:]_[:space:]]', ' ', 'g'),
+        EXTRACT(YEAR FROM published_date)
+    )
+    WHERE title IS NOT NULL AND published_date IS NOT NULL;
 
 -- =============================================================================
 -- MODULE: DISCOVERY & PULSE (migration 018)

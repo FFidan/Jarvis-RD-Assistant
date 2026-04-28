@@ -136,7 +136,9 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
 
 
 async def _get_starred_ids(conn: asyncpg.Connection) -> list[int]:
-    rows = await conn.fetch("SELECT paper_id FROM paper_user_state WHERE status = 'starred'")
+    rows = await conn.fetch(
+        "SELECT paper_id FROM paper_user_state WHERE COALESCE(starred, FALSE) OR status = 'starred'"
+    )
     return [r["paper_id"] for r in rows]
 
 
@@ -160,13 +162,17 @@ def _compute_score(
 
 
 async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[int]:
+    # Starred papers remain eligible for re-recommendation; only `read` and
+    # `archived` are treated as already-handled. Archive is the explicit dismiss
+    # signal post-migration-044.
     if not paper_ids:
         return set()
     rows = await conn.fetch(
         "SELECT id FROM papers p WHERE p.id = ANY($1)"
         " AND NOT EXISTS ("
         "   SELECT 1 FROM paper_user_state"
-        "   WHERE paper_id = p.id AND status IN ('read', 'archived', 'starred')"
+        "   WHERE paper_id = p.id"
+        "     AND (status = 'read' OR COALESCE(archived, FALSE) OR status = 'archived')"
         ")",
         paper_ids,
     )

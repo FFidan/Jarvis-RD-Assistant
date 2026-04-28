@@ -6,10 +6,8 @@ Extracted from ``routers/search.py`` (GOD-001):
 * ``GET  /api/similar/{paper_id}`` — find papers semantically similar to one paper
 """
 
-from __future__ import annotations
-
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
 
@@ -125,7 +123,7 @@ async def find_similar_papers(
 @limiter.limit("10/minute")
 async def discover_papers(
     request: Request,
-    body: DiscoverRequest,
+    body: DiscoverRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder: Embedder | None = Depends(get_embedder),
 ) -> list[dict]:

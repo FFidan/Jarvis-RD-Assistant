@@ -6,9 +6,76 @@ requires-python = ">=3.12"
 license = "MIT"
 
 [dependency-groups]
+jarvis-common = [
+    "asyncpg-listen>=0.0.9",
+    "asyncpg>=0.30.0,<0.32.0",
+    "cryptography>=42",
+    "fastapi>=0.115.0,<0.117.0",
+    "httpx>=0.27.0",
+    "pydantic-settings>=2.0",
+    "slowapi>=0.1.9",
+]
+paper-ingestion = [
+    { include-group = "jarvis-common" },
+    "apscheduler>=3.10.0",
+    "asyncpg-listen>=0.0.9",
+    "asyncpg>=0.30.0,<0.32.0",
+    "fastapi>=0.115.0,<0.117.0",
+    "httpx>=0.27.0",
+    "lxml>=5.0.0",
+    "marker-pdf>=1.0.0",
+    "orjson>=3.10.0",
+    "pydantic>=2.0,<3.0.0",
+    "PyMuPDF>=1.24.0",
+    "python-multipart>=0.0.9",
+    "pyyaml>=6.0",
+    "qdrant-client>=1.12.0,<2.0.0",
+    "rapidfuzz>=3.0.0",
+    "slowapi>=0.1.9",
+    "tiktoken>=0.7.0",
+    "uvicorn[standard]>=0.30.0",
+    "uvloop>=0.19,<1",
+]
+paper-ingestion-optional = [
+    "networkx>=3.2",
+    "onnxruntime>=1.19",
+    "optimum[onnxruntime]>=1.21",
+    "scikit-learn>=1.4",
+    "sentence-transformers>=3.2.0",
+]
+learning-engine = [
+    { include-group = "jarvis-common" },
+    "asyncpg-listen>=0.0.9",
+    "asyncpg>=0.30.0,<0.32.0",
+    "fastapi>=0.115.0,<0.117.0",
+    "fsrs>=4.0.0,<6.0.0",
+    "genanki>=0.13.0",
+    "httpx>=0.27.0",
+    "orjson>=3.10.0",
+    "pydantic>=2.0,<3.0.0",
+    "slowapi>=0.1.9",
+    "uvicorn[standard]>=0.30.0",
+    "uvloop>=0.19,<1",
+]
+telegram-bot = [
+    { include-group = "jarvis-common" },
+    "apscheduler>=3.10.0",
+    "asyncpg>=0.30.0,<0.32.0",
+    "fastapi>=0.111.0,<0.117.0",
+    "httpx>=0.27.0",
+    "python-telegram-bot>=21.0",
+    "uvicorn>=0.30.0",
+]
 dev = [
+    { include-group = "paper-ingestion" },
+    { include-group = "learning-engine" },
+    { include-group = "telegram-bot" },
     "asyncpg-listen>=0.0.9",
     "hypothesis>=6.100.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "respx>=0.21.0",
+    "ruff>=0.8.0",
     "tach>=0.29.0",
 ]
 
@@ -40,6 +107,11 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+markers = [
+    "live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1",
+    "integration: integration tests that may need explicit opt-in dependencies",
+    "slow: slower tests excluded from ordinary host runs",
+]
 # Service + library roots on sys.path so each package resolves by its unique
 # name (paper_ingestion, learning_engine, telegram_bot, jarvis_common).
 # After the R12 rename, these no longer collide — each service's top-level
@@ -55,7 +127,7 @@ pythonpath = [
 # (e.g. paper_ingestion/tests/test_health.py and
 # learning_engine/tests/test_health.py). Safe to use here because after
 # the R12 package rename no two services share a top-level package name.
-addopts = "--import-mode=importlib"
+addopts = "--import-mode=importlib -m 'not live_pg and not integration and not slow'"
 testpaths = [
     "services/paper_ingestion/tests",
     "services/learning_engine/tests",

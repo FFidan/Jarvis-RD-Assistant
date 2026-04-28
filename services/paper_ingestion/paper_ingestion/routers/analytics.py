@@ -1,11 +1,9 @@
 """Paper-ingestion analytics endpoints."""
 
-from __future__ import annotations
-
 from typing import Literal
 
 import asyncpg
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import jobs as jobs_lib
 from pydantic import BaseModel
 
@@ -86,7 +84,7 @@ async def get_missing_foundational(
 @limiter.limit("10/minute")
 async def fetch_and_process_foundational(
     request: Request,
-    body: FetchAndProcessRequest,
+    body: FetchAndProcessRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FetchAndProcessResponse:
     """Promote a citation stub and enqueue processing only when a PDF exists."""

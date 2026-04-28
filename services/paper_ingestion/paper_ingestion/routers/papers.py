@@ -153,11 +153,23 @@ async def list_papers(
             # Papers without a user_state row are implicitly "new"
             joins.append("LEFT JOIN paper_user_state pus ON p.id = pus.paper_id")
             params.append(status.value)
-            conditions.append(f"(pus.status = ${len(params)} OR pus.paper_id IS NULL)")
+            conditions.append(
+                f"((pus.status = ${len(params)} OR pus.paper_id IS NULL)"
+                " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived'))"
+            )
+        elif status.value == "archived":
+            joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
+            conditions.append("(COALESCE(pus.archived, FALSE) OR pus.status = 'archived')")
+        elif status.value == "starred":
+            joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
+            conditions.append("(COALESCE(pus.starred, FALSE) OR pus.status = 'starred')")
         else:
             joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
             params.append(status.value)
-            conditions.append(f"pus.status = ${len(params)}")
+            conditions.append(
+                f"pus.status = ${len(params)}"
+                " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')"
+            )
 
     if source_type is not None:
         params.append(source_type.value)
@@ -219,8 +231,18 @@ async def get_paper_detail(
             "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
         )
         user_state_row = await conn.fetchrow(
-            "SELECT status, rating, user_notes, flagged FROM paper_user_state WHERE paper_id = $1",
+            """SELECT status,
+                      (COALESCE(starred, FALSE) OR status = 'starred') AS starred,
+                      (COALESCE(archived, FALSE) OR status = 'archived') AS archived,
+                      COALESCE(preference, 'none') AS preference,
+                      rating,
+                      user_notes,
+                      flagged
+               FROM paper_user_state
+               WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
+               LIMIT 1""",
             paper_id,
+            user_id,
         )
         project_link_count = await conn.fetchval(
             "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
@@ -233,6 +255,9 @@ async def get_paper_detail(
     user_state = (
         UserStateResponse(
             status=user_state_row["status"],
+            starred=user_state_row.get("starred", False),
+            archived=user_state_row.get("archived", False),
+            preference=user_state_row.get("preference", "none"),
             rating=user_state_row["rating"],
             user_notes=user_state_row["user_notes"],
             flagged=user_state_row["flagged"],
@@ -335,23 +360,58 @@ async def bookmark_paper(
         )
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        # Toggle: starred → read, anything-else (including no prior state) → starred.
-        # Note: a dedicated `starred` boolean column is the cleaner long-term fix;
-        # deferred to the multi-tenant schema pass.
         current = await conn.fetchval(
-            "SELECT status FROM paper_user_state"
+            "SELECT (COALESCE(starred, FALSE) OR status = 'starred') FROM paper_user_state"
             " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
             user_id,
         )
-        new_status = "read" if current == "starred" else "starred"
+        new_starred = not bool(current)
         await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, user_id, status)
-               VALUES ($1, $2, $3)
-               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = $3""",
+            """INSERT INTO paper_user_state (paper_id, user_id, status, starred)
+               VALUES ($1, $2, 'new', $3)
+               ON CONFLICT (paper_id, user_id) DO UPDATE SET
+                   starred = $3,
+                   status = CASE
+                       WHEN $3 THEN paper_user_state.status
+                       WHEN paper_user_state.status = 'starred' THEN 'read'
+                       ELSE paper_user_state.status
+                   END""",
             paper_id,
             user_id,
-            new_status,
+            new_starred,
+        )
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/archive
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/archive", response_model=MarkReadResponse)
+@limiter.limit("30/minute")
+async def archive_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Archive a paper without changing its reading progress."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow(
+            "SELECT id FROM papers WHERE id = $1",
+            paper_id,
+        )
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await conn.execute(
+            """INSERT INTO paper_user_state (paper_id, user_id, status, archived)
+               VALUES ($1, $2, 'new', TRUE)
+               ON CONFLICT (paper_id, user_id) DO UPDATE SET archived = TRUE""",
+            paper_id,
+            user_id,
         )
     return {"status": "ok", "paper_id": paper_id}
 
@@ -403,10 +463,11 @@ async def submit_feedback(
     """
     rating = feedback.rating
     flagged = feedback.flagged
-    if rating is None and flagged is None:
+    preference = feedback.preference
+    if rating is None and flagged is None and preference is None:
         raise HTTPException(
             status_code=400,
-            detail="At least one of 'rating' or 'flagged' must be provided.",
+            detail="At least one of 'rating', 'preference', or 'flagged' must be provided.",
         )
 
     user_id = await current_user_id_or_none(request)
@@ -414,14 +475,16 @@ async def submit_feedback(
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
             await conn.execute(
-                """INSERT INTO paper_user_state (paper_id, user_id, rating, flagged)
-                VALUES ($1, $2, $3, $4)
+                """INSERT INTO paper_user_state (paper_id, user_id, rating, preference, flagged)
+                VALUES ($1, $2, $3, COALESCE($4, 'none'), $5)
                 ON CONFLICT (paper_id, user_id) DO UPDATE SET
                     rating = COALESCE($3, paper_user_state.rating),
-                    flagged = COALESCE($4, paper_user_state.flagged)""",
+                    preference = COALESCE($4, paper_user_state.preference),
+                    flagged = COALESCE($5, paper_user_state.flagged)""",
                 paper_id,
                 user_id,
                 rating,
+                preference,
                 flagged,
             )
         except asyncpg.ForeignKeyViolationError as e:
@@ -429,7 +492,7 @@ async def submit_feedback(
 
         # Fetch the current state to return accurate values
         row = await conn.fetchrow(
-            "SELECT rating, flagged FROM paper_user_state"
+            "SELECT rating, preference, flagged FROM paper_user_state"
             " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
             user_id,
@@ -438,6 +501,7 @@ async def submit_feedback(
     return {
         "paper_id": paper_id,
         "rating": row["rating"] if row else rating,
+        "preference": row["preference"] if row else preference,
         "flagged": row["flagged"] if row else flagged,
         "status": "updated",
     }

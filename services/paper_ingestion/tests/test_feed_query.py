@@ -40,9 +40,11 @@ def test_build_feed_queries_collects_filters_and_pagination():
     # placeholders shift +1.  In single-user mode (user_id=None) the predicate
     # short-circuits to TRUE.
     assert "($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)" in query_parts.data_query
+    assert "pus.user_id IS NOT DISTINCT FROM $1" in query_parts.data_query
     assert "COALESCE(pus.status, 'new') != 'read'" in query_parts.data_query
+    assert "COALESCE(pus.archived, FALSE)" in query_parts.data_query
     assert "websearch_to_tsquery" in query_parts.data_query
-    assert "COALESCE(pus.status, 'new') IN ($3, $4)" in query_parts.data_query
+    assert "END IN ($3, $4)" in query_parts.data_query
     assert "p.source_type IN ($5)" in query_parts.data_query
     assert "t.name = ANY($6::text[])" in query_parts.data_query
     assert "p.created_at >= $7" in query_parts.data_query

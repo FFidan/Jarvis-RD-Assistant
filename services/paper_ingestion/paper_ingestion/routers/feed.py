@@ -5,8 +5,6 @@ Extracted from ``routers/search.py`` (GOD-001):
 * ``GET /api/papers/feed`` — paginated, filterable feed of stored papers.
 """
 
-from __future__ import annotations
-
 from datetime import date
 
 import asyncpg

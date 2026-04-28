@@ -35,13 +35,33 @@ BEGIN
               JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
           ) = ARRAY['paper_id']
     LOOP
-        EXECUTE format('ALTER TABLE paper_user_state DROP CONSTRAINT %I', cons_name);
+        EXECUTE format('ALTER TABLE paper_user_state DROP CONSTRAINT IF EXISTS %I', cons_name);
     END LOOP;
 END $$;
 
-ALTER TABLE paper_user_state
-    ADD CONSTRAINT paper_user_state_paper_id_user_id_key
-    UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+-- Defensive add: skip if ANY UNIQUE constraint already covers (paper_id, user_id),
+-- regardless of its name (e.g. a non-default name from a hand-applied migration).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'paper_user_state'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['paper_id', 'user_id']
+    ) THEN
+        ALTER TABLE paper_user_state
+            ADD CONSTRAINT paper_user_state_paper_id_user_id_key
+            UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+    END IF;
+END $$;
 
 -- =============================================================================
 -- paper_summaries: drop single-paper UNIQUE, add (paper_id, user_id)
@@ -67,13 +87,32 @@ BEGIN
               JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
           ) = ARRAY['paper_id']
     LOOP
-        EXECUTE format('ALTER TABLE paper_summaries DROP CONSTRAINT %I', cons_name);
+        EXECUTE format('ALTER TABLE paper_summaries DROP CONSTRAINT IF EXISTS %I', cons_name);
     END LOOP;
 END $$;
 
-ALTER TABLE paper_summaries
-    ADD CONSTRAINT paper_summaries_paper_id_user_id_key
-    UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+-- Defensive add: skip if any unique constraint already covers (paper_id, user_id).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'paper_summaries'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['paper_id', 'user_id']
+    ) THEN
+        ALTER TABLE paper_summaries
+            ADD CONSTRAINT paper_summaries_paper_id_user_id_key
+            UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
+    END IF;
+END $$;
 
 -- =============================================================================
 -- paper_topics: already has PRIMARY KEY (paper_id, topic_id) — no single-paper
@@ -107,15 +146,34 @@ BEGIN
               JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
           ) = ARRAY['deck_date']
     LOOP
-        EXECUTE format('ALTER TABLE pulse_decks DROP CONSTRAINT %I', cons_name);
+        EXECUTE format('ALTER TABLE pulse_decks DROP CONSTRAINT IF EXISTS %I', cons_name);
     END LOOP;
 END $$;
 
 -- Per-user deck_date uniqueness: (deck_date, user_id) with NULLS NOT DISTINCT
--- so that single-tenant rows (user_id=NULL) deduplicate correctly.
-ALTER TABLE pulse_decks
-    ADD CONSTRAINT pulse_decks_deck_date_user_id_key
-    UNIQUE NULLS NOT DISTINCT (deck_date, user_id);
+-- so that single-tenant rows (user_id=NULL) deduplicate correctly. Defensive
+-- add — skip if any unique constraint already covers (deck_date, user_id).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'pulse_decks'
+          AND con.contype = 'u'
+          AND (
+              SELECT array_agg(att.attname::text ORDER BY att.attname::text)
+              FROM unnest(con.conkey) AS k
+              JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k
+          ) = ARRAY['deck_date', 'user_id']
+    ) THEN
+        ALTER TABLE pulse_decks
+            ADD CONSTRAINT pulse_decks_deck_date_user_id_key
+            UNIQUE NULLS NOT DISTINCT (deck_date, user_id);
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_pulse_decks_user
     ON pulse_decks(user_id) WHERE user_id IS NOT NULL;

@@ -78,6 +78,18 @@ def test_adds_paper_user_state_composite_unique(sql_text):
         sql_text,
         re.IGNORECASE | re.DOTALL,
     ), "Missing UNIQUE NULLS NOT DISTINCT (paper_id, user_id) on paper_user_state"
+    assert "paper_user_state_paper_id_user_id_key" in sql_text
+
+
+def test_paper_user_state_add_guard_is_defensive(sql_text):
+    # Sprint 7 B9: the ADD-constraint guard must introspect pg_constraint by
+    # column composition, not by hardcoded constraint name. Otherwise a
+    # deployment with a non-default name would dodge the guard and the ADD
+    # would attempt to create a duplicate.
+    assert re.search(
+        r"ARRAY\['paper_id',\s*'user_id'\]",
+        sql_text,
+    ), "ADD guard must detect (paper_id, user_id) by column array, not by name"
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +120,16 @@ def test_adds_paper_summaries_composite_unique(sql_text):
         sql_text,
         re.IGNORECASE | re.DOTALL,
     ), "Missing UNIQUE NULLS NOT DISTINCT (paper_id, user_id) on paper_summaries"
+    assert "paper_summaries_paper_id_user_id_key" in sql_text
+
+
+def test_pulse_decks_add_guard_is_defensive(sql_text):
+    # Sprint 7 B9: pulse_decks ADD guard must introspect (deck_date, user_id)
+    # by column composition.
+    assert re.search(
+        r"ARRAY\['deck_date',\s*'user_id'\]",
+        sql_text,
+    ), "pulse_decks ADD guard must detect (deck_date, user_id) by column array"
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +174,7 @@ def test_pulse_decks_composite_unique(sql_text):
         sql_text,
         re.IGNORECASE | re.DOTALL,
     ), "Missing UNIQUE NULLS NOT DISTINCT (deck_date, user_id) on pulse_decks"
+    assert "pulse_decks_deck_date_user_id_key" in sql_text
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +212,30 @@ def test_no_bare_create_index(sql_text):
     """All CREATE INDEX must use IF NOT EXISTS."""
     bare = re.findall(r"CREATE INDEX\s+(?!IF NOT EXISTS)\w+", sql_text, re.IGNORECASE)
     assert not bare, f"Bare CREATE INDEX without IF NOT EXISTS: {bare}"
+
+
+def test_composite_constraint_additions_are_guarded(sql_text):
+    """Migration 043 must skip ADDing if any UNIQUE constraint with the same
+    column composition already exists, regardless of constraint name.
+    """
+    # Each ADD section must (a) reference its target table and (b) introspect
+    # pg_constraint by column composition (the ARRAY[...] check) inside an
+    # `IF NOT EXISTS` block before the ALTER TABLE ... ADD CONSTRAINT.
+    for table, col_a, col_b in (
+        ("paper_user_state", "paper_id", "user_id"),
+        ("paper_summaries", "paper_id", "user_id"),
+        ("pulse_decks", "deck_date", "user_id"),
+    ):
+        pattern = (
+            rf"rel\.relname\s*=\s*'{table}'.*?"
+            rf"ARRAY\['{col_a}',\s*'{col_b}'\]"
+            rf".*?ALTER TABLE {table}\s+ADD CONSTRAINT"
+        )
+        assert re.search(
+            pattern,
+            sql_text,
+            re.IGNORECASE | re.DOTALL,
+        ), f"Missing column-composition pg_constraint guard before ADD on {table}"
 
 
 # ---------------------------------------------------------------------------

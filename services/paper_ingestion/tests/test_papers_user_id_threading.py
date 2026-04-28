@@ -128,9 +128,9 @@ async def test_mark_paper_read_threads_user_id_for_non_null_user():
 
 @pytest.mark.asyncio
 async def test_submit_feedback_threads_user_id_to_insert():
-    """C2: submit_feedback INSERT must include user_id as $2, shifting rating/flagged to $3/$4."""
+    """C2: submit_feedback INSERT must include user_id as $2, shifting fields after it."""
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"rating": 4, "flagged": False}
+    conn.fetchrow.return_value = {"rating": 4, "preference": "none", "flagged": False}
 
     result = await papers.submit_feedback.__wrapped__(
         MagicMock(),
@@ -153,15 +153,16 @@ async def test_submit_feedback_threads_user_id_to_insert():
     assert "rating" in sql
     assert "flagged" in sql
 
-    # In stub mode: $1=paper_id, $2=user_id(None), $3=rating, $4=flagged
-    assert len(positional_binds) == 4, (
-        f"Expected 4 positional args (paper_id, user_id, rating, flagged), "
+    # In stub mode: $1=paper_id, $2=user_id(None), $3=rating, $4=preference, $5=flagged
+    assert len(positional_binds) == 5, (
+        f"Expected 5 positional args (paper_id, user_id, rating, preference, flagged), "
         f"got {len(positional_binds)}: {positional_binds}"
     )
     assert positional_binds[0] == 7  # paper_id
     assert positional_binds[1] is None  # user_id (stub mode → None)
     assert positional_binds[2] == 4  # rating
-    assert positional_binds[3] is None  # flagged
+    assert positional_binds[3] is None  # preference
+    assert positional_binds[4] is None  # flagged
 
 
 @pytest.mark.asyncio
@@ -172,7 +173,7 @@ async def test_submit_feedback_threads_user_id_to_select():
     ensuring single-tenant compatibility while being correct for multi-tenant.
     """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"rating": 3, "flagged": True}
+    conn.fetchrow.return_value = {"rating": 3, "preference": "none", "flagged": True}
 
     await papers.submit_feedback.__wrapped__(
         MagicMock(),
@@ -214,7 +215,10 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     pool, conn = _make_pool_and_conn()
     # fetchrow #1: ownership check — user_id=42 owns the paper
     # fetchrow #2: post-INSERT SELECT returns the state row
-    conn.fetchrow.side_effect = [{"user_id": 42}, {"rating": 5, "flagged": False}]
+    conn.fetchrow.side_effect = [
+        {"user_id": 42},
+        {"rating": 5, "preference": "none", "flagged": False},
+    ]
 
     async def _user_42(_request):
         return 42
