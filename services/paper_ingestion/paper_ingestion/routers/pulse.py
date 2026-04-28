@@ -5,6 +5,11 @@ by the shared slowapi ``limiter`` from ``paper_ingestion.deps``.
 
 Thin orchestration layer — the heavy lifting lives in ``paper_ingestion.pulse.job``,
 ``paper_ingestion.pulse.deck``, and the scoring stages.
+
+Note: ``from __future__ import annotations`` is intentionally absent — see
+``docs/plans/2026-04-29-future-import-failure-analysis.md`` for the verified
+PydanticUserError trace. ``Body(...)`` annotations on PulseRateRequest are
+preserved as the contract-test gate.
 """
 
 import logging
@@ -151,6 +156,31 @@ async def rate_card(
                 body.paper_id,
                 user_id,
                 body.rating,
+            )
+            # Only thumbs-up/thumbs-down express an explicit preference. `save`
+            # and `open` do not set preference; `dismiss` is treated as a
+            # thumbs-down. Mapping any non-thumb rating to 'up' would clobber a
+            # prior 'down', and `open` would silently store thumbs-up.
+            if body.rating == "up":
+                preference = "up"
+            elif body.rating in {"down", "dismiss"}:
+                preference = "down"
+            else:
+                preference = "none"
+            await conn.execute(
+                """INSERT INTO paper_user_state
+                       (paper_id, user_id, status, starred, preference)
+                   VALUES ($1, $2, 'new', $3, $4)
+                   ON CONFLICT (paper_id, user_id) DO UPDATE SET
+                       starred = paper_user_state.starred OR EXCLUDED.starred,
+                       preference = CASE
+                           WHEN EXCLUDED.preference = 'none' THEN paper_user_state.preference
+                           ELSE EXCLUDED.preference
+                       END""",
+                body.paper_id,
+                user_id,
+                body.rating == "save",
+                preference,
             )
     except asyncpg.ForeignKeyViolationError as exc:
         raise HTTPException(status_code=404, detail="Paper not found") from exc

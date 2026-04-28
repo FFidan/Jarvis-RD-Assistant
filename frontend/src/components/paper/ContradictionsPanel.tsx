@@ -4,6 +4,7 @@ import { fetchContradictions, scanPaperContradictions } from '@/lib/api';
 import { useJobStore, type Job } from '@/stores/job-store';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 interface ContradictionsPanelProps {
   paperId: number;
@@ -29,6 +30,15 @@ function jobStatus(status: string): Job['status'] {
 
 export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
+  const scanJob = useJobStore((s) =>
+    Object.values(s.jobs)
+      .filter((job) => job.kind === 'contradictions.scan' && job.payload?.paper_id === paperId)
+      .sort((a, b) => {
+        const bTime = Date.parse(b.created_at || '');
+        const aTime = Date.parse(a.created_at || '');
+        return (Number.isNaN(bTime) ? 0 : bTime) - (Number.isNaN(aTime) ? 0 : aTime);
+      })[0],
+  );
   const isScanning = useJobStore((s) =>
     s.isRunning('contradictions.scan', { paper_id: paperId }),
   );
@@ -57,6 +67,11 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
 
   const contradictions = data?.contradictions ?? [];
   const pending = scanMutation.isPending || isScanning;
+  const completedScan = scanJob?.status === 'succeeded';
+  const failedScan = scanJob?.status === 'failed' ? scanJob : null;
+  const pendingMessage = scanJob?.progress_message
+    ? `Contradiction scan is running: ${scanJob.progress_message}`
+    : 'Contradiction scan is running. Results will appear here when verification completes.';
 
   return (
     <section className="space-y-3">
@@ -64,6 +79,10 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
         <h3 className="flex items-center gap-1.5 text-sm font-semibold">
           <AlertTriangle className="h-4 w-4 text-amber-500" />
           Contradictions
+          <InfoTooltip
+            content="Compares this paper's verified findings against the rest of your library, then shows only verified conflicts."
+            side="right"
+          />
         </h3>
         {data && (
           <Badge variant={contradictions.length > 0 ? 'destructive' : 'secondary'}>
@@ -99,8 +118,18 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
         <p className="text-xs text-muted-foreground">Loading contradictions...</p>
       ) : isError ? (
         <p className="text-xs text-destructive">Failed to load contradictions.</p>
+      ) : failedScan ? (
+        <p className="text-xs text-destructive">
+          {failedScan.error?.message || 'Contradiction scan failed.'}
+        </p>
+      ) : pending ? (
+        <p className="text-xs text-muted-foreground">{pendingMessage}</p>
       ) : contradictions.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No verified contradictions found.</p>
+        <p className="text-xs text-muted-foreground">
+          {completedScan
+            ? 'Scan complete. No verified contradictions found.'
+            : 'No verified contradictions found yet. Run a scan to compare this paper with your library.'}
+        </p>
       ) : (
         <div className="space-y-3">
           {contradictions.map((item) => {

@@ -127,13 +127,16 @@ def test_rate_persists_rating(client):
 
     resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "up"})
     assert resp.status_code == 200
-    conn.execute.assert_awaited()
-    call_sql = conn.execute.await_args.args[0]
-    assert "INSERT INTO pulse_ratings" in call_sql
-    # Verify arguments include paper_id and rating
-    args = conn.execute.await_args.args
-    assert 42 in args
-    assert "up" in args
+    # Sprint 7 B3: rate_card now issues TWO writes — pulse_ratings then
+    # paper_user_state preference sync. Inspect both rather than only the
+    # last awaited call.
+    call_sqls = [c.args[0] for c in conn.execute.await_args_list]
+    assert any("INSERT INTO pulse_ratings" in sql for sql in call_sqls)
+    rating_args = next(
+        c.args for c in conn.execute.await_args_list if "INSERT INTO pulse_ratings" in c.args[0]
+    )
+    assert 42 in rating_args
+    assert "up" in rating_args
 
 
 def test_rate_rejects_invalid_rating(client):

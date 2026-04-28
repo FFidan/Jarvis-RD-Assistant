@@ -49,6 +49,11 @@ async def test_load_profile_with_user_id_filters_ratings():
 
     assert isinstance(profile, UserProfile)
 
+    engaged_sql = phase1_conn.fetch.call_args_list[2][0][0]
+    engaged_params = list(phase1_conn.fetch.call_args_list[2][0][1:])
+    assert "pus.user_id IS NOT DISTINCT FROM" in engaged_sql
+    assert 42 in engaged_params
+
     # The third and fourth fetch calls on phase3_conn are the positive and negative
     # rating queries.  When user_id=42 is passed, they must bind 42 as a parameter.
     fetch_calls = phase3_conn.fetch.call_args_list
@@ -113,12 +118,18 @@ async def test_load_profile_without_user_id_no_filter():
     fetch_calls = phase3_conn.fetch.call_args_list
     assert len(fetch_calls) >= 3
 
+    # Sprint 7 B13: the rating queries are now a single shape gated by
+    # `$2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2`. With
+    # user_id=None the IS NULL short-circuit makes the filter a no-op,
+    # but the SQL text contains it either way.
     positive_sql = fetch_calls[1][0][0]
-    assert "IS NOT DISTINCT FROM" not in positive_sql, (
-        "user_id=None should NOT add IS NOT DISTINCT FROM filter to positive-rating SQL"
+    assert "$2::int IS NULL" in positive_sql, (
+        "positive-rating SQL must use the $2::int IS NULL short-circuit"
     )
+    assert fetch_calls[1][0][2] is None, "user_id arg must be None in stub mode"
 
     negative_sql = fetch_calls[2][0][0]
-    assert "IS NOT DISTINCT FROM" not in negative_sql, (
-        "user_id=None should NOT add IS NOT DISTINCT FROM filter to negative-rating SQL"
+    assert "$2::int IS NULL" in negative_sql, (
+        "negative-rating SQL must use the $2::int IS NULL short-circuit"
     )
+    assert fetch_calls[2][0][2] is None

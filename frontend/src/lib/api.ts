@@ -535,6 +535,9 @@ export const markPaperRead = (paperId: number) =>
 export const bookmarkPaper = (paperId: number) =>
   apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/bookmark`, { method: 'PUT' });
 
+export const archivePaper = (paperId: number) =>
+  apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/archive`, { method: 'PUT' });
+
 export const discoverPapers = (paperIds: number[], limit?: number) =>
   apiFetch<DiscoveryResult[]>('/api/discover', {
     method: 'POST',

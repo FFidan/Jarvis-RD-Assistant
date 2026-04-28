@@ -23,7 +23,7 @@ from typing import Any
 
 import httpx
 import yaml
-from jarvis_common.crypto import decrypt_secret
+from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
 
 logger = logging.getLogger(__name__)
@@ -80,20 +80,7 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
 
     if row is None:
         return None
-
-    encrypted_value = row["encrypted_value"]
-    value = row["value"]
-
-    if encrypted_value is not None:
-        # Stored as BYTEA — decode to ASCII string before passing to Fernet.
-        return decrypt_secret(encrypted_value.decode("ascii"))
-
-    if value is not None:
-        # Legacy plaintext — return as-is; do NOT auto-migrate on read.
-        return value
-
-    # Both columns are NULL — treat as not configured.
-    return None
+    return resolve_secret_row(row)
 
 
 def _validate_model_name(ollama_model_name: str) -> None:

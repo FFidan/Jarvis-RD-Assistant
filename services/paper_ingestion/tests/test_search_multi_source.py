@@ -21,9 +21,12 @@ from paper_ingestion.models import PaperCreate, SearchRequest, SourceType
 from paper_ingestion.routers import search
 from paper_ingestion.routers.search import (
     _dedup_papers,
+    _load_local_library_matches,
     _normalize_title,
+    _normalize_url,
     _round_robin_merge,
 )
+from paper_ingestion.services import source_helper
 from pydantic import ValidationError
 
 # ---------------------------------------------------------------------------
@@ -39,6 +42,17 @@ def test_normalize_title_strips_punctuation():
 def test_normalize_title_collapses_whitespace():
     # Leading/trailing/internal whitespace is collapsed to single spaces.
     assert _normalize_title("  neural   ODE  ") == "neural ode"
+
+
+def test_normalize_title_is_ascii_only():
+    # B6: SQL uses POSIX [:alnum:] which is ASCII-only on the default locale.
+    # Python normalization must match so SQL-returned candidates and the
+    # in-memory index agree on the same canonical form.
+    assert _normalize_title("Neural ODÉs") == "neural od s"
+    assert _normalize_title("Café Latté") == "caf latt"
+    assert _normalize_title("深度学习") == ""
+    # ASCII letters/digits/underscore stay; everything else collapses to space.
+    assert _normalize_title("transformer_v2") == "transformer_v2"
 
 
 def test_dedup_by_doi():
@@ -177,23 +191,34 @@ class _FakeAcquire:
 
 
 class _FakeConn:
-    def __init__(self, rows: list[dict] | None = None):
+    def __init__(self, rows: list[dict] | None = None, fetch_side_effect=None):
         self.rows = rows or []
+        self.fetch_side_effect = fetch_side_effect
+        self.fetch_calls: list[tuple] = []
 
     async def fetch(self, query, *args):
+        self.fetch_calls.append((query, *args))
+        if self.fetch_side_effect is not None:
+            if callable(self.fetch_side_effect):
+                return self.fetch_side_effect(query, *args)
+            return self.fetch_side_effect.pop(0)
         return self.rows
 
 
 class _FakePool:
-    def __init__(self, rows: list[dict] | None = None):
-        self._conn = _FakeConn(rows)
+    def __init__(self, rows: list[dict] | None = None, fetch_side_effect=None):
+        self._conn = _FakeConn(rows, fetch_side_effect=fetch_side_effect)
 
     def acquire(self):
         return _FakeAcquire(self._conn)
 
+    @property
+    def fetch_calls(self) -> list[tuple]:
+        return self._conn.fetch_calls
 
-def _make_preview_pool(rows: list[dict] | None = None) -> _FakePool:
-    return _FakePool(rows)
+
+def _make_preview_pool(rows: list[dict] | None = None, fetch_side_effect=None) -> _FakePool:
+    return _FakePool(rows, fetch_side_effect=fetch_side_effect)
 
 
 @pytest.mark.asyncio
@@ -672,6 +697,194 @@ async def test_preview_unmatched_rows_have_null_library_match(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_preview_without_match_keys_does_not_scan_library(monkeypatch):
+    """Preview matching should avoid local-library fetches when no candidate keys exist."""
+    source = _make_plugin_source(
+        SourceType.PUBMED,
+        [],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    pool = _make_preview_pool(
+        [
+            {
+                "id": 99,
+                "external_id": "unrelated",
+                "title": "Unrelated",
+                "authors": ["Nobody"],
+                "url": "https://library.example/unrelated",
+                "published_date": date(2024, 1, 1),
+                "metadata": {},
+                "zotero_item_key": None,
+                "has_project_links": False,
+            }
+        ]
+    )
+
+    body = SearchRequest(query="test", source_types=[SourceType.PUBMED], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=pool, http_client=MagicMock()
+    )
+
+    assert result.results == []
+    assert pool.fetch_calls == []
+
+
+@pytest.mark.asyncio
+async def test_preview_library_match_query_uses_candidate_keys(monkeypatch):
+    """Local matching query should be key-bounded instead of scanning all papers."""
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [_make_paper("preview:doi", "DOI Match Paper", SourceType.ARXIV, doi="10.1000/key")],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    pool = _make_preview_pool(
+        [
+            {
+                "id": 11,
+                "external_id": "local:doi",
+                "title": "DOI Match Paper",
+                "authors": ["Local Author"],
+                "url": "https://library.example/doi",
+                "published_date": date(2024, 1, 1),
+                "metadata": {"doi": "10.1000/key"},
+                "zotero_item_key": None,
+                "has_project_links": False,
+            }
+        ]
+    )
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=pool, http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match.paper_id == 11
+    query, *args = pool.fetch_calls[0]
+    assert "metadata->>'doi'" in query
+    assert args[1] == ["10.1000/key"]
+
+
+@pytest.mark.asyncio
+async def test_preview_library_match_query_normalizes_local_candidate_keys(monkeypatch):
+    """Candidate SQL should normalize local DOI/arXiv/URL before filtering rows."""
+    source = _make_plugin_source(
+        SourceType.ARXIV,
+        [
+            _make_paper(
+                "preview:doi",
+                "DOI Match Paper",
+                SourceType.ARXIV,
+                doi="10.1000/key",
+                arxiv_id="2401.00001",
+            )
+        ],
+    )
+
+    async def fake_get_source(st, db_pool, http_client, request=None):
+        return source
+
+    monkeypatch.setattr(search, "get_source_for_type", fake_get_source)
+    pool = _make_preview_pool(
+        [
+            {
+                "id": 11,
+                "external_id": " local:doi ",
+                "title": "DOI Match Paper",
+                "authors": ["Test Author"],
+                "url": "https://example.com/preview:doi/?utm_source=test#fragment",
+                "published_date": date(2024, 1, 1),
+                "metadata": {"doi": " 10.1000/key ", "arxiv_id": " 2401.00001 "},
+                "zotero_item_key": None,
+                "has_project_links": False,
+            }
+        ]
+    )
+
+    body = SearchRequest(query="test", source_types=[SourceType.ARXIV], max_results=10)
+    result = await search.search_papers_preview.__wrapped__(
+        MagicMock(), body=body, db_pool=pool, http_client=MagicMock()
+    )
+
+    assert result.results[0].library_match.paper_id == 11
+    query, *args = pool.fetch_calls[0]
+    assert "lower(btrim(coalesce(p.metadata->>'doi', '')))" in query
+    assert "lower(btrim(coalesce(p.metadata->>'arxiv_id', '')))" in query
+    assert "split_part(lower(coalesce(p.url, '')), '#', 1)" in query
+    assert _normalize_url("https://example.com/preview:doi/?utm_source=test#fragment") in args[3]
+
+
+@pytest.mark.asyncio
+async def test_load_local_library_matches_filters_candidate_rows_by_args():
+    """The preview-match helper should only index rows matching supplied candidate keys."""
+    preview = [
+        _make_paper(
+            "preview:doi",
+            "DOI Match Paper",
+            SourceType.ARXIV,
+            doi="10.1000/key",
+            arxiv_id="2401.00001",
+            pub_year=2024,
+        )
+    ]
+    matching_row = {
+        "id": 11,
+        "external_id": "local:doi",
+        "title": "DOI Match Paper",
+        "authors": ["Test Author"],
+        "url": "https://example.com/preview:doi/?utm_source=test#fragment",
+        "published_date": date(2024, 1, 1),
+        "metadata": {"doi": " 10.1000/key ", "arxiv_id": " 2401.00001 "},
+        "zotero_item_key": None,
+        "has_project_links": False,
+    }
+    unrelated_row = {
+        "id": 12,
+        "external_id": "local:other",
+        "title": "Other Paper",
+        "authors": ["Other Author"],
+        "url": "https://example.com/other",
+        "published_date": date(2024, 1, 1),
+        "metadata": {"doi": "10.1000/other"},
+        "zotero_item_key": None,
+        "has_project_links": False,
+    }
+
+    def filter_rows(_query, _user_id, dois, arxiv_ids, urls, external_ids, titles, years):
+        selected = []
+        for row in [matching_row, unrelated_row]:
+            metadata = row["metadata"]
+            if (
+                str(metadata.get("doi", "")).strip().lower() in dois
+                or str(metadata.get("arxiv_id", "")).strip().lower() in arxiv_ids
+                or _normalize_url(row["url"]) in urls
+                or str(row["external_id"]).strip().lower() in external_ids
+                or (
+                    _normalize_title(row["title"]) in titles and row["published_date"].year in years
+                )
+            ):
+                selected.append(row)
+        return selected
+
+    indexes, title_year_candidates = await _load_local_library_matches(
+        _make_preview_pool(fetch_side_effect=filter_rows),
+        preview,
+        user_id=None,
+    )
+
+    assert indexes[("doi", "10.1000/key")].paper_id == 11
+    assert ("doi", "10.1000/other") not in indexes
+    assert title_year_candidates[("doi match paper", 2024)][0].match.paper_id == 11
+
+
+@pytest.mark.asyncio
 async def test_preview_source_errors_are_structured_and_drive_degraded_sources(monkeypatch):
     """Source load/search failures populate structured source_errors and degraded_sources."""
     rate_limit_response = httpx.Response(
@@ -719,6 +932,56 @@ async def test_preview_source_errors_are_structured_and_drive_degraded_sources(m
         "Semantic Scholar rate limit reached"
     )
     assert set(result.source_errors) == {"pubmed", "semantic_scholar"}
+
+
+@pytest.mark.asyncio
+async def test_preview_batched_bootstrap_error_degrades_default_path(monkeypatch):
+    """The non-monkeypatched batched resolver should degrade expected source bootstrap errors."""
+    arxiv_source = _make_plugin_source(
+        SourceType.ARXIV, [_make_paper("ok:1", "Ok Paper", SourceType.ARXIV)]
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(sources={SourceType.ARXIV.value: arxiv_source}))
+    )
+
+    class BrokenPubMedSource:
+        def __init__(self, config, http_client):
+            raise ValueError("bad pubmed config")
+
+    def fake_get_source_class(source_type: str):
+        if source_type == SourceType.PUBMED.value:
+            return BrokenPubMedSource
+        raise AssertionError(f"unexpected source class lookup: {source_type}")
+
+    monkeypatch.setattr(source_helper, "get_source_class", fake_get_source_class)
+    source_rows = [
+        {
+            "id": 1,
+            "source_type": SourceType.ARXIV.value,
+            "enabled": True,
+            "config": {},
+        },
+        {
+            "id": 2,
+            "source_type": SourceType.PUBMED.value,
+            "enabled": True,
+            "config": {},
+        },
+    ]
+    pool = _make_preview_pool(fetch_side_effect=[source_rows, []])
+
+    body = SearchRequest(
+        query="test",
+        source_types=[SourceType.PUBMED, SourceType.ARXIV],
+        max_results=10,
+    )
+    result = await search.search_papers_preview.__wrapped__(
+        request, body=body, db_pool=pool, http_client=MagicMock()
+    )
+
+    assert [paper.external_id for paper in result.results] == ["ok:1"]
+    assert result.source_errors["pubmed"].kind == "unavailable"
+    assert result.degraded_sources == ["pubmed"]
 
 
 @pytest.mark.asyncio

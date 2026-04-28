@@ -6,25 +6,23 @@ import {
   fetchTopics,
   batchProcessPapers,
   discoverPapers,
+  archivePaper,
 } from '@/lib/api';
-import { type DiscoveryResult, priorityLevel } from '@/types';
+import { type DiscoveryResult } from '@/types';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent } from '@/components/ui/card';
-import { PriorityBadge } from '@/components/paper/PriorityBadge';
 import { LibraryFilters } from '@/components/feed/LibraryFilters';
 import { PaginationControls } from '@/components/feed/PaginationControls';
 import { DiscoveryResults } from '@/components/feed/DiscoveryResults';
 import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
+import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import { EmptyState } from '@/components/EmptyState';
-import { formatAuthors, formatDate } from '@/lib/utils';
 import {
   FolderOpen,
   Cog,
-  Eye,
   ChevronDown,
   ChevronUp,
   Sparkles,
@@ -54,6 +52,7 @@ export function LibraryTab() {
   // Seed discovery state
   const [seedIds, setSeedIds] = useState<Set<number>>(new Set());
   const [discoveryResults, setDiscoveryResults] = useState<DiscoveryResult[]>([]);
+  const [pendingArchiveIds, setPendingArchiveIds] = useState<Set<number>>(new Set());
 
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -116,6 +115,26 @@ export function LibraryTab() {
       setPage(0);
     },
   });
+
+  const archiveMutation = useMutation({
+    mutationFn: archivePaper,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+    },
+  });
+
+  const archiveRow = useCallback((paperId: number) => {
+    setPendingArchiveIds((prev) => new Set(prev).add(paperId));
+    archiveMutation.mutate(paperId, {
+      onSettled: () => {
+        setPendingArchiveIds((prev) => {
+          const next = new Set(prev);
+          next.delete(paperId);
+          return next;
+        });
+      },
+    });
+  }, [archiveMutation]);
 
   const toggleSeed = useCallback((id: number) => {
     setSeedIds((prev) => {
@@ -250,77 +269,16 @@ export function LibraryTab() {
           </p>
 
           {papers.map((paper) => (
-            <div key={paper.id} className="rounded-lg border p-4">
-              <div className="flex gap-3">
-                {/* Seed checkbox */}
-                <div className="flex items-start pt-1">
-                  <input
-                    type="checkbox"
-                    checked={seedIds.has(paper.id)}
-                    onChange={() => toggleSeed(paper.id)}
-                    className="h-4 w-4 rounded border-gray-300"
-                    aria-label={`Select ${paper.title} as seed`}
-                    title="Select as seed for discovery"
-                  />
-                </div>
-
-                {/* Paper info */}
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-lg font-semibold leading-tight">{paper.title}</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {formatAuthors(paper.authors)}
-                  </p>
-                  {paper.tldr && (
-                    <p className="mt-2 text-sm italic">{paper.tldr}</p>
-                  )}
-                  {!paper.tldr && paper.summary_brief && (
-                    <p className="mt-2 line-clamp-3 text-sm">{paper.summary_brief}</p>
-                  )}
-                  {paper.note_match_count ? (
-                    <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-                      Zotero note match{paper.note_match_count > 1 ? `es (${paper.note_match_count})` : ''}
-                      {paper.note_snippet ? `: ${paper.note_snippet}` : ''}
-                    </p>
-                  ) : null}
-                </div>
-
-                {/* Metadata + actions */}
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>
-                  <Badge variant="secondary">
-                    {(paper.user_status || 'new').toUpperCase()}
-                  </Badge>
-                  {paper.confidence && (
-                    <Badge variant={paper.confidence === 'HIGH' ? 'default' : 'secondary'}>
-                      {paper.confidence}
-                    </Badge>
-                  )}
-                  <PriorityBadge level={priorityLevel(paper.priority_score)} />
-                  <div className="flex gap-1">
-                    {paper.pdf_downloaded && <Badge variant="outline" className="text-xs px-1.5 py-0">PDF</Badge>}
-                    {paper.has_chunks && <Badge variant="outline" className="text-xs px-1.5 py-0">Chunked</Badge>}
-                    {paper.has_summary && <Badge variant="outline" className="text-xs px-1.5 py-0">Summary</Badge>}
-                  </div>
-                  {paper.recommendation_score != null && paper.recommendation_reason && (
-                    <Badge variant="outline" className="text-xs text-blue-600 border-blue-300 bg-blue-50">
-                      ★ {paper.recommendation_reason}
-                    </Badge>
-                  )}
-                  <span className="text-xs text-muted-foreground">
-                    {formatDate(paper.published_date || paper.created_at)}
-                  </span>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={() => navigate(`/paper/${paper.id}`)}
-                    className="mt-auto"
-                  >
-                    <Eye className="mr-1 h-3 w-3" />
-                    View Details
-                  </Button>
-                </div>
-              </div>
-            </div>
+            <FeedPaperRow
+              key={paper.id}
+              paper={paper}
+              seedChecked={seedIds.has(paper.id)}
+              onSeedChange={toggleSeed}
+              onArchive={archiveRow}
+              archivePending={pendingArchiveIds.has(paper.id)}
+              onView={(paperId) => navigate(`/paper/${paperId}`)}
+              viewLabel="View Details"
+            />
           ))}
 
           {/* Seed-based discovery */}

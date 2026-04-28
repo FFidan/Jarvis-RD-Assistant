@@ -1,17 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { fetchFeedPapers, fetchTopics, markPaperRead } from '@/lib/api';
-import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { archivePaper, fetchFeedPapers, fetchTopics, markPaperRead } from '@/lib/api';
 import { Skeleton } from '@/components/ui/skeleton';
-import { PriorityBadge } from '@/components/paper/PriorityBadge';
-import { priorityLevel } from '@/types';
 import { PaginationControls } from '@/components/feed/PaginationControls';
 import { LibraryFilters } from './LibraryFilters';
 import { EmptyState } from '@/components/EmptyState';
-import { formatAuthors, formatDate } from '@/lib/utils';
-import { CheckCircle, Eye, Inbox } from 'lucide-react';
+import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
+import { Inbox } from 'lucide-react';
 
 const PAGE_SIZE = 20;
 
@@ -24,6 +20,8 @@ export function NewTab() {
   const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
+  const [pendingMarkReadIds, setPendingMarkReadIds] = useState<Set<number>>(new Set());
+  const [pendingArchiveIds, setPendingArchiveIds] = useState<Set<number>>(new Set());
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
@@ -61,6 +59,39 @@ export function NewTab() {
       queryClient.invalidateQueries({ queryKey: ['feed'] });
     },
   });
+
+  const archiveMutation = useMutation({
+    mutationFn: archivePaper,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['feed'] });
+    },
+  });
+
+  const markRowRead = (paperId: number) => {
+    setPendingMarkReadIds((prev) => new Set(prev).add(paperId));
+    markReadMutation.mutate(paperId, {
+      onSettled: () => {
+        setPendingMarkReadIds((prev) => {
+          const next = new Set(prev);
+          next.delete(paperId);
+          return next;
+        });
+      },
+    });
+  };
+
+  const archiveRow = (paperId: number) => {
+    setPendingArchiveIds((prev) => new Set(prev).add(paperId));
+    archiveMutation.mutate(paperId, {
+      onSettled: () => {
+        setPendingArchiveIds((prev) => {
+          const next = new Set(prev);
+          next.delete(paperId);
+          return next;
+        });
+      },
+    });
+  };
 
   if (isLoading) {
     return (
@@ -118,76 +149,15 @@ export function NewTab() {
       ) : (
         <>
           {papers.map((paper) => (
-            <div key={paper.id} className="rounded-lg border p-4">
-              <div className="flex gap-4">
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-lg font-semibold leading-tight">{paper.title}</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {formatAuthors(paper.authors)}
-                  </p>
-                  {paper.tldr && (
-                    <p className="mt-2 text-sm italic">{paper.tldr}</p>
-                  )}
-                  {!paper.tldr && paper.summary_brief && (
-                    <p className="mt-2 line-clamp-3 text-sm">{paper.summary_brief}</p>
-                  )}
-                  {paper.note_match_count ? (
-                    <p className="mt-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-900">
-                      Zotero note match{paper.note_match_count > 1 ? `es (${paper.note_match_count})` : ''}
-                      {paper.note_snippet ? `: ${paper.note_snippet}` : ''}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="flex shrink-0 flex-col items-end gap-1">
-                  <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>
-                  {paper.user_status && (
-                    <Badge variant="secondary">
-                      {paper.user_status.toUpperCase()}
-                    </Badge>
-                  )}
-                  {paper.confidence && (
-                    <Badge variant={paper.confidence === 'HIGH' ? 'default' : 'secondary'}>
-                      {paper.confidence}
-                    </Badge>
-                  )}
-                  <PriorityBadge level={priorityLevel(paper.priority_score)} />
-                  <div className="flex gap-1">
-                    {paper.pdf_downloaded && <Badge variant="outline" className="text-xs px-1.5 py-0">PDF</Badge>}
-                    {paper.has_chunks && <Badge variant="outline" className="text-xs px-1.5 py-0">Chunked</Badge>}
-                    {paper.has_summary && <Badge variant="outline" className="text-xs px-1.5 py-0">Summary</Badge>}
-                  </div>
-                  {paper.recommendation_score != null && paper.recommendation_reason && (
-                    <Badge variant="outline" className="text-xs text-blue-600 border-blue-300 bg-blue-50">
-                      ★ {paper.recommendation_reason}
-                    </Badge>
-                  )}
-                  {paper.discovered_at && (
-                    <span className="text-xs text-muted-foreground">
-                      {formatDate(paper.discovered_at)}
-                    </span>
-                  )}
-                  <div className="mt-auto flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => markReadMutation.mutate(paper.id)}
-                      disabled={markReadMutation.isPending}
-                    >
-                      <CheckCircle className="mr-1 h-3 w-3" />
-                      Mark Read
-                    </Button>
-                    <Button
-                      variant="default"
-                      size="sm"
-                      onClick={() => navigate(`/paper/${paper.id}`)}
-                    >
-                      <Eye className="mr-1 h-3 w-3" />
-                      View
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <FeedPaperRow
+              key={paper.id}
+              paper={paper}
+              onMarkRead={markRowRead}
+              markReadPending={pendingMarkReadIds.has(paper.id)}
+              onArchive={archiveRow}
+              archivePending={pendingArchiveIds.has(paper.id)}
+              onView={(paperId) => navigate(`/paper/${paperId}`)}
+            />
           ))}
 
           <PaginationControls

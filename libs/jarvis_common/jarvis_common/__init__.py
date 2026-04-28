@@ -19,6 +19,7 @@ from jarvis_common.crypto import (
     encrypt_secret,
     mask_secret,
     refresh_fernet_cache,
+    resolve_secret_row,
     validate_encrypted_config_rows,
 )
 from jarvis_common.db_helpers import (
@@ -90,6 +91,7 @@ __all__ = [
     "decrypt_secret",
     "mask_secret",
     "refresh_fernet_cache",
+    "resolve_secret_row",
     "validate_encrypted_config_rows",
     "SourceRateLimiter",
     "create_limiter",

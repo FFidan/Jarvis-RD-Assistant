@@ -87,9 +87,16 @@ _SOURCE_DISPLAY_NAMES = {
 
 
 def _normalize_title(title: str) -> str:
-    """Lowercase, strip punctuation, collapse whitespace for dedup comparison."""
+    """Lowercase, ASCII-normalize, collapse whitespace for dedup comparison.
+
+    ASCII-only character class matches the SQL-side
+    ``regexp_replace(... '[^[:alnum:]_[:space:]]', ' ', 'g')`` used in the
+    title-year fallback. Cross-language matching is best-effort; non-ASCII
+    characters become spaces on both sides so the candidate-key lookup and
+    the in-memory index agree.
+    """
     normalized = title.lower()
-    normalized = re.sub(r"[^\w\s]", " ", normalized)
+    normalized = re.sub(r"[^A-Za-z0-9_\s]", " ", normalized)
     return " ".join(normalized.split())
 
 
@@ -204,6 +211,63 @@ class _TitleYearLibraryCandidate:
     authors: frozenset[str]
 
 
+@dataclass(slots=True)
+class _PreviewMatchKeys:
+    """Deduplicated local-library lookup keys derived from preview results."""
+
+    dois: set[str]
+    arxiv_ids: set[str]
+    urls: set[str]
+    external_ids: set[str]
+    normalized_titles: set[str]
+    years: set[int]
+
+    def has_keys(self) -> bool:
+        """Return True when any key can narrow the local-library query."""
+        return any(
+            [
+                self.dois,
+                self.arxiv_ids,
+                self.urls,
+                self.external_ids,
+                self.normalized_titles,
+                self.years,
+            ]
+        )
+
+
+def _preview_match_keys(papers: list[PaperCreate]) -> _PreviewMatchKeys:
+    """Extract deduplicated local-library lookup keys from preview papers."""
+    keys = _PreviewMatchKeys(
+        dois=set(),
+        arxiv_ids=set(),
+        urls=set(),
+        external_ids=set(),
+        normalized_titles=set(),
+        years=set(),
+    )
+    for paper in papers:
+        metadata = paper.metadata or {}
+        doi = metadata.get("doi")
+        if doi:
+            keys.dois.add(str(doi).strip().lower())
+
+        arxiv_id = metadata.get("arxiv_id")
+        if arxiv_id:
+            keys.arxiv_ids.add(str(arxiv_id).strip().lower())
+
+        if paper.url:
+            keys.urls.add(_normalize_url(paper.url))
+
+        if paper.external_id:
+            keys.external_ids.add(paper.external_id.strip().lower())
+
+        if paper.published_date is not None:
+            keys.normalized_titles.add(_normalize_title(paper.title))
+            keys.years.add(paper.published_date.year)
+    return keys
+
+
 def _store_preferred_library_match(
     indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch],
     priorities: dict[tuple[str, Any], tuple[int, int, int]],
@@ -309,20 +373,73 @@ def _build_preview_source_error(
 
 async def _load_local_library_matches(
     db_pool: asyncpg.Pool,
+    preview_papers: list[PaperCreate] | None = None,
     user_id: int | None = None,
 ) -> tuple[
     dict[tuple[str, Any], SearchPreviewLibraryMatch],
     dict[tuple[str, int], list[_TitleYearLibraryCandidate]],
 ]:
-    """Fetch local-library rows once and index them by every supported match key.
+    """Fetch candidate local-library rows and index them by every supported match key.
 
     The optional ``user_id`` filter scopes results to the caller's owned papers
     plus system-owned (``user_id IS NULL``) rows.  When ``user_id`` is ``None``
     (single-user mode) the predicate is a no-op and all rows are returned.
+
+    ``preview_papers`` narrows the query to rows that can match the preview
+    result keys.  Older tests and internal callers may omit it; that preserves
+    the legacy full-library scan.
     """
+    keys = _preview_match_keys(preview_papers or [])
+    if preview_papers is not None and not keys.has_keys():
+        return {}, {}
+
+    candidate_predicate = ""
+    args: list[Any] = [user_id]
+    if preview_papers is not None:
+        args.extend(
+            [
+                sorted(keys.dois),
+                sorted(keys.arxiv_ids),
+                sorted(keys.urls),
+                sorted(keys.external_ids),
+                sorted(keys.normalized_titles),
+                sorted(keys.years),
+            ]
+        )
+        candidate_predicate = """
+              AND (
+                  lower(btrim(coalesce(p.metadata->>'doi', ''))) = ANY($2::text[])
+                  OR lower(btrim(coalesce(p.metadata->>'arxiv_id', ''))) = ANY($3::text[])
+                  OR btrim(
+                      regexp_replace(
+                          split_part(
+                              split_part(lower(coalesce(p.url, '')), '#', 1),
+                              '?',
+                              1
+                          ),
+                          '/+$',
+                          '',
+                          'g'
+                      )
+                  ) = ANY($4::text[])
+                  OR lower(btrim(p.external_id)) = ANY($5::text[])
+                  OR (
+                      btrim(
+                          regexp_replace(
+                              regexp_replace(lower(p.title), '[^[:alnum:]_[:space:]]', ' ', 'g'),
+                              '[[:space:]]+',
+                              ' ',
+                              'g'
+                          )
+                      ) = ANY($6::text[])
+                      AND EXTRACT(YEAR FROM p.published_date)::int = ANY($7::int[])
+                  )
+              )
+        """
+
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            """
+            f"""
             SELECT p.id,
                    p.external_id,
                    p.title,
@@ -338,9 +455,10 @@ async def _load_local_library_matches(
                    ) AS has_project_links
             FROM papers p
             WHERE ($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)
+            {candidate_predicate}
             ORDER BY p.id ASC
             """,
-            user_id,
+            *args,
         )
 
     indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch] = {}
@@ -367,7 +485,7 @@ async def _load_local_library_matches(
                 indexes, priorities, ("arxiv_id", str(arxiv_id).strip().lower()), row, match
             )
 
-        normalized_url = _normalize_url(str(row["url"]))
+        normalized_url = _normalize_url(str(row.get("url") or ""))
         _store_preferred_library_match(indexes, priorities, ("url", normalized_url), row, match)
         _store_preferred_library_match(
             indexes,

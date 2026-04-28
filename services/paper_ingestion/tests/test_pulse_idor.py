@@ -212,3 +212,59 @@ def test_rate_card_deck_guard_with_real_user_id():
     assert len(params) == 2
     assert params[0] == 99  # paper_id
     assert params[1] == 7  # user_id bound to $2
+
+
+# ---------------------------------------------------------------------------
+# Test 3: rate_card preference no-clobber (B3)
+# ---------------------------------------------------------------------------
+
+
+def _capture_rate_calls(rating: str) -> list:
+    """Issue a rate_card POST and return the conn.execute await call list."""
+    tc, pool, conn, app = _make_client(user_id_override=None)
+    conn.fetchval.return_value = 1
+    conn.execute.return_value = "INSERT 0 1"
+    try:
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 1, "rating": rating})
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+    assert resp.status_code == 200
+    return list(conn.execute.await_args_list)
+
+
+def test_rate_card_save_does_not_overwrite_preference():
+    # rating='save' must bind preference='none' so the ON CONFLICT branch
+    # preserves any prior 'down'.
+    calls = _capture_rate_calls("save")
+    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
+    state_call = calls[1]
+    sql = state_call.args[0]
+    preference_param = state_call.args[4]
+    assert preference_param == "none"
+    assert "WHEN EXCLUDED.preference = 'none' THEN paper_user_state.preference" in sql
+
+
+def test_rate_card_open_does_not_set_thumbs_up():
+    # rating='open' is a navigation event, not a preference signal.
+    calls = _capture_rate_calls("open")
+    assert len(calls) >= 2
+    preference_param = calls[1].args[4]
+    assert preference_param == "none"
+
+
+def test_rate_card_up_records_thumbs_up_preference():
+    calls = _capture_rate_calls("up")
+    assert calls[1].args[4] == "up"
+
+
+def test_rate_card_down_records_thumbs_down_preference():
+    calls = _capture_rate_calls("down")
+    assert calls[1].args[4] == "down"
+
+
+def test_rate_card_dismiss_records_thumbs_down_preference():
+    calls = _capture_rate_calls("dismiss")
+    assert calls[1].args[4] == "down"

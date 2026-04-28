@@ -11,6 +11,7 @@ from jarvis_common.crypto import (
     encrypt_secret,
     mask_secret,
     refresh_fernet_cache,
+    resolve_secret_row,
     rotate_key,
     validate_encrypted_config_rows,
 )
@@ -174,3 +175,44 @@ async def test_validate_encrypted_config_rows_warns_in_dev_on_bad_key(monkeypatc
     checked = await validate_encrypted_config_rows(pool, dev_mode=True)
 
     assert checked == 1
+
+
+# ---------------------------------------------------------------------------
+# resolve_secret_row helper (Sprint 7 B12)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_secret_row_decrypts_encrypted_value(valid_key) -> None:
+    ciphertext = encrypt_secret("plaintext-secret")
+    row = FakeRecord(
+        {"key": "zotero.api_key", "value": None, "encrypted_value": ciphertext.encode()}
+    )
+    assert resolve_secret_row(row) == "plaintext-secret"
+
+
+def test_resolve_secret_row_returns_legacy_plaintext(valid_key) -> None:
+    row = FakeRecord(
+        {"key": "zotero.api_key", "value": "legacy-plaintext", "encrypted_value": None}
+    )
+    assert resolve_secret_row(row) == "legacy-plaintext"
+
+
+def test_resolve_secret_row_returns_none_when_both_missing(valid_key) -> None:
+    row = FakeRecord({"key": "zotero.api_key", "value": None, "encrypted_value": None})
+    assert resolve_secret_row(row) is None
+
+
+def test_resolve_secret_row_raises_invalid_token_on_bad_ciphertext(valid_key) -> None:
+    row = FakeRecord(
+        {"key": "zotero.api_key", "value": None, "encrypted_value": b"not-real-ciphertext"}
+    )
+    with pytest.raises(InvalidToken):
+        resolve_secret_row(row)
+
+
+def test_resolve_secret_row_handles_memoryview_ciphertext(valid_key) -> None:
+    ciphertext = encrypt_secret("from-memoryview").encode()
+    row = FakeRecord(
+        {"key": "zotero.api_key", "value": None, "encrypted_value": memoryview(ciphertext)}
+    )
+    assert resolve_secret_row(row) == "from-memoryview"

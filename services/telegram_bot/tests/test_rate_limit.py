@@ -160,3 +160,36 @@ async def test_rate_limit_notifies_via_callback_answer_when_message_is_none():
     call_kwargs = callback_query.answer.await_args[1]
     assert call_kwargs.get("show_alert") is True
     assert "Rate limit" in call_kwargs.get("text", "")
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_cooldown_branch_uses_callback_answer_when_message_is_none():
+    # Sprint 7 B11: covers the cooldown elif branch (the sliding-window
+    # fallback was already covered above). When a callback handler is
+    # decorated with cooldown_seconds and update.message is None, the
+    # cooldown rejection must surface via callback_query.answer.
+    _timestamps.clear()
+
+    @rate_limit(max_calls=10, window_seconds=60, cooldown_seconds=300)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        return "ok"
+
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = 99005
+    update.message = None
+    callback_query = MagicMock()
+    callback_query.answer = AsyncMock()
+    update.callback_query = callback_query
+
+    context = _make_context()
+
+    first = await _guarded(update, context)
+    assert first == "ok"
+
+    second = await _guarded(update, context)
+    assert second is None
+    callback_query.answer.assert_awaited_once()
+    call_kwargs = callback_query.answer.await_args[1]
+    assert call_kwargs.get("show_alert") is True
+    assert "Cooldown" in call_kwargs.get("text", "") or "Rate limit" in call_kwargs.get("text", "")

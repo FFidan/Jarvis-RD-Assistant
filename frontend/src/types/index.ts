@@ -97,6 +97,9 @@ export interface FeedPaper extends Paper {
   tldr: string | null;
   confidence: Confidence | null;
   user_status: string | null;
+  starred?: boolean;
+  archived?: boolean;
+  preference?: 'none' | 'up' | 'down';
   rating: number | null;
   priority_level?: string;
   has_chunks?: boolean;
@@ -653,6 +656,9 @@ export interface SearchPreviewResponse {
 
 export interface UserState {
   status: string;
+  starred?: boolean;
+  archived?: boolean;
+  preference?: 'none' | 'up' | 'down';
   rating: number | null;
   user_notes: string | null;
   flagged: boolean;

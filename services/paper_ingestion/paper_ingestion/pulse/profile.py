@@ -113,10 +113,15 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             SELECT p.id, p.abstract
             FROM papers p
             JOIN paper_user_state pus ON pus.paper_id = p.id
-            WHERE pus.status IN ('starred', 'read', 'reading')
+            WHERE ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
+              AND (
+                COALESCE(pus.starred, FALSE)
+                OR pus.status IN ('starred', 'read', 'reading')
+            )
               AND p.abstract IS NOT NULL
               AND p.abstract != ''
-            """
+            """,
+            user_id,
         )
         abstracts = [r["abstract"] for r in engaged_rows]
     # Connection released — Phase 1 complete.
@@ -173,59 +178,37 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
-        # 5. Recent rating history (top 10 positive + top 10 negative)
-        # H20/WS-6C: when user_id is provided, filter to that user's ratings.
-        # When user_id is None (single-user / system mode), return all ratings.
-        if user_id is not None:
-            positive_rows = await conn.fetch(
-                """
-                SELECT p.id, p.title
-                FROM pulse_ratings pr
-                JOIN papers p ON p.id = pr.paper_id
-                WHERE pr.rating IN ('up', 'save', 'open')
-                  AND pr.user_id IS NOT DISTINCT FROM $2
-                ORDER BY pr.created_at DESC
-                LIMIT $1
-                """,
-                _RATING_HISTORY_LIMIT,
-                user_id,
-            )
-            negative_rows = await conn.fetch(
-                """
-                SELECT p.title
-                FROM pulse_ratings pr
-                JOIN papers p ON p.id = pr.paper_id
-                WHERE pr.rating IN ('down', 'dismiss')
-                  AND pr.user_id IS NOT DISTINCT FROM $2
-                ORDER BY pr.created_at DESC
-                LIMIT $1
-                """,
-                _RATING_HISTORY_LIMIT,
-                user_id,
-            )
-        else:
-            positive_rows = await conn.fetch(
-                """
-                SELECT p.id, p.title
-                FROM pulse_ratings pr
-                JOIN papers p ON p.id = pr.paper_id
-                WHERE pr.rating IN ('up', 'save', 'open')
-                ORDER BY pr.created_at DESC
-                LIMIT $1
-                """,
-                _RATING_HISTORY_LIMIT,
-            )
-            negative_rows = await conn.fetch(
-                """
-                SELECT p.title
-                FROM pulse_ratings pr
-                JOIN papers p ON p.id = pr.paper_id
-                WHERE pr.rating IN ('down', 'dismiss')
-                ORDER BY pr.created_at DESC
-                LIMIT $1
-                """,
-                _RATING_HISTORY_LIMIT,
-            )
+        # 5. Recent rating history (top 10 positive + top 10 negative).
+        # Sprint 7 B13: single query path — `$2::int IS NULL` short-circuits
+        # the user filter when running in stub/system mode (user_id=None).
+        # When a real user_id is bound, IS NOT DISTINCT FROM matches both the
+        # caller's id and any NULL-stamped legacy rows (M1 residual).
+        positive_rows = await conn.fetch(
+            """
+            SELECT p.id, p.title
+            FROM pulse_ratings pr
+            JOIN papers p ON p.id = pr.paper_id
+            WHERE pr.rating IN ('up', 'save', 'open')
+              AND ($2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
+            ORDER BY pr.created_at DESC
+            LIMIT $1
+            """,
+            _RATING_HISTORY_LIMIT,
+            user_id,
+        )
+        negative_rows = await conn.fetch(
+            """
+            SELECT p.title
+            FROM pulse_ratings pr
+            JOIN papers p ON p.id = pr.paper_id
+            WHERE pr.rating IN ('down', 'dismiss')
+              AND ($2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
+            ORDER BY pr.created_at DESC
+            LIMIT $1
+            """,
+            _RATING_HISTORY_LIMIT,
+            user_id,
+        )
         recent_positive_titles = [r["title"] for r in positive_rows][:_RATING_HISTORY_LIMIT]
         liked_paper_ids = [r.get("id") for r in positive_rows if r.get("id") is not None]
 

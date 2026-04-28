@@ -12,7 +12,12 @@ from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
 from jarvis_common.auth import verify_api_key
-from jarvis_common.crypto import decrypt_secret, encrypt_secret, mask_secret
+from jarvis_common.crypto import (
+    decrypt_secret,
+    encrypt_secret,
+    mask_secret,
+    resolve_secret_row,
+)
 from jarvis_common.settings import get_core_settings, get_telegram_settings
 from pydantic import BaseModel
 
@@ -605,15 +610,10 @@ async def test_provider(
 
     api_key: str | None = None
     if row is not None:
-        enc = row.get("encrypted_value")
-        if enc is not None:
-            try:
-                api_key = decrypt_secret(enc.decode("ascii"))
-            except Exception:
-                api_key = None
-        elif row.get("value") is not None:
-            # Legacy plaintext row
-            api_key = str(row["value"])
+        try:
+            api_key = resolve_secret_row(row)
+        except Exception:
+            api_key = None
 
     if not api_key:
         return ProviderTestResponse(ok=False, error="no api key configured")

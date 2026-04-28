@@ -63,6 +63,38 @@ def decrypt_secret(ciphertext: str) -> str:
     return fernet.decrypt(ciphertext.encode()).decode()
 
 
+def resolve_secret_row(row: Any) -> str | None:
+    """Return the plaintext value for a ``user_config``-shaped row.
+
+    Reads ``encrypted_value`` first (Fernet ciphertext stored as BYTEA,
+    accepting memoryview / bytes / str), falling back to the legacy
+    plaintext ``value`` column. Returns ``None`` when both are absent
+    or NULL. Raises whatever ``decrypt_secret`` raises when an encrypted
+    row cannot be decrypted — callers that want graceful degradation
+    should wrap the call in ``try/except``.
+    """
+    if row is None:
+        return None
+    get = getattr(row, "get", None)
+    if callable(get):
+        enc = row.get("encrypted_value")
+        raw = row.get("value")
+    else:
+        enc = row["encrypted_value"] if "encrypted_value" in row else None
+        raw = row["value"] if "value" in row else None
+    if enc is not None:
+        if isinstance(enc, memoryview):
+            enc = enc.tobytes()
+        if isinstance(enc, bytes | bytearray):
+            ciphertext = bytes(enc).decode("ascii")
+        else:
+            ciphertext = str(enc)
+        return decrypt_secret(ciphertext)
+    if raw is None:
+        return None
+    return str(raw)
+
+
 async def validate_encrypted_config_rows(
     db_pool: Any,
     *,

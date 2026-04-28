@@ -37,6 +37,7 @@ from paper_ingestion.models import (
     PaperResponse,
     RelevanceScoreResponse,
     SearchRequest,
+    SourceType,
 )
 from paper_ingestion.routers.search_helpers import (
     PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS,
@@ -63,7 +64,7 @@ from paper_ingestion.routers.search_helpers import (
     _TitleYearLibraryCandidate,
 )
 from paper_ingestion.services.pdf_workflow import upsert_paper
-from paper_ingestion.services.source_helper import get_source_for_type
+from paper_ingestion.services.source_helper import get_source_for_type, get_sources_for_types
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["search"])
@@ -106,7 +107,34 @@ __all__ = [
     "compute_relevance",
     "router",
     "get_source_for_type",
+    "get_sources_for_types",
 ]
+
+_ORIGINAL_GET_SOURCE_FOR_TYPE = get_source_for_type
+
+
+async def _resolve_sources_for_search(
+    source_types: list[SourceType],
+    db_pool: asyncpg.Pool,
+    http_client: httpx.AsyncClient,
+    request: Request,
+) -> tuple[dict[SourceType, Any], dict[SourceType, Exception]]:
+    """Resolve source plugins, preserving legacy monkeypatch behavior in tests."""
+    if get_source_for_type is not _ORIGINAL_GET_SOURCE_FOR_TYPE:
+        plugins: dict[SourceType, Any] = {}
+        errors: dict[SourceType, Exception] = {}
+        for source_type in source_types:
+            try:
+                plugins[source_type] = await get_source_for_type(
+                    source_type, db_pool, http_client, request=request
+                )
+            except HTTPException as exc:
+                errors[source_type] = exc
+            except PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS as exc:
+                errors[source_type] = exc
+        return plugins, errors
+
+    return await get_sources_for_types(source_types, db_pool, http_client, request=request)
 
 
 # ---------------------------------------------------------------------------
@@ -148,12 +176,20 @@ async def search_papers(
     # Resolve source instances (skip disabled/unknown without failing the whole request)
     plugins = []
     degraded_sources: list[str] = []
+    resolved_plugins, source_load_errors = await _resolve_sources_for_search(
+        source_types, db_pool, http_client, request
+    )
     for st, budget in zip(source_types, budgets):
-        try:
-            plugin = await get_source_for_type(st, db_pool, http_client, request=request)
+        plugin = resolved_plugins.get(st)
+        if plugin is not None:
             plugins.append((st.value, plugin, budget))
-        except HTTPException as e:
-            logger.warning("Source %s unavailable for search: %s", st.value, e.detail)
+            continue
+        exc = source_load_errors.get(st)
+        if isinstance(exc, HTTPException):
+            logger.warning("Source %s unavailable for search: %s", st.value, exc.detail)
+            degraded_sources.append(st.value)
+        elif exc is not None:
+            logger.warning("Source %s unavailable for search: %s", st.value, exc)
             degraded_sources.append(st.value)
 
     # Fan-out search across all available sources concurrently
@@ -250,15 +286,24 @@ async def search_papers_preview(
     plugins = []
     degraded_sources: list[str] = []
     source_errors: dict[str, SearchPreviewSourceError] = {}
+    resolved_plugins, source_load_errors = await _resolve_sources_for_search(
+        source_types, db_pool, http_client, request
+    )
     for st, budget in zip(source_types, budgets):
-        try:
-            plugin = await get_source_for_type(st, db_pool, http_client, request=request)
+        plugin = resolved_plugins.get(st)
+        if plugin is not None:
             plugins.append((st.value, plugin, budget))
-        except HTTPException as e:
-            logger.warning("Source %s unavailable for preview search: %s", st.value, e.detail)
-            source_errors[st.value] = _build_preview_source_error(st.value, e, unavailable=True)
+            continue
+        exc = source_load_errors.get(st)
+        if isinstance(exc, HTTPException):
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc.detail)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
             degraded_sources.append(st.value)
-        except PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS as exc:
+        elif isinstance(exc, PREVIEW_SOURCE_BOOTSTRAP_EXCEPTIONS):
+            logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
+            source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
+            degraded_sources.append(st.value)
+        elif exc is not None:
             logger.warning("Source %s unavailable for preview search: %s", st.value, exc)
             source_errors[st.value] = _build_preview_source_error(st.value, exc, unavailable=True)
             degraded_sources.append(st.value)
@@ -307,7 +352,9 @@ async def search_papers_preview(
         deduped = _dedup_papers(interleaved)
 
     user_id = await current_user_id_or_none(request)
-    library_indexes, title_year_candidates = await _load_local_library_matches(db_pool, user_id)
+    library_indexes, title_year_candidates = await _load_local_library_matches(
+        db_pool, deduped, user_id
+    )
     preview_results = [
         SearchPreviewResult(
             **paper.model_dump(),

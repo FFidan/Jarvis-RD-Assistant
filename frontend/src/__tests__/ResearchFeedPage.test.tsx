@@ -4,7 +4,7 @@ import { userEvent } from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
-import { ApiError } from '@/lib/api';
+import { ApiError, archivePaper } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
 
@@ -106,6 +106,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     }),
     batchSavePapers: vi.fn().mockResolvedValue([{ id: 1, title: 'Saved Paper' }]),
     markPaperRead: vi.fn().mockResolvedValue({ status: 'ok' }),
+    archivePaper: vi.fn().mockResolvedValue({ status: 'archived', rating: null, user_notes: null, flagged: false }),
     discoverPapers: vi.fn().mockResolvedValue([]),
     scanLocalPdfs: vi.fn().mockResolvedValue({ job_id: 'job-scan', status: 'queued' }),
     batchProcessPapers: vi.fn().mockResolvedValue({
@@ -1753,6 +1754,27 @@ describe('ResearchFeedPage', () => {
       expect(
         screen.getByPlaceholderText('Filter by title, abstract, or author...'),
       ).toBeInTheDocument();
+    });
+  });
+
+  it('clicking archive on a Library row calls archivePaper with the paper id (Sprint 7 B16)', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    // Library is the default-active tab; wait for the row to render.
+    await screen.findByText('Test Paper One');
+
+    const archiveButton = await screen.findByRole('button', {
+      name: 'Archive Test Paper One',
+    });
+    await user.click(archiveButton);
+
+    await waitFor(() => {
+      // React Query's `useMutation.mutate(value)` calls the mutationFn with
+      // `(value, mutationContext)` — assert by inspecting positional arg.
+      const mock = vi.mocked(archivePaper);
+      expect(mock).toHaveBeenCalled();
+      expect(mock.mock.calls[0][0]).toBe(1);
     });
   });
 });
