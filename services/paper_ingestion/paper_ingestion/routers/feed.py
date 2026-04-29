@@ -8,13 +8,14 @@ Extracted from ``routers/search.py`` (GOD-001):
 from datetime import date
 
 import asyncpg
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import row_to_feed_paper
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import FeedResponse, priority_level
 from paper_ingestion.services.feed_query import (
+    VIEW_PREDICATES,
     build_feed_queries,
     derive_feed_search_mode,
     fetch_feed_rows,
@@ -47,6 +48,7 @@ async def list_feed_papers(
     date_to: date | None = Query(default=None),
     recommended: bool = False,
     include_zotero_notes: bool = Query(default=False),
+    view: str | None = Query(default=None, max_length=64),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
@@ -66,6 +68,11 @@ async def list_feed_papers(
         Full-text search query.
     statuses : str, optional
         Comma-separated list of user statuses to filter by (e.g. ``new,reading``).
+        Deprecated — use ``view`` instead.
+    view : str, optional
+        Named view predicate: one of ``inbox``, ``library``, ``starred``,
+        ``archived``, ``reading``, ``trash``, ``all_active``.  Takes precedence
+        over ``statuses`` when both are supplied.
     source_types : str, optional
         Comma-separated list of source types (e.g. ``arxiv,semantic_scholar``).
     topic_names : str, optional
@@ -82,6 +89,11 @@ async def list_feed_papers(
     FeedResponse
         ``{papers: [...], total: N}``
     """
+    if view is not None and view not in VIEW_PREDICATES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}",
+        )
     user_id = await current_user_id_or_none(request)
     query_parts = build_feed_queries(
         unread_only=unread_only,
@@ -97,6 +109,7 @@ async def list_feed_papers(
         recommended=recommended,
         include_zotero_notes=include_zotero_notes,
         user_id=user_id,
+        view=view,
     )
 
     # Note: pool.acquire() without an explicit transaction uses auto-commit mode.

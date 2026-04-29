@@ -157,30 +157,60 @@ async def rate_card(
                 user_id,
                 body.rating,
             )
-            # Only thumbs-up/thumbs-down express an explicit preference. `save`
-            # and `open` do not set preference; `dismiss` is treated as a
-            # thumbs-down. Mapping any non-thumb rating to 'up' would clobber a
-            # prior 'down', and `open` would silently store thumbs-up.
-            if body.rating == "up":
+            # Map rating → lifecycle state changes:
+            #   save    → starred=TRUE, saved=TRUE, preference='up'
+            #   dismiss → dismissed=TRUE, preference='down' (saved unchanged)
+            #   open    → no state mutation (only the pulse_ratings row is logged)
+            #   up/down → preference only (no saved/dismissed change)
+            if body.rating == "save":
                 preference = "up"
-            elif body.rating in {"down", "dismiss"}:
+                starred = True
+                saved = True
+                dismissed = False  # default — won't clobber existing TRUE
+            elif body.rating == "dismiss":
                 preference = "down"
+                starred = False  # default — won't clobber existing TRUE
+                saved = False  # default — won't clobber existing TRUE
+                dismissed = True
+            elif body.rating == "up":
+                preference = "up"
+                starred = False
+                saved = False
+                dismissed = False
+            elif body.rating in {"down"}:
+                preference = "down"
+                starred = False
+                saved = False
+                dismissed = False
             else:
+                # "open" and any future ratings: no state mutation
                 preference = "none"
+                starred = False
+                saved = False
+                dismissed = False
             await conn.execute(
                 """INSERT INTO paper_user_state
-                       (paper_id, user_id, status, starred, preference)
-                   VALUES ($1, $2, 'new', $3, $4)
+                       (paper_id, user_id, status, starred, archived, preference, saved, dismissed)
+                   VALUES ($1, $2, 'new', $3, FALSE, $4, $5, $6)
                    ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                       starred = paper_user_state.starred OR EXCLUDED.starred,
-                       preference = CASE
-                           WHEN EXCLUDED.preference = 'none' THEN paper_user_state.preference
-                           ELSE EXCLUDED.preference
-                       END""",
+                       starred    = CASE WHEN EXCLUDED.starred IS DISTINCT FROM FALSE
+                                         THEN EXCLUDED.starred
+                                         ELSE paper_user_state.starred END,
+                       preference = CASE WHEN EXCLUDED.preference IS DISTINCT FROM 'none'
+                                         THEN EXCLUDED.preference
+                                         ELSE paper_user_state.preference END,
+                       saved      = CASE WHEN EXCLUDED.saved IS DISTINCT FROM FALSE
+                                         THEN EXCLUDED.saved
+                                         ELSE paper_user_state.saved END,
+                       dismissed  = CASE WHEN EXCLUDED.dismissed IS DISTINCT FROM FALSE
+                                         THEN EXCLUDED.dismissed
+                                         ELSE paper_user_state.dismissed END""",
                 body.paper_id,
                 user_id,
-                body.rating == "save",
+                starred,
                 preference,
+                saved,
+                dismissed,
             )
     except asyncpg.ForeignKeyViolationError as exc:
         raise HTTPException(status_code=404, detail="Paper not found") from exc

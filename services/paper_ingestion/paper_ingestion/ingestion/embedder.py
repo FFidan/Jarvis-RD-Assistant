@@ -846,6 +846,26 @@ class Embedder:
 
         return results
 
+    async def delete_paper_vectors(self, paper_id: int) -> None:
+        """Delete all chunk vectors for a paper. Used by hard-delete (Sprint 8 B1.1).
+
+        Failures propagate — callers are responsible for transaction coordination.
+
+        Parameters
+        ----------
+        paper_id : int
+            Database ID of the paper whose vectors should be removed from Qdrant.
+        """
+        from qdrant_client.models import FieldCondition, Filter, MatchValue
+
+        await self.qdrant.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=Filter(
+                must=[FieldCondition(key="paper_id", match=MatchValue(value=paper_id))]
+            ),
+            wait=True,
+        )
+
     async def discover_from_seeds(
         self,
         seed_paper_ids: list[int],
@@ -979,3 +999,26 @@ class Embedder:
         # Sort by score descending and trim to requested limit
         results = sorted(best.values(), key=lambda x: x["score"], reverse=True)
         return results[:limit]
+
+
+async def delete_paper_vectors(paper_id: int) -> None:
+    """Delete all Qdrant chunk vectors for *paper_id*.
+
+    Module-level entry point for job handlers and hard-delete paths that access
+    the service via ``paper_ingestion._state.svc`` rather than FastAPI
+    dependency injection.
+
+    Failures propagate — the caller (B1.1 hard-delete handler) wraps SQL +
+    Qdrant in a transaction and relies on propagation to trigger a rollback.
+
+    Parameters
+    ----------
+    paper_id : int
+        Database ID of the paper whose vectors should be removed from Qdrant.
+    """
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    embedder = svc.embedder
+    if embedder is None:
+        raise RuntimeError("Embedder not initialised; cannot delete paper vectors")
+    await embedder.delete_paper_vectors(paper_id)

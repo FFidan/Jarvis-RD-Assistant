@@ -107,6 +107,27 @@ class FeedQueryParts:
     count_params: list[object]
 
 
+VIEW_PREDICATES: dict[str, str] = {
+    "inbox": ("COALESCE(pus.saved, FALSE) = FALSE AND COALESCE(pus.dismissed, FALSE) = FALSE"),
+    "library": (
+        "pus.saved = TRUE"
+        " AND COALESCE(pus.dismissed, FALSE) = FALSE"
+        " AND COALESCE(pus.archived, FALSE) = FALSE"
+    ),
+    "starred": (
+        "pus.saved = TRUE AND pus.starred = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE"
+    ),
+    "archived": (
+        "pus.saved = TRUE AND pus.archived = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE"
+    ),
+    "reading": (
+        "pus.saved = TRUE AND pus.status = 'reading' AND COALESCE(pus.dismissed, FALSE) = FALSE"
+    ),
+    "trash": "pus.dismissed = TRUE",
+    "all_active": "COALESCE(pus.dismissed, FALSE) = FALSE",
+}
+
+
 def split_csv_filter(raw_value: str | None) -> list[str]:
     """Normalize a comma-separated query parameter into trimmed values."""
     if not raw_value:
@@ -129,6 +150,7 @@ def build_feed_queries(
     recommended: bool = False,
     include_zotero_notes: bool = False,
     user_id: int | None = None,
+    view: str | None = None,
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters.
 
@@ -136,7 +158,19 @@ def build_feed_queries(
     system-owned (``papers.user_id IS NULL``) rows.  When ``user_id`` is
     ``None`` (single-user mode) the predicate is a no-op and all papers are
     returned.
+
+    The ``view`` parameter maps to a set of fixed SQL predicates defined in
+    :data:`VIEW_PREDICATES` (e.g. ``"inbox"``, ``"library"``, ``"trash"``).
+    When ``view`` is supplied it takes precedence over the legacy ``statuses``
+    filter.  Raises :exc:`ValueError` if ``view`` is not a recognised key.
+
+    .. deprecated::
+        ``statuses`` — use ``view`` instead.  Retained for backwards compat
+        until the B2.3 migration ships.
     """
+    if view is not None and view not in VIEW_PREDICATES:
+        raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
+
     conditions: list[str] = []
     params: list[object] = []
     param_idx = 1
@@ -174,18 +208,22 @@ def build_feed_queries(
         params.append(q)
         param_idx += 1
 
-    status_list = split_csv_filter(statuses)
-    if status_list:
-        placeholders = ", ".join(f"${param_idx + i}" for i in range(len(status_list)))
-        conditions.append(
-            "CASE"
-            " WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
-            " WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
-            " ELSE COALESCE(pus.status, 'new')"
-            f" END IN ({placeholders})"
-        )
-        params.extend(status_list)
-        param_idx += len(status_list)
+    # view= takes precedence over the legacy statuses= filter
+    if view is not None:
+        conditions.append(f"({VIEW_PREDICATES[view]})")
+    else:
+        status_list = split_csv_filter(statuses)
+        if status_list:
+            placeholders = ", ".join(f"${param_idx + i}" for i in range(len(status_list)))
+            conditions.append(
+                "CASE"
+                " WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+                " WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
+                " ELSE COALESCE(pus.status, 'new')"
+                f" END IN ({placeholders})"
+            )
+            params.extend(status_list)
+            param_idx += len(status_list)
 
     source_list = split_csv_filter(source_types)
     if source_list:

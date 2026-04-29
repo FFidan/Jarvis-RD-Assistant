@@ -162,9 +162,8 @@ def _compute_score(
 
 
 async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[int]:
-    # Starred papers remain eligible for re-recommendation; only `read` and
-    # `archived` are treated as already-handled. Archive is the explicit dismiss
-    # signal post-migration-044.
+    # Dismissed (Trash) and archived papers are both excluded from candidates;
+    # starred papers remain eligible for re-recommendation.
     if not paper_ids:
         return set()
     rows = await conn.fetch(
@@ -172,7 +171,11 @@ async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[
         " AND NOT EXISTS ("
         "   SELECT 1 FROM paper_user_state"
         "   WHERE paper_id = p.id"
-        "     AND (status = 'read' OR COALESCE(archived, FALSE) OR status = 'archived')"
+        "     AND ("
+        "         status = 'read'"
+        "         OR COALESCE(archived, FALSE)"
+        "         OR COALESCE(dismissed, FALSE)"
+        "     )"
         ")",
         paper_ids,
     )

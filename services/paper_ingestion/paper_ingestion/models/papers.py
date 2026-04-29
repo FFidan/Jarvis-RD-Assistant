@@ -175,7 +175,7 @@ class UserStateResponse(BaseModel):
 class UserStateUpsert(BaseModel):
     """Request body for creating/updating user state on a paper."""
 
-    status: Literal["new", "reading", "read", "archived", "starred"] | None = None
+    status: Literal["new", "reading", "read"] | None = None
     starred: bool | None = None
     archived: bool | None = None
     preference: Literal["none", "up", "down"] | None = None
@@ -604,3 +604,9 @@ class FeedCountsResponse(BaseModel):
     reading: int
     trash: int
     all_active: int
+
+
+class ArchiveRequest(BaseModel):
+    """Body for PUT /api/papers/{paper_id}/archive (archive or unarchive)."""
+
+    archive: bool = True

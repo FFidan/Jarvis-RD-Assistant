@@ -90,7 +90,12 @@ async def _persist_deck_inner(
                  reasoning, signals, reasoning_verified, reasoning_confidence)
             SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
             FROM papers p
+            LEFT JOIN paper_user_state pus
+                   ON pus.paper_id = p.id
+                  AND pus.user_id IS NOT DISTINCT FROM NULL
             WHERE p.external_id = $2
+              AND COALESCE(pus.archived, FALSE) = FALSE
+              AND COALESCE(pus.dismissed, FALSE) = FALSE
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
             """,

@@ -153,7 +153,7 @@ async def upsert_user_state(
 
     # Trigger Zotero push when a paper is newly starred and has project links.
     # The job handler checks Zotero config at runtime and returns early if disabled.
-    if body.status == "starred" or body.starred is True:
+    if body.starred is True:
         try:
             async with pool.acquire() as conn:
                 project_count = await conn.fetchval(
