@@ -571,6 +571,46 @@ export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
   return apiFetch('/api/papers/feed/counts');
 }
 
+/** Surface-aware feed fetch for FeedView. Maps SurfaceView + optional filter to fetchFeedPapers params. */
+export async function fetchFeed(params: {
+  view?: import('@/types').SurfaceView;
+  filter?: string | null;
+  limit?: number;
+  offset?: number;
+}): Promise<FeedResponse> {
+  const { view, filter, limit = 30, offset = 0 } = params;
+
+  // Map surface view to statuses / flags
+  let statuses: string | undefined;
+  let unread_only: boolean | undefined;
+
+  switch (view) {
+    case 'inbox':
+      // New/unread papers that are saved but not dismissed/archived
+      unread_only = true;
+      break;
+    case 'library':
+      statuses = filter ?? undefined;
+      break;
+    case 'starred':
+      statuses = 'starred';
+      break;
+    case 'archived':
+      statuses = 'archived';
+      break;
+    case 'reading':
+      statuses = 'reading';
+      break;
+    case 'trash':
+      statuses = 'dismissed';
+      break;
+    default:
+      statuses = filter ?? undefined;
+  }
+
+  return fetchFeedPapers({ statuses, unread_only, limit, offset, include_zotero_notes: true });
+}
+
 export const discoverPapers = (paperIds: number[], limit?: number) =>
   apiFetch<DiscoveryResult[]>('/api/discover', {
     method: 'POST',
