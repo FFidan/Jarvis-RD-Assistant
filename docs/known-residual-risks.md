@@ -108,6 +108,14 @@ S3 backup encryption relies on bucket SSE only — openssl pipeline ships in nex
 
 **Reopen criteria:** when compliance requirements mandate end-to-end encryption of backup files.
 
+### L3 — `nginx.conf` hardcodes the trusted Docker subnet `172.19.0.0/16`
+
+`frontend/nginx.conf:17-19` declares `set_real_ip_from 172.19.0.0/16` so that the rate-limiter sees the real client IP rather than the nginx container IP. The subnet is hardcoded to the default Docker bridge JARVIS uses; if Docker assigns a different subnet to the `jarvis` network (e.g. when `default-address-pools` differ on the host or another stack reserved the range), the `real_ip_recursive` directive won't strip the proxy hop and rate-limit keys will land on the nginx container's IP — effectively a single shared bucket per service.
+
+**Mitigation:** verify the bridge subnet at deploy time with `docker network inspect jarvis | jq '.[0].IPAM.Config[].Subnet'` and either match the host network or accept the rate-limit degradation.
+
+**Reopen criteria:** when LAN/tunnel deployments observe rate-limit anomalies, or when the deploy story moves to a non-default Docker network configuration. Tracked as L3 in 2026-04-28 audit.
+
 ---
 
 ## Sprint 4 deferrals (2026-04-26)

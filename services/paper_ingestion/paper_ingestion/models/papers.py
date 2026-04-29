@@ -160,13 +160,16 @@ class SummaryResponse(BaseModel):
 class UserStateResponse(BaseModel):
     """User reading state for a paper."""
 
-    status: str = "new"
+    status: Literal["new", "reading", "read"] = "new"
+    saved: bool = False
+    dismissed: bool = False
     starred: bool = False
     archived: bool = False
     preference: Literal["none", "up", "down"] = "none"
     rating: int | None = None
     user_notes: str | None = None
     flagged: bool = False
+    updated_at: datetime | None = None  # null for users who never interacted
 
 
 class UserStateUpsert(BaseModel):
@@ -551,3 +554,53 @@ class PapersByStatusItem(BaseModel):
 
     status: str
     count: int
+
+
+# --- Paper Lifecycle Action Models ---
+
+
+class SaveRequest(BaseModel):
+    """Body for POST /api/papers/{paper_id}/save."""
+
+    star: bool = False  # Save & Star variant
+
+
+class DismissRequest(BaseModel):
+    """Body for POST /api/papers/{paper_id}/dismiss."""
+
+    also_zotero: bool = False  # contract §4.5; today no-op until zotero.remove handler
+
+
+class HardDeleteRequest(BaseModel):
+    """Body for DELETE /api/papers/{paper_id} (hard delete)."""
+
+    confirm_title: str  # safety — must match paper.title
+    also_zotero: bool = False
+
+
+class BulkActionRequest(BaseModel):
+    """Body for POST /api/papers/bulk-action."""
+
+    paper_ids: list[int] = Field(min_length=1, max_length=500)
+    action: Literal[
+        "save",
+        "unsave",
+        "dismiss",
+        "archive",
+        "unarchive",
+        "mark_read",
+        "star",
+        "unstar",
+    ]
+
+
+class FeedCountsResponse(BaseModel):
+    """Response for GET /api/papers/feed-counts."""
+
+    inbox: int
+    library: int
+    starred: int
+    archived: int
+    reading: int
+    trash: int
+    all_active: int

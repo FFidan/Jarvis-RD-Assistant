@@ -124,7 +124,7 @@ async def upsert_user_state(
                     (paper_id, user_id, status, starred, archived,
                      preference, rating, user_notes, flagged)
                 VALUES ($1, $2, $3, COALESCE($4, FALSE), COALESCE($5, FALSE),
-                        COALESCE($6, 'none'), $7, $8, $9)
+                        COALESCE($6, 'none'), $7, $8, COALESCE($9, FALSE))
                 ON CONFLICT (paper_id, user_id) DO UPDATE SET
                     status     = COALESCE($3, paper_user_state.status),
                     starred    = COALESCE($4, paper_user_state.starred),
@@ -172,10 +172,10 @@ async def upsert_user_state(
 
     return UserStateResponse(
         status=row["status"],
-        starred=row["starred"],
-        archived=row["archived"],
-        preference=row["preference"],
+        starred=bool(row["starred"]),
+        archived=bool(row["archived"]),
+        preference=row["preference"] or "none",
         rating=row["rating"],
         user_notes=row["user_notes"],
-        flagged=row["flagged"],
+        flagged=bool(row["flagged"]),
     )

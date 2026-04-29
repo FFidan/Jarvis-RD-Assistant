@@ -156,7 +156,9 @@ async def test_main_ignores_unverified_findings_and_reports_metrics(monkeypatch,
 
     monkeypatch.setattr(module.asyncpg, "create_pool", AsyncMock(return_value=pool))
     monkeypatch.setattr(module, "AsyncQdrantClient", MagicMock(return_value=qdrant))
-    monkeypatch.setattr(module.httpx, "AsyncClient", MagicMock(return_value=_async_client_cm(http_client)))
+    monkeypatch.setattr(
+        module.httpx, "AsyncClient", MagicMock(return_value=_async_client_cm(http_client))
+    )
     monkeypatch.setattr(module, "embed_text", AsyncMock(side_effect=[[0.1], [0.2]]))
     monkeypatch.setattr(
         module,
@@ -208,7 +210,9 @@ async def test_main_drops_failed_findings_from_denominator(monkeypatch, capsys):
     monkeypatch.setattr(
         module,
         "search_qdrant",
-        AsyncMock(return_value=[{"paper_id": 301, "chunk_index": 1, "score": 0.95, "content": "ok"}]),
+        AsyncMock(
+            return_value=[{"paper_id": 301, "chunk_index": 1, "score": 0.95, "content": "ok"}]
+        ),
     )
 
     await module.main()

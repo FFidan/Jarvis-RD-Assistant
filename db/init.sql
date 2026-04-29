@@ -247,7 +247,7 @@ CREATE INDEX IF NOT EXISTS idx_paper_contradictions_user ON paper_contradictions
 CREATE TABLE paper_user_state (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE,
-    status          VARCHAR(20) DEFAULT 'new' CHECK (status IN ('new', 'reading', 'read', 'archived', 'starred')),
+    status          VARCHAR(20) DEFAULT 'new' CHECK (status IN ('new', 'reading', 'read')),
     starred         BOOLEAN NOT NULL DEFAULT FALSE,
     archived        BOOLEAN NOT NULL DEFAULT FALSE,
     preference      VARCHAR(10) NOT NULL DEFAULT 'none' CHECK (preference IN ('none', 'up', 'down')),
@@ -256,7 +256,10 @@ CREATE TABLE paper_user_state (
     flagged         BOOLEAN DEFAULT FALSE,
     notified_at     TIMESTAMPTZ,
     read_at         TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    saved           BOOLEAN NOT NULL DEFAULT FALSE,
+    dismissed       BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, star/archive flags, notes, rating, preference, flag.';
@@ -268,11 +271,18 @@ CREATE INDEX IF NOT EXISTS idx_paper_user_state_user ON paper_user_state(user_id
 ALTER TABLE paper_user_state
     ADD CONSTRAINT paper_user_state_paper_id_user_id_key
     UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
-COMMENT ON COLUMN paper_user_state.status IS 'Reading state. Legacy archived/starred values remain accepted for compatibility.';
+COMMENT ON COLUMN paper_user_state.status IS 'Reading state: new, reading, read. Legacy archived/starred values removed in migration 046.';
 COMMENT ON COLUMN paper_user_state.starred IS 'Per-user saved/bookmarked flag independent from reading status.';
 COMMENT ON COLUMN paper_user_state.archived IS 'Per-user archive flag independent from reading status.';
 COMMENT ON COLUMN paper_user_state.preference IS 'Current per-user paper preference: none, up, or down.';
 COMMENT ON COLUMN paper_user_state.flagged IS 'User flagged this summary as potentially inaccurate.';
+COMMENT ON COLUMN paper_user_state.saved IS 'Triage axis: user has explicitly saved this paper for later attention.';
+COMMENT ON COLUMN paper_user_state.dismissed IS 'Triage axis: user dismissed this paper from their feed.';
+-- Migration 046: updated_at trigger (set_updated_at function defined in migration 042).
+DROP TRIGGER IF EXISTS set_updated_at_paper_user_state ON paper_user_state;
+CREATE TRIGGER set_updated_at_paper_user_state
+    BEFORE UPDATE ON paper_user_state
+    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Paper recommendations (from migration 017)
 CREATE TABLE IF NOT EXISTS paper_recommendations (

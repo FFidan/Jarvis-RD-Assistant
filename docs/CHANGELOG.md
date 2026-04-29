@@ -4,6 +4,9 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ## [Unreleased]
 
+### Behavior
+- **Starred papers remain eligible for re-recommendation** (Sprint 7 B4). Pre-migration-044, `_filter_unread` excluded `status IN ('read','archived','starred')` from the unread candidate pool. Post-migration-044, `archived` is the explicit dismiss signal; starring is treated as a *positive* signal and no longer disqualifies a paper from future ranking. Read and archived papers continue to be filtered out.
+
 ### Added
 - **Unified Async Job System** (migration 023): `jobs` table, `jarvis_common/jobs.py` module, REST endpoints (`POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` SSE, `POST /api/jobs/{id}/cancel`), frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toast notifications. Pulse generate, Paper process, Paper analyze, Generate cards (single + batch) migrated.
 - **Global Pomodoro timer** in the TopBar — visible on every page when a session is active, hidden when idle. Click to navigate back to My Day.

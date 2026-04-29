@@ -255,12 +255,12 @@ async def get_paper_detail(
     user_state = (
         UserStateResponse(
             status=user_state_row["status"],
-            starred=user_state_row.get("starred", False),
-            archived=user_state_row.get("archived", False),
-            preference=user_state_row.get("preference", "none"),
+            starred=bool(user_state_row.get("starred")),
+            archived=bool(user_state_row.get("archived")),
+            preference=user_state_row.get("preference") or "none",
             rating=user_state_row["rating"],
             user_notes=user_state_row["user_notes"],
-            flagged=user_state_row["flagged"],
+            flagged=bool(user_state_row["flagged"]),
         )
         if user_state_row
         else None
