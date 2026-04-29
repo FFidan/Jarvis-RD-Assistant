@@ -843,9 +843,13 @@ async def bulk_action_papers(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for paper_id in body.paper_ids:
+                # Nested asyncpg transaction = SAVEPOINT — failure of one paper
+                # rolls back only its savepoint, leaving the outer transaction
+                # alive so subsequent papers can still commit.
                 try:
-                    await assert_paper_ownership(conn, paper_id, user_id)
-                    await _apply_bulk_action(conn, paper_id, user_id, body.action)
+                    async with conn.transaction():
+                        await assert_paper_ownership(conn, paper_id, user_id)
+                        await _apply_bulk_action(conn, paper_id, user_id, body.action)
                     succeeded.append(paper_id)
                 except Exception as exc:  # noqa: BLE001
                     failed.append({"paper_id": paper_id, "error": str(exc)})

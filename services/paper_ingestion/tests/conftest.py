@@ -333,3 +333,84 @@ def fake_llm_score_response(
             "reasoning": reasoning,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. Database pool fixture for integration tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+async def test_db_pool(live_pg_dsn):
+    """Provide a real asyncpg pool connected to the live PostgreSQL fixture.
+
+    Runs migrations and creates all schema tables before each test,
+    then clears them afterward.
+    """
+    from pathlib import Path
+
+    import asyncpg
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=5)
+    assert pool is not None
+
+    # Apply initial schema
+    # db/init.sql is at repo root, not under services/
+    db_dir = Path(__file__).parent.parent.parent.parent / "db"
+    init_sql = (db_dir / "init.sql").read_text()
+
+    async with pool.acquire() as conn:
+        # Split init.sql by semicolons and execute statement by statement
+        # This prevents transaction abort if one statement fails
+        if init_sql.strip():
+            statements = [s.strip() for s in init_sql.split(";") if s.strip()]
+            for stmt in statements:
+                try:
+                    await conn.execute(stmt)
+                except Exception:
+                    # Some statements may fail if objects already exist
+                    pass
+
+        # Apply migrations to set up schema
+        migrations_dir = db_dir / "migrations"
+        migration_files = sorted(migrations_dir.glob("*.sql"))
+
+        for mig_file in migration_files:
+            sql = mig_file.read_text()
+            statements = [s.strip() for s in sql.split(";") if s.strip()]
+            for stmt in statements:
+                try:
+                    await conn.execute(stmt)
+                except Exception:
+                    # Migrations may have already been applied; skip on error
+                    pass
+
+    yield pool
+
+    # Clean up: drop all tables (reverse order to respect FKs)
+    tables_to_drop = [
+        "recommendations",
+        "pulse_ratings",
+        "pulse_cards",
+        "pulse_decks",
+        "pdf_resolutions",
+        "paper_embedding_chunks",
+        "entity_mentions",
+        "entity_types",
+        "entities",
+        "citations",
+        "paper_user_state",
+        "papers",
+        "learning_jobs",
+        "learning_job_batches",
+        "user_config",
+        "projects",
+        "topics",
+        "telegram_conversations",
+    ]
+
+    async with pool.acquire() as conn:
+        for table in tables_to_drop:
+            await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
+
+    await pool.close()

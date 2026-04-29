@@ -99,6 +99,8 @@ export interface FeedPaper extends Paper {
   confidence: Confidence | null;
   /** @deprecated post-046; use user_state booleans (starred, archived, etc.) */
   user_status: string | null;
+  /** post-046 structured state; preferred over user_status */
+  user_state?: UserState | null;
   starred?: boolean;
   archived?: boolean;
   preference?: 'none' | 'up' | 'down';

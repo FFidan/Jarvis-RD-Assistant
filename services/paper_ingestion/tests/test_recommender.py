@@ -184,6 +184,23 @@ class TestFilterUnread:
         assert "archived" in sql
         assert "starred" not in sql, "starred state must not gate recommendation eligibility"
 
+    @pytest.mark.asyncio
+    async def test_filter_unread_excludes_dismissed(self, test_db_pool):
+        """Sprint 8 B3.3: dismissed papers are excluded from candidate set."""
+        # Insert a paper
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-dismiss-1', 'arxiv', 'T', '{}', 'http://x') RETURNING id"
+            )
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, status, dismissed) "
+                "VALUES ($1, NULL, 'new', TRUE)",
+                paper_id,
+            )
+            result = await _filter_unread(conn, [paper_id])
+            assert paper_id not in result, "Dismissed papers must be excluded from candidates"
+
 
 # ===========================================================================
 # 4. refresh_recommendations — integration (fully mocked DB + embedder)

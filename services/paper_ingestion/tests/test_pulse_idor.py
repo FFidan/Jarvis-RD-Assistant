@@ -236,15 +236,16 @@ def _capture_rate_calls(rating: str) -> list:
 
 
 def test_rate_card_save_does_not_overwrite_preference():
-    # rating='save' must bind preference='none' so the ON CONFLICT branch
-    # preserves any prior 'down'.
+    # rating='save' now maps to preference='up' (B1.5 lifecycle semantics).
+    # The ON CONFLICT SQL still uses EXCLUDED IS DISTINCT FROM guards so that
+    # a later 'open' (preference='none') cannot clobber an existing 'up'.
     calls = _capture_rate_calls("save")
     assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
     state_call = calls[1]
     sql = state_call.args[0]
     preference_param = state_call.args[4]
-    assert preference_param == "none"
-    assert "WHEN EXCLUDED.preference = 'none' THEN paper_user_state.preference" in sql
+    assert preference_param == "up"
+    assert "EXCLUDED.preference IS DISTINCT FROM 'none'" in sql
 
 
 def test_rate_card_open_does_not_set_thumbs_up():
@@ -268,3 +269,88 @@ def test_rate_card_down_records_thumbs_down_preference():
 def test_rate_card_dismiss_records_thumbs_down_preference():
     calls = _capture_rate_calls("dismiss")
     assert calls[1].args[4] == "down"
+
+
+# ---------------------------------------------------------------------------
+# B3.2: rate_card lifecycle semantics (WS8)
+# ---------------------------------------------------------------------------
+
+
+def test_rate_card_save_writes_saved_starred_pref_up():
+    """rating='save' must bind starred=True, saved=True, preference='up'.
+
+    The paper_user_state INSERT call (calls[1]) must carry the correct
+    positional args so that on first-visit the row is written correctly and
+    on conflict the EXCLUDED IS DISTINCT FROM guards promote each field.
+
+    Positional layout of the paper_user_state execute call:
+      args[0] = SQL, args[1] = paper_id, args[2] = user_id,
+      args[3] = starred, args[4] = preference, args[5] = saved, args[6] = dismissed
+    """
+    calls = _capture_rate_calls("save")
+    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
+    state_args = calls[1].args
+    assert state_args[3] is True, f"starred must be True for 'save', got {state_args[3]!r}"
+    assert state_args[4] == "up", f"preference must be 'up' for 'save', got {state_args[4]!r}"
+    assert state_args[5] is True, f"saved must be True for 'save', got {state_args[5]!r}"
+
+
+def test_rate_card_dismiss_writes_dismissed_pref_down_preserves_saved():
+    """rating='dismiss' must bind dismissed=True, preference='down', saved=False.
+
+    The saved=False bound value triggers the EXCLUDED IS DISTINCT FROM FALSE
+    guard in the ON CONFLICT clause — when the existing row has saved=True the
+    SQL preserves it.  This test verifies that the bound parameter for saved is
+    False (the preserve-safe default) so the SQL's CASE WHEN guard can do its job.
+
+    Positional layout: args[3]=starred, args[4]=preference, args[5]=saved, args[6]=dismissed
+    """
+    calls = _capture_rate_calls("dismiss")
+    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
+    state_args = calls[1].args
+    sql: str = state_args[0]
+    assert state_args[4] == "down", (
+        f"preference must be 'down' for 'dismiss', got {state_args[4]!r}"
+    )
+    assert state_args[6] is True, f"dismissed must be True for 'dismiss', got {state_args[6]!r}"
+    # saved bound as False so the ON CONFLICT CASE WHEN preserves an existing True
+    assert state_args[5] is False, (
+        f"saved must be False (preserve-safe) for 'dismiss', got {state_args[5]!r}"
+    )
+    # Confirm the SQL has the IS DISTINCT FROM guard that makes preservation work
+    assert "EXCLUDED.saved IS DISTINCT FROM FALSE" in sql, (
+        f"Expected EXCLUDED.saved IS DISTINCT FROM FALSE in SQL:\n{sql!r}"
+    )
+
+
+def test_rate_card_open_is_noop_on_state():
+    """rating='open' is a navigation event — no destructive state mutation.
+
+    The paper_user_state INSERT must bind all fields to their neutral defaults:
+    starred=False, preference='none', saved=False, dismissed=False.
+    Combined with the ON CONFLICT EXCLUDED IS DISTINCT FROM guards this means
+    no existing field value can be overwritten by an 'open' event.
+    """
+    calls = _capture_rate_calls("open")
+    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
+    state_args = calls[1].args
+    sql: str = state_args[0]
+    assert state_args[3] is False, f"starred must be False for 'open' (noop), got {state_args[3]!r}"
+    assert state_args[4] == "none", (
+        f"preference must be 'none' for 'open' (noop), got {state_args[4]!r}"
+    )
+    assert state_args[5] is False, f"saved must be False for 'open' (noop), got {state_args[5]!r}"
+    assert state_args[6] is False, (
+        f"dismissed must be False for 'open' (noop), got {state_args[6]!r}"
+    )
+    # Confirm all four IS DISTINCT FROM guards are present so no field is clobbered
+    assert "EXCLUDED.preference IS DISTINCT FROM 'none'" in sql, (
+        "Missing preference no-clobber guard in SQL"
+    )
+    assert "EXCLUDED.starred IS DISTINCT FROM FALSE" in sql, (
+        "Missing starred no-clobber guard in SQL"
+    )
+    assert "EXCLUDED.saved IS DISTINCT FROM FALSE" in sql, "Missing saved no-clobber guard in SQL"
+    assert "EXCLUDED.dismissed IS DISTINCT FROM FALSE" in sql, (
+        "Missing dismissed no-clobber guard in SQL"
+    )

@@ -159,7 +159,7 @@ export function PaperDetailPage() {
               <button onClick={() => setPaperDetailNoteDismissed(true)} aria-label="Dismiss" className="text-muted-foreground hover:text-foreground">×</button>
             </div>
           )}
-          <PaperHeader paper={paper} isStarred={user_state?.starred === true} />
+          <PaperHeader paper={paper} isStarred={user_state?.starred === true} userState={user_state} />
 
           <Tabs defaultValue="summary">
             <TabsList className="flex-wrap">
