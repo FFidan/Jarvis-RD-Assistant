@@ -155,8 +155,10 @@ async def _simple_digest(
                      WHERE pus.paper_id = p.id
                        AND (
                            COALESCE(pus.starred, FALSE)
-                           OR pus.status IN ('starred', 'reading', 'read')
+                           OR pus.status IN ('reading', 'read')
                        )
+                       AND COALESCE(pus.archived, FALSE) = FALSE
+                       AND COALESCE(pus.dismissed, FALSE) = FALSE
                  )
                  OR EXISTS (
                      SELECT 1 FROM pulse_ratings pr
@@ -198,6 +200,11 @@ async def _simple_digest(
         if len(papers) > 5:
             lines.append(f"   <i>... and {len(papers) - 5} more</i>")
 
+    lines.append(
+        "\n\U0001f4f1 "
+        '<a href="/feed?surface=inbox&amp;filter=pulse-this-week">'
+        "View in JARVIS inbox</a>"
+    )
     try:
         await _send_chunked(bot, owner, lines)
     except Exception:
@@ -246,6 +253,11 @@ async def run_paper_digest(
     if digest and digest.get("topics"):
         text = format_weekly_digest(digest)
         lines = text.split("\n")
+        lines.append(
+            "\n\U0001f4f1 "
+            '<a href="/feed?surface=inbox&amp;filter=pulse-this-week">'
+            "View in JARVIS inbox</a>"
+        )
         await _send_chunked(bot, owner, lines)
         logger.info(
             "LLM digest sent: %d papers in %d topics",

@@ -1,4 +1,4 @@
-"""Paper-domain command handlers: /papers, /stats, /briefing, /next."""
+"""Paper-domain command handlers: /papers, /stats, /briefing, /next, /inbox."""
 
 from __future__ import annotations
 
@@ -188,3 +188,67 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
     else:
         await update.message.reply_text("No pending recommendations found.", parse_mode="HTML")
+
+
+def _inbox_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
+    """Build inline keyboard for an inbox paper card (Save / Dismiss / Read more)."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
+                InlineKeyboardButton("🗑 Dismiss", callback_data=f"paper:dismiss:{paper_id}"),
+                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
+            ]
+        ]
+    )
+
+
+@auth_required
+@rate_limit(max_calls=5, window_seconds=60)
+async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``/inbox`` — show top 10 unread inbox papers for triage."""
+    if update.message is None:
+        return
+    http = get_http(context)
+    config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
+    try:
+        resp = await http.get(
+            f"{config.paper_ingestion_url}/api/papers/feed",
+            params={"view": "inbox", "limit": 10},
+            headers=headers,
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception:
+        logger.exception("Failed to fetch inbox feed")
+        await update.message.reply_text(
+            "Failed to load inbox. Please try again later.",
+            parse_mode="HTML",
+        )
+        return
+
+    if isinstance(data, list):
+        papers = data
+    elif isinstance(data, dict):
+        papers = data.get("papers", [])
+    else:
+        papers = []
+    if not papers:
+        await update.message.reply_text("📭 Inbox is empty — nothing to triage.", parse_mode="HTML")
+        return
+
+    for paper in papers[:10]:
+        paper_id = paper.get("id")
+        if not paper_id:
+            continue
+        text = format_paper_card(paper)
+        await update.message.reply_text(
+            text,
+            parse_mode="HTML",
+            reply_markup=_inbox_keyboard(paper_id),
+            disable_web_page_preview=True,
+        )

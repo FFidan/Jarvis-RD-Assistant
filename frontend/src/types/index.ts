@@ -10,6 +10,7 @@
 
 export type SourceType = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed' | 'local';
 
+/** @deprecated post-046: 'archived' and 'starred' are no longer valid status values; use user_state booleans instead */
 export type PaperStatus = 'new' | 'reading' | 'read' | 'archived' | 'starred';
 
 export type Confidence = 'HIGH' | 'MEDIUM' | 'LOW';
@@ -96,6 +97,7 @@ export interface FeedPaper extends Paper {
   summary_brief: string | null;
   tldr: string | null;
   confidence: Confidence | null;
+  /** @deprecated post-046; use user_state booleans (starred, archived, etc.) */
   user_status: string | null;
   starred?: boolean;
   archived?: boolean;
@@ -655,13 +657,44 @@ export interface SearchPreviewResponse {
 // --- User State ---
 
 export interface UserState {
-  status: string;
-  starred?: boolean;
-  archived?: boolean;
-  preference?: 'none' | 'up' | 'down';
+  status: 'new' | 'reading' | 'read';
+  saved: boolean;
+  dismissed: boolean;
+  starred: boolean;
+  archived: boolean;
+  preference: 'none' | 'up' | 'down';
   rating: number | null;
   user_notes: string | null;
   flagged: boolean;
+  updated_at: string | null;
+}
+
+/** API response shape from PUT /api/papers/{id}/user-state (post-migration-046). */
+export interface UserStateResponse {
+  status: 'new' | 'reading' | 'read';
+  saved: boolean;
+  dismissed: boolean;
+  starred: boolean;
+  archived: boolean;
+  preference: 'none' | 'up' | 'down';
+  rating: number | null;
+  user_notes: string | null;
+  flagged: boolean;
+  updated_at: string | null;
+}
+
+export type SurfaceView = 'inbox' | 'library' | 'starred' | 'archived' | 'reading' | 'trash' | 'search' | 'ask';
+
+export type BulkAction = 'save' | 'unsave' | 'dismiss' | 'archive' | 'unarchive' | 'mark_read' | 'star' | 'unstar';
+
+export interface FeedCountsResponse {
+  inbox: number;
+  library: number;
+  starred: number;
+  archived: number;
+  reading: number;
+  trash: number;
+  all_active: number;
 }
 
 // --- Citation Relation ---

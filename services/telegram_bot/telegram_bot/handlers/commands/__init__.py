@@ -8,6 +8,7 @@ that existing import paths keep working:
 
 from telegram_bot.handlers.commands.paper_commands import (
     briefing_command,
+    inbox_command,
     next_command,
     papers_command,
     stats_command,
@@ -34,6 +35,7 @@ __all__ = [
     "stats_command",
     "briefing_command",
     "next_command",
+    "inbox_command",
     # project domain
     "projects_command",
     "newproject_command",

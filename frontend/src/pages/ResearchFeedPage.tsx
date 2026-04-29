@@ -1,97 +1,114 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ApiError,
   searchPreview,
   batchSavePapers,
-  fetchPulseHistory,
   fetchSources,
+  useFeedCounts,
 } from '@/lib/api';
 import type { SearchFilters } from '@/lib/api';
 import type {
-  PulseDeck as PulseDeckType,
   SearchPreviewResult,
   SearchPreviewSourceError,
   SourceConfig,
 } from '@/types';
+import type { SurfaceView } from '@/types';
 import { toast } from 'sonner';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 import { StreamingChat } from '@/components/chat/StreamingChat';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
 import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
-import { NewTab } from '@/components/feed/NewTab';
-import { LibraryTab } from '@/components/feed/LibraryTab';
-import { PulseDeck } from '@/components/my-day/PulseDeck';
+import { FeedView } from '@/components/feed/FeedView';
+import { CountsBadge } from '@/components/feed/CountsBadge';
 import { BookOpen } from 'lucide-react';
 
-const VALID_TABS = new Set(['library', 'inbox', 'search', 'ask', 'pulse']);
+// ─── surface definitions ────────────────────────────────────────────────────
 
-function TabInfo({ children }: { children: React.ReactNode }) {
+const SURFACES: { value: SurfaceView; label: string; countsKey?: keyof FeedCounts }[] = [
+  { value: 'inbox', label: 'Inbox', countsKey: 'inbox' },
+  { value: 'library', label: 'Library', countsKey: 'library' },
+  { value: 'search', label: 'Search' },
+  { value: 'ask', label: 'Ask' },
+  { value: 'trash', label: 'Trash', countsKey: 'trash' },
+];
+
+type LibraryFilter = 'starred' | 'archived' | 'reading';
+
+const LIBRARY_FILTERS: { value: LibraryFilter; label: string }[] = [
+  { value: 'starred', label: '⭐ Starred' },
+  { value: 'archived', label: '📁 Archived' },
+  { value: 'reading', label: 'Reading' },
+];
+
+// Loose type for counts data — the real shape comes from B2.1
+type FeedCounts = {
+  inbox?: number;
+  library?: number;
+  trash?: number;
+  [key: string]: number | undefined;
+};
+
+// ─── helper ─────────────────────────────────────────────────────────────────
+
+function SectionInfo({ children }: { children: React.ReactNode }) {
   return <p className="text-sm text-muted-foreground mb-4">{children}</p>;
 }
 
+// ─── main component ──────────────────────────────────────────────────────────
+
 export function ResearchFeedPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tabParam = searchParams.get('tab');
+
+  const rawSurface = searchParams.get('surface');
+  const rawFilter = searchParams.get('filter');
+
+  const surface = (rawSurface as SurfaceView | null) ?? 'inbox';
+  const filter = rawFilter as 'starred' | 'archived' | 'reading' | 'pulse-this-week' | null;
+
+  const { data: counts } = useFeedCounts();
+
+  // ── default-landing redirect ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!searchParams.get('surface') && counts) {
+      const target = (counts as FeedCounts).inbox ?? 0 > 0 ? 'inbox' : 'library';
+      setSearchParams({ surface: target }, { replace: true });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [counts]);
+
+  // ── legacy ?tab=pulse redirect → /my-day ───────────────────────────────────
+  useEffect(() => {
+    if (searchParams.get('tab') === 'pulse') {
+      navigate('/my-day', { replace: true });
+    }
+  }, [searchParams, navigate]);
+
+  // ── search/save state (preserved from original) ───────────────────────────
   const [previewResults, setPreviewResults] = useState<SearchPreviewResult[]>([]);
   const [sourceErrors, setSourceErrors] = useState<Record<string, SearchPreviewSourceError>>({});
-  const [activeTab, setActiveTab] = useState(
-    tabParam && VALID_TABS.has(tabParam) ? tabParam : 'library',
-  );
   const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([]);
   const queryClient = useQueryClient();
 
-  // Load enabled external sources to drive the checkbox group
   const { data: allSources } = useQuery<SourceConfig[]>({
     queryKey: ['sources'],
     queryFn: fetchSources,
   });
 
-  // Derive the list of searchable (non-local) enabled sources
   const externalSources = useMemo(
     () => (allSources ?? []).filter((s) => s.source_type !== 'local' && s.enabled),
     [allSources],
   );
 
-  // Initialise selectedSourceTypes once sources load (all checked by default)
   useEffect(() => {
     if (externalSources.length > 0 && selectedSourceTypes.length === 0) {
       setSelectedSourceTypes(externalSources.map((s) => s.source_type));
     }
   }, [externalSources]);
-
-  // Sync tab → URL when user clicks a tab
-  const handleTabChange = useCallback(
-    (value: string) => {
-      setActiveTab(value);
-      if (value === 'library') {
-        // Don't pollute URL with default tab
-        setSearchParams((prev) => {
-          prev.delete('tab');
-          return prev;
-        });
-      } else {
-        setSearchParams((prev) => {
-          prev.set('tab', value);
-          return prev;
-        });
-      }
-    },
-    [setSearchParams],
-  );
-
-  // When the URL ?tab param changes externally (e.g. deep-link navigation),
-  // update active tab
-  useEffect(() => {
-    const t = searchParams.get('tab');
-    if (t && VALID_TABS.has(t) && t !== activeTab) {
-      setActiveTab(t);
-    }
-  }, [searchParams]); // intentionally omit activeTab to avoid loop
 
   const searchMutation = useMutation({
     mutationFn: ({
@@ -121,14 +138,10 @@ export function ResearchFeedPage() {
       const savedByExternalId = new Map(
         data.map((paper) => [paper.external_id, paper.id] as const),
       );
-
       setPreviewResults((current) =>
         current.map((paper) => {
           const paperId = savedByExternalId.get(paper.external_id);
-          if (!paperId) {
-            return paper;
-          }
-
+          if (!paperId) return paper;
           return {
             ...paper,
             library_match: paper.library_match
@@ -155,14 +168,12 @@ export function ResearchFeedPage() {
     },
   });
 
-  const handleSearch = useCallback((
-    query: string,
-    sourceTypes: string[],
-    maxResults: number,
-    filters: SearchFilters,
-  ) => {
-    searchMutation.mutate({ query, sourceTypes, maxResults, filters });
-  }, [searchMutation]);
+  const handleSearch = useCallback(
+    (query: string, sourceTypes: string[], maxResults: number, filters: SearchFilters) => {
+      searchMutation.mutate({ query, sourceTypes, maxResults, filters });
+    },
+    [searchMutation],
+  );
 
   function handleSave(papers: SearchPreviewResult[]) {
     saveMutation.mutate(papers);
@@ -182,167 +193,204 @@ export function ResearchFeedPage() {
           : 'Search failed. Please try again.'
       : null;
 
+  // ── navigation helpers ────────────────────────────────────────────────────
+
+  function setSurface(s: SurfaceView) {
+    setSearchParams((prev) => {
+      prev.set('surface', s);
+      prev.delete('filter');
+      return prev;
+    });
+  }
+
+  function setLibraryFilter(f: LibraryFilter | null) {
+    setSearchParams((prev) => {
+      if (f) {
+        prev.set('filter', f);
+      } else {
+        prev.delete('filter');
+      }
+      return prev;
+    });
+  }
+
+  const feedCounts = counts as FeedCounts | undefined;
+
+  // ─── render ───────────────────────────────────────────────────────────────
+
   return (
     <div className="space-y-6">
       <h1 className="flex items-center gap-2 text-3xl font-bold">
         <BookOpen className="h-8 w-8" />
         Research Feed
       </h1>
-      <p className="text-muted-foreground text-sm">Discover and manage research papers from your configured sources</p>
+      <p className="text-muted-foreground text-sm">
+        Discover and manage research papers from your configured sources
+      </p>
 
-      <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList>
-          <TabsTrigger value="library">Library</TabsTrigger>
-          <TabsTrigger value="inbox">Inbox</TabsTrigger>
-          <TabsTrigger value="search">Search</TabsTrigger>
-          <TabsTrigger value="ask">Ask</TabsTrigger>
-          <TabsTrigger value="pulse">Pulse</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="library">
-          <TabInfo>Browse, search, and filter all papers in your library.</TabInfo>
-          <LibraryTab />
-        </TabsContent>
-
-        <TabsContent value="inbox">
-          <TabInfo>Unread papers from your configured sources — mark as read, view, or filter.</TabInfo>
-          <NewTab />
-        </TabsContent>
-
-        <TabsContent value="search">
-          <div className="space-y-4">
-            <TabInfo>Search external databases live and save new papers to your library.</TabInfo>
-            <div>
-              <h2 className="text-sm font-medium">Discover New Papers</h2>
-              <p className="text-xs text-muted-foreground mb-2">Search across your enabled sources — results can be added to your library.</p>
-            </div>
-
-            {/* Multi-source checkbox group */}
-            {externalSources.length > 0 && (
-              <div className="space-y-1">
-                <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
-                  <span className="text-xs font-medium text-muted-foreground">Sources:</span>
-                  {externalSources.map((source) => (
-                    <label key={source.source_type} className="flex items-center gap-1.5 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
-                        checked={selectedSourceTypes.includes(source.source_type)}
-                        onChange={(e) => {
-                          setSelectedSourceTypes((prev) =>
-                            e.target.checked
-                              ? [...prev, source.source_type]
-                              : prev.filter((t) => t !== source.source_type),
-                          );
-                        }}
-                      />
-                      <span className="text-sm">{SOURCE_LABELS[source.source_type] ?? source.source_type}</span>
-                    </label>
-                  ))}
-                </div>
-                {selectedSourceTypes.length === 0 && (
-                  <p className="text-xs text-destructive">Select at least one source</p>
-                )}
-              </div>
+      {/* ── Surface chips ─────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Surface navigation">
+        {SURFACES.map(({ value, label, countsKey }) => (
+          <button
+            key={value}
+            role="tab"
+            aria-selected={surface === value}
+            onClick={() => setSurface(value)}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors',
+              surface === value
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-muted-foreground hover:bg-muted/70',
             )}
-
-            <SearchBar
-              onSearch={handleSearch}
-              isLoading={searchMutation.isPending}
-              sourceTypes={selectedSourceTypes}
-            />
-            {searchErrorMessage && <p className="text-sm text-destructive">{searchErrorMessage}</p>}
-            <SearchSourceErrors sourceErrors={sourceErrors} />
-            {previewResults.length > 0 && (
-              <PreviewResults
-                papers={previewResults}
-                onSave={handleSave}
-                onClear={handleClearPreview}
-                isSaving={saveMutation.isPending}
-              />
+          >
+            {label}
+            {countsKey && feedCounts?.[countsKey] !== undefined && (
+              <CountsBadge count={feedCounts[countsKey]} />
             )}
-          </div>
-        </TabsContent>
-
-        <TabsContent value="ask" className="flex-1 flex flex-col mt-0">
-          <TabInfo>Ask AI questions answered from your indexed paper library.</TabInfo>
-          <div className="mb-3">
-            <h2 className="text-sm font-medium">Ask Questions</h2>
-            <p className="text-xs text-muted-foreground">Get answers synthesised from your entire library.</p>
-          </div>
-          <div className="flex-1 min-h-[400px]">
-            <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />
-          </div>
-        </TabsContent>
-
-        <TabsContent value="pulse">
-          <TabInfo>Your daily AI-curated research briefing and deck history.</TabInfo>
-          <div className="space-y-6">
-            <PulseDeck />
-            <div className="border-t pt-4">
-              <h3 className="text-sm font-medium mb-3">Pulse History</h3>
-              <PulseHistoryTab />
-            </div>
-          </div>
-        </TabsContent>
-      </Tabs>
-    </div>
-  );
-}
-
-function PulseHistoryTab() {
-  const { data, isLoading, isError, error } = useQuery<PulseDeckType[]>({
-    queryKey: ['pulse-history', 30],
-    queryFn: () => fetchPulseHistory(30),
-  });
-
-  if (isLoading) {
-    return (
-      <div className="space-y-3">
-        <Skeleton className="h-6 w-48" />
-        <Skeleton className="h-16 w-full" />
-        <Skeleton className="h-16 w-full" />
+          </button>
+        ))}
       </div>
-    );
-  }
 
-  if (isError) {
-    return (
-      <p className="text-destructive text-sm">
-        Failed to load Pulse history:{' '}
-        {error instanceof Error ? error.message : 'unknown error'}
-      </p>
-    );
-  }
+      {/* ── Library sub-chips ─────────────────────────────────────────────── */}
+      {surface === 'library' && (
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Library filter">
+          <button
+            role="tab"
+            aria-selected={!filter}
+            onClick={() => setLibraryFilter(null)}
+            className={cn(
+              'inline-flex items-center rounded-full px-3 py-1 text-xs font-medium transition-colors',
+              !filter
+                ? 'bg-secondary text-secondary-foreground'
+                : 'bg-muted/60 text-muted-foreground hover:bg-muted',
+            )}
+          >
+            All
+          </button>
+          {LIBRARY_FILTERS.map(({ value, label }) => (
+            <button
+              key={value}
+              role="tab"
+              aria-selected={filter === value}
+              onClick={() => setLibraryFilter(filter === value ? null : value)}
+              className={cn(
+                'inline-flex items-center rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                filter === value
+                  ? 'bg-secondary text-secondary-foreground'
+                  : 'bg-muted/60 text-muted-foreground hover:bg-muted',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
-  if (!data || data.length === 0) {
-    return (
-      <p className="text-muted-foreground py-8 text-center text-sm">
-        No past Pulse decks yet. Come back after your morning deck has been
-        generated.
-      </p>
-    );
-  }
+      {/* ── Surface content ───────────────────────────────────────────────── */}
 
-  return (
-    <ul className="space-y-2">
-      {data.map((deck) => (
-        <li
-          key={deck.deck_id}
-          className="hover:bg-muted/30 flex items-center justify-between rounded-lg border p-3 transition-colors"
-        >
+      {/* Inbox */}
+      {surface === 'inbox' && (
+        <div>
+          <SectionInfo>Unread papers from your configured sources — mark as read, view, or filter.</SectionInfo>
+          <FeedView surface="inbox" filter={filter} />
+        </div>
+      )}
+
+      {/* Library */}
+      {surface === 'library' && (
+        <div>
+          <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
+          <FeedView surface="library" filter={filter} />
+        </div>
+      )}
+
+      {/* Trash */}
+      {surface === 'trash' && (
+        <div>
+          <SectionInfo>Papers you have archived or removed from your active library.</SectionInfo>
+          <FeedView surface="trash" filter={filter} />
+        </div>
+      )}
+
+      {/* Search */}
+      {surface === 'search' && (
+        <div className="space-y-4">
+          <SectionInfo>Search external databases live and save new papers to your library.</SectionInfo>
           <div>
-            <p className="font-medium">{deck.deck_date}</p>
-            <p className="text-muted-foreground text-xs">
-              {deck.card_count} papers · generated{' '}
-              {new Date(deck.generated_at).toLocaleString()}
+            <h2 className="text-sm font-medium">Discover New Papers</h2>
+            <p className="text-xs text-muted-foreground mb-2">
+              Search across your enabled sources — results can be added to your library.
             </p>
           </div>
-          <span className="text-muted-foreground text-xs italic">
-            read-only
-          </span>
-        </li>
-      ))}
-    </ul>
+
+          {externalSources.length > 0 && (
+            <div className="space-y-1">
+              <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
+                <span className="text-xs font-medium text-muted-foreground">Sources:</span>
+                {externalSources.map((source) => (
+                  <label
+                    key={source.source_type}
+                    className="flex items-center gap-1.5 cursor-pointer select-none"
+                  >
+                    <input
+                      type="checkbox"
+                      className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
+                      checked={selectedSourceTypes.includes(source.source_type)}
+                      onChange={(e) => {
+                        setSelectedSourceTypes((prev) =>
+                          e.target.checked
+                            ? [...prev, source.source_type]
+                            : prev.filter((t) => t !== source.source_type),
+                        );
+                      }}
+                    />
+                    <span className="text-sm">
+                      {SOURCE_LABELS[source.source_type] ?? source.source_type}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              {selectedSourceTypes.length === 0 && (
+                <p className="text-xs text-destructive">Select at least one source</p>
+              )}
+            </div>
+          )}
+
+          <SearchBar
+            onSearch={handleSearch}
+            isLoading={searchMutation.isPending}
+            sourceTypes={selectedSourceTypes}
+          />
+          {searchErrorMessage && (
+            <p className="text-sm text-destructive">{searchErrorMessage}</p>
+          )}
+          <SearchSourceErrors sourceErrors={sourceErrors} />
+          {previewResults.length > 0 && (
+            <PreviewResults
+              papers={previewResults}
+              onSave={handleSave}
+              onClear={handleClearPreview}
+              isSaving={saveMutation.isPending}
+            />
+          )}
+        </div>
+      )}
+
+      {/* Ask */}
+      {surface === 'ask' && (
+        <div className="flex flex-col">
+          <SectionInfo>Ask AI questions answered from your indexed paper library.</SectionInfo>
+          <div className="mb-3">
+            <h2 className="text-sm font-medium">Ask Questions</h2>
+            <p className="text-xs text-muted-foreground">
+              Get answers synthesised from your entire library.
+            </p>
+          </div>
+          <div className="min-h-[400px]">
+            <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

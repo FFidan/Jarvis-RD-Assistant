@@ -189,6 +189,9 @@ import type {
   TelegramPairing,
   TelegramPairingStatus,
   GenerateJobAccepted,
+  UserStateResponse,
+  FeedCountsResponse,
+  BulkAction,
 } from '@/types';
 
 // --- Dashboard ---
@@ -538,6 +541,36 @@ export const bookmarkPaper = (paperId: number) =>
 export const archivePaper = (paperId: number) =>
   apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/archive`, { method: 'PUT' });
 
+// --- Paper lifecycle mutations (WS8) ---
+
+export async function savePaper(paperId: number, opts?: { star?: boolean }): Promise<UserStateResponse> {
+  return apiFetch(`/api/papers/${paperId}/save`, { method: 'PUT', body: JSON.stringify({ star: opts?.star ?? false }) });
+}
+
+export async function unsavePaper(paperId: number): Promise<UserStateResponse> {
+  return apiFetch(`/api/papers/${paperId}/unsave`, { method: 'PUT' });
+}
+
+export async function dismissPaper(paperId: number, opts?: { also_zotero?: boolean }): Promise<UserStateResponse> {
+  return apiFetch(`/api/papers/${paperId}/dismiss`, { method: 'PUT', body: JSON.stringify({ also_zotero: opts?.also_zotero ?? false }) });
+}
+
+export async function restorePaper(paperId: number): Promise<UserStateResponse> {
+  return apiFetch(`/api/papers/${paperId}/restore`, { method: 'PUT' });
+}
+
+export async function hardDeletePaper(paperId: number, body: { confirm_title: string; also_zotero?: boolean }): Promise<{ deleted: number }> {
+  return apiFetch(`/api/papers/${paperId}`, { method: 'DELETE', body: JSON.stringify({ confirm_title: body.confirm_title, also_zotero: body.also_zotero ?? false }) });
+}
+
+export async function bulkAction(body: { paper_ids: number[]; action: BulkAction }): Promise<{ succeeded: number[]; failed: { paper_id: number; error: string }[] }> {
+  return apiFetch('/api/papers/bulk', { method: 'POST', body: JSON.stringify(body) });
+}
+
+export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
+  return apiFetch('/api/papers/feed/counts');
+}
+
 export const discoverPapers = (paperIds: number[], limit?: number) =>
   apiFetch<DiscoveryResult[]>('/api/discover', {
     method: 'POST',
@@ -883,4 +916,15 @@ export async function fetchSnapshot(paperId: number, page: number): Promise<stri
   const res = await apiFetchRaw(`/api/snapshots/${paperId}/${page}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+// --- React Query hooks ---
+import { useQuery } from '@tanstack/react-query';
+
+export function useFeedCounts() {
+  return useQuery({
+    queryKey: ['feed-counts'],
+    queryFn: fetchFeedCounts,
+    staleTime: 5_000,
+  });
 }

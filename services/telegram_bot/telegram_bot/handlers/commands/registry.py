@@ -6,6 +6,7 @@ from telegram.ext import Application, CommandHandler
 
 from telegram_bot.handlers.commands.paper_commands import (
     briefing_command,
+    inbox_command,
     next_command,
     papers_command,
     stats_command,
@@ -39,4 +40,5 @@ def register_command_handlers(app: Application) -> None:
     app.add_handler(CommandHandler("newproject", newproject_command))
     app.add_handler(CommandHandler("focus", focus_command))
     app.add_handler(CommandHandler("next", next_command))
+    app.add_handler(CommandHandler("inbox", inbox_command))
     app.add_handler(CommandHandler("pulse_now", pulse_now_command))
