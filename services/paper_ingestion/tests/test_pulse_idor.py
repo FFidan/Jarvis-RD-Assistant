@@ -190,19 +190,29 @@ def test_rate_card_deck_guard_filters_by_user_id():
 
 
 def test_rate_card_deck_guard_with_real_user_id():
-    """When user_id=7 is injected, $2 in the deck guard must be 7."""
+    """When user_id=7 is resolved, $2 in the deck guard must be 7.
+
+    rate_card calls current_user_id_or_none(request) directly (not via Depends),
+    so we patch it at the pulse router module level to inject the desired user_id.
+    """
+    from unittest.mock import AsyncMock, patch
+
     tc, pool, conn, app = _make_client(user_id_override=7)
 
     conn.fetchval.return_value = 1
     conn.execute.return_value = "INSERT 0 1"
 
-    try:
-        resp = tc.post("/api/pulse/rate", json={"paper_id": 99, "rating": "down"})
-    finally:
-        app.dependency_overrides.clear()
-        from paper_ingestion.deps import limiter
+    with patch(
+        "paper_ingestion.routers.pulse.current_user_id_or_none",
+        new=AsyncMock(return_value=7),
+    ):
+        try:
+            resp = tc.post("/api/pulse/rate", json={"paper_id": 99, "rating": "down"})
+        finally:
+            app.dependency_overrides.clear()
+            from paper_ingestion.deps import limiter
 
-        limiter.enabled = True
+            limiter.enabled = True
 
     assert resp.status_code == 200
 
@@ -215,155 +225,140 @@ def test_rate_card_deck_guard_with_real_user_id():
 
 
 # ---------------------------------------------------------------------------
-# Test 3: rate_card preference no-clobber (B3)
+# Test 3: rate_card per-rating helper dispatch (C3 — post-B4 redesign)
+#
+# rate_card now routes to helper functions in routers/_paper_helpers.py.
+# All tests patch at the routers.pulse module path.
 # ---------------------------------------------------------------------------
 
 
-def _capture_rate_calls(rating: str) -> list:
-    """Issue a rate_card POST and return the conn.execute await call list."""
-    tc, pool, conn, app = _make_client(user_id_override=None)
-    conn.fetchval.return_value = 1
-    conn.execute.return_value = "INSERT 0 1"
+from unittest.mock import AsyncMock, patch  # noqa: E402 — grouped with other imports above
+
+
+def _rate(rating: str, paper_id: int = 1, user_id=None):
+    """Issue a POST /api/pulse/rate and return (resp, app) for cleanup."""
+    tc, pool, conn, app = _make_client(user_id_override=user_id)
+    conn.fetchval.return_value = 1  # deck membership guard passes
     try:
-        resp = tc.post("/api/pulse/rate", json={"paper_id": 1, "rating": rating})
+        resp = tc.post("/api/pulse/rate", json={"paper_id": paper_id, "rating": rating})
     finally:
         app.dependency_overrides.clear()
         from paper_ingestion.deps import limiter
 
         limiter.enabled = True
+    return resp
+
+
+def test_rate_open_writes_nothing():
+    """rating='open' returns 200; no helper writes any DB row."""
+    with (
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
+        ) as mock_state,
+        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
+    ):
+        resp = _rate("open")
+
     assert resp.status_code == 200
-    return list(conn.execute.await_args_list)
+    mock_fb.assert_not_called()
+    mock_state.assert_not_called()
+    mock_trash.assert_not_called()
 
 
-def test_rate_card_save_does_not_overwrite_preference():
-    # rating='save' now maps to preference='up' (B1.5 lifecycle semantics).
-    # The ON CONFLICT SQL still uses EXCLUDED IS DISTINCT FROM guards so that
-    # a later 'open' (preference='none') cannot clobber an existing 'up'.
-    calls = _capture_rate_calls("save")
-    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
-    state_call = calls[1]
-    sql = state_call.args[0]
-    preference_param = state_call.args[4]
-    assert preference_param == "up"
-    assert "EXCLUDED.preference IS DISTINCT FROM 'none'" in sql
+def test_rate_save_writes_state_only():
+    """rating='save' calls _upsert_state_and_starred(state='to_read') and NOT _upsert_recommendation_feedback."""
+    with (
+        patch(
+            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
+        ) as mock_state,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+    ):
+        resp = _rate("save")
+
+    assert resp.status_code == 200
+    mock_state.assert_awaited_once()
+    assert mock_state.await_args.kwargs.get("state") == "to_read"
+    mock_fb.assert_not_called()
 
 
-def test_rate_card_open_does_not_set_thumbs_up():
-    # rating='open' early-returns after recording pulse_ratings — no paper_user_state write.
-    calls = _capture_rate_calls("open")
-    # Only the pulse_ratings INSERT fires; paper_user_state execute must NOT be called.
-    assert len(calls) == 1, (
-        f"rating='open' must produce exactly 1 execute call (pulse_ratings only), got {len(calls)}"
-    )
-    sql: str = calls[0].args[0]
-    assert "pulse_ratings" in sql, f"First execute must target pulse_ratings, got:\n{sql!r}"
+def test_rate_up_writes_recommendation_feedback_positive_pulse_thumbs():
+    """rating='up' calls _upsert_recommendation_feedback(signal='positive', source='pulse_thumbs')."""
+    with patch(
+        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+    ) as mock_fb:
+        resp = _rate("up", paper_id=55)
+
+    assert resp.status_code == 200
+    mock_fb.assert_awaited_once()
+    _conn, paper_id_arg, _uid, signal_arg, source_arg = mock_fb.await_args.args
+    assert paper_id_arg == 55
+    assert signal_arg == "positive"
+    assert source_arg == "pulse_thumbs"
 
 
-def test_rate_card_up_records_thumbs_up_preference():
-    calls = _capture_rate_calls("up")
-    assert calls[1].args[4] == "up"
+def test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs():
+    """rating='down' calls _upsert_recommendation_feedback(signal='negative', source='pulse_thumbs')."""
+    with patch(
+        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+    ) as mock_fb:
+        resp = _rate("down", paper_id=77)
+
+    assert resp.status_code == 200
+    mock_fb.assert_awaited_once()
+    _conn, paper_id_arg, _uid, signal_arg, source_arg = mock_fb.await_args.args
+    assert paper_id_arg == 77
+    assert signal_arg == "negative"
+    assert source_arg == "pulse_thumbs"
 
 
-def test_rate_card_down_records_thumbs_down_preference():
-    calls = _capture_rate_calls("down")
-    assert calls[1].args[4] == "down"
+def test_rate_dismiss_writes_state_trash_and_recommendation_feedback_negative_dismiss_combined():
+    """rating='dismiss' calls _trash_paper AND _upsert_recommendation_feedback(signal='negative', source='dismiss_combined')."""
+    with (
+        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+    ):
+        resp = _rate("dismiss", paper_id=99)
+
+    assert resp.status_code == 200
+    mock_trash.assert_awaited_once()
+    _conn, paper_id_arg, _uid = mock_trash.await_args.args
+    assert paper_id_arg == 99
+
+    mock_fb.assert_awaited_once()
+    _conn, fb_paper_id, _uid, signal_arg, source_arg = mock_fb.await_args.args
+    assert fb_paper_id == 99
+    assert signal_arg == "negative"
+    assert source_arg == "dismiss_combined"
 
 
-def test_rate_card_dismiss_records_thumbs_down_preference():
-    calls = _capture_rate_calls("dismiss")
-    assert calls[1].args[4] == "down"
+def test_rate_card_membership_guard_returns_404_when_paper_not_in_deck():
+    """POST /rate returns 404 when the paper is NOT in the requesting user's pulse deck."""
+    tc, pool, conn, app = _make_client(user_id_override=42)
+    conn.fetchval.return_value = None  # guard: paper not in deck
+    try:
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 999, "rating": "up"})
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
 
+        limiter.enabled = True
 
-# ---------------------------------------------------------------------------
-# B3.2: rate_card lifecycle semantics (WS8)
-# ---------------------------------------------------------------------------
-
-
-def test_rate_card_save_writes_saved_starred_pref_up():
-    """rating='save' must bind starred=True, saved=True, preference='up'.
-
-    The paper_user_state INSERT call (calls[1]) must carry the correct
-    positional args so that on first-visit the row is written correctly and
-    on conflict the EXCLUDED IS DISTINCT FROM guards promote each field.
-
-    Positional layout of the paper_user_state execute call:
-      args[0] = SQL, args[1] = paper_id, args[2] = user_id,
-      args[3] = starred, args[4] = preference, args[5] = saved, args[6] = dismissed
-    """
-    calls = _capture_rate_calls("save")
-    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
-    state_args = calls[1].args
-    assert state_args[3] is True, f"starred must be True for 'save', got {state_args[3]!r}"
-    assert state_args[4] == "up", f"preference must be 'up' for 'save', got {state_args[4]!r}"
-    assert state_args[5] is True, f"saved must be True for 'save', got {state_args[5]!r}"
-
-
-def test_rate_card_dismiss_writes_dismissed_pref_down_preserves_saved():
-    """rating='dismiss' must bind dismissed=True, preference='down', saved=False.
-
-    The saved=False bound value triggers the EXCLUDED IS DISTINCT FROM FALSE
-    guard in the ON CONFLICT clause — when the existing row has saved=True the
-    SQL preserves it.  This test verifies that the bound parameter for saved is
-    False (the preserve-safe default) so the SQL's CASE WHEN guard can do its job.
-
-    Positional layout: args[3]=starred, args[4]=preference, args[5]=saved, args[6]=dismissed
-    """
-    calls = _capture_rate_calls("dismiss")
-    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
-    state_args = calls[1].args
-    sql: str = state_args[0]
-    assert state_args[4] == "down", (
-        f"preference must be 'down' for 'dismiss', got {state_args[4]!r}"
-    )
-    assert state_args[6] is True, f"dismissed must be True for 'dismiss', got {state_args[6]!r}"
-    # saved bound as False so the ON CONFLICT CASE WHEN preserves an existing True
-    assert state_args[5] is False, (
-        f"saved must be False (preserve-safe) for 'dismiss', got {state_args[5]!r}"
-    )
-    # Confirm the SQL has the IS DISTINCT FROM guard that makes preservation work
-    assert "EXCLUDED.saved IS DISTINCT FROM FALSE" in sql, (
-        f"Expected EXCLUDED.saved IS DISTINCT FROM FALSE in SQL:\n{sql!r}"
+    assert resp.status_code == 404, (
+        f"Expected 404 when paper not in deck, got {resp.status_code}: {resp.text}"
     )
 
 
-def test_rate_card_open_is_noop_on_state():
-    """rating='open' early-returns — paper_user_state must NOT be touched.
-
-    The early-return path means conn.execute is called exactly once (for the
-    pulse_ratings INSERT) and never for paper_user_state.  This guarantees no
-    existing user-state field (starred, preference, saved, dismissed) can be
-    clobbered by a navigation event.
-    """
-    calls = _capture_rate_calls("open")
-    assert len(calls) == 1, (
-        f"rating='open' must produce exactly 1 execute call (pulse_ratings only), got {len(calls)}"
-    )
-    sql: str = calls[0].args[0]
-    assert "pulse_ratings" in sql, (
-        f"The single execute call must target pulse_ratings, got:\n{sql!r}"
-    )
-    assert "paper_user_state" not in sql, (
-        f"paper_user_state must NOT be written for rating='open', got:\n{sql!r}"
-    )
-
-
-def test_rate_card_open_records_pulse_ratings_row():
-    """rating='open' must still INSERT a row in pulse_ratings for analytics."""
-    calls = _capture_rate_calls("open")
-    assert len(calls) == 1, f"Expected exactly 1 execute call for 'open', got {len(calls)}"
-    sql: str = calls[0].args[0]
-    assert "pulse_ratings" in sql, f"pulse_ratings INSERT must be present for 'open', got:\n{sql!r}"
-    # Verify the rating value 'open' is passed as the third positional arg
-    assert calls[0].args[3] == "open", (
-        f"Third execute arg must be rating='open', got {calls[0].args[3]!r}"
-    )
-
-
-def test_rate_card_open_returns_logged_status():
-    """rating='open' must return HTTP 200 with status='logged'."""
+def test_rate_card_open_returns_ok_status():
+    """rating='open' returns HTTP 200 with status='ok' (logging-only path)."""
     tc, pool, conn, app = _make_client(user_id_override=None)
     conn.fetchval.return_value = 1
-    conn.execute.return_value = "INSERT 0 1"
     try:
         resp = tc.post("/api/pulse/rate", json={"paper_id": 5, "rating": "open"})
     finally:
@@ -374,6 +369,4 @@ def test_rate_card_open_returns_logged_status():
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     data = resp.json()
-    assert data.get("status") == "logged", (
-        f"Expected status='logged' for 'open' early-return, got {data!r}"
-    )
+    assert data.get("status") == "ok", f"Expected status='ok' for 'open' path, got {data!r}"

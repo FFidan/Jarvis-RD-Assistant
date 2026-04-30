@@ -241,6 +241,7 @@ async def search_papers(
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
+            paper.discovery_origin = "user_initiated"
             row = await upsert_paper(conn, paper)
             saved_results.append(row_to_paper_response(row))
 

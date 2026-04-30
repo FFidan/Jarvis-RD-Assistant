@@ -30,7 +30,6 @@ from paper_ingestion.models import (  # noqa: E402
     TopicCreate,
     TopicResponse,
     TopicUpdate,
-    UserStateUpsert,
     compute_priority,
     priority_level,
 )
@@ -97,12 +96,6 @@ def test_summary_response_parses_nested_findings():
 
     assert summary.key_findings[0].verified is True
     assert summary.cross_references[0].relationship == "extends"
-
-
-def test_user_state_upsert_enforces_rating_bounds():
-    """UserStateUpsert rejects ratings outside the UI's 1-5 range."""
-    with pytest.raises(ValidationError, match="less than or equal to 5"):
-        UserStateUpsert(rating=6)
 
 
 def test_feed_response_defaults_search_mode():

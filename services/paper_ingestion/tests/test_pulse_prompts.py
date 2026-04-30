@@ -278,3 +278,52 @@ def test_build_scoring_prompt_abstract_html_injection_escaped():
 
     assert "<b>" not in user_content
     assert "<script>" not in user_content
+
+
+def test_build_scoring_prompt_legacy_call_without_negative_topics_authors():
+    """Calling without new args returns a prompt identical to the legacy shape (regression guard).
+
+    Verifies that omitting negative_topics and negative_authors produces the
+    same two-element message list structure with no section headers for the new
+    fields, ensuring backward-compatibility with all existing call sites.
+    """
+    topics = _make_topics()
+    candidate = _make_candidate()
+    messages = build_scoring_prompt(
+        topic_context=topics,
+        positive_examples=["Good Paper"],
+        negative_examples=["Bad Paper"],
+        candidate=candidate,
+    )
+    assert len(messages) == 2
+    user_content = next(m for m in messages if m["role"] == "user")["content"]
+    # New section headers must NOT appear when args are omitted
+    assert "Topics you've rejected:" not in user_content
+    assert "Authors you've rejected:" not in user_content
+    # Legacy content is still present
+    assert "Good Paper" in user_content
+    assert "Bad Paper" in user_content
+
+
+def test_build_scoring_prompt_with_negative_topics_and_authors():
+    """Passing non-empty negative_topics and negative_authors inserts both section headers.
+
+    Verifies that the new parameters render correctly into the user message,
+    including the section markers and the sanitised values.
+    """
+    topics = _make_topics()
+    candidate = _make_candidate()
+    messages = build_scoring_prompt(
+        topic_context=topics,
+        positive_examples=[],
+        negative_examples=[],
+        negative_topics=["foo"],
+        negative_authors=["bar"],
+        candidate=candidate,
+    )
+    assert len(messages) == 2
+    user_content = next(m for m in messages if m["role"] == "user")["content"]
+    assert "Topics you've rejected:" in user_content
+    assert "- foo" in user_content
+    assert "Authors you've rejected:" in user_content
+    assert "- bar" in user_content

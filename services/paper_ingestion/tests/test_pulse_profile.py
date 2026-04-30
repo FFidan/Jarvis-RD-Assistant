@@ -71,7 +71,7 @@ def _make_paper_rows(count: int = 3) -> list[FakeRecord]:
 
 def _make_positive_rating_rows() -> list[FakeRecord]:
     return [
-        FakeRecord({"title": f"Positive Paper {i}"})
+        FakeRecord({"id": i, "title": f"Positive Paper {i}"})
         for i in range(1, 12)  # 11 rows, top 10
     ]
 
@@ -80,6 +80,25 @@ def _make_negative_rating_rows() -> list[FakeRecord]:
     return [
         FakeRecord({"title": f"Negative Paper {i}"})
         for i in range(1, 5)  # 4 rows
+    ]
+
+
+def _make_neg_topic_rows() -> list[FakeRecord]:
+    return [
+        FakeRecord({"name": "Reinforcement Learning", "neg_count": 3}),
+    ]
+
+
+def _make_neg_author_rows() -> list[FakeRecord]:
+    return [
+        FakeRecord({"author": "Boring Author", "neg_count": 2}),
+    ]
+
+
+def _make_neg_abstract_rows(count: int = 2) -> list[FakeRecord]:
+    return [
+        FakeRecord({"id": i, "abstract": f"negative abstract {i}", "weight": 1.0})
+        for i in range(1, count + 1)
     ]
 
 
@@ -100,20 +119,29 @@ async def test_load_profile_happy_path():
     negative_rows = _make_negative_rating_rows()
 
     vec = fake_embedding_vector(768)
+    neg_abstract_rows = _make_neg_abstract_rows(2)
 
-    # conn.fetch returns different things on sequential calls
+    # conn.fetch returns different things on sequential calls (10 total)
     conn.fetch.side_effect = [
-        topic_rows,  # topics query
-        author_rows,  # tracked_authors query
-        paper_rows,  # engaged papers query
-        config_rows,  # user_config query
-        positive_rows,  # positive ratings query
-        negative_rows,  # negative ratings query
+        topic_rows,  # 1. topics query
+        author_rows,  # 2. tracked_authors query
+        paper_rows,  # 3. engaged papers query
+        config_rows,  # 4. user_config query
+        positive_rows,  # 5. positive ratings query
+        negative_rows,  # 6. negative ratings query
+        _make_neg_topic_rows(),  # 7. L1 negative topics
+        _make_neg_author_rows(),  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        neg_abstract_rows,  # 10. L2 negative abstracts
     ]
 
-    # embed_texts: called once per paper abstract (3 papers)
+    # embed_texts: called once for library centroid (3 papers), once for negative centroid (2 papers)
     mock_embedder = AsyncMock()
-    mock_embedder.embed_texts.return_value = [vec, vec, vec]
+    neg_vec = fake_embedding_vector(768)
+    mock_embedder.embed_texts.side_effect = [
+        [vec, vec, vec],  # library centroid call
+        [neg_vec, neg_vec],  # negative centroid call
+    ]
 
     profile = await load_profile(pool, embedder=mock_embedder)
 
@@ -134,6 +162,15 @@ async def test_load_profile_happy_path():
     # Rating history (top 10)
     assert len(profile.recent_positive_titles) == 10
     assert len(profile.recent_negative_titles) == 4
+    # New Phase-A fields
+    assert profile.negative_topics == ["Reinforcement Learning"]
+    assert profile.negative_authors == ["Boring Author"]
+    assert profile.negative_centroid is not None
+    assert len(profile.negative_centroid) == 768
+    assert profile.dampened_topics == set()
+    # liked_paper_ids: all ids from positive_rows (not capped like recent_positive_titles)
+    # _make_positive_rating_rows() returns 11 rows, all with ids → 11 liked_paper_ids
+    assert len(profile.liked_paper_ids) == 11
 
 
 # ---------------------------------------------------------------------------
@@ -146,12 +183,16 @@ async def test_load_profile_empty_library_centroid_none():
     """When no engaged papers exist, library_centroid is None."""
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
-        [],  # topics
-        [],  # tracked_authors
-        [],  # engaged papers (empty)
-        _make_config_rows(),  # user_config
-        [],  # positive ratings
-        [],  # negative ratings
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        [],  # 3. engaged papers (empty)
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts (empty → no neg centroid)
     ]
 
     mock_embedder = AsyncMock()
@@ -164,8 +205,13 @@ async def test_load_profile_empty_library_centroid_none():
     assert profile.tracked_author_s2_ids == set()
     assert profile.recent_positive_titles == []
     assert profile.recent_negative_titles == []
-    # embed_texts should NOT be called (no papers to embed)
+    # embed_texts should NOT be called (no papers to embed, no negative abstracts)
     mock_embedder.embed_texts.assert_not_called()
+    # New Phase-A fields — all empty/None
+    assert profile.negative_topics == []
+    assert profile.negative_authors == []
+    assert profile.negative_centroid is None
+    assert profile.dampened_topics == set()
 
 
 # ---------------------------------------------------------------------------
@@ -178,12 +224,16 @@ async def test_load_profile_missing_config_uses_defaults():
     """When user_config has no pulse keys, defaults are applied."""
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
-        [],  # topics
-        [],  # authors
-        [],  # papers
-        [],  # config (empty!)
-        [],  # positives
-        [],  # negatives
+        [],  # 1. topics
+        [],  # 2. authors
+        [],  # 3. papers
+        [],  # 4. config (empty!)
+        [],  # 5. positives
+        [],  # 6. negatives
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts
     ]
     mock_embedder = AsyncMock()
 
@@ -206,17 +256,21 @@ async def test_load_profile_missing_config_uses_defaults():
 async def test_load_profile_rating_history_top10():
     """Positive titles are capped at 10, negative at 10."""
     pool, conn = _make_pool_and_conn()
-    # 15 positive ratings
-    pos_rows = [FakeRecord({"title": f"Pos {i}"}) for i in range(15)]
+    # 15 positive ratings (include id field for liked_paper_ids extraction)
+    pos_rows = [FakeRecord({"id": i, "title": f"Pos {i}"}) for i in range(15)]
     neg_rows = [FakeRecord({"title": f"Neg {i}"}) for i in range(15)]
 
     conn.fetch.side_effect = [
-        [],
-        [],
-        [],
-        _make_config_rows(),
-        pos_rows,
-        neg_rows,
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        [],  # 3. engaged papers
+        _make_config_rows(),  # 4. user_config
+        pos_rows,  # 5. positive ratings
+        neg_rows,  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts
     ]
     mock_embedder = AsyncMock()
 
@@ -302,20 +356,27 @@ async def test_conn_released_before_embed():
     pool = MagicMock()
     pool.acquire.side_effect = [_make_acquire_ctx("c1"), _make_acquire_ctx("c2")]
 
-    # Single conn reused for both phases (fetch side_effect spans all 6 calls).
+    # Single conn reused for both phases (fetch side_effect spans all 10 calls).
     conn = AsyncMock()
     conn.fetch.side_effect = [
-        _make_topic_rows(),  # Phase 1: topics
-        _make_author_rows(),  # Phase 1: tracked_authors
-        _make_paper_rows(2),  # Phase 1: engaged papers
-        _make_config_rows(),  # Phase 3: user_config
-        [],  # Phase 3: positive ratings
-        [],  # Phase 3: negative ratings
+        _make_topic_rows(),  # Phase 1: topics (fetch 1)
+        _make_author_rows(),  # Phase 1: tracked_authors (fetch 2)
+        _make_paper_rows(2),  # Phase 1: engaged papers (fetch 3)
+        _make_config_rows(),  # Phase 3: user_config (fetch 4)
+        [],  # Phase 3: positive ratings (fetch 5)
+        [],  # Phase 3: negative ratings (fetch 6)
+        [],  # Phase 3: L1 negative topics (fetch 7)
+        [],  # Phase 3: L1 negative authors (fetch 8)
+        [],  # Phase 3: L3 dampened topics (fetch 9)
+        [],  # Phase 3: L2 negative abstracts (fetch 10)
     ]
 
     vec = fake_embedding_vector(4)
 
     # embed_texts records its position in the event list when called.
+    # It is called twice: once for library centroid (Phase 2a), once for
+    # negative centroid (Phase 2b) — but only if there are negative abstracts.
+    # With empty neg abstracts, it's called only once.
     async def _embed(texts):
         events.append("embed_texts")
         return [vec] * len(texts)
@@ -363,12 +424,16 @@ async def test_load_profile_bad_weights_value_falls_back_to_defaults():
         FakeRecord({"key": "pulse.stage2_top_k", "value": 50}),
     ]
     conn.fetch.side_effect = [
-        [],  # topics
-        [],  # authors
-        [],  # engaged papers
-        bad_config,  # user_config with bad weights
-        [],  # positives
-        [],  # negatives
+        [],  # 1. topics
+        [],  # 2. authors
+        [],  # 3. engaged papers
+        bad_config,  # 4. user_config with bad weights
+        [],  # 5. positives
+        [],  # 6. negatives
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts
     ]
     mock_embedder = AsyncMock()
 
@@ -387,12 +452,16 @@ async def test_load_profile_empty_topics_produces_valid_profile():
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
-        [],  # no topics
-        [],  # no authors
-        [],  # no engaged papers
-        _make_config_rows(),  # valid config
-        [],  # no positive ratings
-        [],  # no negative ratings
+        [],  # 1. no topics
+        [],  # 2. no authors
+        [],  # 3. no engaged papers
+        _make_config_rows(),  # 4. valid config
+        [],  # 5. no positive ratings
+        [],  # 6. no negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts
     ]
     mock_embedder = AsyncMock()
 
@@ -423,19 +492,24 @@ async def test_load_profile_skips_embeddings_with_wrong_dim():
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
-        [],  # topics
-        [],  # tracked_authors
-        _make_paper_rows(3),  # 3 engaged papers → embedder called with 3 abstracts
-        _make_config_rows(),  # user_config
-        [],  # positive ratings
-        [],  # negative ratings
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        _make_paper_rows(3),  # 3. 3 engaged papers → embedder called with 3 abstracts
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts (empty → no neg centroid embed)
     ]
 
     good_vec = fake_embedding_vector(4)  # dim 4 — the "expected" dimension
     bad_vec = fake_embedding_vector(8)  # dim 8 — mismatched
 
     mock_embedder = AsyncMock()
-    # Return two good vectors and one bad vector (bad is in the middle)
+    # Return two good vectors and one bad vector (bad is in the middle).
+    # Only one embed_texts call (library centroid); no neg centroid since no neg abstracts.
     mock_embedder.embed_texts.return_value = [good_vec, bad_vec, good_vec]
 
     profile = await load_profile(pool, embedder=mock_embedder)
@@ -463,19 +537,24 @@ async def test_load_profile_all_embeddings_wrong_dim_gives_none_centroid():
 
     pool, conn = _make_pool_and_conn()
     conn.fetch.side_effect = [
-        [],
-        [],
-        _make_paper_rows(3),
-        _make_config_rows(),
-        [],
-        [],
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        _make_paper_rows(3),  # 3. engaged papers
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts (empty → no neg centroid embed)
     ]
 
     good_vec = fake_embedding_vector(4)
     bad_vec = fake_embedding_vector(16)  # mismatched
 
     mock_embedder = AsyncMock()
-    # First is good, remaining two are bad
+    # First is good, remaining two are bad.
+    # Only one embed_texts call (library centroid); no neg centroid since no neg abstracts.
     mock_embedder.embed_texts.return_value = [good_vec, bad_vec, bad_vec]
 
     profile = await load_profile(pool, embedder=mock_embedder)
@@ -485,3 +564,121 @@ async def test_load_profile_all_embeddings_wrong_dim_gives_none_centroid():
     assert len(profile.library_centroid) == 4
     for expected, actual in zip(good_vec, profile.library_centroid):
         assert abs(actual - expected) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Phase-A new paths: dampening cap + negative centroid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_profile_dampening_cap_truncation(caplog):
+    """L3 dampened_topics is capped at floor(0.5 × topic_count) when over-represented.
+
+    With 2 topics and 3 dampened topic rows, the cap is floor(0.5 × 2) = 1.
+    Only the top 1 row (highest neg_count) should survive; a warning must be logged.
+    """
+    import logging
+
+    pool, conn = _make_pool_and_conn()
+
+    # 2 topics → cap = floor(0.5 × 2) = 1
+    topic_rows = _make_topic_rows()  # ids 1, 2
+    # 3 dampened rows — more than the cap of 1
+    dampened_rows = [
+        FakeRecord({"id": 10, "neg_count": 8}),  # highest — survives cap
+        FakeRecord({"id": 11, "neg_count": 6}),  # truncated
+        FakeRecord({"id": 12, "neg_count": 5}),  # truncated
+    ]
+
+    conn.fetch.side_effect = [
+        topic_rows,  # 1. topics (2 rows)
+        [],  # 2. tracked_authors
+        [],  # 3. engaged papers
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        dampened_rows,  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts
+    ]
+    mock_embedder = AsyncMock()
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.pulse.profile"):
+        profile = await load_profile(pool, embedder=mock_embedder)
+
+    # Cap applied: only topic id 10 (highest neg_count) survives
+    assert profile.dampened_topics == {10}
+    # Warning must be emitted about truncation
+    assert any("dampened_topics" in record.message for record in caplog.records), (
+        f"Expected dampening cap warning, got: {[r.message for r in caplog.records]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_load_profile_negative_centroid_computed_when_neg_abstracts_present():
+    """L2 negative centroid is computed when negative abstracts exist.
+
+    With 2 negative abstract rows, embed_texts should be called twice total:
+    once for library centroid (empty → skipped) and once for the negative centroid.
+    """
+    pool, conn = _make_pool_and_conn()
+    neg_abstract_rows = _make_neg_abstract_rows(2)  # 2 rows, weight=1.0 each
+
+    conn.fetch.side_effect = [
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        [],  # 3. engaged papers (empty → no library centroid embed call)
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        neg_abstract_rows,  # 10. L2 negative abstracts (2 rows)
+    ]
+
+    vec = fake_embedding_vector(8)
+    mock_embedder = AsyncMock()
+    # Only called once: for negative centroid (library centroid is skipped — no engaged papers).
+    mock_embedder.embed_texts.return_value = [vec, vec]
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    # Library centroid is None (no engaged papers)
+    assert profile.library_centroid is None
+    # Negative centroid should be computed from the two weighted abstract embeddings
+    assert profile.negative_centroid is not None
+    assert len(profile.negative_centroid) == 8
+    # Both weights are 1.0 and both vecs are identical → centroid == vec
+    for expected, actual in zip(vec, profile.negative_centroid):
+        assert abs(actual - expected) < 1e-9, f"negative_centroid[i]={actual} != vec[i]={expected}"
+    # embed_texts called exactly once (no library centroid call when no abstracts)
+    mock_embedder.embed_texts.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_load_profile_negative_centroid_none_when_no_neg_abstracts():
+    """L2 negative_centroid is None when there are no negative abstracts."""
+    pool, conn = _make_pool_and_conn()
+
+    conn.fetch.side_effect = [
+        [],  # 1. topics
+        [],  # 2. tracked_authors
+        [],  # 3. engaged papers
+        _make_config_rows(),  # 4. user_config
+        [],  # 5. positive ratings
+        [],  # 6. negative ratings
+        [],  # 7. L1 negative topics
+        [],  # 8. L1 negative authors
+        [],  # 9. L3 dampened topics
+        [],  # 10. L2 negative abstracts (empty)
+    ]
+    mock_embedder = AsyncMock()
+
+    profile = await load_profile(pool, embedder=mock_embedder)
+
+    assert profile.negative_centroid is None
+    # embed_texts never called (no library abstracts and no negative abstracts)
+    mock_embedder.embed_texts.assert_not_called()

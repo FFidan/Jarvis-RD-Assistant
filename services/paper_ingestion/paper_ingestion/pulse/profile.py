@@ -44,6 +44,12 @@ class UserProfile(BaseModel):
     recent_positive_titles: list[str]
     recent_negative_titles: list[str]
     liked_paper_ids: list[int] = Field(default_factory=list)
+    # Phase A — lifecycle redesign fields (Wave 1cd)
+    user_id: int | None = None
+    negative_topics: list[str] = Field(default_factory=list)
+    negative_authors: list[str] = Field(default_factory=list)
+    negative_centroid: list[float] | None = None
+    dampened_topics: set[int] = Field(default_factory=set)
 
 
 async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = None) -> UserProfile:
@@ -58,7 +64,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         computation and is passed through to the scoring stages.
     user_id:
         Optional caller user ID.  When provided, rating history is filtered to
-        rows matching this user (``pr.user_id IS NOT DISTINCT FROM $N``).
+        rows matching this user (``rf.user_id IS NOT DISTINCT FROM $N``).
         When None (single-user / system mode), no user_id filter is applied and
         all ratings are returned — preserving the existing single-tenant behaviour.
 
@@ -70,8 +76,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     Notes
     -----
     The function intentionally uses two separate connection acquisitions with
-    the HTTP call to embed_texts() running in between (no connection held), so
-    that a potentially slow embedding round-trip does not block a pool slot
+    the HTTP calls to embed_texts() running in between (no connection held), so
+    that potentially slow embedding round-trips do not block pool slots
     (BE-001 / PI-006).
     """
     # ------------------------------------------------------------------
@@ -107,7 +113,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             if name:
                 tracked_author_names.add(str(name).lower())
 
-        # 3. Collect abstracts of "engaged" papers for centroid computation
+        # 3. Collect abstracts of "engaged" papers for library centroid computation.
+        # Phase A fix: state column replaces the old status/saved columns; starred is orthogonal.
         engaged_rows = await conn.fetch(
             """
             SELECT p.id, p.abstract
@@ -116,7 +123,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             WHERE ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
               AND (
                 COALESCE(pus.starred, FALSE)
-                OR pus.status IN ('starred', 'read', 'reading')
+                OR COALESCE(pus.state, 'inbox') IN ('to_read', 'reading', 'done')
             )
               AND p.abstract IS NOT NULL
               AND p.abstract != ''
@@ -127,7 +134,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     # Connection released — Phase 1 complete.
 
     # ------------------------------------------------------------------
-    # Phase 2 — HTTP call to embedder (no DB connection held, see PI-006)
+    # Phase 2a — HTTP call for library centroid (no DB connection held, PI-006)
     # ------------------------------------------------------------------
     library_centroid: list[float] | None = None
     if abstracts:
@@ -154,14 +161,16 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             library_centroid = None
 
     # ------------------------------------------------------------------
-    # Phase 3 — fetch config + rating history, assemble UserProfile
+    # Phase 3 — fetch config + rating history + L1/L2/L3 signals
     # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
-        # 4. Config: weights, deck_size, stage2_top_k
+        # 4. Config: weights, deck_size, stage2_top_k, l2_lambda
         config_rows = await conn.fetch(
             """
             SELECT key, value FROM user_config
-            WHERE key IN ('pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k')
+            WHERE key IN (
+                'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda'
+            )
             """
         )
         cfg: dict[str, Any] = {r["key"]: r["value"] for r in config_rows}
@@ -178,41 +187,171 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         deck_size = int(cfg.get("pulse.deck_size", _DEFAULT_DECK_SIZE))
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
-        # 5. Recent rating history (top 10 positive + top 10 negative).
-        # Sprint 7 B13: single query path — `$2::int IS NULL` short-circuits
-        # the user filter when running in stub/system mode (user_id=None).
-        # When a real user_id is bound, IS NOT DISTINCT FROM matches both the
-        # caller's id and any NULL-stamped legacy rows (M1 residual).
+        # Read l2_lambda — validated by A2 config validator ([0.0, 2.0]); default 0.5.
+        raw_l2 = cfg.get("pulse.l2_lambda")
+        l2_lambda: float = float(raw_l2) if raw_l2 is not None else 0.5
+        weights["l2_lambda"] = l2_lambda
+
+        # 5. Recent positive ratings (recommendation_feedback, 90-day window).
         positive_rows = await conn.fetch(
             """
-            SELECT p.id, p.title
-            FROM pulse_ratings pr
-            JOIN papers p ON p.id = pr.paper_id
-            WHERE pr.rating IN ('up', 'save', 'open')
-              AND ($2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
-            ORDER BY pr.created_at DESC
-            LIMIT $1
+            SELECT DISTINCT p.id, p.title
+              FROM recommendation_feedback rf
+              JOIN papers p ON p.id = rf.paper_id
+             WHERE rf.signal = 'positive'
+               AND rf.created_at > NOW() - INTERVAL '90 days'
+               AND rf.user_id IS NOT DISTINCT FROM $1
+             ORDER BY rf.created_at DESC
+             LIMIT $2
             """,
-            _RATING_HISTORY_LIMIT,
             user_id,
+            _RATING_HISTORY_LIMIT,
         )
+
+        # 6. Recent negative ratings — titles only.
         negative_rows = await conn.fetch(
             """
-            SELECT p.title
-            FROM pulse_ratings pr
-            JOIN papers p ON p.id = pr.paper_id
-            WHERE pr.rating IN ('down', 'dismiss')
-              AND ($2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2)
-            ORDER BY pr.created_at DESC
-            LIMIT $1
+            SELECT DISTINCT p.title
+              FROM recommendation_feedback rf
+              JOIN papers p ON p.id = rf.paper_id
+             WHERE rf.signal = 'negative'
+               AND rf.created_at > NOW() - INTERVAL '90 days'
+               AND rf.user_id IS NOT DISTINCT FROM $1
+             ORDER BY rf.created_at DESC
+             LIMIT $2
             """,
-            _RATING_HISTORY_LIMIT,
             user_id,
+            _RATING_HISTORY_LIMIT,
         )
+
         recent_positive_titles = [r["title"] for r in positive_rows][:_RATING_HISTORY_LIMIT]
         liked_paper_ids = [r.get("id") for r in positive_rows if r.get("id") is not None]
-
         recent_negative_titles = [r["title"] for r in negative_rows][:_RATING_HISTORY_LIMIT]
+
+        # 7. L1 — negative topics (top 10 by negative-feedback count, 90-day window).
+        neg_topic_rows = await conn.fetch(
+            """
+            SELECT t.name, COUNT(*) AS neg_count
+              FROM recommendation_feedback rf
+              JOIN papers p ON p.id = rf.paper_id
+              JOIN paper_topics pt ON pt.paper_id = p.id
+              JOIN topics t ON t.id = pt.topic_id
+             WHERE rf.signal = 'negative'
+               AND rf.created_at > NOW() - INTERVAL '90 days'
+               AND rf.user_id IS NOT DISTINCT FROM $1
+             GROUP BY t.name
+             ORDER BY neg_count DESC
+             LIMIT 10
+            """,
+            user_id,
+        )
+        negative_topics: list[str] = [r["name"] for r in neg_topic_rows]
+
+        # 8. L1 — negative authors (top 10 by negative-feedback count, 90-day window).
+        neg_author_rows = await conn.fetch(
+            """
+            SELECT author, COUNT(*) AS neg_count
+              FROM (
+                SELECT UNNEST(p.authors) AS author
+                  FROM recommendation_feedback rf
+                  JOIN papers p ON p.id = rf.paper_id
+                 WHERE rf.signal = 'negative'
+                   AND rf.created_at > NOW() - INTERVAL '90 days'
+                   AND rf.user_id IS NOT DISTINCT FROM $1
+              ) authors_expanded
+             GROUP BY author
+             ORDER BY neg_count DESC
+             LIMIT 10
+            """,
+            user_id,
+        )
+        negative_authors: list[str] = [r["author"] for r in neg_author_rows]
+
+        # 9. L3 — dampened topics (≥5 negatives in 90d window), per spec §7.3.2.
+        dampened_rows = await conn.fetch(
+            """
+            SELECT t.id, COUNT(*) AS neg_count
+              FROM recommendation_feedback rf
+              JOIN papers p ON p.id = rf.paper_id
+              JOIN paper_topics pt ON pt.paper_id = p.id
+              JOIN topics t ON t.id = pt.topic_id
+             WHERE rf.signal = 'negative'
+               AND rf.created_at > NOW() - INTERVAL '90 days'
+               AND rf.user_id IS NOT DISTINCT FROM $1
+             GROUP BY t.id
+            HAVING COUNT(*) >= 5
+            """,
+            user_id,
+        )
+        # rows ordered by neg_count desc for deterministic cap truncation
+        dampened_rows_sorted = sorted(dampened_rows, key=lambda r: r["neg_count"], reverse=True)
+
+        # 10. L3 dampening cap (spec §7.3.4): dampened_topics must not exceed
+        # 50% of all topic slots — prevents over-dampening a sparse topic list.
+        topic_count = len(topics)
+        dampened_set: set[int] = set()
+        if dampened_rows_sorted:
+            cap = max(0, topic_count // 2)  # floor(0.5 × topic_count)
+            if len(dampened_rows_sorted) > cap:
+                logger.warning(
+                    "load_profile: dampened_topics (%d) exceeds 50%% of topic count (%d); "
+                    "truncating to %d",
+                    len(dampened_rows_sorted),
+                    topic_count,
+                    cap,
+                )
+                dampened_rows_sorted = dampened_rows_sorted[:cap]
+            dampened_set = {r["id"] for r in dampened_rows_sorted}
+
+        # 11. L2 — negative abstracts for centroid pre-compute (with 30d half-weight decay).
+        neg_abstract_rows = await conn.fetch(
+            """
+            SELECT p.id, p.abstract,
+                   CASE WHEN rf.created_at > NOW() - INTERVAL '30 days'
+                        THEN 1.0 ELSE 0.5 END AS weight
+              FROM recommendation_feedback rf
+              JOIN papers p ON p.id = rf.paper_id
+             WHERE rf.signal = 'negative'
+               AND rf.created_at > NOW() - INTERVAL '90 days'
+               AND rf.user_id IS NOT DISTINCT FROM $1
+               AND p.abstract IS NOT NULL
+               AND length(p.abstract) > 0
+             ORDER BY rf.created_at DESC
+             LIMIT 100
+            """,
+            user_id,
+        )
+    # Connection released — Phase 3 complete.
+
+    # ------------------------------------------------------------------
+    # Phase 2b — Compute L2 negative centroid (no DB connection held)
+    # ------------------------------------------------------------------
+    negative_centroid: list[float] | None = None
+    if neg_abstract_rows:
+        try:
+            neg_abstracts = [r["abstract"] for r in neg_abstract_rows]
+            neg_weights = [float(r["weight"]) for r in neg_abstract_rows]
+            neg_embeddings = await embedder.embed_texts(neg_abstracts)
+            if neg_embeddings:
+                expected_dim = len(neg_embeddings[0])
+                weighted_centroid = [0.0] * expected_dim
+                total_weight = 0.0
+                for vec, w in zip(neg_embeddings, neg_weights):
+                    if len(vec) != expected_dim:
+                        logger.warning(
+                            "load_profile: skipping negative embedding with dim %d != expected %d",
+                            len(vec),
+                            expected_dim,
+                        )
+                        continue
+                    for i, v in enumerate(vec):
+                        weighted_centroid[i] += w * v
+                    total_weight += w
+                if total_weight > 0.0:
+                    negative_centroid = [v / total_weight for v in weighted_centroid]
+        except RuntimeError:
+            logger.warning("load_profile: failed to compute negative centroid", exc_info=True)
+            negative_centroid = None
 
     return UserProfile(
         topics=topics,
@@ -225,4 +364,9 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         recent_positive_titles=recent_positive_titles,
         recent_negative_titles=recent_negative_titles,
         liked_paper_ids=liked_paper_ids,
+        user_id=user_id,
+        negative_topics=negative_topics,
+        negative_authors=negative_authors,
+        negative_centroid=negative_centroid,
+        dampened_topics=dampened_set,
     )

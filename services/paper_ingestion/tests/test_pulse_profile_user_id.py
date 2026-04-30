@@ -24,12 +24,16 @@ async def test_load_profile_with_user_id_filters_ratings():
         [],  # tracked_authors
         [],  # engaged papers for centroid
     ]
-    # Phase 3 connection: config + ratings
+    # Phase 3 connection: config + ratings + Phase-A extras (B1 adds 4 more fetches)
     phase3_conn = AsyncMock()
     phase3_conn.fetch.side_effect = [
         [{"key": "pulse.deck_size", "value": 10}],  # user_config
         [{"id": 1, "title": "Liked Paper"}],  # positive ratings
         [{"title": "Disliked Paper"}],  # negative ratings
+        [],  # L1 negative topics
+        [],  # L1 negative authors
+        [],  # L3 dampened topics
+        [],  # L2 negative abstracts
     ]
 
     pool = MagicMock()
@@ -97,6 +101,10 @@ async def test_load_profile_without_user_id_no_filter():
         [],  # user_config
         [],  # positive ratings
         [],  # negative ratings
+        [],  # L1 negative topics
+        [],  # L1 negative authors
+        [],  # L3 dampened topics
+        [],  # L2 negative abstracts
     ]
 
     pool = MagicMock()
@@ -118,18 +126,17 @@ async def test_load_profile_without_user_id_no_filter():
     fetch_calls = phase3_conn.fetch.call_args_list
     assert len(fetch_calls) >= 3
 
-    # Sprint 7 B13: the rating queries are now a single shape gated by
-    # `$2::int IS NULL OR pr.user_id IS NOT DISTINCT FROM $2`. With
-    # user_id=None the IS NULL short-circuit makes the filter a no-op,
-    # but the SQL text contains it either way.
+    # The rating queries use `rf.user_id IS NOT DISTINCT FROM $1` with
+    # user_id=None bound as $1.  IS NOT DISTINCT FROM NULL is semantically
+    # equivalent to IS NULL, giving the correct single-tenant passthrough.
     positive_sql = fetch_calls[1][0][0]
-    assert "$2::int IS NULL" in positive_sql, (
-        "positive-rating SQL must use the $2::int IS NULL short-circuit"
+    assert "IS NOT DISTINCT FROM" in positive_sql, (
+        "positive-rating SQL must use IS NOT DISTINCT FROM for user_id filtering"
     )
-    assert fetch_calls[1][0][2] is None, "user_id arg must be None in stub mode"
+    assert fetch_calls[1][0][1] is None, "user_id arg must be None in stub mode"
 
     negative_sql = fetch_calls[2][0][0]
-    assert "$2::int IS NULL" in negative_sql, (
-        "negative-rating SQL must use the $2::int IS NULL short-circuit"
+    assert "IS NOT DISTINCT FROM" in negative_sql, (
+        "negative-rating SQL must use IS NOT DISTINCT FROM for user_id filtering"
     )
-    assert fetch_calls[2][0][2] is None
+    assert fetch_calls[2][0][1] is None

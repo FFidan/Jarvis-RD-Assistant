@@ -301,6 +301,7 @@ from paper_ingestion.routers import (  # noqa: E402
     pdf,
     priority,
     rag,
+    recommendation_feedback,
     recommendations,
     search,
     settings,
@@ -326,6 +327,7 @@ app.include_router(analyze.router)
 app.include_router(notes.router)
 app.include_router(priority.router)
 app.include_router(recommendations.router)
+app.include_router(recommendation_feedback.router)
 app.include_router(search.router)
 app.include_router(discovery.router)
 app.include_router(feed.router)

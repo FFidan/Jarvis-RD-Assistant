@@ -151,10 +151,10 @@ class TestListFeedPapers:
         assert body["total"] == 1
         assert len(body["papers"]) == 1
 
-        # Verify SQL uses paper_user_state for unread filtering
+        # Verify SQL uses VIEW_PREDICATES['active'] for unread filtering (Phase-A redesign)
         fetch_call = conn.fetch.call_args
         sql = fetch_call[0][0]
-        assert "COALESCE(pus.status, 'new') != 'read'" in sql
+        assert "COALESCE(pus.state, 'inbox') IN ('inbox','to_read','reading')" in sql
 
     def test_empty_feed(self, client):
         """Feed returns empty list when no papers exist."""
@@ -198,64 +198,3 @@ class TestListFeedPapers:
         assert "EXISTS (SELECT 1 FROM paper_notes pn" in count_sql
         assert "JOIN paper_notes" not in count_sql
         assert resp.json()["papers"][0]["note_match_count"] == 2
-
-
-class TestMarkPaperRead:
-    """Tests for PUT /api/papers/{paper_id}/read."""
-
-    def test_mark_paper_read_success(self, client):
-        """Marking an existing paper as read returns ok."""
-        test_client, mock_pool = client
-        conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        conn.fetchrow.return_value = _to_record({"id": 42})
-
-        resp = test_client.put("/api/papers/42/read")
-        assert resp.status_code == 200
-
-        body = resp.json()
-        assert body["status"] == "ok"
-        assert body["paper_id"] == 42
-
-        # Verify the SELECT SQL was called with the right paper_id
-        fetchrow_call = conn.fetchrow.call_args
-        sql = fetchrow_call[0][0]
-        assert "SELECT id FROM papers WHERE id" in sql
-        assert fetchrow_call[0][1] == 42
-
-    def test_mark_paper_read_writes_paper_user_state(self, client):
-        """PUT /api/papers/{id}/read also upserts paper_user_state."""
-        test_client, mock_pool = client
-        conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-        conn.fetchrow.return_value = _to_record({"id": 42})
-
-        resp = test_client.put("/api/papers/42/read")
-        assert resp.status_code == 200
-
-        # Verify paper_user_state INSERT was executed
-        execute_calls = conn.execute.call_args_list
-        assert len(execute_calls) >= 1
-        user_state_sql = execute_calls[0][0][0]
-        assert "paper_user_state" in user_state_sql
-        assert "read" in user_state_sql
-        # Verify paper_id was passed as argument
-        assert execute_calls[0][0][1] == 42
-
-    def test_mark_nonexistent_paper_returns_404(self, client):
-        """Marking a nonexistent paper as read returns 404."""
-        test_client, mock_pool = client
-        conn = AsyncMock()
-        mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
-        mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
-
-        conn.fetchrow.return_value = None
-
-        resp = test_client.put("/api/papers/99999/read")
-        assert resp.status_code == 404
-
-        body = resp.json()
-        assert "not found" in body["detail"].lower()

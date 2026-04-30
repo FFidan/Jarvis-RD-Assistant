@@ -4,6 +4,10 @@ Provides a version-controlled system prompt and a builder function that
 assembles the chat completion message list for a single candidate paper.
 """
 
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 from jarvis_common.prompt_safety import safe_for_prompt
 
 from paper_ingestion.models import PaperCreate, TopicRef
@@ -33,6 +37,9 @@ def build_scoring_prompt(
     topic_context: list[TopicRef],
     positive_examples: list[str],
     negative_examples: list[str],
+    negative_topics: Sequence[str] = (),
+    negative_authors: Sequence[str] = (),
+    *,
     candidate: PaperCreate,
 ) -> list[dict[str, str]]:
     """Build chat completion messages for LLM scoring of a candidate paper.
@@ -45,6 +52,10 @@ def build_scoring_prompt(
         Recent paper titles the researcher rated positively.
     negative_examples:
         Recent paper titles the researcher rated negatively.
+    negative_topics:
+        Topic names the researcher has explicitly rejected/dismissed.
+    negative_authors:
+        Author names the researcher has explicitly rejected/dismissed.
     candidate:
         The paper to be scored.
 
@@ -79,6 +90,20 @@ def build_scoring_prompt(
     else:
         neg_section = "Recently dismissed papers: (none yet)"
 
+    # --- Rejected topics section ---
+    if negative_topics:
+        neg_topics_lines = "\n".join(f"- {safe_for_prompt(t)}" for t in negative_topics)
+        neg_topics_section = f"\nTopics you've rejected:\n{neg_topics_lines}"
+    else:
+        neg_topics_section = ""
+
+    # --- Rejected authors section ---
+    if negative_authors:
+        neg_authors_lines = "\n".join(f"- {safe_for_prompt(a)}" for a in negative_authors)
+        neg_authors_section = f"\nAuthors you've rejected:\n{neg_authors_lines}"
+    else:
+        neg_authors_section = ""
+
     # --- Candidate paper ---
     authors_display = candidate.authors[:_AUTHORS_MAX]
     authors_str = safe_for_prompt(", ".join(authors_display))
@@ -95,7 +120,7 @@ def build_scoring_prompt(
 
 {pos_section}
 
-{neg_section}
+{neg_section}{neg_topics_section}{neg_authors_section}
 
 Candidate paper to score:
 Title: {safe_title}

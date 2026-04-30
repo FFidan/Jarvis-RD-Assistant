@@ -390,6 +390,7 @@ async def test_db_pool(live_pg_dsn):
     # Clean up: drop all tables (reverse order to respect FKs)
     tables_to_drop = [
         "recommendations",
+        "recommendation_feedback",
         "pulse_ratings",
         "pulse_cards",
         "pulse_decks",

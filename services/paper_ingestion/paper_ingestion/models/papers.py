@@ -70,7 +70,9 @@ class PaperBase(BaseModel):
 class PaperCreate(PaperBase):
     """Used when inserting a new paper from a source."""
 
-    pass
+    discovery_origin: Literal["user_initiated", "pulse", "recommender", "citation_batch"] = (
+        "user_initiated"
+    )
 
 
 class PaperResponse(PaperBase):
@@ -457,6 +459,38 @@ class RecomputePrioritiesResponse(BaseModel):
     """Response for POST /api/papers/recompute-priorities."""
 
     updated: int
+
+
+class FeedbackListItem(BaseModel):
+    """One row in GET /api/recommendation_feedback response."""
+
+    paper_id: int
+    title: str
+    signal: Literal["positive", "negative"]
+    source: Literal[
+        "pulse_thumbs",
+        "feed_thumbs",
+        "paper_detail_thumbs",
+        "dismiss_combined",
+    ]
+    reason: str | None = None
+    topic_id: int | None = None
+    topic_name: str | None = None
+    created_at: datetime
+
+
+class FeedbackListResponse(BaseModel):
+    """Response for GET /api/recommendation_feedback."""
+
+    items: list[FeedbackListItem]
+    total: int
+
+
+class DeleteFeedbackResponse(BaseModel):
+    """Response for DELETE /api/recommendation_feedback/{topic_id}."""
+
+    deleted: int
+    topic_id: int
 
 
 class BatchProcessResponse(BaseModel):

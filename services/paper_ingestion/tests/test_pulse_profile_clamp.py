@@ -23,7 +23,7 @@ async def test_load_profile_clamps_negative_weights(caplog):
         [],  # engaged papers for centroid
     ]
 
-    # Phase 3 connection: config (with a negative weight) + ratings
+    # Phase 3 connection: config (with a negative weight) + ratings + Phase-A extras
     phase3_conn = AsyncMock()
     phase3_conn.fetch.side_effect = [
         # user_config rows: pulse.weights has recency = -0.5
@@ -49,6 +49,10 @@ async def test_load_profile_clamps_negative_weights(caplog):
         ],
         [],  # positive ratings
         [],  # negative ratings
+        [],  # L1 negative topics
+        [],  # L1 negative authors
+        [],  # L3 dampened topics
+        [],  # L2 negative abstracts
     ]
 
     pool = MagicMock()
@@ -110,8 +114,12 @@ async def test_load_profile_no_clamp_warning_when_weights_positive(caplog):
                 },
             },
         ],
-        [],
-        [],
+        [],  # positive ratings
+        [],  # negative ratings
+        [],  # L1 negative topics
+        [],  # L1 negative authors
+        [],  # L3 dampened topics
+        [],  # L2 negative abstracts
     ]
 
     pool = MagicMock()
@@ -150,6 +158,10 @@ def _make_pool_with_weights(weights: dict) -> MagicMock:
         ],
         [],  # positive ratings
         [],  # negative ratings
+        [],  # L1 negative topics
+        [],  # L1 negative authors
+        [],  # L3 dampened topics
+        [],  # L2 negative abstracts
     ]
 
     pool = MagicMock()

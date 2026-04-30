@@ -552,6 +552,38 @@ async def test_set_config_string_deck_size_returns_400(_app):
 
 
 @pytest.mark.asyncio
+async def test_set_config_l2_lambda_valid_accepted(_app):
+    """PUT /api/config/pulse.l2_lambda accepts a float in [0, 2]."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.l2_lambda",
+            json={"key": "pulse.l2_lambda", "value": 0.5},
+        )
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_set_config_l2_lambda_out_of_range_returns_400(_app):
+    """PUT /api/config/pulse.l2_lambda rejects a value > 2.0."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/pulse.l2_lambda",
+            json={"key": "pulse.l2_lambda", "value": 5.0},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_set_config_valid_cron_accepted(_app):
     """PUT /api/config/pulse.cron accepts a valid cron expression."""
     app, conn, _ = _app

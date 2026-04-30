@@ -146,7 +146,7 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
 async def _get_starred_ids(conn: asyncpg.Connection, user_id: int | None) -> list[int]:
     rows = await conn.fetch(
         "SELECT paper_id FROM paper_user_state"
-        " WHERE (COALESCE(starred, FALSE) OR status = 'starred')"
+        " WHERE COALESCE(starred, FALSE)"
         "   AND user_id IS NOT DISTINCT FROM $1",
         user_id,
     )
@@ -175,22 +175,27 @@ def _compute_score(
 async def _filter_unread(
     conn: asyncpg.Connection, paper_ids: list[int], user_id: int | None
 ) -> set[int]:
-    # Dismissed (Trash) and archived papers are both excluded from candidates;
-    # starred papers remain eligible for re-recommendation.
+    # Hard-exclude papers whose lifecycle state is 'trash' or 'done',
+    # and papers with a negative recommendation_feedback signal in the last 60 days.
+    # Papers with no user_state row (COALESCE to 'inbox') remain eligible.
     if not paper_ids:
         return set()
     rows = await conn.fetch(
-        "SELECT id FROM papers p WHERE p.id = ANY($1)"
-        " AND NOT EXISTS ("
-        "   SELECT 1 FROM paper_user_state"
-        "   WHERE paper_id = p.id"
-        "     AND user_id IS NOT DISTINCT FROM $2"
-        "     AND ("
-        "         status = 'read'"
-        "         OR COALESCE(archived, FALSE)"
-        "         OR COALESCE(dismissed, FALSE)"
-        "     )"
-        ")",
+        """SELECT id FROM papers p
+               WHERE p.id = ANY($1)
+                 AND NOT EXISTS (
+                   SELECT 1 FROM paper_user_state pus
+                    WHERE pus.paper_id = p.id
+                      AND pus.user_id IS NOT DISTINCT FROM $2
+                      AND COALESCE(pus.state, 'inbox') IN ('trash', 'done')
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM recommendation_feedback rf
+                    WHERE rf.paper_id = p.id
+                      AND rf.signal = 'negative'
+                      AND rf.created_at > NOW() - INTERVAL '60 days'
+                      AND rf.user_id IS NOT DISTINCT FROM $2
+                 )""",
         paper_ids,
         user_id,
     )

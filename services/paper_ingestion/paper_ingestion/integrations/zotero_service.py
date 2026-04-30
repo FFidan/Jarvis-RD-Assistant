@@ -520,12 +520,22 @@ async def poll_zotero_library(
             abstract=abstract or None,
             url=url,
             metadata=metadata,
+            discovery_origin="user_initiated",
         )
 
         try:
             async with db_pool.acquire() as conn:
                 row = await upsert_paper(conn, paper_create)
                 paper_id: int = row["id"]
+                # First-sync wins: INSERT to_read state but never overwrite
+                # existing user state (user may have trashed the paper).
+                await conn.execute(
+                    """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
+                       VALUES ($1, $2, 'to_read', FALSE)
+                       ON CONFLICT (paper_id, user_id) DO NOTHING""",
+                    paper_id,
+                    None,  # single-tenant; multi-tenant deferred per spec §10
+                )
                 # Store the Zotero item key on the paper row.
                 if item_key:
                     await conn.execute(

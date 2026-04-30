@@ -39,12 +39,15 @@ def _make_profile(
     topics: list[TopicRef] | None = None,
     tracked_author_names: set[str] | None = None,
     tracked_author_s2_ids: set[str] | None = None,
+    negative_centroid: list[float] | None = None,
+    l2_lambda: float = 0.5,
 ) -> UserProfile:
     return UserProfile(
         topics=topics or [],
         tracked_author_names=tracked_author_names or set(),
         tracked_author_s2_ids=tracked_author_s2_ids or set(),
         library_centroid=centroid,
+        negative_centroid=negative_centroid,
         weights={
             "embedding": 0.2,
             "topic": 0.2,
@@ -52,6 +55,7 @@ def _make_profile(
             "llm_novelty": 0.1,
             "author_bonus": 0.15,
             "recency": 0.05,
+            "l2_lambda": l2_lambda,
         },
         deck_size=10,
         stage2_top_k=50,
@@ -258,5 +262,76 @@ async def test_stage1_scored_candidate_has_expected_signals():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
 
     signals = result[0].signals
-    for key in ("embedding", "topic", "recency", "author_bonus"):
+    for key in ("embedding", "topic", "recency", "author_bonus", "l2_penalty"):
         assert key in signals, f"Missing signal: {key}"
+
+
+# ---------------------------------------------------------------------------
+# L2 negative-centroid penalty (Wave 1cd §7.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage1_no_negative_centroid_no_penalty():
+    """When profile.negative_centroid is None, l2_penalty signal is 0.0."""
+    paper = _make_paper()
+    profile = _make_profile(centroid=None, negative_centroid=None)
+    embedder = _make_embedder([[1.0, 0.0, 0.0, 0.0]])
+
+    result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
+
+    assert len(result) == 1
+    assert result[0].signals["l2_penalty"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_stage1_with_negative_centroid_applies_penalty():
+    """When negative_centroid is set, l2_penalty equals lambda * cosine(cand, neg_centroid).
+
+    Uses unit vectors so cosine similarity = 1.0 for perfectly aligned candidate.
+    Expected penalty = l2_lambda * 1.0.
+    The embedding signal is reduced by this penalty (embedding_sim - penalty).
+    """
+    # Candidate and negative centroid point in the same direction (cosine=1.0)
+    cand_vec = [1.0, 0.0, 0.0, 0.0]
+    neg_centroid = [1.0, 0.0, 0.0, 0.0]
+    l2_lambda = 0.5
+
+    paper = _make_paper()
+    profile = _make_profile(
+        centroid=None,  # no positive centroid — isolates L2 path
+        negative_centroid=neg_centroid,
+        l2_lambda=l2_lambda,
+    )
+    embedder = _make_embedder([cand_vec])
+
+    result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
+
+    assert len(result) == 1
+    signals = result[0].signals
+    expected_penalty = l2_lambda * 1.0  # cosine([1,0,0,0], [1,0,0,0]) = 1.0
+    assert abs(signals["l2_penalty"] - expected_penalty) < 1e-6
+    # embedding signal = 0.0 (no positive centroid) - penalty → negative
+    assert abs(signals["embedding"] - (0.0 - expected_penalty)) < 1e-6
+
+
+@pytest.mark.asyncio
+async def test_stage1_with_negative_centroid_orthogonal_no_penalty():
+    """Candidate orthogonal to negative_centroid gets zero penalty (cosine=0.0)."""
+    cand_vec = [0.0, 1.0, 0.0, 0.0]  # orthogonal to neg_centroid
+    neg_centroid = [1.0, 0.0, 0.0, 0.0]
+    l2_lambda = 0.5
+
+    paper = _make_paper()
+    profile = _make_profile(
+        centroid=None,
+        negative_centroid=neg_centroid,
+        l2_lambda=l2_lambda,
+    )
+    embedder = _make_embedder([cand_vec])
+
+    result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
+
+    assert len(result) == 1
+    # cosine([0,1,0,0], [1,0,0,0]) = 0.0 → penalty = 0.0
+    assert abs(result[0].signals["l2_penalty"]) < 1e-6

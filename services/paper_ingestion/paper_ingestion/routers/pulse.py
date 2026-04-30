@@ -16,7 +16,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, current_user_id, current_user_id_or_none, log_audit
+from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
 from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -33,6 +33,11 @@ from paper_ingestion.models import (
 )
 from paper_ingestion.pulse.deck import load_history, load_today
 from paper_ingestion.pulse.training import FEATURE_NAMES
+from paper_ingestion.routers._paper_helpers import (
+    _trash_paper,
+    _upsert_recommendation_feedback,
+    _upsert_state_and_starred,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,98 +126,53 @@ async def get_history(
 async def rate_card(
     request: Request,
     body: PulseRateRequest = Body(...),
-    user_id: int | None = Depends(current_user_id),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseRateResponse:
-    """Persist a user rating for a Pulse-shown paper.
+    """Persist a user rating for a Pulse-shown paper (spec §4.4).
 
-    Rating is stored in ``pulse_ratings`` with ``source='pulse'`` so that the
-    profile centroid refresh can distinguish Pulse clicks from library thumbs.
+    Signal routing:
+    - ``open``    — logging-only, no DB writes.
+    - ``save``    — upserts lifecycle state to ``to_read`` (no feedback row).
+    - ``up``      — positive recommendation_feedback with source ``pulse_thumbs``.
+    - ``down``    — negative recommendation_feedback with source ``pulse_thumbs``.
+    - ``dismiss`` — trashes paper AND writes negative feedback (``dismiss_combined``),
+                    both inside a single transaction so partial failures roll back.
 
-    Guard: the paper must belong to a Pulse deck before it can be rated.
-    Duplicate ratings (double-click) are handled by ON CONFLICT DO UPDATE.
+    Guard: paper must be a member of the requesting user's pulse deck (404 if not).
     """
-    try:
-        async with db_pool.acquire() as conn:
-            # Guard: paper must exist in a pulse deck
-            member = await conn.fetchval(
-                """SELECT 1 FROM pulse_cards pc
-                   JOIN pulse_decks pd ON pc.deck_id = pd.id
-                   WHERE pc.paper_id = $1
-                     AND pd.user_id IS NOT DISTINCT FROM $2
-                   LIMIT 1""",
-                body.paper_id,
-                user_id,
-            )
-            if not member:
-                raise HTTPException(status_code=404, detail="Paper not found in your pulse deck")
+    _ = request  # required by slowapi limiter — pyright suppression idiom (plan §2 constraint 7)
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        in_deck = await conn.fetchval(
+            """SELECT 1 FROM pulse_cards pc
+               JOIN pulse_decks pd ON pc.deck_id = pd.id
+               WHERE pc.paper_id = $1
+                 AND pd.user_id IS NOT DISTINCT FROM $2
+               LIMIT 1""",
+            body.paper_id,
+            user_id,
+        )
+        if not in_deck:
+            raise HTTPException(status_code=404, detail="Paper not found in your pulse deck")
 
-            await conn.execute(
-                """INSERT INTO pulse_ratings (paper_id, user_id, rating, source)
-                   VALUES ($1, $2, $3, 'pulse')
-                   ON CONFLICT (paper_id, user_id) DO UPDATE
-                     SET rating    = EXCLUDED.rating,
-                         created_at = NOW()""",
-                body.paper_id,
-                user_id,
-                body.rating,
-            )
-            # Early-return for 'open': pulse_ratings row already recorded above for
-            # analytics; paper_user_state must NOT be written (logging-only action).
+        async with conn.transaction():
             if body.rating == "open":
-                return PulseRateResponse(status="logged")
-
-            # Map rating → lifecycle state changes:
-            #   save    → starred=TRUE, saved=TRUE, preference='up'
-            #   dismiss → dismissed=TRUE, preference='down' (saved unchanged)
-            #   up/down → preference only (no saved/dismissed change)
-            if body.rating == "save":
-                preference = "up"
-                starred = True
-                saved = True
-                dismissed = False  # default — won't clobber existing TRUE
-            elif body.rating == "dismiss":
-                preference = "down"
-                starred = False  # default — won't clobber existing TRUE
-                saved = False  # default — won't clobber existing TRUE
-                dismissed = True
+                logger.debug("pulse open: paper_id=%s user_id=%s", body.paper_id, user_id)
+            elif body.rating == "save":
+                await _upsert_state_and_starred(conn, body.paper_id, user_id, state="to_read")
             elif body.rating == "up":
-                preference = "up"
-                starred = False
-                saved = False
-                dismissed = False
-            else:
-                # 'down' and any unrecognised ratings: treat as thumbs-down
-                preference = "down"
-                starred = False
-                saved = False
-                dismissed = False
-            await conn.execute(
-                """INSERT INTO paper_user_state
-                       (paper_id, user_id, status, starred, archived, preference, saved, dismissed)
-                   VALUES ($1, $2, 'new', $3, FALSE, $4, $5, $6)
-                   ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                       starred    = CASE WHEN EXCLUDED.starred IS DISTINCT FROM FALSE
-                                         THEN EXCLUDED.starred
-                                         ELSE paper_user_state.starred END,
-                       preference = CASE WHEN EXCLUDED.preference IS DISTINCT FROM 'none'
-                                         THEN EXCLUDED.preference
-                                         ELSE paper_user_state.preference END,
-                       saved      = CASE WHEN EXCLUDED.saved IS DISTINCT FROM FALSE
-                                         THEN EXCLUDED.saved
-                                         ELSE paper_user_state.saved END,
-                       dismissed  = CASE WHEN EXCLUDED.dismissed IS DISTINCT FROM FALSE
-                                         THEN EXCLUDED.dismissed
-                                         ELSE paper_user_state.dismissed END""",
-                body.paper_id,
-                user_id,
-                starred,
-                preference,
-                saved,
-                dismissed,
-            )
-    except asyncpg.ForeignKeyViolationError as exc:
-        raise HTTPException(status_code=404, detail="Paper not found") from exc
+                await _upsert_recommendation_feedback(
+                    conn, body.paper_id, user_id, "positive", "pulse_thumbs"
+                )
+            elif body.rating == "down":
+                await _upsert_recommendation_feedback(
+                    conn, body.paper_id, user_id, "negative", "pulse_thumbs"
+                )
+            elif body.rating == "dismiss":
+                await _trash_paper(conn, body.paper_id, user_id)
+                await _upsert_recommendation_feedback(
+                    conn, body.paper_id, user_id, "negative", "dismiss_combined"
+                )
     return PulseRateResponse(status="ok")
 
 

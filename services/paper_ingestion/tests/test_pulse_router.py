@@ -121,22 +121,113 @@ def test_history_returns_list(client):
     assert call.kwargs.get("days") == 14 or (len(call.args) >= 2 and call.args[1] == 14)
 
 
-def test_rate_persists_rating(client):
+def test_rate_open_writes_nothing(client):
+    """rating='open' returns 200 and does NOT call any write SQL."""
     tc, pool, conn = client
-    conn.execute.return_value = "INSERT 0 1"
+    conn.fetchval.return_value = 1  # deck membership guard passes
 
-    resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "up"})
+    with (
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
+        ) as mock_state,
+        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
+    ):
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "open"})
+
     assert resp.status_code == 200
-    # Sprint 7 B3: rate_card now issues TWO writes — pulse_ratings then
-    # paper_user_state preference sync. Inspect both rather than only the
-    # last awaited call.
-    call_sqls = [c.args[0] for c in conn.execute.await_args_list]
-    assert any("INSERT INTO pulse_ratings" in sql for sql in call_sqls)
-    rating_args = next(
-        c.args for c in conn.execute.await_args_list if "INSERT INTO pulse_ratings" in c.args[0]
-    )
-    assert 42 in rating_args
-    assert "up" in rating_args
+    mock_fb.assert_not_called()
+    mock_state.assert_not_called()
+    mock_trash.assert_not_called()
+
+
+def test_rate_save_writes_state_only(client):
+    """rating='save' calls _upsert_state_and_starred(state='to_read') only."""
+    tc, pool, conn = client
+    conn.fetchval.return_value = 1
+
+    with (
+        patch(
+            "paper_ingestion.routers.pulse._upsert_state_and_starred", new_callable=AsyncMock
+        ) as mock_state,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+    ):
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "save"})
+
+    assert resp.status_code == 200
+    mock_state.assert_awaited_once()
+    call_kwargs = mock_state.await_args
+    assert call_kwargs is not None
+    # Third positional arg is conn, then paper_id, then user_id; state is a kwarg
+    assert call_kwargs.kwargs.get("state") == "to_read"
+    mock_fb.assert_not_called()
+
+
+def test_rate_up_writes_recommendation_feedback_positive_pulse_thumbs(client):
+    """rating='up' calls _upsert_recommendation_feedback(signal='positive', source='pulse_thumbs')."""
+    tc, pool, conn = client
+    conn.fetchval.return_value = 1
+
+    with patch(
+        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+    ) as mock_fb:
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "up"})
+
+    assert resp.status_code == 200
+    mock_fb.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg, signal_arg, source_arg = mock_fb.await_args.args
+    assert paper_id_arg == 42
+    assert signal_arg == "positive"
+    assert source_arg == "pulse_thumbs"
+
+
+def test_rate_down_writes_recommendation_feedback_negative_pulse_thumbs(client):
+    """rating='down' calls _upsert_recommendation_feedback(signal='negative', source='pulse_thumbs')."""
+    tc, pool, conn = client
+    conn.fetchval.return_value = 1
+
+    with patch(
+        "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+    ) as mock_fb:
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "down"})
+
+    assert resp.status_code == 200
+    mock_fb.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg, signal_arg, source_arg = mock_fb.await_args.args
+    assert paper_id_arg == 42
+    assert signal_arg == "negative"
+    assert source_arg == "pulse_thumbs"
+
+
+def test_rate_dismiss_writes_state_trash_and_recommendation_feedback_negative_dismiss_combined(
+    client,
+):
+    """rating='dismiss' calls both _trash_paper AND _upsert_recommendation_feedback(signal='negative', source='dismiss_combined')."""
+    tc, pool, conn = client
+    conn.fetchval.return_value = 1
+
+    with (
+        patch("paper_ingestion.routers.pulse._trash_paper", new_callable=AsyncMock) as mock_trash,
+        patch(
+            "paper_ingestion.routers.pulse._upsert_recommendation_feedback", new_callable=AsyncMock
+        ) as mock_fb,
+    ):
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 42, "rating": "dismiss"})
+
+    assert resp.status_code == 200
+    mock_trash.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg = mock_trash.await_args.args
+    assert paper_id_arg == 42
+
+    mock_fb.assert_awaited_once()
+    _conn_arg, fb_paper_id, fb_user_id, signal_arg, source_arg = mock_fb.await_args.args
+    assert fb_paper_id == 42
+    assert signal_arg == "negative"
+    assert source_arg == "dismiss_combined"
 
 
 def test_rate_rejects_invalid_rating(client):

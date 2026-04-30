@@ -69,6 +69,8 @@ async def run_auto_pipeline(app) -> None:
                             async with db_pool.acquire() as conn:
                                 for paper in results:
                                     try:
+                                        # spec §3.3 lock — system-initiated bulk discovery
+                                        paper.discovery_origin = "recommender"
                                         row = await upsert_paper(conn, paper)
                                         if row and row["is_insert"]:
                                             papers_added += 1

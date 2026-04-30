@@ -109,8 +109,9 @@ async def test_persist_deck_inserts_deck_and_cards():
     papers = [_make_paper(i) for i in range(3)]
     # fetchval call sequence with new persist_deck logic:
     #   1: deck INSERT RETURNING id → deck_id=42
-    #   2,3,4: card INSERT RETURNING id → non-None means success
-    conn.fetchval.side_effect = [42, 101, 102, 103]
+    #   2: L3 count query (25 candidates pass filter, ≥ 20 so L3 applies)
+    #   3,4,5: card INSERT RETURNING id → non-None means success
+    conn.fetchval.side_effect = [42, 25, 101, 102, 103]
 
     cards = [_make_scored(p, score=float(i) / 3.0) for i, p in enumerate(papers)]
 
@@ -128,8 +129,11 @@ async def test_persist_deck_returns_insert_count():
     """persist_deck returns the number of successfully inserted card rows."""
     pool, conn = _make_pool_and_conn()
     deck_date = date(2024, 1, 15)
-    # fetchval sequence: deck upsert → deck_id=99, card insert → inserted_id=1 (success)
-    conn.fetchval.side_effect = [99, 1]
+    # fetchval sequence:
+    #   1: deck upsert → deck_id=99
+    #   2: L3 count query → 25 candidates pass filter (≥ 20, L3 applies)
+    #   3: card insert → inserted_id=1 (success)
+    conn.fetchval.side_effect = [99, 25, 1]
 
     cards = [_make_scored(_make_paper(0))]
 
@@ -203,16 +207,20 @@ async def test_persist_deck_inner_uses_pulse_candidate_exclude_sql():
 
     pool, conn = _make_pool_and_conn()
     deck_date = date(2024, 6, 3)
-    conn.fetchval.side_effect = [55, 1]  # deck_id, then one card success
+    # fetchval sequence:
+    #   1: deck upsert → deck_id=55
+    #   2: L3 count query → 25 candidates pass filter (≥ 20, L3 applies)
+    #   3: card INSERT → inserted_id=1 (success)
+    conn.fetchval.side_effect = [55, 25, 1]  # deck_id, l3_count, then one card success
 
     paper = _make_paper(0)
     cards = [_make_scored(paper)]
 
     await _persist_deck_inner(conn, deck_date, cards=cards, stats={})
 
-    # Second fetchval call is the card INSERT
-    assert conn.fetchval.call_count >= 2, "Expected at least 2 fetchval calls"
-    card_call = conn.fetchval.call_args_list[1]
+    # Third fetchval call is the card INSERT (index 2; index 1 is L3 count query)
+    assert conn.fetchval.call_count >= 3, "Expected at least 3 fetchval calls"
+    card_call = conn.fetchval.call_args_list[2]
     sql = card_call.args[0]
     assert PULSE_CANDIDATE_EXCLUDE_SQL in sql, (
         f"Card INSERT SQL must embed PULSE_CANDIDATE_EXCLUDE_SQL predicate.\n"
@@ -381,10 +389,11 @@ async def test_persist_deck_counts_actual_inserts_when_paper_missing():
 
     # fetchval call sequence:
     #   1st: deck upsert → deck_id = 7
-    #   2nd: card insert for paper 0 → inserted_id = 101 (success)
-    #   3rd: card insert for paper 1 → None (paper row missing)
-    #   4th: card insert for paper 2 → inserted_id = 103 (success)
-    conn.fetchval.side_effect = [7, 101, None, 103]
+    #   2nd: L3 count query → 25 candidates pass filter (≥ 20, L3 applies)
+    #   3rd: card insert for paper 0 → inserted_id = 101 (success)
+    #   4th: card insert for paper 1 → None (paper row missing)
+    #   5th: card insert for paper 2 → inserted_id = 103 (success)
+    conn.fetchval.side_effect = [7, 25, 101, None, 103]
 
     papers = [_make_paper(i) for i in range(3)]
     cards = [_make_scored(p, score=float(i + 1) / 3.0) for i, p in enumerate(papers)]

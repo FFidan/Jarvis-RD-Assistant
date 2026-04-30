@@ -307,6 +307,7 @@ async def run_pulse(
                         # B1.1: nested transaction issues SAVEPOINT/ROLLBACK TO SAVEPOINT
                         # so a single-card failure cannot poison the outer transaction.
                         async with conn.transaction():
+                            card.paper.discovery_origin = "pulse"
                             await upsert_paper(conn, card.paper)
                         successes += 1
                     except Exception as exc:  # per-card: roll back savepoint, keep outer txn alive

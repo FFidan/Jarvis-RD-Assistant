@@ -71,6 +71,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "pulse.deck_size",
         "pulse.stage2_top_k",
         "pulse.weights",
+        "pulse.l2_lambda",
         # Setup wizard
         "setup.completed",
         "telegram.owner_chat_id",
@@ -180,6 +181,18 @@ def _validate_optional_int(v: Any) -> None:
         raise ValueError("value must be an integer or null")
 
 
+def _validate_l2_lambda(v: Any) -> None:
+    """Validate pulse.l2_lambda — cosine-penalty multiplier for negative signals.
+
+    Range [0, 2]: 0 disables the penalty, 1 = equal-weight, 2 = double-weight.
+    Values >2 make the penalty dominate scoring, which is considered unsafe.
+    """
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        raise ValueError("pulse.l2_lambda must be a number")
+    if not (0.0 <= float(v) <= 2.0):
+        raise ValueError("pulse.l2_lambda must be between 0.0 and 2.0")
+
+
 def _validate_nonempty_str(v: Any) -> None:
     if not isinstance(v, str) or not v.strip():
         raise ValueError("value must be a non-empty string")
@@ -219,6 +232,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.weights": _validate_pulse_weights,
     "pulse.deck_size": _validate_positive_int,
     "pulse.stage2_top_k": _validate_positive_int,
+    "pulse.l2_lambda": _validate_l2_lambda,
     "pulse.enabled": _validate_bool,
     "setup.completed": _validate_bool,
     "telegram.owner_chat_id": _validate_optional_int,

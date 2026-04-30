@@ -6,6 +6,7 @@ from typing import Annotated
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, assert_paper_ownership, escape_like
+from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import (
@@ -31,6 +32,11 @@ from paper_ingestion.models import (
     UserStateResponse,
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
+from paper_ingestion.routers._paper_helpers import (
+    _trash_paper,
+    _upsert_recommendation_feedback,
+    _upsert_state_and_starred,
+)
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -320,6 +326,10 @@ async def batch_save_papers(
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             for paper in papers:
+                # Wave 1cd Task B6: stamp citation_batch origin (overrides
+                # PaperCreate's "user_initiated" default — the batch endpoint
+                # is the canonical citation-graph fan-out path).
+                paper.discovery_origin = "citation_batch"
                 row = await upsert_paper(conn, paper)
                 results.append(row_to_paper_response(row))
     return results
@@ -451,66 +461,6 @@ async def _assert_paper_in_state(
         )
 
 
-async def _upsert_state_and_starred(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-    *,
-    state: str | None = None,
-    starred: bool | None = None,
-) -> None:
-    """Upsert paper_user_state, writing only the fields explicitly supplied.
-
-    Fields left as ``None`` are preserved on conflict.
-    """
-    if state is None and starred is None:
-        return
-    cols = ["paper_id", "user_id"]
-    placeholders = ["$1", "$2"]
-    values: list[object] = [paper_id, user_id]
-    updates: list[str] = []
-    if state is not None:
-        cols.append("state")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(state)
-        updates.append(f"state = ${len(values)}")
-    if starred is not None:
-        cols.append("starred")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(starred)
-        updates.append(f"starred = ${len(values)}")
-    sql = (
-        f"INSERT INTO paper_user_state ({', '.join(cols)}) "  # noqa: S608
-        f"VALUES ({', '.join(placeholders)}) "
-        f"ON CONFLICT (paper_id, user_id) DO UPDATE SET {', '.join(updates)}"
-    )
-    await conn.execute(sql, *values)
-
-
-async def _trash_paper(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-) -> None:
-    """Atomic move to Trash: ``state_before_trash := state; state := 'trash'``.
-
-    For a paper without a ``paper_user_state`` row, the INSERT branch
-    initialises ``state_before_trash`` to ``'inbox'`` (the implicit default
-    per spec §2.3). For an existing row, the UPDATE preserves the prior
-    state into ``state_before_trash`` so :func:`_restore_paper` can return
-    the paper to where it came from.
-    """
-    await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)
-           VALUES ($1, $2, 'trash', 'inbox')
-           ON CONFLICT (paper_id, user_id) DO UPDATE
-             SET state_before_trash = paper_user_state.state,
-                 state = 'trash'""",
-        paper_id,
-        user_id,
-    )
-
-
 async def _restore_paper(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
@@ -528,31 +478,6 @@ async def _restore_paper(
             WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
         paper_id,
         user_id,
-    )
-
-
-async def _upsert_recommendation_feedback(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-    signal: str,
-    source: str,
-    reason: str | None = None,
-) -> None:
-    """INSERT/UPSERT a ``recommendation_feedback`` row for the given source."""
-    await conn.execute(
-        """INSERT INTO recommendation_feedback
-               (paper_id, user_id, signal, source, reason)
-           VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (paper_id, user_id, source) DO UPDATE
-             SET signal = EXCLUDED.signal,
-                 reason = EXCLUDED.reason,
-                 created_at = NOW()""",
-        paper_id,
-        user_id,
-        signal,
-        source,
-        reason,
     )
 
 
@@ -693,15 +618,35 @@ async def star_paper(
 ):
     """Set ``starred = TRUE``. Does not change reading state.
 
-    Note: Wave 1d will add the optional Zotero push trigger here.
+    Side effect: enqueues a ``zotero.push`` job iff the paper is currently
+    linked to at least one project (``project_papers`` row). The enqueue
+    runs OUTSIDE the connection block so ``jobs_lib.enqueue`` (which
+    acquires its own pool connection) cannot deadlock against the
+    connection we hold here. Failures to enqueue are logged but do not
+    fail the star mutation itself (best-effort).
     """
+    _ = request  # required by @limiter.limit; not used in body
     user_id = await current_user_id_or_none(request)
+    project_link_count = 0
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
+        project_link_count = (
+            await conn.fetchval(
+                "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
+                paper_id,
+            )
+            or 0
+        )
+    # Outside conn block: enqueue without holding the pool slot
+    if project_link_count > 0:
+        try:
+            await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
+        except Exception:
+            logger.exception("zotero.push enqueue failed for paper %d", paper_id)
     return {"status": "ok", "paper_id": paper_id}
 
 

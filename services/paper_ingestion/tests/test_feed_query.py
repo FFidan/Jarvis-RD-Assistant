@@ -22,45 +22,49 @@ def test_split_csv_filter_trims_and_discards_empty_items():
 
 
 def test_build_feed_queries_collects_filters_and_pagination():
-    """The feed query builder should keep bind parameters aligned with filters."""
+    """The feed query builder should keep bind parameters aligned with filters.
+
+    Phase-A redesign: statuses= is deprecated/dead; the view= param replaces it.
+    pus.state (not pus.status) is used throughout.
+    """
     query_parts = build_feed_queries(
         unread_only=True,
         sort="priority",
         limit=10,
         offset=20,
         q="attention",
-        statuses="new,reading",
+        statuses="new,reading",  # deprecated — ignored silently; no SQL generated
         source_types="arxiv",
         topic_names="agents,rag",
         date_from=date(2026, 1, 1),
         date_to=date(2026, 3, 1),
     )
 
-    # WS-6B-β prepends a user-scoping predicate at $1 so all subsequent
-    # placeholders shift +1.  In single-user mode (user_id=None) the predicate
-    # short-circuits to TRUE.
+    # WS-6B-β: user-scoping predicate at $1; single-user mode short-circuits to TRUE.
     assert "($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)" in query_parts.data_query
+    # Phase-A: pus.user_id scoping is in _BASE_FROM (LEFT JOIN)
     assert "pus.user_id IS NOT DISTINCT FROM $1" in query_parts.data_query
-    assert "COALESCE(pus.status, 'new') != 'read'" in query_parts.data_query
-    assert "COALESCE(pus.archived, FALSE)" in query_parts.data_query
+    # unread_only → VIEW_PREDICATES['active'] (Phase-A state machine)
+    assert "COALESCE(pus.state, 'inbox') IN ('inbox','to_read','reading')" in query_parts.data_query
     assert "websearch_to_tsquery" in query_parts.data_query
-    assert "END IN ($3, $4)" in query_parts.data_query
-    assert "p.source_type IN ($5)" in query_parts.data_query
-    assert "t.name = ANY($6::text[])" in query_parts.data_query
-    assert "p.created_at >= $7" in query_parts.data_query
-    assert "p.created_at <= $8" in query_parts.data_query
+
+    # statuses= is dead post-Phase-A — no IN clause generated for it.
+    # With statuses ignored: $2=q, $3=source, $4=topic_list, $5=date_from, $6=date_to
+    assert "p.source_type IN ($3)" in query_parts.data_query
+    assert "t.name = ANY($4::text[])" in query_parts.data_query
+    assert "p.created_at >= $5" in query_parts.data_query
+    assert "p.created_at <= $6" in query_parts.data_query
     assert "ORDER BY p.priority_score DESC NULLS LAST" in query_parts.data_query
+
     assert query_parts.params == [
-        None,  # user_id (single-user default)
-        "attention",
-        "new",
-        "reading",
-        "arxiv",
-        ["agents", "rag"],
-        date(2026, 1, 1),
-        date(2026, 3, 1),
-        10,
-        20,
+        None,  # $1 user_id (single-user default)
+        "attention",  # $2 q
+        "arxiv",  # $3 source_type
+        ["agents", "rag"],  # $4 topic_list
+        date(2026, 1, 1),  # $5 date_from
+        date(2026, 3, 1),  # $6 date_to
+        10,  # $7 LIMIT
+        20,  # $8 OFFSET
     ]
     assert query_parts.count_params == query_parts.params[:-2]
 

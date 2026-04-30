@@ -82,8 +82,8 @@ async def scan_local_pdf_directory(db_pool: Any, *, scan_dir: str | None = None)
                     row = await file_conn.fetchrow(
                         """
                         INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                            url, metadata)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                            url, metadata, discovery_origin)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, 'user_initiated')
                         RETURNING *
                         """,
                         external_id,

@@ -674,6 +674,9 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
     """``star`` writes ``starred = $N`` only — no ``state =`` clause."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
+    # B6 added a fetchval for project_papers COUNT after the upsert.
+    # Return 0 so no zotero.push is enqueued and the comparison succeeds.
+    conn.fetchval.return_value = 0
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)

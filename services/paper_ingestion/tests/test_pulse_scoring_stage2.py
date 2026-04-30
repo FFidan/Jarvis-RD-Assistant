@@ -339,3 +339,66 @@ async def test_stage2_clamps_out_of_range_scores():
     # Normalised signals stay in [0, 1]
     assert 0.0 <= result[0].signals["llm_relevance"] <= 1.0
     assert 0.0 <= result[0].signals["llm_novelty"] <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# negative_topics / negative_authors forwarding (Wave 1cd)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage2_passes_negative_topics_and_authors_to_prompt():
+    """stage2_llm_rerank must forward profile.negative_topics and profile.negative_authors
+    to build_scoring_prompt so the LLM is aware of rejected signals.
+
+    Uses a profile with non-empty negative_topics/negative_authors and patches
+    build_scoring_prompt to capture the kwargs it receives.
+    """
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper)]
+
+    profile = UserProfile(
+        topics=[TopicRef(id=1, name="Neural ODEs", description="Continuous dynamics")],
+        tracked_author_names=set(),
+        tracked_author_s2_ids=set(),
+        library_centroid=None,
+        weights={"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1},
+        deck_size=10,
+        stage2_top_k=50,
+        recent_positive_titles=["Good Paper"],
+        recent_negative_titles=["Bad Paper"],
+        negative_topics=["Computer Vision", "NLP"],
+        negative_authors=["Spam Author"],
+    )
+
+    captured_kwargs: dict = {}
+
+    # Patch build_scoring_prompt to record its kwargs and return a minimal message list.
+    with patch(
+        "paper_ingestion.pulse.scoring.build_scoring_prompt",
+        wraps=None,
+        side_effect=lambda *args, **kwargs: (
+            captured_kwargs.update(kwargs)
+            or [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "score this paper"},
+            ]
+        ),
+    ):
+        with patch(
+            "paper_ingestion.pulse.scoring.call_llm",
+            new_callable=AsyncMock,
+            return_value={"relevance": 7, "novelty": 5, "reasoning": "relevant"},
+        ):
+            result = await stage2_llm_rerank(stage1_out, profile, MagicMock())
+
+    assert len(result) == 1
+    assert result[0].llm_relevance == 7
+    assert "negative_topics" in captured_kwargs, (
+        "build_scoring_prompt not called with negative_topics"
+    )
+    assert "negative_authors" in captured_kwargs, (
+        "build_scoring_prompt not called with negative_authors"
+    )
+    assert list(captured_kwargs["negative_topics"]) == ["Computer Vision", "NLP"]
+    assert list(captured_kwargs["negative_authors"]) == ["Spam Author"]

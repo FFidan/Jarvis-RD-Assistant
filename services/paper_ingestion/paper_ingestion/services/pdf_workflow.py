@@ -52,8 +52,9 @@ async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
     """Insert or update a paper, returning the row."""
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                               published_date, url, pdf_url, citation_count, metadata)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                               published_date, url, pdf_url, citation_count, metadata,
+                               discovery_origin)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
            ON CONFLICT (external_id) DO UPDATE SET
                title = EXCLUDED.title,
                authors = EXCLUDED.authors,
@@ -71,6 +72,7 @@ async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
         paper.pdf_url,
         paper.citation_count,
         paper.metadata,
+        paper.discovery_origin,
     )
     if row is None:
         raise RuntimeError("upsert_paper RETURNING always yields a row")

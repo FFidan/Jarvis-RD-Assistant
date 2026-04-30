@@ -140,7 +140,14 @@ class TestAggregateToPapers:
 
 
 class TestFilterUnread:
-    """_filter_unread returns the set of paper_ids that have no read/archived/starred state."""
+    """_filter_unread returns the set of paper_ids eligible for recommendation.
+
+    Eligibility predicate (Phase-A lifecycle contract):
+    - state IN ('trash', 'done') → excluded (hard lifecycle gate via paper_user_state.state)
+    - recommendation_feedback.signal = 'negative' within 60 days → excluded (L3 hard exclusion)
+    - No state row (COALESCE to 'inbox') → eligible
+    - state IN ('inbox', 'to_read', 'reading') → eligible
+    """
 
     @pytest.mark.asyncio
     async def test_empty_input(self) -> None:
@@ -175,33 +182,189 @@ class TestFilterUnread:
         assert [5, 6, 7] in positional, f"paper_ids not found in call args: {positional}"
 
     @pytest.mark.asyncio
-    async def test_starred_papers_remain_eligible_for_recommendation(self) -> None:
-        # Sprint 7 B4: starred papers stay eligible. The SQL must NOT exclude
-        # status='starred' or COALESCE(starred, FALSE).
+    async def test_lifecycle_predicate_uses_state_column(self) -> None:
+        # Phase-A B5: the SQL must use COALESCE(pus.state, 'inbox') IN ('trash','done')
+        # to gate recommendation eligibility.  Old columns (status, archived, dismissed)
+        # were dropped in migration 047 and must NOT appear in the SQL.
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
         await _filter_unread(conn, [1], user_id=None)
         sql = conn.fetch.await_args.args[0]
-        assert "status = 'read'" in sql
-        assert "archived" in sql
+        assert "'trash'" in sql, "SQL must reference trash state"
+        assert "'done'" in sql, "SQL must reference done state"
+        # Dropped columns must not appear in the predicate
+        assert "status = 'read'" not in sql, "status column was dropped in migration 047"
+        assert "archived" not in sql, "archived column was dropped in migration 047"
+        assert "dismissed" not in sql, "dismissed column was dropped in migration 047"
+
+    @pytest.mark.asyncio
+    async def test_starred_papers_remain_eligible_for_recommendation(self) -> None:
+        # Phase-A: starred boolean is in paper_user_state but does NOT gate eligibility
+        # (starred papers are still recommended). The SQL must NOT exclude on starred.
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _filter_unread(conn, [1], user_id=None)
+        sql = conn.fetch.await_args.args[0]
         assert "starred" not in sql, "starred state must not gate recommendation eligibility"
 
     @pytest.mark.asyncio
-    async def test_filter_unread_excludes_dismissed(self, test_db_pool):
-        """Sprint 8 B3.3: dismissed papers are excluded from candidate set."""
-        # Insert a paper
+    async def test_negative_feedback_within_60d_predicate_in_sql(self) -> None:
+        # Phase-A L3: SQL must contain the recommendation_feedback 60-day hard exclusion.
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _filter_unread(conn, [1], user_id=None)
+        sql = conn.fetch.await_args.args[0]
+        assert "recommendation_feedback" in sql, (
+            "SQL must reference recommendation_feedback for L3 exclusion"
+        )
+        assert "'negative'" in sql, "SQL must filter on signal = 'negative'"
+        assert "60 days" in sql, "SQL must enforce the 60-day feedback window"
+
+    @pytest.mark.asyncio
+    async def test_negative_feedback_59d_excludes_paper(self) -> None:
+        """Negative feedback 59 days old (< 60d) fires the NOT EXISTS → paper excluded.
+
+        Boundary contract: `rf.created_at > NOW() - INTERVAL '60 days'`
+        A 59-day-old feedback row satisfies `> (now - 60d)` → EXISTS fires → excluded.
+        """
+        conn = AsyncMock()
+        # Simulate DB returning no rows (paper excluded by the EXISTS condition)
+        conn.fetch = AsyncMock(return_value=[])
+        result = await _filter_unread(conn, [10], user_id=None)
+        assert 10 not in result, (
+            "Paper with 59d-old negative feedback must be excluded (within 60d window)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_negative_feedback_60d_boundary_exclusive(self) -> None:
+        """Negative feedback exactly 60 days old sits on the boundary — exclusive `>`.
+
+        With strict `>`, `created_at = (now - 60d)` is NOT > (now - 60d) → EXISTS does
+        not fire → paper is ELIGIBLE. 60-day-old feedback does NOT trigger exclusion.
+        """
+        conn = AsyncMock()
+        # Simulate DB returning the paper (boundary-exclusive: 60d is NOT excluded)
+        conn.fetch = AsyncMock(return_value=[{"id": 11}])
+        result = await _filter_unread(conn, [11], user_id=None)
+        assert 11 in result, (
+            "Paper with exactly 60d-old negative feedback must be ELIGIBLE "
+            "(strict > means boundary is exclusive: 60d old does NOT trigger exclusion)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_negative_feedback_61d_eligible(self) -> None:
+        """Negative feedback 61 days old is outside the 60d window → paper eligible."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[{"id": 12}])
+        result = await _filter_unread(conn, [12], user_id=None)
+        assert 12 in result, (
+            "Paper with 61d-old negative feedback must be eligible (expired window)"
+        )
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_excludes_trash_state(self, test_db_pool):
+        """Phase-A: papers with state='trash' are excluded from recommendation candidates.
+
+        Migration 047 replaced dismissed=TRUE with state='trash'. This test uses the
+        new schema column (state TEXT) not the dropped boolean (dismissed).
+        """
         async with test_db_pool.acquire() as conn:
             paper_id = await conn.fetchval(
                 "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-dismiss-1', 'arxiv', 'T', '{}', 'http://x') RETURNING id"
+                "VALUES ('test-trash-1', 'arxiv', 'T', '{}', 'http://x') RETURNING id"
             )
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, status, dismissed) "
-                "VALUES ($1, NULL, 'new', TRUE)",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) "
+                "VALUES ($1, NULL, 'trash')",
                 paper_id,
             )
             result = await _filter_unread(conn, [paper_id], user_id=None)
-            assert paper_id not in result, "Dismissed papers must be excluded from candidates"
+            assert paper_id not in result, "Trash papers must be excluded from candidates"
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_excludes_done_state(self, test_db_pool):
+        """Phase-A: papers with state='done' are excluded from recommendation candidates.
+
+        Migration 047 replaced archived=TRUE/status='read' with state='done'.
+        """
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-done-1', 'arxiv', 'Done Paper', '{}', 'http://done') RETURNING id"
+            )
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, NULL, 'done')",
+                paper_id,
+            )
+            result = await _filter_unread(conn, [paper_id], user_id=None)
+            assert paper_id not in result, "Done papers must be excluded from candidates"
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_includes_inbox_and_reading_states(self, test_db_pool):
+        """Phase-A: papers with state in ('inbox','to_read','reading') remain eligible."""
+        async with test_db_pool.acquire() as conn:
+            for state_val, ext_id in [
+                ("inbox", "test-inbox-1"),
+                ("to_read", "test-to-read-1"),
+                ("reading", "test-reading-1"),
+            ]:
+                paper_id = await conn.fetchval(
+                    "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                    "VALUES ($1, 'arxiv', $1, '{}', 'http://x') RETURNING id",
+                    ext_id,
+                )
+                await conn.execute(
+                    "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, NULL, $2)",
+                    paper_id,
+                    state_val,
+                )
+                result = await _filter_unread(conn, [paper_id], user_id=None)
+                assert paper_id in result, f"Paper with state='{state_val}' must remain eligible"
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_excludes_negative_feedback_within_60d(self, test_db_pool):
+        """Phase-A L3: negative recommendation_feedback within 60 days excludes a paper."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-negfb-1', 'arxiv', 'Neg FB Paper', '{}', 'http://nf') RETURNING id"
+            )
+            # Insert negative feedback 30 days ago (well within the 60d window)
+            await conn.execute(
+                "INSERT INTO recommendation_feedback"
+                " (paper_id, user_id, signal, source, created_at)"
+                " VALUES ($1, NULL, 'negative', 'pulse_thumbs', NOW() - INTERVAL '30 days')",
+                paper_id,
+            )
+            result = await _filter_unread(conn, [paper_id], user_id=None)
+            assert paper_id not in result, (
+                "Paper with negative feedback within 60 days must be excluded"
+            )
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_includes_paper_after_60d_negative_feedback(self, test_db_pool):
+        """Phase-A L3 boundary (exclusive): negative feedback > 60 days old does not exclude.
+
+        Strict `>` means a feedback row created exactly 60d+1s ago is outside the window.
+        Here we use 61 days to be unambiguous.
+        """
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-negfb-2', 'arxiv', 'Old Neg FB Paper', '{}', 'http://nf2')"
+                " RETURNING id"
+            )
+            # Feedback 61 days ago — outside the 60d exclusive window
+            await conn.execute(
+                "INSERT INTO recommendation_feedback"
+                " (paper_id, user_id, signal, source, created_at)"
+                " VALUES ($1, NULL, 'negative', 'pulse_thumbs', NOW() - INTERVAL '61 days')",
+                paper_id,
+            )
+            result = await _filter_unread(conn, [paper_id], user_id=None)
+            assert paper_id in result, (
+                "Paper with negative feedback older than 60 days must be eligible again"
+            )
 
     # -----------------------------------------------------------------------
     # Multi-tenant isolation tests (W3-T2)
@@ -231,65 +394,74 @@ class TestFilterUnread:
 
     @pytest.mark.asyncio
     async def test_filter_unread_cross_user_isolation(self, test_db_pool):
-        """State rows for user A must NOT affect filtering for user B."""
+        """State rows for user A must NOT affect filtering for user B.
+
+        Phase-A: uses state='done' (replaces old status='read').
+        """
         async with test_db_pool.acquire() as conn:
             paper_id = await conn.fetchval(
                 "INSERT INTO papers (external_id, source_type, title, authors, url) "
                 "VALUES ('test-isolation-1', 'arxiv', 'Isolation Paper', '{}', 'http://x') "
                 "RETURNING id"
             )
-            # User A marks the paper as read
+            # User A marks the paper as done (Phase-A: was status='read')
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, status) VALUES ($1, 1, 'read')",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, 'done')",
                 paper_id,
             )
-            # User B queries: paper should still appear (user B has not read it)
+            # User B queries: paper should still appear (user B has not done it)
             result = await _filter_unread(conn, [paper_id], user_id=2)
-            assert paper_id in result, "Paper read by user A must still be a candidate for user B"
-            # User A queries: paper should be excluded (user A has read it)
+            assert paper_id in result, (
+                "Paper marked done by user A must still be a candidate for user B"
+            )
+            # User A queries: paper should be excluded (user A marked it done)
             result = await _filter_unread(conn, [paper_id], user_id=1)
-            assert paper_id not in result, "Paper read by user A must be excluded for user A"
+            assert paper_id not in result, "Paper marked done by user A must be excluded for user A"
 
     @pytest.mark.asyncio
-    async def test_filter_unread_archived_cross_user_isolation(self, test_db_pool):
-        """Archived flag for user A must NOT exclude the paper for user B."""
+    async def test_filter_unread_done_cross_user_isolation(self, test_db_pool):
+        """state='done' for user A must NOT exclude the paper for user B.
+
+        Phase-A: state='done' replaces the old archived=TRUE column (dropped in migration 047).
+        """
         async with test_db_pool.acquire() as conn:
             paper_id = await conn.fetchval(
                 "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-isolation-2', 'arxiv', 'Archived Paper', '{}', 'http://y') "
+                "VALUES ('test-isolation-2', 'arxiv', 'Done Paper', '{}', 'http://y') "
                 "RETURNING id"
             )
-            # User A archives the paper
+            # User A marks the paper as done (was: archived=TRUE)
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, status, archived) "
-                "VALUES ($1, 10, 'new', TRUE)",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 10, 'done')",
                 paper_id,
             )
             # User B: paper must still be a candidate
             result = await _filter_unread(conn, [paper_id], user_id=20)
             assert paper_id in result, (
-                "Paper archived by user A must still be a candidate for user B"
+                "Paper in state='done' for user A must still be a candidate for user B"
             )
 
     @pytest.mark.asyncio
-    async def test_filter_unread_dismissed_cross_user_isolation(self, test_db_pool):
-        """Dismissed flag for user A must NOT exclude the paper for user B."""
+    async def test_filter_unread_trash_cross_user_isolation(self, test_db_pool):
+        """state='trash' for user A must NOT exclude the paper for user B.
+
+        Phase-A: state='trash' replaces the old dismissed=TRUE column (dropped in migration 047).
+        """
         async with test_db_pool.acquire() as conn:
             paper_id = await conn.fetchval(
                 "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-isolation-3', 'arxiv', 'Dismissed Paper', '{}', 'http://z') "
+                "VALUES ('test-isolation-3', 'arxiv', 'Trash Paper', '{}', 'http://z') "
                 "RETURNING id"
             )
-            # User A dismisses the paper
+            # User A trashes the paper (was: dismissed=TRUE)
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, status, dismissed) "
-                "VALUES ($1, 100, 'new', TRUE)",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 100, 'trash')",
                 paper_id,
             )
             # User B: paper must still be a candidate
             result = await _filter_unread(conn, [paper_id], user_id=200)
             assert paper_id in result, (
-                "Paper dismissed by user A must still be a candidate for user B"
+                "Paper in state='trash' for user A must still be a candidate for user B"
             )
 
 
@@ -347,24 +519,33 @@ class TestGetStarredIds:
             )
 
     @pytest.mark.asyncio
-    async def test_starred_status_cross_user_isolation(self, test_db_pool):
-        """status='starred' for user A must not pollute user B's starred set."""
+    async def test_starred_boolean_only_drives_starred_ids(self, test_db_pool):
+        """Phase-A: _get_starred_ids uses COALESCE(starred, FALSE) — no status column.
+
+        Migration 047 dropped status (including the old 'starred' enum value).
+        A paper whose user_state has starred=FALSE must NOT appear in starred results,
+        even if other fields would have matched the old status='starred' predicate.
+        """
         async with test_db_pool.acquire() as conn:
             paper_id = await conn.fetchval(
                 "INSERT INTO papers (external_id, source_type, title, authors, url) "
-                "VALUES ('test-star-isolation-2', 'arxiv', 'Status Star Paper', '{}', 'http://s2') "
+                "VALUES ('test-star-isolation-2', 'arxiv', 'Not-Starred Paper', '{}', 'http://s2') "
                 "RETURNING id"
             )
-            # User A marks status='starred'
+            # User A has a state row but starred=FALSE (the only column that now matters)
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, status) "
-                "VALUES ($1, 10, 'starred')",
+                "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, 10, FALSE)",
                 paper_id,
             )
-            # User B: must NOT see paper as starred
+            # User A: paper must NOT be in starred list (starred=FALSE)
+            user_a_starred = await _get_starred_ids(conn, user_id=10)
+            assert paper_id not in user_a_starred, (
+                "Paper with starred=FALSE must not appear in starred list"
+            )
+            # User B: also must not see it
             user_b_starred = await _get_starred_ids(conn, user_id=20)
             assert paper_id not in user_b_starred, (
-                "status='starred' row for user A must not appear in user B's starred list"
+                "Paper with starred=FALSE for user A must not appear in user B's starred list"
             )
 
 
@@ -417,9 +598,9 @@ def _build_app(
     conn = AsyncMock()
 
     # _read_weights: SELECT key, value FROM user_config
-    # _get_starred_ids: SELECT paper_id FROM paper_user_state WHERE status = 'starred'
+    # _get_starred_ids: SELECT paper_id FROM paper_user_state WHERE COALESCE(starred, FALSE)
     # projects: SELECT name, description FROM projects WHERE status = 'active'
-    # _filter_unread: SELECT id FROM papers WHERE ...
+    # _filter_unread: SELECT id FROM papers WHERE ... (state not in trash/done, no 60d neg feedback)
     # executemany: upsert
 
     # We wire conn.fetch with side_effect ordering matching the call sequence inside
@@ -519,8 +700,8 @@ class TestRefreshRecommendations:
 
     @pytest.mark.asyncio
     async def test_already_read_excluded(self) -> None:
-        """Papers present in paper_user_state as read/archived/starred are excluded."""
-        # High score but _filter_unread returns empty → means the paper is read/etc.
+        """Papers filtered out by _filter_unread (state=trash/done or 60d negative feedback) are excluded."""
+        # High score but _filter_unread returns empty → paper is in trash/done or has recent negative feedback.
         app = _build_app(
             starred_ids=[1],
             discover_results=[{"paper_id": 55, "score": 0.95}],

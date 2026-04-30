@@ -80,8 +80,10 @@ async def get_or_create_stub_paper(conn: ConnLike, s2_data: dict) -> int | None:
 
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                               published_date, url, citation_count, metadata)
-           VALUES ($1, 'semantic_scholar', $2, $3, '', $4, $5, $6, $7::jsonb)
+                               published_date, url, citation_count, metadata,
+                               discovery_origin)
+           VALUES ($1, 'semantic_scholar', $2, $3, '', $4, $5, $6, $7::jsonb,
+                   'citation_batch')
            ON CONFLICT (external_id) DO UPDATE SET citation_count = EXCLUDED.citation_count
            RETURNING id""",
         external_id,

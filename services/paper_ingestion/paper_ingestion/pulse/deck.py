@@ -91,14 +91,89 @@ async def _persist_deck_inner(
     # Delete old cards for this deck (idempotent replace)
     await conn.execute("DELETE FROM pulse_cards WHERE deck_id = $1", deck_id)
 
+    # -------------------------------------------------------------------------
+    # L3 safeguard — spec §7.3.1 two-pass min-candidate guarantee
+    #
+    # Count how many of the incoming candidates would survive the 60-day
+    # negative-feedback exclusion before committing to it.  If fewer than 20
+    # survive we fall back to L1+L2 only (skip the NOT EXISTS clause) so the
+    # deck never shrinks to a stub.
+    # -------------------------------------------------------------------------
+    external_ids = [sc.paper.external_id for sc in cards]
+
+    # spec §7.3.1 — count candidates that pass the 60d negative-feedback filter
+    l3_pass_count: int = await conn.fetchval(
+        """
+        SELECT COUNT(*)
+        FROM papers p
+        WHERE p.external_id = ANY($1::text[])
+          AND NOT EXISTS (
+              SELECT 1 FROM recommendation_feedback rf
+               WHERE rf.paper_id = p.id
+                 AND rf.signal = 'negative'
+                 AND rf.created_at > NOW() - INTERVAL '60 days'
+                 AND rf.user_id IS NOT DISTINCT FROM $2
+          )
+        """,
+        external_ids,
+        user_id,
+    )
+
+    _min_l3_candidates = 20
+    apply_l3_filter = l3_pass_count >= _min_l3_candidates
+    if not apply_l3_filter:
+        logger.warning(
+            "L3 hard-exclusion would leave only %d candidates; falling back to L1+L2",
+            l3_pass_count,
+        )
+
     # Insert new cards one by one, counting actual successes
     successes = 0
     for rank, sc in enumerate(cards, start=1):
         reasoning_confidence_str = (
             sc.reasoning_confidence.value if sc.reasoning_confidence is not None else None
         )
-        inserted_id = await conn.fetchval(
-            f"""
+        if apply_l3_filter:
+            # spec §7.3.1 — exclude papers with 60d negative feedback for this user
+            inserted_id = await conn.fetchval(
+                f"""
+            INSERT INTO pulse_cards
+                (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
+                 reasoning, signals, reasoning_verified, reasoning_confidence)
+            SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
+            FROM papers p
+            LEFT JOIN paper_user_state pus
+                   ON pus.paper_id = p.id
+                  AND pus.user_id IS NOT DISTINCT FROM $11
+            WHERE p.external_id = $2
+              AND NOT ({PULSE_CANDIDATE_EXCLUDE_SQL})
+              -- spec §7.3.1: exclude papers with 60d negative feedback for this user
+              AND NOT EXISTS (
+                  SELECT 1 FROM recommendation_feedback rf
+                   WHERE rf.paper_id = p.id
+                     AND rf.signal = 'negative'
+                     AND rf.created_at > NOW() - INTERVAL '60 days'
+                     AND rf.user_id IS NOT DISTINCT FROM $11
+              )
+            ON CONFLICT (deck_id, paper_id) DO NOTHING
+            RETURNING id
+            """,
+                deck_id,
+                sc.paper.external_id,
+                rank,
+                sc.final_score or 0.0,
+                sc.llm_relevance,
+                sc.llm_novelty,
+                sc.reasoning,
+                sc.signals,
+                sc.reasoning_verified,
+                reasoning_confidence_str,
+                user_id,
+            )
+        else:
+            # L3 fallback: skip the 60d negative-feedback filter (L1+L2 only)
+            inserted_id = await conn.fetchval(
+                f"""
             INSERT INTO pulse_cards
                 (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
                  reasoning, signals, reasoning_verified, reasoning_confidence)
@@ -112,18 +187,18 @@ async def _persist_deck_inner(
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
             """,
-            deck_id,
-            sc.paper.external_id,
-            rank,
-            sc.final_score or 0.0,
-            sc.llm_relevance,
-            sc.llm_novelty,
-            sc.reasoning,
-            sc.signals,
-            sc.reasoning_verified,
-            reasoning_confidence_str,
-            user_id,
-        )
+                deck_id,
+                sc.paper.external_id,
+                rank,
+                sc.final_score or 0.0,
+                sc.llm_relevance,
+                sc.llm_novelty,
+                sc.reasoning,
+                sc.signals,
+                sc.reasoning_verified,
+                reasoning_confidence_str,
+                user_id,
+            )
         if inserted_id is not None:
             successes += 1
         else:

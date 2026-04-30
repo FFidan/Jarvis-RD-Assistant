@@ -156,12 +156,22 @@ async def stage1_embedding_filter(
 
     centroid = profile.library_centroid
 
+    # L2 negative-centroid penalty (Wave 1cd §7.2)
+    negative_centroid = profile.negative_centroid  # list[float] | None
+    l2_lambda = float(profile.weights.get("l2_lambda", 0.5))
+
     scored: list[ScoredCandidate] = []
     for idx, candidate in enumerate(candidates):
         cand_vec = candidate_embeddings[idx] if idx < len(candidate_embeddings) else []
 
         # Embedding similarity to library centroid
         embedding_sim = _cosine(cand_vec, centroid) if centroid else 0.0
+        negative_penalty = (
+            l2_lambda * _cosine(cand_vec, negative_centroid)
+            if negative_centroid is not None
+            else 0.0
+        )
+        embedding_sim -= negative_penalty
 
         # Max topic similarity
         topic_sim = 0.0
@@ -186,6 +196,7 @@ async def stage1_embedding_filter(
             "topic": topic_sim,
             "recency": recency,
             "author_bonus": author_bonus,
+            "l2_penalty": negative_penalty,
         }
         # Preliminary score (for ranking cut only)
         prelim = embedding_sim + topic_sim + recency + author_bonus * 0.5
@@ -252,6 +263,8 @@ async def stage2_llm_rerank(
                     topic_context=profile.topics,
                     positive_examples=profile.recent_positive_titles,
                     negative_examples=profile.recent_negative_titles,
+                    negative_topics=profile.negative_topics,
+                    negative_authors=profile.negative_authors,
                     candidate=sc.paper,
                 )
                 # Extract system and user content to pass via proper roles.
