@@ -64,10 +64,10 @@ Related docs:
   `::jsonb`; asyncpg's JSONB codec handles serialization.
 - Migration files must not contain bare DDL outside a transaction. Run
   `bash scripts/check-migrations-no-tx.sh` to verify before adding a migration.
-- Archived-state predicate logic is centralised in
-  `paper_ingestion/queries/predicates.py` (`IS_ARCHIVED_SQL`,
-  `IS_NOT_ARCHIVED_SQL`). Use these constants; never duplicate the condition
-  inline. Run `bash scripts/check-archived-predicate.sh` to detect drift.
+- State-based predicate logic is centralised in
+  `paper_ingestion/queries/predicates.py` — `VIEW_PREDICATES` (10 named
+  surfaces), `RECOMMENDER_EXCLUDE_SQL`, and `PULSE_CANDIDATE_EXCLUDE_SQL`.
+  Use these constants; never duplicate the SQL condition inline.
 
 ## Anti-Hallucination Invariants
 

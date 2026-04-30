@@ -1,17 +1,31 @@
-"""Reusable SQL predicate fragments for paper_user_state filtering.
+"""State-based SQL predicate fragments for paper_user_state filtering.
 
-These are SQL string constants intended for safe interpolation into
-queries built around the `paper_user_state pus` alias. All fragments
-assume the alias is `pus` and are NULL-safe via three-valued logic
-— important for LEFT JOINs where ``pus.*`` is NULL when the user has
-never interacted with the paper.
+All fragments assume the alias is `pus`. Fragments use COALESCE so that
+papers without a paper_user_state row (LEFT JOIN NULL) are treated as
+state='inbox' — the freshly-discovered default per spec §6.
 """
 
-# ``IS NOT DISTINCT FROM 'archived'`` evaluates FALSE (not NULL) when
-# pus.status is NULL — without this, the legacy-status branch would
-# poison the OR with a NULL and ``NOT IS_ARCHIVED_SQL`` would filter
-# out every never-touched paper from ``unread_only`` feeds.
-IS_ARCHIVED_SQL = "(COALESCE(pus.archived, FALSE) OR pus.status IS NOT DISTINCT FROM 'archived')"
-IS_NOT_ARCHIVED_SQL = f"(NOT {IS_ARCHIVED_SQL})"
-IS_DISMISSED_SQL = "COALESCE(pus.dismissed, FALSE)"
-IS_SAVED_SQL = "COALESCE(pus.saved, FALSE)"
+# Per-view predicates (spec §6). Used by routers/feed.py, list_papers,
+# get_feed_counts, and other surface-bound queries.
+VIEW_PREDICATES: dict[str, str] = {
+    "inbox": "COALESCE(pus.state, 'inbox') = 'inbox'",
+    "library": "COALESCE(pus.state, 'inbox') IN ('to_read','reading','done')",
+    "reading_list": "COALESCE(pus.state, 'inbox') = 'to_read'",
+    "reading": "COALESCE(pus.state, 'inbox') = 'reading'",
+    "done": "COALESCE(pus.state, 'inbox') = 'done'",
+    "starred": "pus.starred = TRUE AND COALESCE(pus.state, 'inbox') != 'trash'",
+    "trash": "pus.state = 'trash'",
+    "active": "COALESCE(pus.state, 'inbox') IN ('inbox','to_read','reading')",
+    "kept": "COALESCE(pus.state, 'inbox') IN ('to_read','reading','done')",
+    "all_non_trash": "COALESCE(pus.state, 'inbox') != 'trash'",
+}
+
+# Recommender exclusion (spec §7.3.1): papers in trash or done are never
+# recommended again. The 60-day negative-feedback exclusion lives in
+# recommender.py (Wave 1c) to avoid coupling this constant to the
+# recommendation_feedback table.
+RECOMMENDER_EXCLUDE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"
+
+# Pulse candidate filter (spec §6 + §7.3.1): same as RECOMMENDER_EXCLUDE_SQL
+# today, kept as a separate name in case Pulse and Recommender diverge.
+PULSE_CANDIDATE_EXCLUDE_SQL = "COALESCE(pus.state, 'inbox') IN ('trash','done')"

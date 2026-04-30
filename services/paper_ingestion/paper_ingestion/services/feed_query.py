@@ -8,7 +8,7 @@ from datetime import date
 
 import asyncpg
 
-from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
+from paper_ingestion.queries.predicates import VIEW_PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -36,14 +36,9 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     return (
         f"SELECT p.*, ps.summary_brief, {tldr_sql}, ps.confidence,"
         f"{note_sql}"
-        " CASE"
-        f"   WHEN {IS_ARCHIVED_SQL} THEN 'archived'"
-        "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
-        "   ELSE pus.status"
-        " END AS user_status,"
-        " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
-        f" {IS_ARCHIVED_SQL} AS archived,"
-        " COALESCE(pus.preference, 'none') AS preference,"
+        " COALESCE(pus.state, 'inbox') AS state,"
+        " pus.state_before_trash,"
+        " COALESCE(pus.starred, FALSE) AS starred,"
         " pus.rating,"
         " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
         " (ps.id IS NOT NULL) AS has_summary,"
@@ -71,25 +66,6 @@ class FeedQueryParts:
     count_query: str
     params: list[object]
     count_params: list[object]
-
-
-VIEW_PREDICATES: dict[str, str] = {
-    "inbox": ("COALESCE(pus.saved, FALSE) = FALSE AND COALESCE(pus.dismissed, FALSE) = FALSE"),
-    "library": (
-        f"pus.saved = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE AND NOT {IS_ARCHIVED_SQL}"
-    ),
-    "starred": (
-        "pus.saved = TRUE AND pus.starred = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE"
-    ),
-    "archived": (
-        f"pus.saved = TRUE AND {IS_ARCHIVED_SQL} AND COALESCE(pus.dismissed, FALSE) = FALSE"
-    ),
-    "reading": (
-        "pus.saved = TRUE AND pus.status = 'reading' AND COALESCE(pus.dismissed, FALSE) = FALSE"
-    ),
-    "trash": "pus.dismissed = TRUE",
-    "all_active": "COALESCE(pus.dismissed, FALSE) = FALSE",
-}
 
 
 def split_csv_filter(raw_value: str | None) -> list[str]:
@@ -124,13 +100,14 @@ def build_feed_queries(
     returned.
 
     The ``view`` parameter maps to a set of fixed SQL predicates defined in
-    :data:`VIEW_PREDICATES` (e.g. ``"inbox"``, ``"library"``, ``"trash"``).
+    :data:`VIEW_PREDICATES`.  Valid values:
+    ``inbox / library / reading_list / reading / done / starred / trash /
+    active / kept / all_non_trash``.
     When ``view`` is supplied it takes precedence over the legacy ``statuses``
     filter.  Raises :exc:`ValueError` if ``view`` is not a recognised key.
 
-    .. deprecated::
-        ``statuses`` — use ``view`` instead.  Retained for backwards compat
-        until the B2.3 migration ships.
+    .. deprecated:: Phase A
+        `statuses` is ignored. Use `view` instead. Removed entirely in a future sprint.
     """
     if view is not None and view not in VIEW_PREDICATES:
         raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
@@ -148,7 +125,7 @@ def build_feed_queries(
     param_idx += 1
 
     if unread_only:
-        conditions.append(f"COALESCE(pus.status, 'new') != 'read' AND NOT {IS_ARCHIVED_SQL}")
+        conditions.append(f"({VIEW_PREDICATES['active']})")
 
     note_query_param: int | None = None
     if q:
@@ -175,16 +152,12 @@ def build_feed_queries(
     else:
         status_list = split_csv_filter(statuses)
         if status_list:
-            placeholders = ", ".join(f"${param_idx + i}" for i in range(len(status_list)))
-            conditions.append(
-                "CASE"
-                f" WHEN {IS_ARCHIVED_SQL} THEN 'archived'"
-                " WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
-                " ELSE COALESCE(pus.status, 'new')"
-                f" END IN ({placeholders})"
+            logger.warning(
+                "feed_query: 'statuses' query param is deprecated and ignored "
+                "post-Phase-A; use 'view' instead. Got: %s",
+                status_list,
             )
-            params.extend(status_list)
-            param_idx += len(status_list)
+            # Intentionally no condition added — statuses filter is dead.
 
     source_list = split_csv_filter(source_types)
     if source_list:

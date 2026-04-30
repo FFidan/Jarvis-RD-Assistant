@@ -1,6 +1,8 @@
-"""Tests for paper lifecycle endpoints: save/unsave/dismiss/restore/delete/bulk/counts/archive.
+"""Tests for paper lifecycle endpoints: trash/restore/delete/bulk/counts.
 
-WS8-B3.1 — Sprint 8 lifecycle endpoint coverage.
+Phase-A rewrite: aligns with the new paper_user_state schema (state/starred columns)
+and the 10-bucket FeedCountsResponse.  Deleted endpoints (save, unsave, dismiss,
+archive) and deleted helpers (_assert_confirm_title_matches) are no longer tested here.
 """
 
 from __future__ import annotations
@@ -12,11 +14,7 @@ from fastapi import HTTPException
 
 # conftest.py provides FakeRecord, _make_pool_and_conn, and mock_db fixture.
 from paper_ingestion.models import (  # noqa: E402
-    ArchiveRequest,
     BulkActionRequest,
-    DismissRequest,
-    HardDeleteRequest,
-    SaveRequest,
 )
 from paper_ingestion.routers import papers  # noqa: E402
 
@@ -56,267 +54,39 @@ def _mock_request():
 
 
 # ---------------------------------------------------------------------------
-# Save
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_save_writes_saved_true():
-    """PUT /save sets saved=TRUE; starred stays False when body.star=False."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 1}
-
-    result = await papers.save_paper.__wrapped__(
-        _mock_request(),
-        paper_id=1,
-        body=SaveRequest(star=False),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 1}
-    # _upsert_user_state was called: assert saved=True appears in SQL
-    sql = conn.execute.await_args.args[0]
-    assert "saved" in sql
-    # 'starred' should NOT appear as an extra field when star=False
-    # (only saved=True is passed, not starred)
-    # The SQL is built dynamically from columns; verify saved is the only extra column
-    positional = conn.execute.await_args.args
-    # positional: (sql, paper_id, user_id, True) — saved=True is the last arg
-    assert True in positional
-
-
-@pytest.mark.asyncio
-async def test_save_with_star_writes_both():
-    """PUT /save with {star: true} sets both saved=TRUE and starred=TRUE."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 2}
-
-    result = await papers.save_paper.__wrapped__(
-        _mock_request(),
-        paper_id=2,
-        body=SaveRequest(star=True),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 2}
-    sql = conn.execute.await_args.args[0]
-    assert "saved" in sql
-    assert "starred" in sql
-    positional = conn.execute.await_args.args
-    # Both True values (saved=True, starred=True) must appear
-    assert positional.count(True) >= 2
-
-
-@pytest.mark.asyncio
-async def test_save_idempotent():
-    """Calling /save twice should both succeed with ok status."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 3}
-
-    result1 = await papers.save_paper.__wrapped__(
-        _mock_request(),
-        paper_id=3,
-        body=SaveRequest(star=False),
-        db_pool=pool,
-    )
-    result2 = await papers.save_paper.__wrapped__(
-        _mock_request(),
-        paper_id=3,
-        body=SaveRequest(star=False),
-        db_pool=pool,
-    )
-
-    assert result1 == {"status": "ok", "paper_id": 3}
-    assert result2 == {"status": "ok", "paper_id": 3}
-    # Both calls should have executed the upsert SQL
-    assert conn.execute.await_count == 2
-    # Both upsert SQLs contain ON CONFLICT (idempotent upsert)
-    for call in conn.execute.await_args_list:
-        assert "ON CONFLICT" in call.args[0]
-
-
-# ---------------------------------------------------------------------------
-# Unsave
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_unsave_preserves_star():
-    """PUT /unsave sets saved=FALSE; the SQL does NOT touch the starred column."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 4}
-
-    result = await papers.unsave_paper.__wrapped__(
-        _mock_request(),
-        paper_id=4,
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 4}
-    sql = conn.execute.await_args.args[0]
-    # saved must be in the SQL
-    assert "saved" in sql
-    # starred must NOT appear (preserved via ON CONFLICT DO UPDATE — not explicitly set)
-    assert "starred" not in sql
-
-
-# ---------------------------------------------------------------------------
-# Dismiss
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_dismiss_writes_dismissed_and_pref():
-    """PUT /dismiss sets dismissed=TRUE and preference='down'."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 5}
-
-    result = await papers.dismiss_paper.__wrapped__(
-        _mock_request(),
-        paper_id=5,
-        body=DismissRequest(also_zotero=False),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 5}
-    sql = conn.execute.await_args.args[0]
-    assert "dismissed" in sql
-    assert "preference" in sql
-    positional = conn.execute.await_args.args
-    # 'down' string must appear in positional args (preference value)
-    assert "down" in positional
-
-
-@pytest.mark.asyncio
-async def test_dismiss_preserves_saved():
-    """PUT /dismiss does NOT include saved in the upsert fields (so saved is preserved)."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 6}
-
-    result = await papers.dismiss_paper.__wrapped__(
-        _mock_request(),
-        paper_id=6,
-        body=DismissRequest(also_zotero=False),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 6}
-    sql = conn.execute.await_args.args[0]
-    # The dismiss upsert sets dismissed and preference — saved is not mentioned
-    # (ON CONFLICT DO UPDATE only touches the columns that are listed in updates)
-    assert "dismissed" in sql
-    assert "saved" not in sql
-
-
-# ---------------------------------------------------------------------------
-# Restore
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_restore_clears_dismissed():
-    """PUT /restore sets dismissed=FALSE and preference='none'."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 7}
-
-    result = await papers.restore_paper.__wrapped__(
-        _mock_request(),
-        paper_id=7,
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 7}
-    sql = conn.execute.await_args.args[0]
-    assert "dismissed" in sql
-    assert "preference" in sql
-    positional = conn.execute.await_args.args
-    assert False in positional  # dismissed=False
-    assert "none" in positional  # preference='none'
-
-
-@pytest.mark.asyncio
-async def test_restore_preserves_saved():
-    """PUT /restore preserves saved=TRUE so previously-saved papers return to Library.
-
-    When a paper is dismissed, it goes to Trash. Restore clears dismissed=FALSE
-    and preference='none', but does NOT touch saved — so if the paper was saved
-    before dismissal, it returns to Library (saved=TRUE); if never saved,
-    it returns to Inbox (saved=FALSE).
-    """
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 8}
-
-    result = await papers.restore_paper.__wrapped__(
-        _mock_request(),
-        paper_id=8,
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 8}
-    sql = conn.execute.await_args.args[0]
-    # restore must set dismissed and preference
-    assert "dismissed" in sql
-    assert "preference" in sql
-    # Crucially: saved must NOT appear in the SQL (so it's preserved)
-    assert "saved" not in sql
-
-
-# ---------------------------------------------------------------------------
 # Hard delete
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_requires_dismissed():
-    """DELETE /papers/{id} returns 409 when paper is NOT in Trash."""
+async def test_hard_delete_requires_trash_state():
+    """DELETE /papers/{id} returns 409 when paper is NOT in 'trash' state."""
     pool, conn = _make_pool_and_conn()
-    # Paper exists; fetchrow returns a row so ownership check passes.
-    # fetchval returns None (no user_state row → not dismissed).
+    # _assert_paper_in_state fetches state via fetchval; None → COALESCE → 'inbox'
     conn.fetchval.return_value = None
 
     with pytest.raises(HTTPException) as exc_info:
         await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=10,
-            body=HardDeleteRequest(confirm_title="Some Paper", also_zotero=False),
             db_pool=pool,
         )
 
     assert exc_info.value.status_code == 409
-    assert "Trash" in exc_info.value.detail
+    assert "trash" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_hard_delete_requires_title_match():
-    """DELETE /papers/{id} returns 400 when confirm_title does not match paper title."""
+async def test_hard_delete_with_trash_state_succeeds():
+    """DELETE /papers/{id} returns {"deleted": paper_id} when paper is in 'trash'."""
     pool, conn = _make_pool_and_conn()
-    # fetchval calls: first = dismissed check (True), second = title fetch ("Real Title")
-    conn.fetchval.side_effect = [True, "Real Title"]
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.hard_delete_paper.__wrapped__(
-            _mock_request(),
-            paper_id=11,
-            body=HardDeleteRequest(confirm_title="Wrong Title", also_zotero=False),
-            db_pool=pool,
-        )
-
-    assert exc_info.value.status_code == 400
-    assert "confirm_title" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_hard_delete_with_correct_title_succeeds():
-    """DELETE /papers/{id} returns {"deleted": paper_id} on happy path."""
-    pool, conn = _make_pool_and_conn()
-    # fetchval: dismissed=True, title="Correct Title"
-    conn.fetchval.side_effect = [True, "Correct Title"]
+    # _assert_paper_in_state: fetchval returns 'trash' → precondition satisfied
+    conn.fetchval.return_value = "trash"
 
     with patch("paper_ingestion.routers.papers.delete_paper_vectors", new_callable=AsyncMock):
         result = await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=12,
-            body=HardDeleteRequest(confirm_title="Correct Title", also_zotero=False),
             db_pool=pool,
         )
 
@@ -331,7 +101,7 @@ async def test_hard_delete_with_correct_title_succeeds():
 async def test_hard_delete_calls_qdrant():
     """DELETE /papers/{id} calls delete_paper_vectors with the correct paper_id."""
     pool, conn = _make_pool_and_conn()
-    conn.fetchval.side_effect = [True, "The Title"]
+    conn.fetchval.return_value = "trash"
 
     with patch(
         "paper_ingestion.routers.papers.delete_paper_vectors",
@@ -340,7 +110,6 @@ async def test_hard_delete_calls_qdrant():
         await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=13,
-            body=HardDeleteRequest(confirm_title="The Title", also_zotero=False),
             db_pool=pool,
         )
 
@@ -355,7 +124,7 @@ async def test_hard_delete_calls_qdrant():
 @pytest.mark.asyncio
 async def test_bulk_action_save_succeeds_for_all():
     """POST /bulk with action=save succeeds for all 3 paper_ids."""
-    pool, conn = _make_pool_and_conn()
+    pool = _make_pool_and_conn()[0]
 
     result = await papers.bulk_action_papers.__wrapped__(
         _mock_request(),
@@ -370,7 +139,7 @@ async def test_bulk_action_save_succeeds_for_all():
 @pytest.mark.asyncio
 async def test_bulk_action_mixed_validity():
     """POST /bulk with 2 valid + 1 paper that raises an error yields 2 succeeded, 1 failed."""
-    pool, conn = _make_pool_and_conn()
+    pool = _make_pool_and_conn()[0]
 
     # Make _apply_bulk_action raise for paper_id=999 only
     original_apply = papers._apply_bulk_action
@@ -400,11 +169,12 @@ async def test_bulk_action_savepoint_isolation():
     The nested asyncpg transaction (SAVEPOINT) must roll back only the failing
     paper's work, leaving the outer transaction alive for subsequent papers.
     """
-    pool, conn = _make_pool_and_conn()
+    pool = _make_pool_and_conn()[0]
 
     failing_id = 200
 
     async def _fail_at_200(c, paper_id, user_id, action):
+        del c, user_id, action  # signature matches _apply_bulk_action; only paper_id used
         if paper_id == failing_id:
             raise RuntimeError("forced savepoint test failure")
         # Success for others — just pass
@@ -431,16 +201,19 @@ async def test_bulk_action_savepoint_isolation():
 
 @pytest.mark.asyncio
 async def test_feed_counts_basic():
-    """GET /feed/counts returns FeedCountsResponse with correct field names."""
+    """GET /feed/counts returns FeedCountsResponse with correct 10-bucket field names."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {
-        "inbox": 1,
-        "library": 2,
-        "starred": 1,
-        "archived": 1,
-        "reading": 0,
+        "inbox": 3,
+        "library": 5,
+        "reading_list": 2,
+        "reading": 1,
+        "done": 2,
+        "starred": 2,
         "trash": 1,
-        "all_active": 4,
+        "active": 6,
+        "kept": 5,
+        "all_non_trash": 11,
     }
 
     result = await papers.get_feed_counts.__wrapped__(
@@ -448,84 +221,20 @@ async def test_feed_counts_basic():
         db_pool=pool,
     )
 
-    assert result.inbox == 1
-    assert result.library == 2
-    assert result.starred == 1
-    assert result.archived == 1
-    assert result.reading == 0
+    assert result.inbox == 3
+    assert result.library == 5
+    assert result.reading_list == 2
+    assert result.reading == 1
+    assert result.done == 2
+    assert result.starred == 2
     assert result.trash == 1
-    assert result.all_active == 4
+    assert result.active == 6
+    assert result.kept == 5
+    assert result.all_non_trash == 11
 
 
 # ---------------------------------------------------------------------------
-# Archive precondition
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_archive_requires_saved():
-    """PUT /archive returns 409 when the paper has not been saved first."""
-    pool, conn = _make_pool_and_conn()
-    # fetchrow: paper exists
-    conn.fetchrow.return_value = {"id": 20}
-    # fetchval: saved=False (not in Library)
-    conn.fetchval.return_value = False
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers.archive_paper.__wrapped__(
-            _mock_request(),
-            paper_id=20,
-            body=ArchiveRequest(archive=True),
-            db_pool=pool,
-        )
-
-    assert exc_info.value.status_code == 409
-    assert "Save before archiving" in exc_info.value.detail
-
-
-@pytest.mark.asyncio
-async def test_archive_after_save_works():
-    """PUT /archive succeeds when the paper is already saved."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 21}
-    # fetchval: saved=True → archive precondition satisfied
-    conn.fetchval.return_value = True
-
-    result = await papers.archive_paper.__wrapped__(
-        _mock_request(),
-        paper_id=21,
-        body=ArchiveRequest(archive=True),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 21}
-    sql = conn.execute.await_args.args[0]
-    assert "archived" in sql
-
-
-@pytest.mark.asyncio
-async def test_unarchive_works():
-    """PUT /archive with {archive: false} succeeds without any saved precondition."""
-    pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {"id": 22}
-    # fetchval should NOT be called for unarchive (archive=False skips the check)
-
-    result = await papers.archive_paper.__wrapped__(
-        _mock_request(),
-        paper_id=22,
-        body=ArchiveRequest(archive=False),
-        db_pool=pool,
-    )
-
-    assert result == {"status": "ok", "paper_id": 22}
-    sql = conn.execute.await_args.args[0]
-    assert "archived" in sql
-    # Crucially: fetchval was not called (no saved-state check for unarchive)
-    conn.fetchval.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# Hard delete — A1.1 / A1.2 new test cases
+# Hard delete — A1.1 / ordering + rollback guarantees
 # ---------------------------------------------------------------------------
 
 
@@ -533,16 +242,18 @@ async def test_unarchive_works():
 async def test_hard_delete_reorders_qdrant_after_db_commit():
     """A1.1: DELETE FROM papers executes BEFORE delete_paper_vectors (outside transaction)."""
     pool, conn = _make_pool_and_conn()
-    # dismissed=True, title matches
-    conn.fetchval.side_effect = [True, "Order Test"]
+    # _assert_paper_in_state: paper is in 'trash'
+    conn.fetchval.return_value = "trash"
 
     call_order: list[str] = []
 
     async def _fake_execute(sql, *args):
+        del args  # asyncpg .execute signature compat; values unused in this stub
         if "DELETE FROM papers" in sql:
             call_order.append("db_delete")
 
     async def _fake_delete_vectors(paper_id):
+        del paper_id  # signature compat; only call ordering matters for this test
         call_order.append("qdrant_delete")
 
     conn.execute.side_effect = _fake_execute
@@ -554,7 +265,6 @@ async def test_hard_delete_reorders_qdrant_after_db_commit():
         result = await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=50,
-            body=HardDeleteRequest(confirm_title="Order Test", also_zotero=False),
             db_pool=pool,
         )
 
@@ -570,7 +280,7 @@ async def test_hard_delete_db_rollback_does_not_call_qdrant():
     import asyncpg as _asyncpg
 
     pool, conn = _make_pool_and_conn()
-    conn.fetchval.side_effect = [True, "Rollback Test"]
+    conn.fetchval.return_value = "trash"
     conn.execute.side_effect = _asyncpg.PostgresError("simulated DB failure")
 
     with patch(
@@ -581,7 +291,6 @@ async def test_hard_delete_db_rollback_does_not_call_qdrant():
             await papers.hard_delete_paper.__wrapped__(
                 _mock_request(),
                 paper_id=51,
-                body=HardDeleteRequest(confirm_title="Rollback Test", also_zotero=False),
                 db_pool=pool,
             )
 
@@ -592,9 +301,10 @@ async def test_hard_delete_db_rollback_does_not_call_qdrant():
 async def test_hard_delete_qdrant_failure_logs_orphan():
     """A1.1: If delete_paper_vectors raises after DB delete, logger.exception is called with 'orphans'."""
     pool, conn = _make_pool_and_conn()
-    conn.fetchval.side_effect = [True, "Qdrant Fail"]
+    conn.fetchval.return_value = "trash"
 
     async def _fail_vectors(paper_id):
+        del paper_id  # signature compat; failure path doesn't depend on the id
         raise RuntimeError("Qdrant connection refused")
 
     with patch(
@@ -605,7 +315,6 @@ async def test_hard_delete_qdrant_failure_logs_orphan():
             result = await papers.hard_delete_paper.__wrapped__(
                 _mock_request(),
                 paper_id=52,
-                body=HardDeleteRequest(confirm_title="Qdrant Fail", also_zotero=False),
                 db_pool=pool,
             )
 
@@ -621,26 +330,3 @@ async def test_hard_delete_qdrant_failure_logs_orphan():
 
     # Endpoint still returns success (best-effort Qdrant cleanup)
     assert result == {"deleted": 52}
-
-
-@pytest.mark.asyncio
-async def test_hard_delete_confirm_title_trim():
-    """A1.2: _assert_confirm_title_matches passes when title has leading/trailing whitespace."""
-    conn = AsyncMock()
-    conn.fetchval.return_value = "  Foo  "
-
-    # Should NOT raise — trimmed values match
-    await papers._assert_confirm_title_matches(conn, paper_id=1, confirm_title="Foo")
-
-
-@pytest.mark.asyncio
-async def test_hard_delete_confirm_title_case_mismatch():
-    """A1.2: _assert_confirm_title_matches raises 400 when titles differ in case."""
-    conn = AsyncMock()
-    conn.fetchval.return_value = "foo"
-
-    with pytest.raises(HTTPException) as exc_info:
-        await papers._assert_confirm_title_matches(conn, paper_id=1, confirm_title="Foo")
-
-    assert exc_info.value.status_code == 400
-    assert "confirm_title" in exc_info.value.detail

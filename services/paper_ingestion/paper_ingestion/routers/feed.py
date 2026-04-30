@@ -14,8 +14,8 @@ from jarvis_common.auth import current_user_id_or_none
 from paper_ingestion.converters import row_to_feed_paper
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import FeedResponse, priority_level
+from paper_ingestion.queries.predicates import VIEW_PREDICATES
 from paper_ingestion.services.feed_query import (
-    VIEW_PREDICATES,
     build_feed_queries,
     derive_feed_search_mode,
     fetch_feed_rows,
@@ -70,9 +70,10 @@ async def list_feed_papers(
         Comma-separated list of user statuses to filter by (e.g. ``new,reading``).
         Deprecated — use ``view`` instead.
     view : str, optional
-        Named view predicate: one of ``inbox``, ``library``, ``starred``,
-        ``archived``, ``reading``, ``trash``, ``all_active``.  Takes precedence
-        over ``statuses`` when both are supplied.
+        Named view predicate: one of ``inbox``, ``library``, ``reading_list``,
+        ``reading``, ``done``, ``starred``, ``trash``, ``active``, ``kept``,
+        ``all_non_trash``.  Takes precedence over ``statuses`` when both are
+        supplied.
     source_types : str, optional
         Comma-separated list of source types (e.g. ``arxiv,semantic_scholar``).
     topic_names : str, optional

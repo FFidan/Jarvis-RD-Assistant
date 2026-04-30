@@ -45,8 +45,8 @@ UPDATE paper_user_state SET state_before_trash = CASE
 END
 WHERE state = 'trash';
 
--- Drop legacy columns. The check-archived-predicate.sh guard is dropped in a
--- subsequent commit alongside the predicates.py rewrite.
+-- Drop legacy columns (the lint guard check-archived-predicate.sh is deleted
+-- as the archived predicate is no longer needed).
 ALTER TABLE paper_user_state
     DROP COLUMN IF EXISTS saved,
     DROP COLUMN IF EXISTS dismissed,

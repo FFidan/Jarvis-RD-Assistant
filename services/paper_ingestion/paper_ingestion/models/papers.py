@@ -29,16 +29,6 @@ class SourceType(str, Enum):
     PUBMED = "pubmed"
 
 
-class PaperStatus(str, Enum):
-    """User-facing paper reading status."""
-
-    NEW = "new"
-    READING = "reading"
-    READ = "read"
-    ARCHIVED = "archived"
-    STARRED = "starred"
-
-
 class Confidence(str, Enum):
     """Summary confidence level based on quote verification pass rate.
 
@@ -89,6 +79,9 @@ class PaperResponse(PaperBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
+    discovery_origin: Literal["user_initiated", "pulse", "recommender", "citation_batch"] = (
+        "user_initiated"  # NEW per spec §3.2 — immutable after insert
+    )
     pdf_local_path: str | None = None
     pdf_downloaded: bool = False
     discovered_at: datetime | None = None
@@ -97,7 +90,7 @@ class PaperResponse(PaperBase):
 
 
 class ChunkResponse(BaseModel):
-    """A single text chunk from a paper."""
+    """A single text chunk from a processed paper."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -158,39 +151,33 @@ class SummaryResponse(BaseModel):
 
 
 class UserStateResponse(BaseModel):
-    """User reading state for a paper."""
+    """User reading state for a paper (post-redesign per spec §9.1)."""
 
-    status: Literal["new", "reading", "read"] = "new"
-    saved: bool = False
-    dismissed: bool = False
+    state: Literal["inbox", "to_read", "reading", "done", "trash"]
+    state_before_trash: Literal["inbox", "to_read", "reading", "done"] | None = None
     starred: bool = False
-    archived: bool = False
-    preference: Literal["none", "up", "down"] = "none"
     rating: int | None = None
     user_notes: str | None = None
     flagged: bool = False
-    updated_at: datetime | None = None  # null for users who never interacted
+    updated_at: datetime | None = None
 
 
-class UserStateUpsert(BaseModel):
-    """Request body for creating/updating user state on a paper."""
+class RecentFeedback(BaseModel):
+    """Most recent feedback by current user (UI affordance state)."""
 
-    status: Literal["new", "reading", "read"] | None = None
-    starred: bool | None = None
-    archived: bool | None = None
-    preference: Literal["none", "up", "down"] | None = None
-    rating: int | None = Field(None, ge=1, le=5)
-    user_notes: str | None = None
-    flagged: bool | None = None
+    signal: Literal["positive", "negative"]
+    source: str
+    created_at: datetime
 
 
 class PaperDetailResponse(BaseModel):
-    """Paper with its summary and chunks."""
+    """Paper with its summary, chunks, user state, and most recent feedback."""
 
     paper: PaperResponse
     summary: SummaryResponse | None = None
     chunks: list[ChunkResponse] = Field(default_factory=list)
     user_state: UserStateResponse | None = None
+    recent_feedback: RecentFeedback | None = None  # NEW per spec §9.1
     has_project_links: bool = False
 
 
@@ -304,10 +291,9 @@ class FeedPaper(PaperResponse):
     summary_brief: str | None = None
     tldr: str | None = None
     confidence: Confidence | None = None
-    user_status: str | None = None
+    state: Literal["inbox", "to_read", "reading", "done", "trash"] = "inbox"
+    state_before_trash: Literal["inbox", "to_read", "reading", "done"] | None = None
     starred: bool = False
-    archived: bool = False
-    preference: Literal["none", "up", "down"] = "none"
     rating: int | None = None
     priority_level: str | None = None
     has_chunks: bool = False
@@ -438,25 +424,25 @@ class RelevanceScoreResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    """Body for POST /api/papers/{paper_id}/feedback.
+    """Body for POST /api/papers/{paper_id}/feedback (per spec §4.3)."""
 
-    Both ``rating`` and ``flagged`` are optional but at least one must be
-    provided — the handler enforces this with a 400 response.
-    """
-
-    rating: int | None = Field(default=None, ge=1, le=5)
-    preference: Literal["none", "up", "down"] | None = None
-    flagged: bool | None = None
+    signal: Literal["positive", "negative"]
+    source: Literal[
+        "pulse_thumbs",
+        "feed_thumbs",
+        "paper_detail_thumbs",
+        "dismiss_combined",
+    ]
+    reason: str | None = None
 
 
 class FeedbackResponse(BaseModel):
     """Response for POST /api/papers/{paper_id}/feedback."""
 
     paper_id: int
-    rating: int | None = None
-    preference: Literal["none", "up", "down"] | None = None
-    flagged: bool | None = None
-    status: str
+    signal: Literal["positive", "negative"]
+    source: str
+    created_at: datetime
 
 
 class PaperPriorityResponse(BaseModel):
@@ -559,54 +545,42 @@ class PapersByStatusItem(BaseModel):
 # --- Paper Lifecycle Action Models ---
 
 
-class SaveRequest(BaseModel):
-    """Body for POST /api/papers/{paper_id}/save."""
-
-    star: bool = False  # Save & Star variant
-
-
-class DismissRequest(BaseModel):
-    """Body for POST /api/papers/{paper_id}/dismiss."""
-
-    also_zotero: bool = False  # contract §4.5; today no-op until zotero.remove handler
-
-
-class HardDeleteRequest(BaseModel):
-    """Body for DELETE /api/papers/{paper_id} (hard delete)."""
-
-    confirm_title: str  # safety — must match paper.title
-    also_zotero: bool = False
-
-
 class BulkActionRequest(BaseModel):
-    """Body for POST /api/papers/bulk-action."""
+    """Body for POST /api/papers/bulk."""
 
-    paper_ids: list[int] = Field(min_length=1, max_length=500)
+    paper_ids: list[int] = Field(..., min_length=1, max_length=500)
     action: Literal[
         "save",
-        "unsave",
-        "dismiss",
-        "archive",
-        "unarchive",
-        "mark_read",
+        "skip",
+        "trash",
+        "mark_reading",
+        "mark_done",
+        "restore",
         "star",
         "unstar",
+        "feedback_positive",
+        "feedback_negative",
     ]
 
 
 class FeedCountsResponse(BaseModel):
-    """Response for GET /api/papers/feed-counts."""
+    """Response for GET /api/papers/feed/counts (10 named views per spec §6)."""
 
     inbox: int
     library: int
-    starred: int
-    archived: int
+    reading_list: int
     reading: int
+    done: int
+    starred: int
     trash: int
-    all_active: int
+    active: int
+    kept: int
+    all_non_trash: int
 
 
-class ArchiveRequest(BaseModel):
-    """Body for PUT /api/papers/{paper_id}/archive (archive or unarchive)."""
+class AnnotationsRequest(BaseModel):
+    """Body for PUT /api/papers/{paper_id}/annotations (per resolved §3.3)."""
 
-    archive: bool = True
+    rating: int | None = Field(default=None, ge=1, le=5)
+    user_notes: str | None = None
+    flagged: bool | None = None

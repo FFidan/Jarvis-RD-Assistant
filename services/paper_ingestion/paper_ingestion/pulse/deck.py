@@ -10,7 +10,7 @@ from typing import Any
 
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
+from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -108,8 +108,7 @@ async def _persist_deck_inner(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
-              AND NOT {IS_ARCHIVED_SQL}
-              AND COALESCE(pus.dismissed, FALSE) = FALSE
+              AND NOT ({PULSE_CANDIDATE_EXCLUDE_SQL})
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
             """,

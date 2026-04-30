@@ -29,7 +29,6 @@ test-service:
 ## Lint all Python code
 lint:
 	bash scripts/check-migrations-no-tx.sh
-	bash scripts/check-archived-predicate.sh
 	uv run ruff check services/ libs/ scripts/
 
 ## Format all Python code

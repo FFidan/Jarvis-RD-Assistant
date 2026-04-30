@@ -16,24 +16,21 @@ from paper_ingestion.converters import (
 from paper_ingestion.deps import get_db_pool, get_optional_embedder, limiter
 from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
-    ArchiveRequest,
+    AnnotationsRequest,
     BulkActionRequest,
-    DismissRequest,
     FeedbackRequest,
     FeedbackResponse,
     FeedCountsResponse,
-    HardDeleteRequest,
     MarkReadResponse,
     PaperBriefResponse,
     PaperCreate,
     PaperDetailResponse,
     PaperResponse,
-    PaperStatus,
-    SaveRequest,
+    RecentFeedback,
     SourceType,
     UserStateResponse,
 )
-from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
+from paper_ingestion.queries.predicates import VIEW_PREDICATES
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -61,6 +58,7 @@ async def list_papers_brief(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return lightweight paper list for selector dropdowns."""
+    _ = request  # required by @limiter.limit; not used in body
     async with db_pool.acquire() as conn:
         if search:
             rows = await conn.fetch(
@@ -90,7 +88,7 @@ async def list_papers_brief(
 @limiter.limit("60/minute")
 async def list_papers(
     request: Request,
-    status: PaperStatus | None = None,
+    view: str | None = Query(default=None, max_length=64),
     source_type: SourceType | None = None,
     topic_id: int | None = None,
     q: str | None = None,
@@ -107,8 +105,10 @@ async def list_papers(
 
     Parameters
     ----------
-    status : PaperStatus | None
-        Filter by user state status.
+    view : str | None
+        Filter by named view (one of the keys in
+        :data:`paper_ingestion.queries.predicates.VIEW_PREDICATES`).
+        Unknown values raise 422.
     source_type : SourceType | None
         Filter by paper source.
     topic_id : int | None
@@ -126,10 +126,18 @@ async def list_papers(
     """
     from paper_ingestion.converters import hybrid_dict_to_paper_response
 
+    user_id = await current_user_id_or_none(request)
+
+    if view is not None and view not in VIEW_PREDICATES:
+        raise HTTPException(
+            status_code=422,
+            detail=(f"Unknown view '{view}'. Valid views: {sorted(VIEW_PREDICATES.keys())}"),
+        )
+
     # ------------------------------------------------------------------
     # Hybrid search path: q is set and no other filters are active
     # ------------------------------------------------------------------
-    has_extra_filters = any([status, source_type, topic_id])
+    has_extra_filters = any([view, source_type, topic_id])
     if q and not has_extra_filters:
         if embedder is not None and embedder.qdrant is not None:
             try:
@@ -156,24 +164,15 @@ async def list_papers(
         params.append(topic_id)
         conditions.append(f"pt.topic_id = ${len(params)}")
 
-    if status is not None:
-        if status.value == "new":
-            # Papers without a user_state row are implicitly "new"
-            joins.append("LEFT JOIN paper_user_state pus ON p.id = pus.paper_id")
-            params.append(status.value)
-            conditions.append(
-                f"((pus.status = ${len(params)} OR pus.paper_id IS NULL) AND NOT {IS_ARCHIVED_SQL})"
-            )
-        elif status.value == "archived":
-            joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
-            conditions.append(IS_ARCHIVED_SQL)
-        elif status.value == "starred":
-            joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
-            conditions.append("(COALESCE(pus.starred, FALSE) OR pus.status = 'starred')")
-        else:
-            joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
-            params.append(status.value)
-            conditions.append(f"pus.status = ${len(params)} AND NOT {IS_ARCHIVED_SQL}")
+    if view is not None:
+        # Bind the user_id so other users' state rows do not leak into the
+        # predicate. Mirrors the LEFT JOIN pattern used by routers/feed.py.
+        params.append(user_id)
+        joins.append(
+            "LEFT JOIN paper_user_state pus ON pus.paper_id = p.id"
+            f" AND (${len(params)}::int IS NULL OR pus.user_id IS NOT DISTINCT FROM ${len(params)})"
+        )
+        conditions.append(VIEW_PREDICATES[view])
 
     if source_type is not None:
         params.append(source_type.value)
@@ -209,7 +208,7 @@ async def get_paper_detail(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PaperDetailResponse:
-    """Get a paper with its summary and chunks.
+    """Get a paper with its summary, chunks, user state, and most recent feedback.
 
     Parameters
     ----------
@@ -219,7 +218,8 @@ async def get_paper_detail(
     Returns
     -------
     PaperDetailResponse
-        Paper, optional summary, and all chunks.
+        Paper, optional summary, chunks, user state, and most recent
+        recommendation feedback (if any).
     """
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
@@ -235,16 +235,23 @@ async def get_paper_detail(
             "SELECT * FROM paper_chunks WHERE paper_id = $1 ORDER BY chunk_index", paper_id
         )
         user_state_row = await conn.fetchrow(
-            """SELECT status,
-                      (COALESCE(starred, FALSE) OR status = 'starred') AS starred,
-                      (COALESCE(archived, FALSE) OR status = 'archived') AS archived,
-                      COALESCE(preference, 'none') AS preference,
-                      rating,
-                      user_notes,
-                      flagged
+            """SELECT COALESCE(state, 'inbox') AS state,
+                      state_before_trash,
+                      COALESCE(starred, FALSE) AS starred,
+                      rating, user_notes,
+                      COALESCE(flagged, FALSE) AS flagged,
+                      updated_at
                FROM paper_user_state
                WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
                LIMIT 1""",
+            paper_id,
+            user_id,
+        )
+        feedback_row = await conn.fetchrow(
+            """SELECT signal, source, created_at
+               FROM recommendation_feedback
+               WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
+               ORDER BY created_at DESC LIMIT 1""",
             paper_id,
             user_id,
         )
@@ -258,15 +265,24 @@ async def get_paper_detail(
     chunks = [row_to_chunk_response(r) for r in chunk_rows]
     user_state = (
         UserStateResponse(
-            status=user_state_row["status"],
-            starred=bool(user_state_row.get("starred")),
-            archived=bool(user_state_row.get("archived")),
-            preference=user_state_row.get("preference") or "none",
+            state=user_state_row["state"],
+            state_before_trash=user_state_row["state_before_trash"],
+            starred=bool(user_state_row["starred"]),
             rating=user_state_row["rating"],
             user_notes=user_state_row["user_notes"],
             flagged=bool(user_state_row["flagged"]),
+            updated_at=user_state_row["updated_at"],
         )
         if user_state_row
+        else None
+    )
+    recent_feedback = (
+        RecentFeedback(
+            signal=feedback_row["signal"],
+            source=feedback_row["source"],
+            created_at=feedback_row["created_at"],
+        )
+        if feedback_row
         else None
     )
     has_project_links = bool(project_link_count)
@@ -276,165 +292,9 @@ async def get_paper_detail(
         summary=summary,
         chunks=chunks,
         user_state=user_state,
+        recent_feedback=recent_feedback,
         has_project_links=has_project_links,
     )
-
-
-# ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/read
-# ---------------------------------------------------------------------------
-
-
-@router.put("/{paper_id}/read", response_model=MarkReadResponse)
-@limiter.limit("60/minute")
-async def mark_paper_read(
-    request: Request,
-    paper_id: int,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
-    """Mark a paper as read.
-
-    Parameters
-    ----------
-    request : Request
-        FastAPI request (needed by rate limiter).
-    paper_id : int
-        Database paper ID.
-    db_pool : asyncpg.Pool
-        Injected database pool.
-
-    Returns
-    -------
-    dict
-        ``{"status": "ok", "paper_id": <id>}``
-    """
-    user_id = await current_user_id_or_none(request)
-    async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow(
-            "SELECT id FROM papers WHERE id = $1",
-            paper_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
-        await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, user_id, status)
-               VALUES ($1, $2, 'read')
-               ON CONFLICT (paper_id, user_id) DO UPDATE SET status = 'read'""",
-            paper_id,
-            user_id,
-        )
-    return {"status": "ok", "paper_id": paper_id}
-
-
-# ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/bookmark
-# ---------------------------------------------------------------------------
-
-
-@router.put("/{paper_id}/bookmark", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
-async def bookmark_paper(
-    request: Request,
-    paper_id: int,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
-    """Toggle bookmark (star) state for a paper.
-
-    When starring (starred=TRUE), also sets saved=TRUE so the paper enters the
-    Library.  Unstarring does NOT unsave.
-
-    Parameters
-    ----------
-    request : Request
-        FastAPI request (needed by rate limiter).
-    paper_id : int
-        Database paper ID.
-    db_pool : asyncpg.Pool
-        Injected database pool.
-
-    Returns
-    -------
-    dict
-        ``{"status": "ok", "paper_id": <id>}``
-    """
-    user_id = await current_user_id_or_none(request)
-    async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow(
-            "SELECT id FROM papers WHERE id = $1",
-            paper_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
-        current = await conn.fetchval(
-            "SELECT COALESCE(starred, FALSE) FROM paper_user_state"
-            " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
-            paper_id,
-            user_id,
-        )
-        new_starred = not bool(current)
-        await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, user_id, status, starred, saved)
-               VALUES ($1, $2, 'new', $3, CASE WHEN $3 THEN TRUE ELSE FALSE END)
-               ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                   starred = $3,
-                   saved = CASE WHEN $3 THEN TRUE ELSE paper_user_state.saved END""",
-            paper_id,
-            user_id,
-            new_starred,
-        )
-    return {"status": "ok", "paper_id": paper_id}
-
-
-# ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/archive
-# ---------------------------------------------------------------------------
-
-
-@router.put("/{paper_id}/archive", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
-async def archive_paper(
-    request: Request,
-    paper_id: int,
-    body: ArchiveRequest = ArchiveRequest(),
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
-    """Archive (or unarchive) a paper without changing its reading progress.
-
-    Archiving requires the paper to already be saved (in the Library).
-    Unarchiving has no precondition.
-    """
-    user_id = await current_user_id_or_none(request)
-    async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-        row = await conn.fetchrow(
-            "SELECT id FROM papers WHERE id = $1",
-            paper_id,
-        )
-        if not row:
-            raise HTTPException(status_code=404, detail="Paper not found")
-        if body.archive:
-            saved_state = await conn.fetchval(
-                "SELECT COALESCE(saved, FALSE) FROM paper_user_state"
-                " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
-                paper_id,
-                user_id,
-            )
-            if not saved_state:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Save before archiving — papers must be in Library first",
-                )
-        await conn.execute(
-            """INSERT INTO paper_user_state (paper_id, user_id, status, archived)
-               VALUES ($1, $2, 'new', $3)
-               ON CONFLICT (paper_id, user_id) DO UPDATE SET archived = $3""",
-            paper_id,
-            user_id,
-            body.archive,
-        )
-    return {"status": "ok", "paper_id": paper_id}
 
 
 # ---------------------------------------------------------------------------
@@ -450,6 +310,7 @@ async def batch_save_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PaperResponse]:
     """Upsert a list of papers to the database (by external_id)."""
+    _ = request  # required by @limiter.limit; not used in body
     max_batch = 100
     if len(papers) > max_batch:
         raise HTTPException(400, f"Batch size cannot exceed {max_batch}")
@@ -465,71 +326,51 @@ async def batch_save_papers(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/papers/{paper_id}/feedback
+# POST /api/papers/{paper_id}/feedback  — writes to recommendation_feedback
 # ---------------------------------------------------------------------------
 
 
 @router.post("/{paper_id}/feedback", response_model=FeedbackResponse)
-@limiter.limit("30/minute")
+@limiter.limit("60/minute")
 async def submit_feedback(
     request: Request,
     paper_id: int,
-    feedback: FeedbackRequest,
+    body: FeedbackRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Allow users to rate a paper (1-5) and/or flag suspicious summaries.
+    """Record per-paper recommendation feedback.
 
-    Both fields live in the JSON body (see :class:`FeedbackRequest`); at least
-    one of ``rating`` / ``flagged`` must be provided or the handler returns 400.
+    Writes to the ``recommendation_feedback`` table (one row per
+    ``(paper_id, user_id, source)`` triple — repeat submissions overwrite
+    the prior row).
     """
-    rating = feedback.rating
-    flagged = feedback.flagged
-    preference = feedback.preference
-    if rating is None and flagged is None and preference is None:
-        raise HTTPException(
-            status_code=400,
-            detail="At least one of 'rating', 'preference', or 'flagged' must be provided.",
-        )
-
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
-            await conn.execute(
-                """INSERT INTO paper_user_state (paper_id, user_id, rating, preference, flagged)
-                VALUES ($1, $2, $3, COALESCE($4, 'none'), $5)
-                ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                    rating = COALESCE($3, paper_user_state.rating),
-                    preference = COALESCE($4, paper_user_state.preference),
-                    flagged = COALESCE($5, paper_user_state.flagged)""",
+            row = await conn.fetchrow(
+                """INSERT INTO recommendation_feedback
+                       (paper_id, user_id, signal, source, reason)
+                   VALUES ($1, $2, $3, $4, $5)
+                   ON CONFLICT (paper_id, user_id, source) DO UPDATE
+                     SET signal = EXCLUDED.signal,
+                         reason = EXCLUDED.reason,
+                         created_at = NOW()
+                   RETURNING paper_id, signal, source, created_at""",
                 paper_id,
                 user_id,
-                rating,
-                preference,
-                flagged,
+                body.signal,
+                body.source,
+                body.reason,
             )
         except asyncpg.ForeignKeyViolationError as e:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
-
-        # Fetch the current state to return accurate values
-        row = await conn.fetchrow(
-            "SELECT rating, preference, flagged FROM paper_user_state"
-            " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
-            paper_id,
-            user_id,
-        )
-
-    return {
-        "paper_id": paper_id,
-        "rating": row["rating"] if row else rating,
-        "preference": row["preference"] if row else preference,
-        "flagged": row["flagged"] if row else flagged,
-        "status": "updated",
-    }
+    assert row is not None  # RETURNING guarantees a row on success
+    return FeedbackResponse(**dict(row))
 
 
 # ---------------------------------------------------------------------------
-# GET /api/papers/feed/counts  — B1.4
+# GET /api/papers/feed/counts  — 10 named views per spec §6
 # ---------------------------------------------------------------------------
 
 
@@ -539,117 +380,180 @@ async def get_feed_counts(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Return per-bucket paper counts for the current user."""
+    """Return per-bucket paper counts for the current user (10 named views)."""
     user_id = await current_user_id_or_none(request)
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            f"""
-            SELECT
-                COALESCE(SUM(CASE WHEN COALESCE(pus.saved, FALSE) = FALSE
-                                AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                THEN 1 ELSE 0 END), 0) AS inbox,
-                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                AND NOT {IS_ARCHIVED_SQL}
-                                THEN 1 ELSE 0 END), 0) AS library,
-                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND pus.starred = TRUE
-                                AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                THEN 1 ELSE 0 END), 0) AS starred,
-                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND {IS_ARCHIVED_SQL}
-                                AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                THEN 1 ELSE 0 END), 0) AS archived,
-                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND pus.status = 'reading'
-                                AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                THEN 1 ELSE 0 END), 0) AS reading,
-                COALESCE(SUM(CASE WHEN pus.dismissed = TRUE THEN 1 ELSE 0 END), 0) AS trash,
-                COALESCE(SUM(CASE WHEN COALESCE(pus.dismissed, FALSE) = FALSE
-                                THEN 1 ELSE 0 END), 0) AS all_active
-            FROM papers p
-            LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-              AND ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
-            WHERE p.user_id IS NOT DISTINCT FROM $1
-            """,
-            user_id,
+
+    def _sum(view_key: str, alias: str) -> str:
+        return (
+            f"COALESCE(SUM(CASE WHEN {VIEW_PREDICATES[view_key]} "
+            f"THEN 1 ELSE 0 END), 0)::int AS {alias}"
         )
+
+    sql = f"""
+        SELECT
+            {_sum("inbox", "inbox")},
+            {_sum("library", "library")},
+            {_sum("reading_list", "reading_list")},
+            {_sum("reading", "reading")},
+            {_sum("done", "done")},
+            {_sum("starred", "starred")},
+            {_sum("trash", "trash")},
+            {_sum("active", "active")},
+            {_sum("kept", "kept")},
+            {_sum("all_non_trash", "all_non_trash")}
+          FROM papers p
+          LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+            AND ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
+         WHERE p.user_id IS NOT DISTINCT FROM $1
+    """
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(sql, user_id)
+    assert row is not None  # aggregate query always returns one row
     return FeedCountsResponse(
         inbox=row["inbox"],
         library=row["library"],
-        starred=row["starred"],
-        archived=row["archived"],
+        reading_list=row["reading_list"],
         reading=row["reading"],
+        done=row["done"],
+        starred=row["starred"],
         trash=row["trash"],
-        all_active=row["all_active"],
+        active=row["active"],
+        kept=row["kept"],
+        all_non_trash=row["all_non_trash"],
     )
 
 
 # ---------------------------------------------------------------------------
-# Lifecycle helpers — B1.1
+# Lifecycle helpers — Phase A Wave 1ab
 # ---------------------------------------------------------------------------
 
 
-async def _assert_paper_in_trash(
+async def _assert_paper_in_state(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
     user_id: int | None,
+    state: str,
 ) -> None:
-    """Raise 409 if the paper has not been dismissed (not in Trash)."""
-    dismissed = await conn.fetchval(
-        "SELECT COALESCE(dismissed, FALSE) FROM paper_user_state"
+    """Raise 409 if the paper is not in the expected state.
+
+    Treats a missing ``paper_user_state`` row as ``state='inbox'`` per spec §6.
+    """
+    current = await conn.fetchval(
+        "SELECT COALESCE(state, 'inbox') FROM paper_user_state"
         " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
         paper_id,
         user_id,
     )
-    if not dismissed:
+    if current != state:
         raise HTTPException(
             status_code=409,
-            detail="Paper must be dismissed (in Trash) before hard-delete",
+            detail=(f"Paper must be in state '{state}'; currently '{current or 'inbox'}'"),
         )
 
 
-async def _assert_confirm_title_matches(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    confirm_title: str,
-) -> None:
-    """Raise 400 if ``confirm_title`` (trimmed) does not match the paper's title (trimmed)."""
-    title = await conn.fetchval(
-        "SELECT title FROM papers WHERE id = $1",
-        paper_id,
-    )
-    if (title or "").strip() != (confirm_title or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail="confirm_title does not match the paper's title",
-        )
-
-
-async def _upsert_user_state(
+async def _upsert_state_and_starred(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
     user_id: int | None,
-    **fields: object,
+    *,
+    state: str | None = None,
+    starred: bool | None = None,
 ) -> None:
-    """COALESCE-aware upsert of arbitrary paper_user_state fields.
+    """Upsert paper_user_state, writing only the fields explicitly supplied.
 
-    Only the key/value pairs passed as ``**fields`` are set; existing columns
-    not mentioned are preserved via ``DO UPDATE SET col = excluded.col``.
+    Fields left as ``None`` are preserved on conflict.
     """
-    if not fields:
+    if state is None and starred is None:
         return
-
-    columns = list(fields.keys())
-    values = list(fields.values())
-
-    # Always include paper_id and user_id at positions $1/$2
-    col_list = ", ".join(["paper_id", "user_id", "status"] + columns)
-    placeholders = ", ".join(["$1", "$2", "'new'"] + [f"${i + 3}" for i in range(len(columns))])
-    updates = ", ".join([f"{col} = ${i + 3}" for i, col in enumerate(columns)])
-
+    cols = ["paper_id", "user_id"]
+    placeholders = ["$1", "$2"]
+    values: list[object] = [paper_id, user_id]
+    updates: list[str] = []
+    if state is not None:
+        cols.append("state")
+        placeholders.append(f"${len(values) + 1}")
+        values.append(state)
+        updates.append(f"state = ${len(values)}")
+    if starred is not None:
+        cols.append("starred")
+        placeholders.append(f"${len(values) + 1}")
+        values.append(starred)
+        updates.append(f"starred = ${len(values)}")
     sql = (
-        f"INSERT INTO paper_user_state ({col_list}) "  # noqa: S608
-        f"VALUES ({placeholders}) "
-        f"ON CONFLICT (paper_id, user_id) DO UPDATE SET {updates}"
+        f"INSERT INTO paper_user_state ({', '.join(cols)}) "  # noqa: S608
+        f"VALUES ({', '.join(placeholders)}) "
+        f"ON CONFLICT (paper_id, user_id) DO UPDATE SET {', '.join(updates)}"
     )
-    await conn.execute(sql, paper_id, user_id, *values)
+    await conn.execute(sql, *values)
+
+
+async def _trash_paper(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_id: int,
+    user_id: int | None,
+) -> None:
+    """Atomic move to Trash: ``state_before_trash := state; state := 'trash'``.
+
+    For a paper without a ``paper_user_state`` row, the INSERT branch
+    initialises ``state_before_trash`` to ``'inbox'`` (the implicit default
+    per spec §2.3). For an existing row, the UPDATE preserves the prior
+    state into ``state_before_trash`` so :func:`_restore_paper` can return
+    the paper to where it came from.
+    """
+    await conn.execute(
+        """INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)
+           VALUES ($1, $2, 'trash', 'inbox')
+           ON CONFLICT (paper_id, user_id) DO UPDATE
+             SET state_before_trash = paper_user_state.state,
+                 state = 'trash'""",
+        paper_id,
+        user_id,
+    )
+
+
+async def _restore_paper(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_id: int,
+    user_id: int | None,
+) -> None:
+    """Restore from trash: ``state := COALESCE(state_before_trash, 'inbox')``.
+
+    Also clears ``state_before_trash`` so the field only carries meaning
+    while the paper is in trash.
+    """
+    await conn.execute(
+        """UPDATE paper_user_state
+              SET state = COALESCE(state_before_trash, 'inbox'),
+                  state_before_trash = NULL
+            WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
+        paper_id,
+        user_id,
+    )
+
+
+async def _upsert_recommendation_feedback(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_id: int,
+    user_id: int | None,
+    signal: str,
+    source: str,
+    reason: str | None = None,
+) -> None:
+    """INSERT/UPSERT a ``recommendation_feedback`` row for the given source."""
+    await conn.execute(
+        """INSERT INTO recommendation_feedback
+               (paper_id, user_id, signal, source, reason)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (paper_id, user_id, source) DO UPDATE
+             SET signal = EXCLUDED.signal,
+                 reason = EXCLUDED.reason,
+                 created_at = NOW()""",
+        paper_id,
+        user_id,
+        signal,
+        source,
+        reason,
+    )
 
 
 async def _apply_bulk_action(
@@ -660,122 +564,136 @@ async def _apply_bulk_action(
 ) -> None:
     """Dispatch a single bulk action to the appropriate state mutation."""
     if action == "save":
-        await _upsert_user_state(conn, paper_id, user_id, saved=True)
-    elif action == "unsave":
-        await _upsert_user_state(conn, paper_id, user_id, saved=False)
-    elif action == "dismiss":
-        await _upsert_user_state(conn, paper_id, user_id, dismissed=True, preference="down")
-    elif action == "archive":
-        await _upsert_user_state(conn, paper_id, user_id, archived=True)
-    elif action == "unarchive":
-        await _upsert_user_state(conn, paper_id, user_id, archived=False)
-    elif action == "mark_read":
-        await _upsert_user_state(conn, paper_id, user_id, status="read")
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
+    elif action == "skip":
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
+    elif action == "trash":
+        await _trash_paper(conn, paper_id, user_id)
+    elif action == "mark_reading":
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
+    elif action == "mark_done":
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
+    elif action == "restore":
+        await _restore_paper(conn, paper_id, user_id)
     elif action == "star":
-        await _upsert_user_state(conn, paper_id, user_id, starred=True, saved=True)
+        await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
     elif action == "unstar":
-        await _upsert_user_state(conn, paper_id, user_id, starred=False)
+        await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
+    elif action == "feedback_positive":
+        await _upsert_recommendation_feedback(conn, paper_id, user_id, "positive", "feed_thumbs")
+    elif action == "feedback_negative":
+        await _upsert_recommendation_feedback(conn, paper_id, user_id, "negative", "feed_thumbs")
     else:
         raise ValueError(f"Unknown bulk action: {action}")
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/save  — B1.1
+# PUT /api/papers/{paper_id}/save  — Reading List
 # ---------------------------------------------------------------------------
 
 
 @router.put("/{paper_id}/save", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
+@limiter.limit("60/minute")
 async def save_paper(
     request: Request,
     paper_id: int,
-    body: SaveRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Save a paper to the Library (optionally also star it)."""
+    """Save a paper to the Reading List (``state := 'to_read'``)."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        extra: dict[str, object] = {"saved": True}
-        if body.star:
-            extra["starred"] = True
-        await _upsert_user_state(conn, paper_id, user_id, **extra)
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
     return {"status": "ok", "paper_id": paper_id}
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/unsave  — B1.1
+# PUT /api/papers/{paper_id}/skip  — Inbox skip → done
 # ---------------------------------------------------------------------------
 
 
-@router.put("/{paper_id}/unsave", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
-async def unsave_paper(
+@router.put("/{paper_id}/skip", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def skip_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Remove a paper from the Library (preserves star/archive flags)."""
+    """Skip a paper from the Inbox (``state := 'done'``)."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        await _upsert_user_state(conn, paper_id, user_id, saved=False)
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/dismiss  — B1.1
+# PUT /api/papers/{paper_id}/reading  — start reading
 # ---------------------------------------------------------------------------
 
 
-@router.put("/{paper_id}/dismiss", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
-async def dismiss_paper(
+@router.put("/{paper_id}/reading", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def reading_paper(
     request: Request,
     paper_id: int,
-    body: DismissRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Dismiss a paper to Trash (sets dismissed=TRUE, preference='down')."""
+    """Mark a paper as currently being read (``state := 'reading'``)."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        if body.also_zotero:
-            logger.info(
-                "Zotero remove requested for paper %d but handler not yet implemented",
-                paper_id,
-            )
-        await _upsert_user_state(conn, paper_id, user_id, dismissed=True, preference="down")
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
     return {"status": "ok", "paper_id": paper_id}
 
 
 # ---------------------------------------------------------------------------
-# PUT /api/papers/{paper_id}/restore  — B1.1
+# PUT /api/papers/{paper_id}/done  — finish reading
 # ---------------------------------------------------------------------------
 
 
-@router.put("/{paper_id}/restore", response_model=MarkReadResponse)
-@limiter.limit("30/minute")
-async def restore_paper(
+@router.put("/{paper_id}/done", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def done_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Restore a paper from Trash to its previous surface.
+    """Mark a paper as done (``state := 'done'``)."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
+    return {"status": "ok", "paper_id": paper_id}
 
-    Sets dismissed=FALSE and preference='none', preserving saved/starred/archived
-    so the paper returns to where it was before being dismissed:
-      - saved=TRUE  → Library (or Starred/Archived sub-view if those flags are set)
-      - saved=FALSE → Inbox
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/star
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/star", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def star_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Set ``starred = TRUE``. Does not change reading state.
+
+    Note: Wave 1d will add the optional Zotero push trigger here.
     """
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
@@ -783,12 +701,165 @@ async def restore_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        await _upsert_user_state(conn, paper_id, user_id, dismissed=False, preference="none")
+        await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
     return {"status": "ok", "paper_id": paper_id}
 
 
 # ---------------------------------------------------------------------------
-# DELETE /api/papers/{paper_id}  — B1.1 hard delete
+# PUT /api/papers/{paper_id}/unstar
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/unstar", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def unstar_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Set ``starred = FALSE``. Does not change reading state."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await _upsert_state_and_starred(conn, paper_id, user_id, starred=False)
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/trash
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/trash", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def trash_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await _trash_paper(conn, paper_id, user_id)
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/restore
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/restore", response_model=MarkReadResponse)
+@limiter.limit("60/minute")
+async def restore_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Restore a paper from Trash to its prior state."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await _restore_paper(conn, paper_id, user_id)
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/trash_and_reject  — combined action (spec §4.4)
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/trash_and_reject", response_model=MarkReadResponse)
+@limiter.limit("30/minute")
+async def trash_and_reject_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Trash the paper AND record negative feedback (``source='dismiss_combined'``).
+
+    Single transaction. The only combined action in the system per spec §4.4.
+    """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        async with conn.transaction():
+            await _trash_paper(conn, paper_id, user_id)
+            await _upsert_recommendation_feedback(
+                conn,
+                paper_id,
+                user_id,
+                "negative",
+                "dismiss_combined",
+            )
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/annotations  — rating / notes / flagged (spec §3.3)
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/annotations", response_model=UserStateResponse)
+@limiter.limit("30/minute")
+async def annotate_paper(
+    request: Request,
+    paper_id: int,
+    body: AnnotationsRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Update subjective per-paper annotations (rating 1-5, user_notes, flagged).
+
+    Partial updates: any field left as ``None`` is preserved on conflict.
+    Returns the resulting :class:`UserStateResponse` so the frontend can
+    refresh its local cache without a follow-up GET.
+    """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        try:
+            row = await conn.fetchrow(
+                """INSERT INTO paper_user_state
+                       (paper_id, user_id, rating, user_notes, flagged)
+                   VALUES ($1, $2, $3, $4, COALESCE($5, FALSE))
+                   ON CONFLICT (paper_id, user_id) DO UPDATE SET
+                       rating     = COALESCE($3, paper_user_state.rating),
+                       user_notes = COALESCE($4, paper_user_state.user_notes),
+                       flagged    = COALESCE($5, paper_user_state.flagged)
+                   RETURNING
+                       COALESCE(state, 'inbox') AS state,
+                       state_before_trash,
+                       COALESCE(starred, FALSE) AS starred,
+                       rating, user_notes,
+                       COALESCE(flagged, FALSE) AS flagged,
+                       updated_at""",
+                paper_id,
+                user_id,
+                body.rating,
+                body.user_notes,
+                body.flagged,
+            )
+        except asyncpg.ForeignKeyViolationError as e:
+            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
+    assert row is not None  # RETURNING guarantees a row on success
+    return UserStateResponse(**dict(row))
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/papers/{paper_id}  — hard delete (preserves WS-AH2 NEW-H2)
 # ---------------------------------------------------------------------------
 
 
@@ -797,21 +868,23 @@ async def restore_paper(
 async def hard_delete_paper(
     request: Request,
     paper_id: int,
-    body: HardDeleteRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Permanently delete a paper (must be in Trash; title confirmation required)."""
+    """Permanently delete a trashed paper.
+
+    Cascades through FK; Qdrant cleanup is best-effort.
+
+    Order rationale (WS-AH2 NEW-H2 — load-bearing): if SQL ``DELETE`` fails,
+    the txn rolls back and Qdrant is untouched (user retries cleanly). If
+    SQL succeeds and Qdrant fails, vectors are orphaned (recoverable). The
+    reverse order is data-loss-prone — do not collapse the inside-txn
+    DELETE and outside-txn Qdrant cleanup into a single try/except.
+    """
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_trash(conn, paper_id, user_id)
-        await _assert_confirm_title_matches(conn, paper_id, body.confirm_title)
+        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
         async with conn.transaction():
-            if body.also_zotero:
-                logger.info(
-                    "Zotero remove requested for paper %d but handler not yet implemented",
-                    paper_id,
-                )
             await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
         # Qdrant cleanup OUTSIDE the transaction — Qdrant is non-transactional;
         # we prefer the row to commit first so a Qdrant failure leaves orphan
@@ -827,7 +900,7 @@ async def hard_delete_paper(
 
 
 # ---------------------------------------------------------------------------
-# POST /api/papers/bulk  — B1.1 bulk action
+# POST /api/papers/bulk
 # ---------------------------------------------------------------------------
 
 
@@ -842,7 +915,7 @@ async def bulk_action_papers(
 
     Returns ``{"succeeded": [...], "failed": [{"paper_id": int, "error": str}]}``.
     Partial failures are collected; the outer transaction is committed even when
-    individual papers fail.
+    individual papers fail (per-paper savepoints isolate rollbacks).
     """
     user_id = await current_user_id_or_none(request)
     succeeded: list[int] = []
