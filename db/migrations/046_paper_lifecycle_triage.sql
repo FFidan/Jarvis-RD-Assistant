@@ -1,5 +1,3 @@
-BEGIN;
-
 -- Triage axis
 ALTER TABLE paper_user_state
     ADD COLUMN IF NOT EXISTS saved BOOLEAN NOT NULL DEFAULT FALSE,
@@ -42,5 +40,3 @@ DROP TRIGGER IF EXISTS set_updated_at_paper_user_state ON paper_user_state;
 CREATE TRIGGER set_updated_at_paper_user_state
     BEFORE UPDATE ON paper_user_state
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
-COMMIT;

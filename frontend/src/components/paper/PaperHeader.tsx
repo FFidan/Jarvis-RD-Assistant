@@ -33,6 +33,7 @@ export function PaperHeader({ paper, isStarred = false, userState }: PaperHeader
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['paper-detail', paper.id] });
     queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+    queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
   };
 
   const bookmarkMut = useMutation({

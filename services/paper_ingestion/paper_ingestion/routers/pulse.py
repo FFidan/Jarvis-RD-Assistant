@@ -157,10 +157,14 @@ async def rate_card(
                 user_id,
                 body.rating,
             )
+            # Early-return for 'open': pulse_ratings row already recorded above for
+            # analytics; paper_user_state must NOT be written (logging-only action).
+            if body.rating == "open":
+                return PulseRateResponse(status="logged")
+
             # Map rating → lifecycle state changes:
             #   save    → starred=TRUE, saved=TRUE, preference='up'
             #   dismiss → dismissed=TRUE, preference='down' (saved unchanged)
-            #   open    → no state mutation (only the pulse_ratings row is logged)
             #   up/down → preference only (no saved/dismissed change)
             if body.rating == "save":
                 preference = "up"
@@ -177,14 +181,9 @@ async def rate_card(
                 starred = False
                 saved = False
                 dismissed = False
-            elif body.rating in {"down"}:
-                preference = "down"
-                starred = False
-                saved = False
-                dismissed = False
             else:
-                # "open" and any future ratings: no state mutation
-                preference = "none"
+                # 'down' and any unrecognised ratings: treat as thumbs-down
+                preference = "down"
                 starred = False
                 saved = False
                 dismissed = False

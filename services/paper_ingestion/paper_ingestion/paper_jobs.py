@@ -401,7 +401,10 @@ async def _digest_weekly_job(
     if verifier is None:
         raise RuntimeError("verifier not initialized")
     days = int(payload.get("days", 7))
+    user_id: int | None = payload.get("user_id")
     await ctx.update_progress(0.1, "Generating weekly digest")
-    digest = await generate_weekly_summary(pool, http_client, days=days, verifier=verifier)
+    digest = await generate_weekly_summary(
+        pool, http_client, days=days, verifier=verifier, user_id=user_id
+    )
     await ctx.update_progress(1.0, "Done")
     return digest

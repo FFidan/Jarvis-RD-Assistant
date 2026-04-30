@@ -421,3 +421,120 @@ async def test_weekly_summary_llm_failure_has_empty_theme_splits():
     assert nlp["themes"] == []
     assert nlp["verified_themes"] == []
     assert nlp["unverified_themes"] == []
+
+
+# ---------------------------------------------------------------------------
+# W3-T3: user_id parameterization
+# ---------------------------------------------------------------------------
+
+
+def _make_pool_capturing_params(rows_by_user_id: dict) -> tuple[MagicMock, list]:
+    """Pool mock that captures the ``user_id`` bind param ($2) passed to fetch().
+
+    ``rows_by_user_id`` maps ``user_id`` (int or None) to the list of rows
+    the DB would return for that user.  Calls with an unexpected user_id return [].
+    """
+    captured: list = []
+
+    async def _fetch(query: str, *args):
+        # args[0] = cutoff ($1), args[1] = user_id ($2)
+        uid = args[1] if len(args) > 1 else None
+        captured.append(uid)
+        return rows_by_user_id.get(uid, [])
+
+    conn = AsyncMock()
+    conn.fetch = _fetch
+
+    pool = MagicMock()
+
+    @asynccontextmanager
+    async def _acquire():
+        yield conn
+
+    pool.acquire = _acquire
+    return pool, captured
+
+
+async def test_user_id_filters_to_user_a_only():
+    """Weekly summary called with user_id=1 only returns that user's rows.
+
+    Two users (A=1, B=2) each have a paper. Querying for user A must NOT
+    include user B's paper.
+    """
+    row_a = _make_paper_row(101, "User A Paper", "NLP", summary_brief="A finding")
+    row_b = _make_paper_row(202, "User B Paper", "CV", summary_brief="B finding")
+
+    pool, captured = _make_pool_capturing_params({1: [row_a], 2: [row_b]})
+    http_client = AsyncMock()
+
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=1)
+
+    # The pool received user_id=1 as the $2 bind param.
+    assert captured == [1]
+    # Only user A's paper is in the result.
+    all_ids = {p["id"] for topic in result["topics"] for p in topic["top_papers"]}
+    assert 101 in all_ids
+    assert 202 not in all_ids
+    assert result["total_papers"] == 1
+
+
+async def test_user_id_filters_to_user_b_only():
+    """Weekly summary called with user_id=2 only returns that user's rows."""
+    row_a = _make_paper_row(101, "User A Paper", "NLP", summary_brief="A finding")
+    row_b = _make_paper_row(202, "User B Paper", "CV", summary_brief="B finding")
+
+    pool, captured = _make_pool_capturing_params({1: [row_a], 2: [row_b]})
+    http_client = AsyncMock()
+
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=2)
+
+    assert captured == [2]
+    all_ids = {p["id"] for topic in result["topics"] for p in topic["top_papers"]}
+    assert 202 in all_ids
+    assert 101 not in all_ids
+    assert result["total_papers"] == 1
+
+
+async def test_user_id_none_aggregates_all_users():
+    """Weekly summary called with user_id=None passes None as $2 (global aggregate)."""
+    row_a = _make_paper_row(101, "User A Paper", "NLP", summary_brief="A finding")
+    row_b = _make_paper_row(202, "User B Paper", "NLP", summary_brief="B finding")
+
+    # None key = both users' rows returned (global aggregate).
+    pool, captured = _make_pool_capturing_params({None: [row_a, row_b]})
+    http_client = AsyncMock()
+
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=None)
+
+    # $2 was NULL (None), meaning no user filter applied.
+    assert captured == [None]
+    all_ids = {p["id"] for topic in result["topics"] for p in topic["top_papers"]}
+    assert 101 in all_ids
+    assert 202 in all_ids
+    assert result["total_papers"] == 2
+
+
+async def test_user_id_default_is_none():
+    """Calling generate_weekly_summary without user_id defaults to None (global)."""
+    row = _make_paper_row(10, "Some Paper", "ML", summary_brief="finding")
+    pool, captured = _make_pool_capturing_params({None: [row]})
+    http_client = AsyncMock()
+
+    # No user_id kwarg — must default to None.
+    result = await generate_weekly_summary(pool, http_client, days=7)
+
+    assert captured == [None]
+    assert result["total_papers"] == 1
+
+
+async def test_user_id_unknown_user_returns_empty():
+    """A user_id with no engagement rows produces the honest empty response."""
+    pool, captured = _make_pool_capturing_params({1: [], 2: []})
+    http_client = AsyncMock()
+
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=99)
+
+    assert captured == [99]
+    assert result["total_papers"] == 0
+    assert result["topics"] == []
+    assert "message" in result

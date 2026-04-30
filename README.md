@@ -340,7 +340,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-043)
+│   └── migrations/             # Versioned schema changes (001-046)
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -414,7 +414,7 @@ docker compose exec postgres psql -U jarvis -d jarvis -c \
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — Single-source operator guide: deployment modes, TLS, tunnels, backups, troubleshooting.
 - [docs/PRD.md](docs/PRD.md) — Product requirements and feature-level spec, including the Discovery & Pulse design.
 - [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) — Non-functional requirements and technical constraints.
-- [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the [1.2.4] Round-7 audit remediation.
+- [docs/CHANGELOG.md](docs/CHANGELOG.md) — Release notes per version, including the WS-AH paper-lifecycle triage sprint and WS-AH2 verification audit.
 - [AGENTS.md](AGENTS.md) — Repository-level guidance for contributors (human or AI).
 
 ## License

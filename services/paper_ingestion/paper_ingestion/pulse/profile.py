@@ -149,7 +149,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
                         centroid[i] += v
                     n += 1
                 library_centroid = [v / n for v in centroid] if n > 0 else None
-        except Exception:
+        except RuntimeError:
             logger.warning("load_profile: failed to compute library centroid", exc_info=True)
             library_centroid = None
 

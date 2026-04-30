@@ -231,26 +231,31 @@ class PDFProcessor:
         # Stream download directly to disk to avoid memory accumulation
         total_size = 0
         header_bytes = b""
+
+        def _write_pdf_chunk(path: Path, data: bytes) -> None:
+            """Write PDF chunk to disk (blocking I/O wrapped for async context)."""
+            with open(path, "ab") as f:
+                f.write(data)
+
         async with self.http_client.stream(
             "GET", current_url, timeout=120.0, follow_redirects=False
         ) as stream_resp:
             stream_resp.raise_for_status()
-            with open(pdf_path, "wb") as f:
-                async for data in stream_resp.aiter_bytes(chunk_size=65536):
-                    total_size += len(data)
-                    if total_size > MAX_PDF_SIZE:
+            # Pre-create empty file
+            await asyncio.to_thread(pdf_path.touch)
+            async for data in stream_resp.aiter_bytes(chunk_size=65536):
+                total_size += len(data)
+                if total_size > MAX_PDF_SIZE:
+                    pdf_path.unlink(missing_ok=True)
+                    raise ValueError(
+                        f"PDF exceeds maximum size of {MAX_PDF_SIZE // (1024 * 1024)} MB"
+                    )
+                if not header_bytes:
+                    header_bytes = data[:5]
+                    if not header_bytes.startswith(b"%PDF-"):
                         pdf_path.unlink(missing_ok=True)
-                        raise ValueError(
-                            f"PDF exceeds maximum size of {MAX_PDF_SIZE // (1024 * 1024)} MB"
-                        )
-                    if not header_bytes:
-                        header_bytes = data[:5]
-                        if not header_bytes.startswith(b"%PDF-"):
-                            pdf_path.unlink(missing_ok=True)
-                            raise ValueError(
-                                "Downloaded file is not a valid PDF (missing %PDF header)"
-                            )
-                    f.write(data)
+                        raise ValueError("Downloaded file is not a valid PDF (missing %PDF header)")
+                await asyncio.to_thread(_write_pdf_chunk, pdf_path, data)
 
         bytes_written = total_size
 

@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 import asyncpg
@@ -24,6 +25,11 @@ _ALLOWED_TABLES = frozenset(
         "tracked_authors",
     }
 )
+
+# Whitelist for extra_sets fragments: only col = NOW(), col = NULL, or col = $N
+# are accepted. Anything else (subqueries, arbitrary expressions, string literals)
+# is rejected to prevent SQL-injection-adjacent misuse.
+_EXTRA_SET_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*\s*=\s*(NOW\(\)|NULL|\$\d+)$")
 
 
 def quote_ident(name: str) -> str:
@@ -187,9 +193,16 @@ async def dynamic_update(
             "'id' column cannot be updated via dynamic_update — use a dedicated SQL statement"
         )
 
-    if extra_sets is not None and not all(isinstance(s, str) for s in extra_sets):
-        bad_types = [type(s).__name__ for s in extra_sets]
-        raise TypeError(f"dynamic_update extra_sets must all be str, got {bad_types}")
+    if extra_sets is not None:
+        if not all(isinstance(s, str) for s in extra_sets):
+            bad_types = [type(s).__name__ for s in extra_sets]
+            raise TypeError(f"dynamic_update extra_sets must all be str, got {bad_types}")
+        bad_frags = [s for s in extra_sets if not _EXTRA_SET_RE.match(s)]
+        if bad_frags:
+            raise ValueError(
+                f"dynamic_update extra_sets must match {_EXTRA_SET_RE.pattern!r}; "
+                f"got disallowed fragments: {bad_frags}"
+            )
 
     if not updates and not extra_sets:
         raise ValueError("No updates to apply")

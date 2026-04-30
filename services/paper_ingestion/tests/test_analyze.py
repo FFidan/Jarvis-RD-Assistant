@@ -13,7 +13,8 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.routers.analyze import _analyze_stream, _sse_event
+from paper_ingestion.routers._sse import SSE_DONE, sse_event
+from paper_ingestion.routers.analyze import _analyze_stream
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -136,12 +137,12 @@ async def _collect_events(
 
 
 # ---------------------------------------------------------------------------
-# Test _sse_event helper
+# Test sse_event helper (from paper_ingestion.routers._sse)
 # ---------------------------------------------------------------------------
 
 
 def test_sse_event_dict():
-    result = _sse_event({"type": "step", "step": "downloading", "status": "started"})
+    result = sse_event({"type": "step", "step": "downloading", "status": "started"})
     assert result.startswith("data: ")
     assert result.endswith("\n\n")
     parsed = json.loads(result[6:])
@@ -149,9 +150,8 @@ def test_sse_event_dict():
     assert parsed["step"] == "downloading"
 
 
-def test_sse_event_string():
-    result = _sse_event("[DONE]")
-    assert result == "data: [DONE]\n\n"
+def test_sse_done_constant():
+    assert SSE_DONE == "data: [DONE]\n\n"
 
 
 # ---------------------------------------------------------------------------

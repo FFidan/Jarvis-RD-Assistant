@@ -110,8 +110,8 @@ async def paper_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
@@ -139,6 +139,7 @@ async def paper_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text(f"✅ Paper <b>{paper_id}</b> saved.", parse_mode="HTML")
     except Exception:
         logger.exception("Failed to save paper id=%s", paper_id)
+        await query.answer()
         await query.message.reply_text("Failed to save paper.", parse_mode="HTML")
 
 
@@ -148,8 +149,8 @@ async def paper_dismiss_callback(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
@@ -179,6 +180,7 @@ async def paper_dismiss_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
     except Exception:
         logger.exception("Failed to dismiss paper id=%s", paper_id)
+        await query.answer()
         await query.message.reply_text("Failed to dismiss paper.", parse_mode="HTML")
 
 
@@ -256,11 +258,10 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     if not await auth_check(update, config, db_pool):
         return
 
-    # Delegate to review_start by patching the update so it carries a message.
-    # review_start only uses update.message.reply_text and update.effective_chat
-    # for auth — both are accessible via the callback query's message.
-    update.message = query.message  # type: ignore[assignment]
-    await review_start(update, context)
+    # Delegate to review_start, passing the callback message explicitly so that
+    # update.message is never mutated (Update fields are conceptually immutable
+    # per call and the assignment was fragile / type-unsafe).
+    await review_start(update, context, message=query.message)
 
 
 @rate_limit(max_calls=10, window_seconds=60)

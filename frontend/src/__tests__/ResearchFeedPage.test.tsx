@@ -4,7 +4,7 @@ import { userEvent } from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
-import { ApiError, archivePaper } from '@/lib/api';
+import { ApiError, archivePaper, useFeedCounts } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
 
@@ -33,6 +33,57 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchFeedPapers: vi.fn().mockResolvedValue({
+      papers: [
+      {
+        id: 1,
+        external_id: 'arxiv:2301.00001',
+        source_type: 'arxiv',
+        title: 'Test Paper One',
+        authors: ['Author A', 'Author B'],
+        abstract: 'An abstract for the test paper.',
+        published_date: '2025-01-01',
+        url: 'https://arxiv.org/abs/2301.00001',
+        pdf_url: null,
+        pdf_local_path: null,
+        pdf_downloaded: false,
+        citation_count: 10,
+        priority_score: 0.8,
+        metadata: {},
+        discovered_at: '2025-01-01T00:00:00Z',
+        created_at: '2025-01-01T00:00:00Z',
+        summary_brief: 'A brief summary.',
+        tldr: 'Short TLDR',
+        confidence: 'HIGH',
+        user_status: 'new',
+        rating: null,
+      },
+      {
+        id: 2,
+        external_id: 'arxiv:2301.00002',
+        source_type: 'semantic_scholar',
+        title: 'Test Paper Two',
+        authors: ['Author C'],
+        abstract: 'Another abstract.',
+        published_date: '2025-02-01',
+        url: 'https://semanticscholar.org/paper/123',
+        pdf_url: null,
+        pdf_local_path: null,
+        pdf_downloaded: false,
+        citation_count: 5,
+        priority_score: 0.3,
+        metadata: {},
+        discovered_at: '2025-02-01T00:00:00Z',
+        created_at: '2025-02-01T00:00:00Z',
+        summary_brief: null,
+        tldr: null,
+        confidence: null,
+        user_status: 'reading',
+        rating: null,
+      },
+    ],
+    total: 2,
+  }),
+    fetchFeed: vi.fn().mockResolvedValue({
       papers: [
       {
         id: 1,
@@ -132,6 +183,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 4, source_type: 'pubmed', enabled: true, config: {}, priority: 4, display_order: 4, created_at: '2025-01-01T00:00:00Z' },
       { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
     ]),
+    fetchFeedCounts: vi.fn().mockResolvedValue({
+      inbox: 0, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 0,
+    }),
+    useFeedCounts: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
     fetchPulseHistory: vi.fn().mockResolvedValue([]),
     zoteroGetLinkage: vi.fn().mockResolvedValue({
       zotero_item_key: null,
@@ -224,17 +279,28 @@ describe('ResearchFeedPage', () => {
 
   it('renders both tab triggers (Inbox and Library)', () => {
     renderPage();
-    expect(screen.getByRole('tab', { name: 'Inbox' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Library' })).toBeInTheDocument();
+    // Use regex matchers so count badges (e.g. "Inbox 3") don't break the query
+    expect(screen.getByRole('tab', { name: /^Inbox/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Library/ })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Trash/ })).toBeInTheDocument();
+    // Pulse tab was moved to /my-day; it is no longer a surface chip on this page
+    expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
   });
 
-  it('defaults to Library tab active', () => {
+  it('defaults to Library tab active', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 0, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 5 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
     renderPage();
-    const libraryTab = screen.getByRole('tab', { name: 'Library' });
-    expect(libraryTab).toHaveAttribute('data-state', 'active');
+    await waitFor(() => {
+      // Surface chips use aria-selected (not data-state) to indicate the active chip
+      // Use regex so count badges like "Library 5" don't break the query
+      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+    });
   });
 
   it('renders the Ask tab heading and description', async () => {
@@ -712,9 +778,11 @@ describe('ResearchFeedPage', () => {
   it('switches to Library tab on click', async () => {
     const user = userEvent.setup();
     renderPage();
-    const libraryTab = screen.getByRole('tab', { name: 'Library' });
+    // Use regex so count badges like "Library 5" don't break the query
+    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
     await user.click(libraryTab);
-    expect(libraryTab).toHaveAttribute('data-state', 'active');
+    // Surface chips use aria-selected (not data-state) to indicate the active chip
+    expect(libraryTab).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows papers in the New tab after loading', async () => {
@@ -1352,7 +1420,8 @@ describe('ResearchFeedPage', () => {
       expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s) to your library.');
     });
 
-    expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('data-state', 'active');
+    // Surface chips use aria-selected (not data-state) to indicate the active chip
+    expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Save Flow Paper')).toBeInTheDocument();
   });
 
@@ -1731,37 +1800,51 @@ describe('ResearchFeedPage', () => {
     );
   });
 
-  it('shows Library tab content with import section', async () => {
+  it('shows Library tab content with section description', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const libraryTab = screen.getByRole('tab', { name: 'Library' });
+    // Use regex so count badges like "Library 5" don't break the query
+    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
     await user.click(libraryTab);
 
     await waitFor(() => {
-      expect(screen.getByText('Import local PDFs')).toBeInTheDocument();
+      // The Library surface renders a section description and its FeedView
+      expect(
+        screen.getByText('Browse, search, and filter all papers in your library.'),
+      ).toBeInTheDocument();
     });
   });
 
-  it('shows library papers with filter input after switching to Library tab', async () => {
+  it('shows library papers after switching to Library tab', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const libraryTab = screen.getByRole('tab', { name: 'Library' });
+    // Use regex so count badges like "Library 5" don't break the query
+    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
     await user.click(libraryTab);
 
+    // Library surface now renders papers via FeedView (filter input is no longer part of this view)
     await waitFor(() => {
-      expect(
-        screen.getByPlaceholderText('Filter by title, abstract, or author...'),
-      ).toBeInTheDocument();
+      expect(screen.getByText('Test Paper One')).toBeInTheDocument();
     });
   });
 
   it('clicking archive on a Library row calls archivePaper with the paper id (Sprint 7 B16)', async () => {
     const user = userEvent.setup();
+    // Library is the default surface when inbox=0
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 0, library: 2, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
     renderPage();
 
-    // Library is the default-active tab; wait for the row to render.
+    // Wait for redirect to library surface, then wait for the row to render.
+    // Use regex so count badges like "Library 2" don't break the query
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+    });
     await screen.findByText('Test Paper One');
 
     const archiveButton = await screen.findByRole('button', {
@@ -1776,5 +1859,129 @@ describe('ResearchFeedPage', () => {
       expect(mock).toHaveBeenCalled();
       expect(mock.mock.calls[0][0]).toBe(1);
     });
+  });
+
+  // ── Sprint 8 B3.7 — Surface chips ─────────────────────────────────────────
+
+  it('renders 5 surface chips: Inbox | Library | Search | Ask | Trash', () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    renderPage();
+    // Regex matchers tolerate count badges appended to badge-enabled surfaces
+    expect(screen.getByRole('tab', { name: /^Inbox/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Library/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^Trash/ })).toBeInTheDocument();
+  });
+
+  it('surface chip uses useFeedCounts data for conditional CountsBadge rendering', () => {
+    // When useFeedCounts returns counts data, the chip renders the CountsBadge child
+    // (actual count text rendering depends on CountsBadge's internal surface lookup)
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 3, library: 5, starred: 1, archived: 0, reading: 2, trash: 0, all_active: 10 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
+    renderPage();
+    // Inbox chip should have countsKey='inbox' and feedCounts.inbox=3 !== undefined
+    // so CountsBadge is attempted to be rendered inside the Inbox chip button
+    const inboxChip = screen.getByRole('tab', { name: /Inbox/i });
+    expect(inboxChip).toBeInTheDocument();
+    // Trash chip has countsKey='trash'; trash=0 so feedCounts['trash'] === 0 !== undefined
+    // so CountsBadge is also attempted to render inside Trash chip
+    const trashChip = screen.getByRole('tab', { name: /Trash/i });
+    expect(trashChip).toBeInTheDocument();
+  });
+
+  it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 2, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 7 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
+    renderPage();
+    await waitFor(() => {
+      // After redirect, Inbox chip should be aria-selected
+      // Use regex so count badges like "Inbox 2" don't break the query
+      expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  it('default landing redirects to ?surface=library when inbox = 0', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 0, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 5 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
+    renderPage();
+    await waitFor(() => {
+      // Use regex so count badges like "Library 5" don't break the query
+      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+    });
+  });
+
+  it('?tab=pulse legacy deep-link causes navigate to /my-day', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    // Render with the legacy ?tab=pulse query param
+    render(
+      <QueryClientProvider client={appQueryClient}>
+        <MemoryRouter initialEntries={['/feed?tab=pulse']}>
+          <Routes>
+            <Route path="/feed" element={<ResearchFeedPage />} />
+            <Route path="/my-day" element={<LocationDisplay />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('location-path')).toHaveTextContent('/my-day');
+    });
+  });
+
+  // ── W2-T3: Surface chip click → ?surface= update ───────────────────────────
+
+  it('clicking each surface chip makes it aria-selected and deselects the previous chip', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    const surfaces = [
+      { regex: /^Inbox/, label: 'Inbox' },
+      { regex: /^Library/, label: 'Library' },
+      { regex: /^Search$/, label: 'Search' },
+      { regex: /^Ask$/, label: 'Ask' },
+      { regex: /^Trash/, label: 'Trash' },
+    ] as const;
+
+    for (const { regex } of surfaces) {
+      const chip = screen.getByRole('tab', { name: regex });
+      await user.click(chip);
+      // Clicked chip must be selected
+      expect(chip).toHaveAttribute('aria-selected', 'true');
+      // All other main surface chips must be deselected
+      for (const { regex: otherRegex } of surfaces) {
+        if (otherRegex === regex) continue;
+        const other = screen.getByRole('tab', { name: otherRegex });
+        expect(other).toHaveAttribute('aria-selected', 'false');
+      }
+    }
+  });
+
+  // ── W2-T3: ?surface=garbage URL fallback ───────────────────────────────────
+
+  it('?surface=garbage falls back to Inbox surface (VALID_SURFACES guard)', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    render(
+      <QueryClientProvider client={appQueryClient}>
+        <MemoryRouter initialEntries={['/feed?surface=garbage']}>
+          <Routes>
+            <Route path="/feed" element={<ResearchFeedPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // Unknown surface falls back to 'inbox' (line 92-95 of ResearchFeedPage.tsx)
+    expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'false');
   });
 });

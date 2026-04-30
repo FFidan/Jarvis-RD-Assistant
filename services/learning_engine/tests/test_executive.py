@@ -285,25 +285,39 @@ async def test_focus_log_task_not_found(exec_app):
 
 @pytest.mark.asyncio
 async def test_focus_log_with_paper_id(exec_app):
-    """POST /api/executive/focus/log with paper_id returns 200."""
+    """POST /api/executive/focus/log with paper_id returns 200 and uses new ON CONFLICT (paper_id, user_id) clause."""
+    from unittest.mock import patch
+
     app, conn = exec_app
 
     # fetchrow (SELECT FOR UPDATE) returns a row — paper exists
     conn.fetchrow.return_value = FakeRecord(id=7)
     conn.execute.return_value = "INSERT 1"
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.post(
-            "/api/executive/focus/log",
-            json={"duration_hours": 0.5, "paper_id": 7},
-        )
+    with patch(
+        "learning_engine.routers.executive.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/api/executive/focus/log",
+                json={"duration_hours": 0.5, "paper_id": 7},
+            )
 
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "success"
     assert data["recorded_hours"] == 0.5
+
+    # Verify the ON CONFLICT clause references the composite key (paper_id, user_id)
+    executed_sqls = [str(call.args[0]) for call in conn.execute.call_args_list]
+    paper_state_sql = next((s for s in executed_sqls if "paper_user_state" in s), None)
+    assert paper_state_sql is not None, "Expected an INSERT into paper_user_state"
+    assert "ON CONFLICT (paper_id, user_id)" in paper_state_sql, (
+        f"SQL must use composite ON CONFLICT, got: {paper_state_sql!r}"
+    )
 
 
 @pytest.mark.asyncio

@@ -421,25 +421,32 @@ async def test_bookmark_paper_toggles_starred_without_read_status_clobber():
     assert result2 == {"status": "ok", "paper_id": 5}
     second_args = conn.execute.await_args.args
     assert second_args[1:] == (5, None, False)
-    assert "WHEN paper_user_state.status = 'starred' THEN 'read'" in second_args[0]
+    # Post-WS8-046, status='starred' is no longer a legal value, so the legacy
+    # CASE branch was removed. Confirm the new auto-save clause is in place.
+    assert "saved = CASE WHEN $3 THEN TRUE ELSE paper_user_state.saved END" in second_args[0]
 
 
 @pytest.mark.asyncio
 async def test_archive_paper_sets_archived_flag():
-    """archive_paper should set archived without changing reading status."""
+    """archive_paper sets archived=TRUE when saved=TRUE precondition holds."""
+    from paper_ingestion.models import ArchiveRequest
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {"id": 8}
+    # Precondition: paper must already be saved.
+    conn.fetchval = AsyncMock(return_value=True)
 
     result = await papers.archive_paper.__wrapped__(
         MagicMock(),
         paper_id=8,
+        body=ArchiveRequest(),
         db_pool=pool,
     )
 
     assert result == {"status": "ok", "paper_id": 8}
     sql = conn.execute.await_args.args[0]
     assert "archived" in sql
-    assert conn.execute.await_args.args[1:] == (8, None)
+    assert conn.execute.await_args.args[1:] == (8, None, True)
 
 
 @pytest.mark.asyncio

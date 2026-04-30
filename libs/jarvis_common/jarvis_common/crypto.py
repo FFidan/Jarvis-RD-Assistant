@@ -5,8 +5,10 @@ from __future__ import annotations
 import functools
 import logging
 import os
+from collections.abc import Mapping
 from typing import Any
 
+import asyncpg
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
@@ -16,7 +18,9 @@ logger = logging.getLogger(__name__)
 def _load_fernet() -> Fernet:
     """Build a Fernet instance from JARVIS_CONFIG_KEY env var.
 
-    Cached so repeated calls don't re-parse the key.
+    Cached for process lifetime so repeated calls don't re-parse the key.
+    Send SIGHUP after rotating CONFIG_ENC_KEY to clear the cache (see
+    :func:`reload_fernet_on_sighup`).
     Raises RuntimeError if the key is unset or malformed.
     """
     raw = os.environ.get("JARVIS_CONFIG_KEY", "")
@@ -43,6 +47,25 @@ def refresh_fernet_cache() -> None:
     _load_fernet.cache_clear()
 
 
+def reload_fernet_on_sighup() -> None:
+    """Register SIGHUP → clear _load_fernet cache.
+
+    Operators send SIGHUP after rotating CONFIG_ENC_KEY so the next
+    call to :func:`encrypt_secret` or :func:`decrypt_secret` re-reads
+    the new key from the environment without a full process restart.
+
+    Safe to call from any service startup path; the handler is a no-op if
+    SIGHUP is not available (e.g. Windows) or the caller is not the main thread.
+    """
+    import signal
+
+    try:
+        signal.signal(signal.SIGHUP, lambda *_: _load_fernet.cache_clear())
+    except (ValueError, OSError):
+        # Not in main thread, or platform without SIGHUP (Windows).
+        pass
+
+
 def encrypt_secret(plaintext: str) -> str:
     """Encrypt *plaintext* with the key from JARVIS_CONFIG_KEY.
 
@@ -63,7 +86,9 @@ def decrypt_secret(ciphertext: str) -> str:
     return fernet.decrypt(ciphertext.encode()).decode()
 
 
-def resolve_secret_row(row: Any) -> str | None:
+def resolve_secret_row(
+    row: asyncpg.Record | Mapping[str, Any] | None,
+) -> str | None:
     """Return the plaintext value for a ``user_config``-shaped row.
 
     Reads ``encrypted_value`` first (Fernet ciphertext stored as BYTEA,
@@ -72,16 +97,17 @@ def resolve_secret_row(row: Any) -> str | None:
     or NULL. Raises whatever ``decrypt_secret`` raises when an encrypted
     row cannot be decrypted — callers that want graceful degradation
     should wrap the call in ``try/except``.
+
+    Accepts either an ``asyncpg.Record`` (which supports ``dict()``
+    coercion) or any ``Mapping[str, Any]`` (e.g. a plain ``dict``).
     """
     if row is None:
         return None
-    get = getattr(row, "get", None)
-    if callable(get):
-        enc = row.get("encrypted_value")
-        raw = row.get("value")
-    else:
-        enc = row["encrypted_value"] if "encrypted_value" in row else None
-        raw = row["value"] if "value" in row else None
+    # asyncpg.Record is not a virtual subclass of Mapping; normalise both
+    # forms into a Mapping so we get static type guarantees downstream.
+    data: Mapping[str, Any] = row if isinstance(row, Mapping) else dict(row)
+    enc = data.get("encrypted_value")
+    raw = data.get("value")
     if enc is not None:
         if isinstance(enc, memoryview):
             enc = enc.tobytes()
@@ -180,5 +206,6 @@ __all__ = [
     "mask_secret",
     "rotate_key",
     "refresh_fernet_cache",
+    "reload_fernet_on_sighup",
     "validate_encrypted_config_rows",
 ]

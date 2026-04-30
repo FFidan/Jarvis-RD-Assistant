@@ -14,7 +14,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-const STATUS_OPTIONS = ['new', 'reading', 'read', 'archived', 'starred'] as const;
+const STATUS_OPTIONS = ['new', 'reading', 'read'] as const;
 
 interface UserStateFormProps {
   paperId: number;
@@ -73,7 +73,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
 
       <div className="space-y-1">
         <Label htmlFor="user-status">Status</Label>
-        <Select value={status} onValueChange={setStatus}>
+        <Select value={status} onValueChange={(v) => setStatus(v as 'new' | 'reading' | 'read')}>
           <SelectTrigger id="user-status">
             <SelectValue />
           </SelectTrigger>

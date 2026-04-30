@@ -14,6 +14,8 @@ from telegram_bot.config import BotConfig
 from telegram_bot.handlers.callback_handler import (  # noqa: E402
     paper_bookmark_callback,
     paper_detail_callback,
+    paper_dismiss_callback,
+    paper_save_callback,
     project_detail_callback,
     start_review_callback,
     task_done_callback,
@@ -275,6 +277,8 @@ async def test_task_done_not_found():
 async def test_start_review_callback_delegates_to_review_start():
     """start_review callback delegates to review_start rather than printing a stub message."""
     update, context, _, _ = _make_callback_update_and_context("start_review")
+    # Capture the original update.message sentinel so we can assert it is not mutated.
+    original_message = update.message
 
     with patch(
         "telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock
@@ -283,10 +287,30 @@ async def test_start_review_callback_delegates_to_review_start():
 
     update.callback_query.answer.assert_awaited_once()
     mock_review_start.assert_awaited_once()
-    # Confirm review_start was called with the same update and context
-    called_update, called_context = mock_review_start.call_args[0]
-    assert called_update is update
-    assert called_context is context
+    # Confirm review_start was called with the same update and context as positional args.
+    called_args, called_kwargs = mock_review_start.call_args
+    assert called_args[0] is update
+    assert called_args[1] is context
+    # The explicit message kwarg must be the callback query's message — not update.message.
+    assert called_kwargs.get("message") is update.callback_query.message
+    # update.message must remain unchanged (no mutation of the Update object).
+    assert update.message is original_message
+
+
+@pytest.mark.asyncio
+async def test_start_review_callback_does_not_mutate_update_message():
+    """start_review_callback must never assign to update.message — Update is immutable per call."""
+    update, context, _, _ = _make_callback_update_and_context("start_review")
+    sentinel = object()
+    update.message = sentinel  # Set a known sentinel value.
+
+    with patch("telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock):
+        await start_review_callback(update, context)
+
+    assert update.message is sentinel, (
+        "start_review_callback must not mutate update.message; "
+        f"expected sentinel but got {update.message!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +343,87 @@ def test_start_review_not_registered_in_callback_handler():
         f"start_review should NOT be registered via register_callback_handlers "
         f"(ConversationHandler owns it). Found patterns: {registered_patterns}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_save_callback  (NEW-H1 — single query.answer() per path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_save_callback_success_answers_once_with_text():
+    """On HTTP 200, query.answer is called exactly once with the success text."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:save:42")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.put.return_value = mock_resp
+
+    await paper_save_callback(update, context)
+
+    query = update.callback_query
+    query.answer.assert_awaited_once()
+    call_kwargs = query.answer.await_args[1]
+    assert call_kwargs.get("text") == "✅ Saved"
+    # reply_text should also be called with the confirmation message
+    query.message.reply_text.assert_awaited_once()
+    assert "42" in query.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_paper_save_callback_failure_answers_bare_and_replies_error():
+    """On HTTP failure, query.answer() (no text) clears spinner; reply_text carries the error."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:save:42")
+    mock_http.put.side_effect = Exception("Connection refused")
+
+    await paper_save_callback(update, context)
+
+    query = update.callback_query
+    # Exactly one answer call, bare (no text kwarg / text is None/missing)
+    query.answer.assert_awaited_once()
+    call_kwargs = query.answer.await_args[1]
+    assert not call_kwargs.get("text")
+    # User-visible error via reply_text
+    query.message.reply_text.assert_awaited_once()
+    assert "Failed" in query.message.reply_text.call_args[0][0]
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_dismiss_callback  (NEW-H1 — single query.answer() per path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_dismiss_callback_success_answers_once_with_text():
+    """On HTTP 200, query.answer is called exactly once with the success text."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:dismiss:99")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.put.return_value = mock_resp
+
+    await paper_dismiss_callback(update, context)
+
+    query = update.callback_query
+    query.answer.assert_awaited_once()
+    call_kwargs = query.answer.await_args[1]
+    assert call_kwargs.get("text") == "🗑 Dismissed"
+    # reply_text should also be called with the confirmation message
+    query.message.reply_text.assert_awaited_once()
+    assert "99" in query.message.reply_text.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_paper_dismiss_callback_failure_answers_bare_and_replies_error():
+    """On HTTP failure, query.answer() (no text) clears spinner; reply_text carries the error."""
+    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:dismiss:99")
+    mock_http.put.side_effect = Exception("Connection refused")
+
+    await paper_dismiss_callback(update, context)
+
+    query = update.callback_query
+    # Exactly one answer call, bare (no text kwarg / text is None/missing)
+    query.answer.assert_awaited_once()
+    call_kwargs = query.answer.await_args[1]
+    assert not call_kwargs.get("text")
+    # User-visible error via reply_text
+    query.message.reply_text.assert_awaited_once()
+    assert "Failed" in query.message.reply_text.call_args[0][0]

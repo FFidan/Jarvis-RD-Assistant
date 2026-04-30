@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MemoryRouter } from 'react-router-dom';
 import { PaperHeader } from '@/components/paper/PaperHeader';
 import type { Paper } from '@/types';
 
@@ -10,6 +11,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     bookmarkPaper: vi.fn(),
+    savePaper: vi.fn().mockResolvedValue({}),
+    unsavePaper: vi.fn().mockResolvedValue({}),
+    markPaperRead: vi.fn().mockResolvedValue({}),
+    archivePaper: vi.fn().mockResolvedValue({}),
+    dismissPaper: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -46,11 +52,14 @@ function renderWithProviders(
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <PaperHeader paper={paper} isStarred={isStarred} />
-    </QueryClientProvider>,
+  const result = render(
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>
+        <PaperHeader paper={paper} isStarred={isStarred} />
+      </QueryClientProvider>
+    </MemoryRouter>,
   );
+  return { ...result, queryClient };
 }
 
 describe('PaperHeader', () => {
@@ -171,6 +180,46 @@ describe('PaperHeader', () => {
     // Button should be enabled again
     await waitFor(() => {
       expect(bookmarkButton).not.toBeDisabled();
+    });
+  });
+
+  describe('M18 — invalidate includes papers-feed', () => {
+    it('invalidates papers-feed query after bookmark action succeeds', async () => {
+      const { bookmarkPaper } = await import('@/lib/api');
+      vi.mocked(bookmarkPaper).mockResolvedValue({ status: 'bookmarked', paper_id: 1 });
+
+      const user = userEvent.setup();
+      const { queryClient } = renderWithProviders();
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      const bookmarkButton = screen.getByRole('button', { name: /Bookmark paper/ });
+      await user.click(bookmarkButton);
+
+      await waitFor(() => {
+        const keys = invalidateSpy.mock.calls.map(
+          ([opts]) => (opts as { queryKey: unknown[] }).queryKey,
+        );
+        expect(keys).toContainEqual(['papers-feed']);
+      });
+    });
+
+    it('invalidates papers-feed query after mark-read action succeeds', async () => {
+      const { markPaperRead } = await import('@/lib/api');
+      vi.mocked(markPaperRead).mockResolvedValue({ status: 'read' });
+
+      const user = userEvent.setup();
+      const { queryClient } = renderWithProviders();
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      const readButton = screen.getByRole('button', { name: /Mark as read/ });
+      await user.click(readButton);
+
+      await waitFor(() => {
+        const keys = invalidateSpy.mock.calls.map(
+          ([opts]) => (opts as { queryKey: unknown[] }).queryKey,
+        );
+        expect(keys).toContainEqual(['papers-feed']);
+      });
     });
   });
 });

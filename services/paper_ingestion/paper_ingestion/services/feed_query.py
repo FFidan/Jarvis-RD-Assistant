@@ -8,6 +8,8 @@ from datetime import date
 
 import asyncpg
 
+from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
+
 logger = logging.getLogger(__name__)
 
 
@@ -35,12 +37,12 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
         f"SELECT p.*, ps.summary_brief, {tldr_sql}, ps.confidence,"
         f"{note_sql}"
         " CASE"
-        "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+        f"   WHEN {IS_ARCHIVED_SQL} THEN 'archived'"
         "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
         "   ELSE pus.status"
         " END AS user_status,"
         " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
-        " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
+        f" {IS_ARCHIVED_SQL} AS archived,"
         " COALESCE(pus.preference, 'none') AS preference,"
         " pus.rating,"
         " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
@@ -51,42 +53,6 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     )
 
 
-_BASE_SELECT = (
-    "SELECT p.*, ps.summary_brief, ps.tldr, ps.confidence,"
-    " 0::integer AS note_match_count, NULL::text AS note_snippet,"
-    " CASE"
-    "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
-    "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
-    "   ELSE pus.status"
-    " END AS user_status,"
-    " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
-    " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
-    " COALESCE(pus.preference, 'none') AS preference,"
-    " pus.rating,"
-    " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
-    " (ps.id IS NOT NULL) AS has_summary,"
-    " pr.score AS recommendation_score,"
-    " pr.explanation AS recommendation_reason,"
-    " pr.modes AS recommendation_modes"
-)
-_FALLBACK_SELECT = (
-    "SELECT p.*, ps.summary_brief, NULL AS tldr, ps.confidence,"
-    " 0::integer AS note_match_count, NULL::text AS note_snippet,"
-    " CASE"
-    "   WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
-    "   WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
-    "   ELSE pus.status"
-    " END AS user_status,"
-    " (COALESCE(pus.starred, FALSE) OR pus.status = 'starred') AS starred,"
-    " (COALESCE(pus.archived, FALSE) OR pus.status = 'archived') AS archived,"
-    " COALESCE(pus.preference, 'none') AS preference,"
-    " pus.rating,"
-    " (EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)) AS has_chunks,"
-    " (ps.id IS NOT NULL) AS has_summary,"
-    " pr.score AS recommendation_score,"
-    " pr.explanation AS recommendation_reason,"
-    " pr.modes AS recommendation_modes"
-)
 _BASE_FROM = (
     " FROM papers p"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
@@ -110,15 +76,13 @@ class FeedQueryParts:
 VIEW_PREDICATES: dict[str, str] = {
     "inbox": ("COALESCE(pus.saved, FALSE) = FALSE AND COALESCE(pus.dismissed, FALSE) = FALSE"),
     "library": (
-        "pus.saved = TRUE"
-        " AND COALESCE(pus.dismissed, FALSE) = FALSE"
-        " AND COALESCE(pus.archived, FALSE) = FALSE"
+        f"pus.saved = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE AND NOT {IS_ARCHIVED_SQL}"
     ),
     "starred": (
         "pus.saved = TRUE AND pus.starred = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE"
     ),
     "archived": (
-        "pus.saved = TRUE AND pus.archived = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE"
+        f"pus.saved = TRUE AND {IS_ARCHIVED_SQL} AND COALESCE(pus.dismissed, FALSE) = FALSE"
     ),
     "reading": (
         "pus.saved = TRUE AND pus.status = 'reading' AND COALESCE(pus.dismissed, FALSE) = FALSE"
@@ -184,10 +148,7 @@ def build_feed_queries(
     param_idx += 1
 
     if unread_only:
-        conditions.append(
-            "COALESCE(pus.status, 'new') != 'read'"
-            " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')"
-        )
+        conditions.append(f"COALESCE(pus.status, 'new') != 'read' AND NOT {IS_ARCHIVED_SQL}")
 
     note_query_param: int | None = None
     if q:
@@ -217,7 +178,7 @@ def build_feed_queries(
             placeholders = ", ".join(f"${param_idx + i}" for i in range(len(status_list)))
             conditions.append(
                 "CASE"
-                " WHEN COALESCE(pus.archived, FALSE) OR pus.status = 'archived' THEN 'archived'"
+                f" WHEN {IS_ARCHIVED_SQL} THEN 'archived'"
                 " WHEN COALESCE(pus.starred, FALSE) OR pus.status = 'starred' THEN 'starred'"
                 " ELSE COALESCE(pus.status, 'new')"
                 f" END IN ({placeholders})"
@@ -289,7 +250,7 @@ def build_feed_queries(
 
 
 async def fetch_feed_rows(
-    conn,
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     query_parts: FeedQueryParts,
 ):
     """Fetch feed rows, retrying without TLDR if the column is absent."""

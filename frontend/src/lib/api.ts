@@ -571,7 +571,15 @@ export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
   return apiFetch('/api/papers/feed/counts');
 }
 
-/** Surface-aware feed fetch for FeedView. Maps SurfaceView + optional filter to fetchFeedPapers params. */
+/** Surface-aware feed fetch for FeedView. Passes view= directly to the
+ * backend so VIEW_PREDICATES (canonical lifecycle predicates) are used
+ * — the legacy unread_only/statuses path uses different SQL that does
+ * not match what the count badges show.
+ *
+ * filter is the Library sub-chip (starred/archived/reading) — when
+ * provided it overrides the surface so e.g. surface=library + filter=
+ * starred maps to view=starred.
+ */
 export async function fetchFeed(params: {
   view?: import('@/types').SurfaceView;
   filter?: string | null;
@@ -580,35 +588,21 @@ export async function fetchFeed(params: {
 }): Promise<FeedResponse> {
   const { view, filter, limit = 30, offset = 0 } = params;
 
-  // Map surface view to statuses / flags
-  let statuses: string | undefined;
-  let unread_only: boolean | undefined;
-
-  switch (view) {
-    case 'inbox':
-      // New/unread papers that are saved but not dismissed/archived
-      unread_only = true;
-      break;
-    case 'library':
-      statuses = filter ?? undefined;
-      break;
-    case 'starred':
-      statuses = 'starred';
-      break;
-    case 'archived':
-      statuses = 'archived';
-      break;
-    case 'reading':
-      statuses = 'reading';
-      break;
-    case 'trash':
-      statuses = 'dismissed';
-      break;
-    default:
-      statuses = filter ?? undefined;
+  let resolvedView: import('@/types').SurfaceView | undefined = view;
+  if (view === 'library' && filter) {
+    if (filter === 'starred' || filter === 'archived' || filter === 'reading') {
+      resolvedView = filter as import('@/types').SurfaceView;
+    }
   }
 
-  return fetchFeedPapers({ statuses, unread_only, limit, offset, include_zotero_notes: true });
+  const searchParams = new URLSearchParams();
+  if (resolvedView) {
+    searchParams.set('view', resolvedView);
+  }
+  searchParams.set('limit', String(limit));
+  searchParams.set('offset', String(offset));
+  searchParams.set('include_zotero_notes', 'true');
+  return apiFetch<FeedResponse>(`/api/papers/feed?${searchParams.toString()}`);
 }
 
 export const discoverPapers = (paperIds: number[], limit?: number) =>

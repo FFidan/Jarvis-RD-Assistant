@@ -14,6 +14,7 @@ from paper_ingestion.converters import (
     row_to_summary_response,
 )
 from paper_ingestion.deps import get_db_pool, get_optional_embedder, limiter
+from paper_ingestion.ingestion.embedder import delete_paper_vectors
 from paper_ingestion.models import (
     ArchiveRequest,
     BulkActionRequest,
@@ -32,6 +33,7 @@ from paper_ingestion.models import (
     SourceType,
     UserStateResponse,
 )
+from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -160,22 +162,18 @@ async def list_papers(
             joins.append("LEFT JOIN paper_user_state pus ON p.id = pus.paper_id")
             params.append(status.value)
             conditions.append(
-                f"((pus.status = ${len(params)} OR pus.paper_id IS NULL)"
-                " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived'))"
+                f"((pus.status = ${len(params)} OR pus.paper_id IS NULL) AND NOT {IS_ARCHIVED_SQL})"
             )
         elif status.value == "archived":
             joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
-            conditions.append("(COALESCE(pus.archived, FALSE) OR pus.status = 'archived')")
+            conditions.append(IS_ARCHIVED_SQL)
         elif status.value == "starred":
             joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
             conditions.append("(COALESCE(pus.starred, FALSE) OR pus.status = 'starred')")
         else:
             joins.append("JOIN paper_user_state pus ON p.id = pus.paper_id")
             params.append(status.value)
-            conditions.append(
-                f"pus.status = ${len(params)}"
-                " AND NOT (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')"
-            )
+            conditions.append(f"pus.status = ${len(params)} AND NOT {IS_ARCHIVED_SQL}")
 
     if source_type is not None:
         params.append(source_type.value)
@@ -545,18 +543,18 @@ async def get_feed_counts(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            """
+            f"""
             SELECT
                 COALESCE(SUM(CASE WHEN COALESCE(pus.saved, FALSE) = FALSE
                                 AND COALESCE(pus.dismissed, FALSE) = FALSE
                                 THEN 1 ELSE 0 END), 0) AS inbox,
                 COALESCE(SUM(CASE WHEN pus.saved = TRUE AND COALESCE(pus.dismissed, FALSE) = FALSE
-                                AND COALESCE(pus.archived, FALSE) = FALSE
+                                AND NOT {IS_ARCHIVED_SQL}
                                 THEN 1 ELSE 0 END), 0) AS library,
                 COALESCE(SUM(CASE WHEN pus.saved = TRUE AND pus.starred = TRUE
                                 AND COALESCE(pus.dismissed, FALSE) = FALSE
                                 THEN 1 ELSE 0 END), 0) AS starred,
-                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND pus.archived = TRUE
+                COALESCE(SUM(CASE WHEN pus.saved = TRUE AND {IS_ARCHIVED_SQL}
                                 AND COALESCE(pus.dismissed, FALSE) = FALSE
                                 THEN 1 ELSE 0 END), 0) AS archived,
                 COALESCE(SUM(CASE WHEN pus.saved = TRUE AND pus.status = 'reading'
@@ -612,12 +610,12 @@ async def _assert_confirm_title_matches(
     paper_id: int,
     confirm_title: str,
 ) -> None:
-    """Raise 400 if ``confirm_title`` does not exactly match the paper's title."""
+    """Raise 400 if ``confirm_title`` (trimmed) does not match the paper's title (trimmed)."""
     title = await conn.fetchval(
         "SELECT title FROM papers WHERE id = $1",
         paper_id,
     )
-    if title != confirm_title:
+    if (title or "").strip() != (confirm_title or "").strip():
         raise HTTPException(
             status_code=400,
             detail="confirm_title does not match the paper's title",
@@ -772,7 +770,13 @@ async def restore_paper(
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
-    """Restore a dismissed paper from Trash (sets dismissed=FALSE, preference='none')."""
+    """Restore a paper from Trash to its previous surface.
+
+    Sets dismissed=FALSE and preference='none', preserving saved/starred/archived
+    so the paper returns to where it was before being dismissed:
+      - saved=TRUE  → Library (or Starred/Archived sub-view if those flags are set)
+      - saved=FALSE → Inbox
+    """
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
@@ -808,13 +812,17 @@ async def hard_delete_paper(
                     "Zotero remove requested for paper %d but handler not yet implemented",
                     paper_id,
                 )
-            # Deferred import: delete_paper_vectors is wired by B1.8 in parallel.
-            # At runtime this will fail gracefully if B1.8 hasn't landed yet;
-            # tests can mock 'paper_ingestion.ingestion.embedder.delete_paper_vectors'.
-            from paper_ingestion.ingestion.embedder import delete_paper_vectors  # noqa: PLC0415
-
-            await delete_paper_vectors(paper_id)
             await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+        # Qdrant cleanup OUTSIDE the transaction — Qdrant is non-transactional;
+        # we prefer the row to commit first so a Qdrant failure leaves orphan
+        # vectors (recoverable) rather than a missing-vectors row (data loss).
+        try:
+            await delete_paper_vectors(paper_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            logger.exception(
+                "Qdrant cleanup failed for paper %d after DB delete; vectors are now orphans",
+                paper_id,
+            )
     return {"deleted": paper_id}
 
 

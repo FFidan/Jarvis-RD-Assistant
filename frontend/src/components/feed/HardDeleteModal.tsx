@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { hardDeletePaper } from '@/lib/api';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 interface HardDeleteModalProps {
   open: boolean;
@@ -25,7 +26,7 @@ export function HardDeleteModal({ open, paperId, paperTitle, onClose }: HardDele
   const queryClient = useQueryClient();
 
   const mutation = useMutation({
-    mutationFn: () => hardDeletePaper(paperId!, { confirm_title: confirmText, also_zotero: alsoZotero }),
+    mutationFn: () => hardDeletePaper(paperId!, { confirm_title: confirmText.trim(), also_zotero: alsoZotero }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
       queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
@@ -33,6 +34,8 @@ export function HardDeleteModal({ open, paperId, paperTitle, onClose }: HardDele
       setAlsoZotero(false);
       onClose();
     },
+    onError: (err) =>
+      toast.error(err instanceof Error ? err.message : 'Hard delete failed'),
   });
 
   const matches = confirmText.trim() === paperTitle.trim();

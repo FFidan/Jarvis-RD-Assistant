@@ -16,8 +16,16 @@ _MIN_SCORE = 0.25
 _MAX_RECOMMENDATIONS = 50
 
 
-async def refresh_recommendations(app: Any) -> int:
-    """Compute and upsert recommendations. Returns count saved."""
+async def refresh_recommendations(app: Any, user_id: int | None = None) -> int:
+    """Compute and upsert recommendations. Returns count saved.
+
+    Parameters
+    ----------
+    user_id:
+        When provided, recommendations are scoped to that user's starred
+        papers and read/archived/dismissed state.  Pass ``None`` to use
+        legacy tenant-agnostic behaviour (all rows, user_id IS NULL).
+    """
     db_pool = app.state.db_pool
     embedder = app.state.embedder
 
@@ -31,7 +39,7 @@ async def refresh_recommendations(app: Any) -> int:
     # --- Pre-read: fetch IDs and project names without holding the conn
     #     across slow HTTP/Qdrant calls. ---
     async with db_pool.acquire() as conn:
-        starred_ids = await _get_starred_ids(conn)
+        starred_ids = await _get_starred_ids(conn, user_id)
         projects_raw = await conn.fetch(
             "SELECT name, description FROM projects WHERE status = 'active'"
         )
@@ -86,7 +94,7 @@ async def refresh_recommendations(app: Any) -> int:
 
     # --- Post-write: persist results with a fresh connection ---
     async with db_pool.acquire() as conn:
-        unread_ids = await _filter_unread(conn, [r["paper_id"] for r in merged])
+        unread_ids = await _filter_unread(conn, [r["paper_id"] for r in merged], user_id)
         merged = [r for r in merged if r["paper_id"] in unread_ids]
 
         if not merged:
@@ -135,9 +143,12 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
     return liked, project, enabled
 
 
-async def _get_starred_ids(conn: asyncpg.Connection) -> list[int]:
+async def _get_starred_ids(conn: asyncpg.Connection, user_id: int | None) -> list[int]:
     rows = await conn.fetch(
-        "SELECT paper_id FROM paper_user_state WHERE COALESCE(starred, FALSE) OR status = 'starred'"
+        "SELECT paper_id FROM paper_user_state"
+        " WHERE (COALESCE(starred, FALSE) OR status = 'starred')"
+        "   AND user_id IS NOT DISTINCT FROM $1",
+        user_id,
     )
     return [r["paper_id"] for r in rows]
 
@@ -161,7 +172,9 @@ def _compute_score(
     return liked * liked_weight + project * project_weight
 
 
-async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[int]:
+async def _filter_unread(
+    conn: asyncpg.Connection, paper_ids: list[int], user_id: int | None
+) -> set[int]:
     # Dismissed (Trash) and archived papers are both excluded from candidates;
     # starred papers remain eligible for re-recommendation.
     if not paper_ids:
@@ -171,6 +184,7 @@ async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[
         " AND NOT EXISTS ("
         "   SELECT 1 FROM paper_user_state"
         "   WHERE paper_id = p.id"
+        "     AND user_id IS NOT DISTINCT FROM $2"
         "     AND ("
         "         status = 'read'"
         "         OR COALESCE(archived, FALSE)"
@@ -178,6 +192,7 @@ async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int]) -> set[
         "     )"
         ")",
         paper_ids,
+        user_id,
     )
     return {r["id"] for r in rows}
 

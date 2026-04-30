@@ -22,6 +22,7 @@ from paper_ingestion.recommender import (  # noqa: E402
     _aggregate_to_papers,
     _compute_score,
     _filter_unread,
+    _get_starred_ids,
     refresh_recommendations,
 )
 
@@ -144,7 +145,7 @@ class TestFilterUnread:
     @pytest.mark.asyncio
     async def test_empty_input(self) -> None:
         conn = AsyncMock()
-        result = await _filter_unread(conn, [])
+        result = await _filter_unread(conn, [], user_id=None)
         assert result == set()
         conn.fetch.assert_not_called()
 
@@ -152,14 +153,14 @@ class TestFilterUnread:
     async def test_returns_unread_ids(self) -> None:
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[{"id": 1}, {"id": 3}])
-        result = await _filter_unread(conn, [1, 2, 3])
+        result = await _filter_unread(conn, [1, 2, 3], user_id=None)
         assert result == {1, 3}
 
     @pytest.mark.asyncio
     async def test_all_read_returns_empty(self) -> None:
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        result = await _filter_unread(conn, [10, 20])
+        result = await _filter_unread(conn, [10, 20], user_id=None)
         assert result == set()
 
     @pytest.mark.asyncio
@@ -167,10 +168,11 @@ class TestFilterUnread:
         """The paper_ids list must be forwarded to the SQL query as $1."""
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [5, 6, 7])
+        await _filter_unread(conn, [5, 6, 7], user_id=None)
         args = conn.fetch.call_args
-        # second positional arg is the paper_ids list
-        assert [5, 6, 7] in args.args or [5, 6, 7] == args.args[-1]
+        # second positional arg ($1) is the paper_ids list; third ($2) is user_id
+        positional = args.args
+        assert [5, 6, 7] in positional, f"paper_ids not found in call args: {positional}"
 
     @pytest.mark.asyncio
     async def test_starred_papers_remain_eligible_for_recommendation(self) -> None:
@@ -178,7 +180,7 @@ class TestFilterUnread:
         # status='starred' or COALESCE(starred, FALSE).
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1])
+        await _filter_unread(conn, [1], user_id=None)
         sql = conn.fetch.await_args.args[0]
         assert "status = 'read'" in sql
         assert "archived" in sql
@@ -198,8 +200,172 @@ class TestFilterUnread:
                 "VALUES ($1, NULL, 'new', TRUE)",
                 paper_id,
             )
-            result = await _filter_unread(conn, [paper_id])
+            result = await _filter_unread(conn, [paper_id], user_id=None)
             assert paper_id not in result, "Dismissed papers must be excluded from candidates"
+
+    # -----------------------------------------------------------------------
+    # Multi-tenant isolation tests (W3-T2)
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.asyncio
+    async def test_user_id_bound_in_filter_unread_query(self) -> None:
+        """user_id must be forwarded to the SQL query as $2."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _filter_unread(conn, [1, 2], user_id=42)
+        positional = conn.fetch.call_args.args
+        # $1 = paper_ids, $2 = user_id
+        assert positional[1] == [1, 2], "paper_ids must be $1"
+        assert positional[2] == 42, "user_id must be $2"
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_sql_contains_user_id_guard(self) -> None:
+        """SQL must contain 'user_id IS NOT DISTINCT FROM' to scope per-tenant."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _filter_unread(conn, [1], user_id=None)
+        sql = conn.fetch.call_args.args[0]
+        assert "user_id IS NOT DISTINCT FROM" in sql, (
+            "SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely"
+        )
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_cross_user_isolation(self, test_db_pool):
+        """State rows for user A must NOT affect filtering for user B."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-isolation-1', 'arxiv', 'Isolation Paper', '{}', 'http://x') "
+                "RETURNING id"
+            )
+            # User A marks the paper as read
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, status) VALUES ($1, 1, 'read')",
+                paper_id,
+            )
+            # User B queries: paper should still appear (user B has not read it)
+            result = await _filter_unread(conn, [paper_id], user_id=2)
+            assert paper_id in result, "Paper read by user A must still be a candidate for user B"
+            # User A queries: paper should be excluded (user A has read it)
+            result = await _filter_unread(conn, [paper_id], user_id=1)
+            assert paper_id not in result, "Paper read by user A must be excluded for user A"
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_archived_cross_user_isolation(self, test_db_pool):
+        """Archived flag for user A must NOT exclude the paper for user B."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-isolation-2', 'arxiv', 'Archived Paper', '{}', 'http://y') "
+                "RETURNING id"
+            )
+            # User A archives the paper
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, status, archived) "
+                "VALUES ($1, 10, 'new', TRUE)",
+                paper_id,
+            )
+            # User B: paper must still be a candidate
+            result = await _filter_unread(conn, [paper_id], user_id=20)
+            assert paper_id in result, (
+                "Paper archived by user A must still be a candidate for user B"
+            )
+
+    @pytest.mark.asyncio
+    async def test_filter_unread_dismissed_cross_user_isolation(self, test_db_pool):
+        """Dismissed flag for user A must NOT exclude the paper for user B."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-isolation-3', 'arxiv', 'Dismissed Paper', '{}', 'http://z') "
+                "RETURNING id"
+            )
+            # User A dismisses the paper
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, status, dismissed) "
+                "VALUES ($1, 100, 'new', TRUE)",
+                paper_id,
+            )
+            # User B: paper must still be a candidate
+            result = await _filter_unread(conn, [paper_id], user_id=200)
+            assert paper_id in result, (
+                "Paper dismissed by user A must still be a candidate for user B"
+            )
+
+
+# ===========================================================================
+# 3b. _get_starred_ids — multi-tenant isolation (W3-T2)
+# ===========================================================================
+
+
+class TestGetStarredIds:
+    """_get_starred_ids must scope results to the given user_id."""
+
+    @pytest.mark.asyncio
+    async def test_user_id_bound_in_query(self) -> None:
+        """user_id must be forwarded to the SQL query as $1."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _get_starred_ids(conn, user_id=7)
+        positional = conn.fetch.call_args.args
+        assert positional[1] == 7, "user_id must be $1 in _get_starred_ids query"
+
+    @pytest.mark.asyncio
+    async def test_sql_contains_user_id_guard(self) -> None:
+        """SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        await _get_starred_ids(conn, user_id=None)
+        sql = conn.fetch.call_args.args[0]
+        assert "user_id IS NOT DISTINCT FROM" in sql, (
+            "SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely"
+        )
+
+    @pytest.mark.asyncio
+    async def test_starred_cross_user_isolation(self, test_db_pool):
+        """Starred paper under user A must NOT appear in user B's starred set."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-star-isolation-1', 'arxiv', 'Star Paper', '{}', 'http://s1') "
+                "RETURNING id"
+            )
+            # User A stars the paper
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, starred) VALUES ($1, 1, TRUE)",
+                paper_id,
+            )
+            # User B queries: paper must NOT be in starred list
+            user_b_starred = await _get_starred_ids(conn, user_id=2)
+            assert paper_id not in user_b_starred, (
+                "Paper starred by user A must NOT appear in user B's starred list"
+            )
+            # User A queries: paper MUST be in starred list
+            user_a_starred = await _get_starred_ids(conn, user_id=1)
+            assert paper_id in user_a_starred, (
+                "Paper starred by user A must appear in user A's starred list"
+            )
+
+    @pytest.mark.asyncio
+    async def test_starred_status_cross_user_isolation(self, test_db_pool):
+        """status='starred' for user A must not pollute user B's starred set."""
+        async with test_db_pool.acquire() as conn:
+            paper_id = await conn.fetchval(
+                "INSERT INTO papers (external_id, source_type, title, authors, url) "
+                "VALUES ('test-star-isolation-2', 'arxiv', 'Status Star Paper', '{}', 'http://s2') "
+                "RETURNING id"
+            )
+            # User A marks status='starred'
+            await conn.execute(
+                "INSERT INTO paper_user_state (paper_id, user_id, status) "
+                "VALUES ($1, 10, 'starred')",
+                paper_id,
+            )
+            # User B: must NOT see paper as starred
+            user_b_starred = await _get_starred_ids(conn, user_id=20)
+            assert paper_id not in user_b_starred, (
+                "status='starred' row for user A must not appear in user B's starred list"
+            )
 
 
 # ===========================================================================

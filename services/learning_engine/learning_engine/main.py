@@ -117,6 +117,8 @@ _lifespan_config = ServiceLifespanConfig(
         _register_le_job_handlers,
         _log_le_started,
     ],
+    # Index-aligned with custom_init_tasks; None = no teardown counterpart.
+    custom_teardown_tasks=[None, None, None, None],
 )
 
 app = FastAPI(

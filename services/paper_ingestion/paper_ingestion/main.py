@@ -252,9 +252,16 @@ _lifespan_config = ServiceLifespanConfig(
         _start_scheduler_hook,
         _register_job_handlers,
     ],
+    # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
-        _shutdown_scheduler,
-        _shutdown_qdrant,
+        None,  # _warn_multitenant_stub
+        None,  # _validate_bbt_url_hook
+        None,  # _run_migrations_hook
+        _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
+        None,  # _init_source_singletons
+        None,  # _refresh_telegram_username
+        _shutdown_scheduler,  # _start_scheduler_hook
+        None,  # _register_job_handlers
     ],
 )
 

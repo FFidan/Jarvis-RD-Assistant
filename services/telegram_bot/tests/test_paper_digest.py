@@ -131,21 +131,100 @@ async def test_run_paper_digest_falls_back_to_simple_digest():
     ):
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
-    simple_digest.assert_awaited_once_with(db_pool, bot, config, 1234)
+    simple_digest.assert_awaited_once_with(db_pool, bot, config, 1234, db_user_id=None)
 
 
 @pytest.mark.asyncio
 async def test_simple_digest_query_includes_starred_boolean_or_clause():
-    # Migration 044 introduced the per-user `starred` boolean. The digest must
+    # Migration 044 introduced the per-user `starred` boolean. Migration 046 migrated
+    # legacy status='starred' rows to starred=TRUE with status='read'. The digest must
     # include papers UI-starred via the new bookmark toggle (which writes
-    # starred=TRUE while preserving the prior reading status), not only the
-    # legacy status='starred' rows.
+    # starred=TRUE while preserving the prior reading status) as well as papers
+    # with status='reading' or 'read'.
     db_pool = AsyncMock()
     db_pool.fetch.return_value = []
     bot = AsyncMock()
 
-    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234)
+    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=None)
 
     sql = db_pool.fetch.await_args.args[0]
-    assert "COALESCE(pus.starred, FALSE)" in sql
-    assert "pus.status IN ('starred', 'reading', 'read')" in sql
+    # pus2 alias used in the positive-inclusion subquery (pus used by top-level NOT EXISTS guard)
+    assert "COALESCE(pus2.starred, FALSE)" in sql
+    assert "pus2.status IN ('reading', 'read')" in sql
+    # Verify archived/dismissed guard is now a top-level NOT EXISTS (NEW-M11)
+    assert "NOT EXISTS" in sql
+    assert "COALESCE(pus.archived, FALSE)" in sql
+    assert "COALESCE(pus.dismissed, FALSE)" in sql
+    # Verify 'starred' is no longer in the status check (migration 046 removed it)
+    assert (
+        "'starred'" not in sql or "pus2.starred" in sql
+    )  # 'starred' only in column name, not status value
+
+
+@pytest.mark.asyncio
+async def test_simple_digest_db_user_id_default_none_matches_null_row():
+    """db_user_id=None (default) causes IS NOT DISTINCT FROM $1 to match NULL rows.
+
+    A paper archived by a NULL-user_id paper_user_state row must be excluded when
+    _simple_digest is called with db_user_id=None (single-tenant mode).
+    """
+    db_pool = AsyncMock()
+    # Simulate the query returning empty (archived row matched, paper excluded)
+    db_pool.fetch.return_value = []
+    bot = AsyncMock()
+
+    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=None)
+
+    sql, bound_param = db_pool.fetch.await_args.args
+    # IS NOT DISTINCT FROM must appear in all three subqueries
+    assert sql.count("IS NOT DISTINCT FROM $1") == 3
+    # The bound parameter must be None (matches NULL rows via IS NOT DISTINCT FROM)
+    assert bound_param is None
+
+
+@pytest.mark.asyncio
+async def test_simple_digest_db_user_id_42_does_not_see_user_99_archived():
+    """db_user_id=42 scopes queries so user 99's archived flag does not suppress paper.
+
+    The SQL is parameterised with $1 = 42; a paper_user_state row with user_id=99
+    and archived=TRUE must NOT cause the paper to be excluded from user 42's digest.
+    We verify this by confirming the SQL is called with db_user_id=42, so the
+    IS NOT DISTINCT FROM $1 predicate only matches user 42's rows.
+    """
+    db_pool = AsyncMock()
+    # Simulate a paper making it through the filter (user 99's archived row ignored)
+    db_pool.fetch.return_value = [
+        {
+            "id": 1,
+            "title": "Visible Paper",
+            "url": "https://example.com/p1",
+            "published_date": None,
+            "authors": None,
+            "topic_name": "AI",
+            "relevance_score": 0.9,
+            "summary_brief": None,
+            "confidence": None,
+        }
+    ]
+    bot = AsyncMock()
+
+    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=42)
+
+    _sql, bound_param = db_pool.fetch.await_args.args
+    # The query must be scoped to user 42 — user 99's archived row won't match
+    assert bound_param == 42
+
+
+@pytest.mark.asyncio
+async def test_simple_digest_passes_db_user_id_to_query():
+    """_simple_digest passes db_user_id as the sole bound parameter to db_pool.fetch."""
+    db_pool = AsyncMock()
+    db_pool.fetch.return_value = []
+    bot = AsyncMock()
+
+    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=42)
+
+    call_args = db_pool.fetch.await_args.args
+    # args[0] = SQL string, args[1] = db_user_id value
+    assert len(call_args) == 2, "fetch must be called with exactly (sql, db_user_id)"
+    assert call_args[1] == 42

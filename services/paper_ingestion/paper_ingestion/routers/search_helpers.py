@@ -534,7 +534,7 @@ def _match_preview_result(
     if match is not None:
         return match
 
-    match = library_indexes.get(("external_id", paper.external_id.strip().lower()))
+    match = library_indexes.get(("external_id", (paper.external_id or "").strip().lower()))
     if match is not None:
         return match
 

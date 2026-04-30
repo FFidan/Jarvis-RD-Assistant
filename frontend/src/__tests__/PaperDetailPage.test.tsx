@@ -147,10 +147,16 @@ const MOCK_CHUNKS = [
 ];
 
 const MOCK_USER_STATE = {
-  status: 'reading',
+  status: 'reading' as const,
+  saved: true,
+  dismissed: false,
+  starred: false,
+  archived: false,
+  preference: 'none' as const,
   rating: 4,
   user_notes: 'Great paper on attention.',
   flagged: false,
+  updated_at: null,
 };
 
 const MOCK_NOTES = [

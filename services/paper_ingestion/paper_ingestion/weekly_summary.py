@@ -66,6 +66,7 @@ async def generate_weekly_summary(
     litellm_url: str | None = None,
     days: int = 7,
     verifier: QuoteVerifier | None = None,
+    user_id: int | None = None,
 ) -> dict:
     """Generate per-topic digests for papers the user engaged with in the lookback window.
 
@@ -75,6 +76,13 @@ async def generate_weekly_summary(
 
     Papers passively surfaced by Pulse but never rated or saved are excluded,
     preventing the Weekly Summary from becoming a noise-generator.
+
+    Parameters
+    ----------
+    user_id:
+        When provided, restricts ``paper_user_state`` and ``pulse_ratings``
+        lookups to the given user.  ``None`` (default) aggregates across all
+        users, preserving backwards-compatible global behaviour.
     """
     litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
     if litellm_url is not None:
@@ -107,6 +115,7 @@ async def generate_weekly_summary(
                             COALESCE(pus.starred, FALSE)
                             OR pus.status IN ('starred', 'reading', 'read')
                         )
+                        AND pus.user_id IS NOT DISTINCT FROM $2
                   )
                   OR
                   EXISTS (
@@ -114,11 +123,13 @@ async def generate_weekly_summary(
                       WHERE pr.paper_id = p.id
                         AND pr.rating IN ('up', 'save', 'open')
                         AND pr.created_at >= $1
+                        AND pr.user_id IS NOT DISTINCT FROM $2
                   )
               )
             ORDER BY t.name, pt.relevance_score DESC NULLS LAST
             """,
             cutoff,
+            user_id,
         )
 
     # Empty-state honesty: short-circuit without calling the LLM.

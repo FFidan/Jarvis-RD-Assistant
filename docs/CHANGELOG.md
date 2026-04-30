@@ -35,6 +35,64 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - Legacy client-side multi-source fan-out in Discover tab (backend handles it).
 - `frontend/src/components/settings/RecommendationSection.tsx` (absorbed into PulseSection).
 
+## [1.2.8] - 2026-04-29
+
+### WS-AH2 — Verification Audit Fixes
+
+9 commits (c6cfd14..6adef70). Closes 11 findings from the 2026-04-30 verification audit (`docs/plans/2026-04-30-verification-audit.md` + `docs/plans/2026-04-29-ws-ah-plan.md`). Pyright 0/0/0; backend 1762 tests pass; frontend 457 tests pass.
+
+#### Fixed
+
+- **H2 — Hard-delete reorder**: PG commit before Qdrant delete so vectors are not orphaned on PG failure.
+- **H5 — Bulk clear on URL change**: bulk selection now clears automatically when the active surface chip changes.
+- **H6 / DRY-1 — Archived predicate substitution**: `archived` filter predicate centralised in `query/predicates.py`; all call sites updated to use the shared constant.
+- **M8 — Title trim**: paper title is stripped of leading/trailing whitespace on ingest and upsert.
+- **M11 / NI-2 — `db_user_id` parameter**: `_simple_digest` scoping corrected; `db_user_id` now threaded through Telegram digest helpers instead of relying on closure capture.
+- **NI-1 — `pulse_decks.user_id` column**: deck INSERT now includes `user_id`; rows no longer accumulate with `user_id=NULL`.
+- **NI-3 — `HardDeleteModal` onError toast**: mutation `onError` callback added so deletion failures surface a toast instead of failing silently.
+- **NI-4 — Top-of-module imports**: deferred imports in `app_factory.py` and related modules hoisted to module level.
+- **NI-5 — `app_factory` equal-length contract**: lifespan init and teardown lists verified to have equal length; assertion added to catch future mismatches.
+- **NI-6 — Migration lint cwd anchor**: `scripts/check_migration_lint.sh` now anchors to the repo root regardless of invocation directory.
+- **L12 — Closed**: confirmed resolved as part of WS-AH1 work; no additional action needed.
+
+---
+
+## [1.2.7] - 2026-04-29
+
+### WS-AH / WS8 — Paper Lifecycle Triage
+
+28 commits (570aac6..4b3d1e1). Introduces a full paper lifecycle triage system (Inbox → Save → Library → Star → Archive → Dismiss → Trash → HardDelete) and closes findings from the 2026-04-29 deep audit. Migration 046 (`paper_lifecycle_triage`) is the schema anchor.
+
+#### FEATURE
+
+- **Migration 046 — paper lifecycle axes**: `saved`, `dismissed`, `updated_at` columns added to `paper_user_state`; `status` enum extended; backfill applied.
+- **Feed surface chips**: Research Feed gains Inbox / Library / Search / Ask / Trash surface chips with sub-chip filters; Pulse removed from feed tabs (redirected to `/my-day`).
+- **FeedView component**: replaces LibraryTab + NewTab with a single surface-aware `FeedView` component and `useFeedCounts` hook.
+- **Paper lifecycle endpoints**: `POST /api/papers/{id}/save`, `POST /api/papers/{id}/unsave`, `POST /api/papers/{id}/dismiss`, `POST /api/papers/{id}/restore`, `DELETE /api/papers/{id}` (hard-delete), `POST /api/papers/bulk`, `GET /api/feed/counts` added to papers router.
+- **TrashView + HardDeleteModal**: 2-step title-confirm hard-delete UI; Zotero sync coming-soon placeholder.
+- **PaperDetail action bar**: Save / Mark Read / Archive / Dismiss / HardDelete actions wired to mutations.
+- **Keyboard shortcuts**: `j/k/s/S/e/d/r/o/Enter/?/Esc` shortcuts via `useFeedKeyboardShortcuts` hook; `KeyboardCheatSheet` modal.
+- **CountsBadge**: reactive count badge next to surface chips.
+- **Bulk actions**: per-surface bulk select with checkbox, Ctrl+A shortcut, and `BULK-TXN-001` nested savepoints.
+- **Telegram**: `/inbox` command; Save / Dismiss inline callbacks; digest excludes archived and dismissed papers.
+
+#### RELIABILITY
+
+- **BULK-TXN-001**: each paper in a bulk action wrapped in a nested savepoint so one failure does not abort the full batch.
+- **Pulse lifecycle semantics**: `rate_card` Save → `starred+saved+pulse_up`; Dismiss → `dismissed+pulse_down`; `open` rating is a no-op (early return).
+- **Pulse generator**: excludes archived and dismissed candidates from overnight scoring.
+- **Recommender**: excludes dismissed (Trash) candidates from recommendations.
+- **SSE helper**: `sse_event()` helper + `SSE_DONE` constant extracted; all SSE routers updated.
+- **Multi-tenant readiness**: `user_id` bound in all user-state filter queries (`reco`, `pulse`, `weekly_summary`).
+- **focus-session ON CONFLICT**: learning engine `ON CONFLICT (paper_id, user_id)` fix + live-PG regression test.
+
+#### DOCS
+
+- **WS-AH1 audit-hotfix-sprint plan**: falsification record for findings that proved not to be bugs added to `docs/plans/2026-04-29-ws-ah-plan.md`.
+- **Migration 046 lint**: `scripts/check_migration_lint.sh` scope extended to cover 044+.
+
+---
+
 ## [1.2.6] - 2026-04-28
 
 ### Sprint 6 — Security + Reliability Hardening
@@ -314,19 +372,4 @@ The overnight proactive paper discovery subsystem is complete. All six implement
 - FSRS spaced repetition for learning cards
 - Analytics page with activity, retention, and review charts
 - Project management with tasks, milestones, and papers
-- Settings page for topics, sources, authors, ingestion, automation, extraction, recommendations
-- nginx reverse proxy for frontend routing
-- CORS middleware for both FastAPI services
-- SSE streaming for paper analysis and RAG chat
-
-## [1.0.0] - 2026-02-15
-
-### Added
-- Paper ingestion from arXiv, Semantic Scholar, and manual PDF upload
-- Hybrid search (BM25 + semantic) with cross-encoder reranking
-- RAG-powered Q&A with citation verification
-- Telegram bot with push notifications and daily briefings
-- PostgreSQL database with 13 migrations
-- Qdrant vector database for semantic search
-- LiteLLM for model-agnostic LLM access
-- Docker Compose deployment (9 services)
+- Settings page for topics, sources, a

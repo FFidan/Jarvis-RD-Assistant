@@ -14,7 +14,7 @@ import type {
   SearchPreviewSourceError,
   SourceConfig,
 } from '@/types';
-import type { SurfaceView } from '@/types';
+import type { SurfaceView, FeedCountsResponse } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { StreamingChat } from '@/components/chat/StreamingChat';
@@ -24,11 +24,13 @@ import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { FeedView } from '@/components/feed/FeedView';
 import { CountsBadge } from '@/components/feed/CountsBadge';
+import { KeyboardCheatSheet } from '@/components/feed/KeyboardCheatSheet';
+import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { BookOpen } from 'lucide-react';
 
 // ─── surface definitions ────────────────────────────────────────────────────
 
-const SURFACES: { value: SurfaceView; label: string; countsKey?: keyof FeedCounts }[] = [
+const SURFACES: { value: SurfaceView; label: string; countsKey?: keyof FeedCountsResponse }[] = [
   { value: 'inbox', label: 'Inbox', countsKey: 'inbox' },
   { value: 'library', label: 'Library', countsKey: 'library' },
   { value: 'search', label: 'Search' },
@@ -44,13 +46,33 @@ const LIBRARY_FILTERS: { value: LibraryFilter; label: string }[] = [
   { value: 'reading', label: 'Reading' },
 ];
 
-// Loose type for counts data — the real shape comes from B2.1
-type FeedCounts = {
-  inbox?: number;
-  library?: number;
-  trash?: number;
-  [key: string]: number | undefined;
-};
+// URL-param guards (NEW-M16) — reject unexpected ?surface= / ?filter= values
+const VALID_SURFACES: ReadonlySet<SurfaceView> = new Set<SurfaceView>([
+  'inbox',
+  'library',
+  'search',
+  'ask',
+  'trash',
+  'starred',
+  'archived',
+  'reading',
+]);
+
+const VALID_LIBRARY_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
+  'starred',
+  'archived',
+  'reading',
+]);
+
+// Top-level filters extend LibraryFilter with the special 'pulse-this-week' value.
+type TopLevelFilter = LibraryFilter | 'pulse-this-week';
+
+const VALID_FILTERS: ReadonlySet<TopLevelFilter> = new Set<TopLevelFilter>([
+  'starred',
+  'archived',
+  'reading',
+  'pulse-this-week',
+]);
 
 // ─── helper ─────────────────────────────────────────────────────────────────
 
@@ -67,15 +89,48 @@ export function ResearchFeedPage() {
   const rawSurface = searchParams.get('surface');
   const rawFilter = searchParams.get('filter');
 
-  const surface = (rawSurface as SurfaceView | null) ?? 'inbox';
-  const filter = rawFilter as 'starred' | 'archived' | 'reading' | 'pulse-this-week' | null;
+  const surface: SurfaceView =
+    rawSurface && VALID_SURFACES.has(rawSurface as SurfaceView)
+      ? (rawSurface as SurfaceView)
+      : 'inbox';
+  const filter: TopLevelFilter | null =
+    rawFilter && VALID_FILTERS.has(rawFilter as TopLevelFilter)
+      ? (rawFilter as TopLevelFilter)
+      : null;
+
+  // Clear bulk selection on any surface change — handles URL-driven changes
+  // (browser back/forward, programmatic setSearchParams, deep-links) that
+  // imperative click handlers can't intercept.
+  useEffect(() => {
+    useBulkSelection.getState().clear();
+  }, [surface]);
+
+  // Cheat-sheet modal (mount-once + ? listener handled below)
+  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+      if (e.key === '?') setCheatSheetOpen(true);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const { data: counts } = useFeedCounts();
 
   // ── default-landing redirect ───────────────────────────────────────────────
   useEffect(() => {
     if (!searchParams.get('surface') && counts) {
-      const target = (counts as FeedCounts).inbox ?? 0 > 0 ? 'inbox' : 'library';
+      const target = (counts.inbox ?? 0) > 0 ? 'inbox' : 'library';
       setSearchParams({ surface: target }, { replace: true });
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -205,7 +260,7 @@ export function ResearchFeedPage() {
 
   function setLibraryFilter(f: LibraryFilter | null) {
     setSearchParams((prev) => {
-      if (f) {
+      if (f && VALID_LIBRARY_FILTERS.has(f)) {
         prev.set('filter', f);
       } else {
         prev.delete('filter');
@@ -214,12 +269,14 @@ export function ResearchFeedPage() {
     });
   }
 
-  const feedCounts = counts as FeedCounts | undefined;
+  const feedCounts = counts;
 
   // ─── render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-6">
+      <KeyboardCheatSheet open={cheatSheetOpen} onClose={() => setCheatSheetOpen(false)} />
+
       <h1 className="flex items-center gap-2 text-3xl font-bold">
         <BookOpen className="h-8 w-8" />
         Research Feed
@@ -237,15 +294,15 @@ export function ResearchFeedPage() {
             aria-selected={surface === value}
             onClick={() => setSurface(value)}
             className={cn(
-              'inline-flex items-center gap-1.5 rounded-full px-4 py-1.5 text-sm font-medium transition-colors',
+              'inline-flex h-9 items-center gap-2 rounded-md border px-4 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               surface === value
-                ? 'bg-primary text-primary-foreground'
-                : 'bg-muted text-muted-foreground hover:bg-muted/70',
+                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
+                : 'border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground',
             )}
           >
             {label}
             {countsKey && feedCounts?.[countsKey] !== undefined && (
-              <CountsBadge count={feedCounts[countsKey]} />
+              <CountsBadge surface={countsKey} />
             )}
           </button>
         ))}
@@ -259,10 +316,10 @@ export function ResearchFeedPage() {
             aria-selected={!filter}
             onClick={() => setLibraryFilter(null)}
             className={cn(
-              'inline-flex items-center rounded-full px-3 py-1 text-xs font-medium transition-colors',
+              'inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               !filter
-                ? 'bg-secondary text-secondary-foreground'
-                : 'bg-muted/60 text-muted-foreground hover:bg-muted',
+                ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
             )}
           >
             All
@@ -274,10 +331,10 @@ export function ResearchFeedPage() {
               aria-selected={filter === value}
               onClick={() => setLibraryFilter(filter === value ? null : value)}
               className={cn(
-                'inline-flex items-center rounded-full px-3 py-1 text-xs font-medium transition-colors',
+                'inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                 filter === value
-                  ? 'bg-secondary text-secondary-foreground'
-                  : 'bg-muted/60 text-muted-foreground hover:bg-muted',
+                  ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                  : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               )}
             >
               {label}

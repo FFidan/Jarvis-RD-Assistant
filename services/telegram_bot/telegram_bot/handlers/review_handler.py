@@ -10,7 +10,7 @@ import logging
 from html import escape as _html_escape
 
 from jarvis_common.time_utils import utc_now_iso
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.ext import (
     CallbackQueryHandler,
     CommandHandler,
@@ -83,9 +83,31 @@ def _rating_keyboard() -> InlineKeyboardMarkup:
 # ---------------------------------------------------------------------------
 
 
-async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle ``/review`` — begin a flashcard review session."""
-    if update.message is None or context.user_data is None:
+async def review_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    message: Message | None = None,
+) -> int:
+    """Handle ``/review`` — begin a flashcard review session.
+
+    Args:
+        update: The incoming Update from python-telegram-bot.
+        context: The handler context.
+        message: Explicit ``Message`` to reply to.  When omitted, falls back to
+            ``update.message`` (command path) and then to
+            ``update.callback_query.message`` (callback path).  Passing this
+            explicitly avoids mutating ``update.message`` from callback sites.
+    """
+    # Resolve the reply target without mutating the Update object.
+    msg: Message | None = message
+    if msg is None:
+        msg = update.message
+    if msg is None and update.callback_query is not None:
+        raw = update.callback_query.message
+        msg = raw if isinstance(raw, Message) else None
+
+    if msg is None or context.user_data is None:
         return ConversationHandler.END
 
     config = get_config(context)
@@ -98,12 +120,12 @@ async def review_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
     card = await _fetch_next_card(context)
     if card is None:
-        await update.message.reply_text("No cards due! You're all caught up.", parse_mode="HTML")
+        await msg.reply_text("No cards due! You're all caught up.", parse_mode="HTML")
         return ConversationHandler.END
 
     context.user_data["current_card"] = card
     text = format_card_front(card)
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=_show_answer_keyboard())
+    await msg.reply_text(text, parse_mode="HTML", reply_markup=_show_answer_keyboard())
     return SHOWING_FRONT
 
 

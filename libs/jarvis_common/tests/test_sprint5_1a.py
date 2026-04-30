@@ -158,7 +158,11 @@ class TestValidateEncryptedConfigRowsToleratesMissingTable:
     async def test_validate_encrypted_config_rows_called_after_custom_init_tasks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """validate_encrypted_config_rows must be called AFTER custom_init_tasks run."""
+        """validate_encrypted_config_rows must be called BEFORE custom_init_tasks run.
+
+        NEW-M6: validation order was intentionally reversed so that a bad schema
+        fails fast before any custom hook runs.
+        """
         from jarvis_common.app_factory import ServiceLifespanConfig, configure_lifespan
 
         monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
@@ -199,12 +203,13 @@ class TestValidateEncryptedConfigRowsToleratesMissingTable:
                 service_name="test_ordering",
                 jobs_worker_kinds=set(),
                 custom_init_tasks=[init_hook],
+                custom_teardown_tasks=[None],
             )
             app = FastAPI()
             async with configure_lifespan(config)(app):
                 pass
 
-        # init_hook must come before validate_encrypted in the call log.
-        assert call_log == ["init_hook", "validate_encrypted"], (
-            f"Expected init_hook before validate_encrypted, got: {call_log}"
+        # validate_encrypted must come before init_hook (NEW-M6 fix).
+        assert call_log == ["validate_encrypted", "init_hook"], (
+            f"Expected validate_encrypted before init_hook, got: {call_log}"
         )

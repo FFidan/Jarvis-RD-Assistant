@@ -4,7 +4,6 @@ Includes single-paper ask, cross-paper ask, streaming SSE variants,
 summarization, and weekly digest.
 """
 
-import json
 import logging
 
 import asyncpg
@@ -44,6 +43,7 @@ from paper_ingestion.rag.streaming import (
     sse_error_stream,
     stream_rag_events,
 )
+from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -406,10 +406,10 @@ async def ask_cross_paper_stream(
         no_result = result
 
         async def _no_results_stream():
-            yield f"data: {json.dumps({'type': 'token', 'content': no_result.answer})}\n\n"
-            yield f"data: {json.dumps({'type': 'sources', 'sources': no_result.sources})}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'full_answer': no_result.answer})}\n\n"
-            yield "data: [DONE]\n\n"
+            yield sse_event({"type": "token", "content": no_result.answer})
+            yield sse_event({"type": "sources", "sources": no_result.sources})
+            yield sse_event({"type": "done", "full_answer": no_result.answer})
+            yield SSE_DONE
 
         return StreamingResponse(
             _no_results_stream(),
@@ -443,6 +443,7 @@ async def ask_cross_paper_stream(
 async def get_weekly_digest(
     request: Request,
     days: int = Query(default=7, ge=1, le=30),
+    user_id: int | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
@@ -458,6 +459,9 @@ async def get_weekly_digest(
     ----------
     days : int
         Number of days to look back (1-30, default 7).
+    user_id : int, optional
+        When provided, restricts the digest to papers engaged with by this
+        user only.  Omit (or pass ``None``) for the global aggregate.
 
     Returns
     -------
@@ -466,7 +470,9 @@ async def get_weekly_digest(
     """
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
-    return await generate_weekly_summary(db_pool, http_client, days=days, verifier=verifier)
+    return await generate_weekly_summary(
+        db_pool, http_client, days=days, verifier=verifier, user_id=user_id
+    )
 
 
 @router.post("/digest/weekly", response_model=JobCreateResponse, status_code=202)

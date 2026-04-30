@@ -23,6 +23,7 @@ from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.rag.decomposition import decompose_query
+from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 if TYPE_CHECKING:
     from paper_ingestion.extraction.verify import QuoteVerifier
@@ -71,8 +72,8 @@ class CrossPaperRagNoResults:
 
 async def sse_error_stream(message: str):
     """Yield a single SSE error event followed by [DONE] sentinel."""
-    yield f"data: {json.dumps({'type': 'error', 'message': message})}\n\n"
-    yield "data: [DONE]\n\n"
+    yield sse_event({"type": "error", "message": message})
+    yield SSE_DONE
 
 
 # ---------------------------------------------------------------------------
@@ -343,7 +344,7 @@ async def stream_rag_events(
                 content = choices[0].get("delta", {}).get("content", "")
                 if content:
                     full_answer += content
-                    yield f"data: {json.dumps({'type': 'token', 'content': content})}\n\n"
+                    yield sse_event({"type": "token", "content": content})
     except Exception as e:
         _err_msgs = {
             httpx.TimeoutException: "LLM request timed out. Please try again.",
@@ -357,8 +358,8 @@ async def stream_rag_events(
         async for event in sse_error_stream(msg):
             yield event
         return
-    yield f"data: {json.dumps({'type': 'sources', 'sources': sources_list})}\n\n"
-    yield f"data: {json.dumps({'type': 'done', 'full_answer': full_answer})}\n\n"
+    yield sse_event({"type": "sources", "sources": sources_list})
+    yield sse_event({"type": "done", "full_answer": full_answer})
     # Sentence-level verification — runs after tokens have streamed (additive latency only)
     if verifier is not None and db_pool is not None:
         try:
@@ -373,7 +374,7 @@ async def stream_rag_events(
                     {"text": s.text, "verified": s.verified} for s in report.per_sentence
                 ],
             }
-            yield f"data: {json.dumps(payload)}\n\n"
+            yield sse_event(payload)
         except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
             logger.warning("RAG verification failed: %s", exc)
-    yield "data: [DONE]\n\n"
+    yield SSE_DONE

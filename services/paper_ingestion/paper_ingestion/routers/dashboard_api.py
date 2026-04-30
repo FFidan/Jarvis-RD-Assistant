@@ -14,6 +14,7 @@ from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import DashboardMetrics, UserStateResponse, UserStateUpsert
+from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ async def get_dashboard_metrics(
     """
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            """
+            f"""
             SELECT
                 (SELECT COUNT(*) FROM papers) AS total_papers,
                 (SELECT COUNT(*) FROM papers p
@@ -46,8 +47,7 @@ async def get_dashboard_metrics(
                    WHERE pus.paper_id = p.id
                      AND (
                        pus.status = 'read'
-                       OR COALESCE(pus.archived, FALSE)
-                       OR pus.status = 'archived'
+                       OR {IS_ARCHIVED_SQL}
                      )
                  )) AS unread_papers,
                 (SELECT COUNT(*) FROM papers p

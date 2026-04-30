@@ -249,11 +249,14 @@ def test_rate_card_save_does_not_overwrite_preference():
 
 
 def test_rate_card_open_does_not_set_thumbs_up():
-    # rating='open' is a navigation event, not a preference signal.
+    # rating='open' early-returns after recording pulse_ratings — no paper_user_state write.
     calls = _capture_rate_calls("open")
-    assert len(calls) >= 2
-    preference_param = calls[1].args[4]
-    assert preference_param == "none"
+    # Only the pulse_ratings INSERT fires; paper_user_state execute must NOT be called.
+    assert len(calls) == 1, (
+        f"rating='open' must produce exactly 1 execute call (pulse_ratings only), got {len(calls)}"
+    )
+    sql: str = calls[0].args[0]
+    assert "pulse_ratings" in sql, f"First execute must target pulse_ratings, got:\n{sql!r}"
 
 
 def test_rate_card_up_records_thumbs_up_preference():
@@ -324,33 +327,53 @@ def test_rate_card_dismiss_writes_dismissed_pref_down_preserves_saved():
 
 
 def test_rate_card_open_is_noop_on_state():
-    """rating='open' is a navigation event — no destructive state mutation.
+    """rating='open' early-returns — paper_user_state must NOT be touched.
 
-    The paper_user_state INSERT must bind all fields to their neutral defaults:
-    starred=False, preference='none', saved=False, dismissed=False.
-    Combined with the ON CONFLICT EXCLUDED IS DISTINCT FROM guards this means
-    no existing field value can be overwritten by an 'open' event.
+    The early-return path means conn.execute is called exactly once (for the
+    pulse_ratings INSERT) and never for paper_user_state.  This guarantees no
+    existing user-state field (starred, preference, saved, dismissed) can be
+    clobbered by a navigation event.
     """
     calls = _capture_rate_calls("open")
-    assert len(calls) >= 2, "expected pulse_ratings + paper_user_state inserts"
-    state_args = calls[1].args
-    sql: str = state_args[0]
-    assert state_args[3] is False, f"starred must be False for 'open' (noop), got {state_args[3]!r}"
-    assert state_args[4] == "none", (
-        f"preference must be 'none' for 'open' (noop), got {state_args[4]!r}"
+    assert len(calls) == 1, (
+        f"rating='open' must produce exactly 1 execute call (pulse_ratings only), got {len(calls)}"
     )
-    assert state_args[5] is False, f"saved must be False for 'open' (noop), got {state_args[5]!r}"
-    assert state_args[6] is False, (
-        f"dismissed must be False for 'open' (noop), got {state_args[6]!r}"
+    sql: str = calls[0].args[0]
+    assert "pulse_ratings" in sql, (
+        f"The single execute call must target pulse_ratings, got:\n{sql!r}"
     )
-    # Confirm all four IS DISTINCT FROM guards are present so no field is clobbered
-    assert "EXCLUDED.preference IS DISTINCT FROM 'none'" in sql, (
-        "Missing preference no-clobber guard in SQL"
+    assert "paper_user_state" not in sql, (
+        f"paper_user_state must NOT be written for rating='open', got:\n{sql!r}"
     )
-    assert "EXCLUDED.starred IS DISTINCT FROM FALSE" in sql, (
-        "Missing starred no-clobber guard in SQL"
+
+
+def test_rate_card_open_records_pulse_ratings_row():
+    """rating='open' must still INSERT a row in pulse_ratings for analytics."""
+    calls = _capture_rate_calls("open")
+    assert len(calls) == 1, f"Expected exactly 1 execute call for 'open', got {len(calls)}"
+    sql: str = calls[0].args[0]
+    assert "pulse_ratings" in sql, f"pulse_ratings INSERT must be present for 'open', got:\n{sql!r}"
+    # Verify the rating value 'open' is passed as the third positional arg
+    assert calls[0].args[3] == "open", (
+        f"Third execute arg must be rating='open', got {calls[0].args[3]!r}"
     )
-    assert "EXCLUDED.saved IS DISTINCT FROM FALSE" in sql, "Missing saved no-clobber guard in SQL"
-    assert "EXCLUDED.dismissed IS DISTINCT FROM FALSE" in sql, (
-        "Missing dismissed no-clobber guard in SQL"
+
+
+def test_rate_card_open_returns_logged_status():
+    """rating='open' must return HTTP 200 with status='logged'."""
+    tc, pool, conn, app = _make_client(user_id_override=None)
+    conn.fetchval.return_value = 1
+    conn.execute.return_value = "INSERT 0 1"
+    try:
+        resp = tc.post("/api/pulse/rate", json={"paper_id": 5, "rating": "open"})
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    data = resp.json()
+    assert data.get("status") == "logged", (
+        f"Expected status='logged' for 'open' early-return, got {data!r}"
     )

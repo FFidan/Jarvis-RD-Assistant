@@ -37,9 +37,11 @@ interface FeedPaperRowProps {
   dismissPending?: boolean;
   onRestore?: (paperId: number) => void;
   restorePending?: boolean;
-  onHardDelete?: (paperId: number) => void;
+  onHardDelete?: (paperId: number, title: string) => void;
   hardDeletePending?: boolean;
+  onUnsave?: (paperId: number) => void;
   onStar?: (paperId: number) => void;
+  starPending?: boolean;
   onUnstar?: (paperId: number) => void;
   onUnarchive?: (paperId: number) => void;
   // Bulk selection
@@ -67,7 +69,9 @@ export function FeedPaperRow({
   restorePending = false,
   onHardDelete,
   hardDeletePending = false,
+  onUnsave: _onUnsave,
   onStar,
+  starPending = false,
   onUnstar,
   onUnarchive,
   bulkSelected,
@@ -326,7 +330,7 @@ export function FeedPaperRow({
               <Button
                 variant="destructive"
                 size="icon"
-                onClick={() => onHardDelete(paper.id)}
+                onClick={() => onHardDelete(paper.id, paper.title)}
                 disabled={hardDeletePending}
                 aria-label={`Permanently delete ${paper.title}`}
                 title="Permanently delete"

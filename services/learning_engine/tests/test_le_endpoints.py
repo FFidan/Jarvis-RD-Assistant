@@ -883,3 +883,83 @@ async def test_health_check_ok(_app):
     # Public /health no longer exposes service/checks — SEC-H09
     assert "service" not in body
     assert "checks" not in body
+
+
+# ---------------------------------------------------------------------------
+# Live PostgreSQL tests — gated by JARVIS_RUN_LIVE_PG=1
+# ---------------------------------------------------------------------------
+
+pytestmark_live = pytest.mark.live_pg
+
+
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_focus_session_paper_id_live_pg(live_pg_dsn: str) -> None:
+    """POST /api/executive/focus/log with paper_id must not raise HTTP 500.
+
+    Regression guard for NEW-C1: migration 043 replaced the single-column
+    UNIQUE on paper_user_state(paper_id) with a composite
+    (paper_id, user_id) NULLS NOT DISTINCT index.  The old ON CONFLICT (paper_id)
+    clause raises PostgreSQL error 42P10 on any deployment that has applied 043.
+    This test verifies that the fixed SQL executes without error against a real
+    PostgreSQL database with all migrations applied.
+    """
+    from pathlib import Path
+
+    import asyncpg
+    from paper_ingestion.migrations_runner import run_migrations
+
+    repo_root = Path(__file__).resolve().parents[3]
+    init_sql = repo_root / "db" / "init.sql"
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(init_sql.read_text(encoding="utf-8"))
+        await run_migrations(pool)
+
+        async with pool.acquire() as conn:
+            # Insert a paper row to satisfy the FK constraint
+            await conn.execute(
+                """
+                INSERT INTO papers (external_id, source_type, title, authors, url)
+                VALUES ('live-le-focus-c1', 'arxiv', 'Live LE Focus C1',
+                        ARRAY['Tester'], 'https://example.test/c1')
+                """
+            )
+            paper_id: int = await conn.fetchval(
+                "SELECT id FROM papers WHERE external_id = $1",
+                "live-le-focus-c1",
+            )
+
+            # Execute the fixed upsert SQL directly — this is exactly what
+            # log_focus_session runs after the NEW-C1 fix.
+            await conn.execute(
+                """INSERT INTO paper_user_state (paper_id, user_id, status)
+                   VALUES ($1, $2, 'reading')
+                   ON CONFLICT (paper_id, user_id) DO UPDATE
+                      SET status = 'reading'
+                    WHERE paper_user_state.status = 'new'""",
+                paper_id,
+                None,  # user_id = None (unauthenticated)
+            )
+
+            # Calling it a second time must also succeed (idempotent upsert)
+            await conn.execute(
+                """INSERT INTO paper_user_state (paper_id, user_id, status)
+                   VALUES ($1, $2, 'reading')
+                   ON CONFLICT (paper_id, user_id) DO UPDATE
+                      SET status = 'reading'
+                    WHERE paper_user_state.status = 'new'""",
+                paper_id,
+                None,
+            )
+
+            # Verify the row was written
+            status = await conn.fetchval(
+                "SELECT status FROM paper_user_state WHERE paper_id = $1 AND user_id IS NULL",
+                paper_id,
+            )
+            assert status == "reading"
+    finally:
+        await pool.close()

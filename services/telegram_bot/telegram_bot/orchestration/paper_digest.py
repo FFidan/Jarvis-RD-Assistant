@@ -126,6 +126,8 @@ async def _simple_digest(
     bot: Bot,
     config: BotConfig,
     owner: int,
+    *,
+    db_user_id: int | None = None,
 ) -> None:
     """Fallback: send a simple digest built from direct DB queries.
 
@@ -138,8 +140,21 @@ async def _simple_digest(
     config : BotConfig
         Bot configuration.
     owner : int
-        Resolved owner chat ID (already validated by caller).
+        Resolved owner chat ID for Bot.send_message (Telegram chat ID, NOT a DB user PK).
+    db_user_id : int | None, keyword-only
+        DB user PK for paper_user_state / pulse_ratings scoping. ``None``
+        (default) means single-tenant mode and matches NULL rows via
+        ``IS NOT DISTINCT FROM``. Multi-tenant callers must resolve the
+        Telegram chat → DB user via the (yet-to-be-wired) pairing table
+        and pass the concrete PK; see ARCHITECTURE.md "Authentication
+        and Ownership".
     """
+    # Note: legacy status='starred' rows were backfilled to starred=TRUE by
+    # migration 044; this digest relies on the boolean column only.
+    # NB: the archived predicate below mirrors IS_ARCHIVED_SQL from
+    # services/paper_ingestion/paper_ingestion/queries/predicates.py — duplicated
+    # here because telegram_bot is a separate deployable service and we don't
+    # cross-import paper_ingestion modules at runtime.
     rows = await db_pool.fetch(
         """SELECT p.id, p.title, p.url, p.published_date, p.authors,
                   t.name as topic_name, pt.relevance_score,
@@ -149,25 +164,35 @@ async def _simple_digest(
            JOIN topics t ON pt.topic_id = t.id
            LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
            WHERE p.created_at >= NOW() - INTERVAL '7 days'
+             AND NOT EXISTS (
+                 SELECT 1 FROM paper_user_state pus
+                  WHERE pus.paper_id = p.id
+                    AND pus.user_id IS NOT DISTINCT FROM $1
+                    AND (
+                        (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')
+                        OR COALESCE(pus.dismissed, FALSE)
+                    )
+             )
              AND (
                  EXISTS (
-                     SELECT 1 FROM paper_user_state pus
-                     WHERE pus.paper_id = p.id
+                     SELECT 1 FROM paper_user_state pus2
+                     WHERE pus2.paper_id = p.id
+                       AND pus2.user_id IS NOT DISTINCT FROM $1
                        AND (
-                           COALESCE(pus.starred, FALSE)
-                           OR pus.status IN ('reading', 'read')
+                           COALESCE(pus2.starred, FALSE)
+                           OR pus2.status IN ('reading', 'read')
                        )
-                       AND COALESCE(pus.archived, FALSE) = FALSE
-                       AND COALESCE(pus.dismissed, FALSE) = FALSE
                  )
                  OR EXISTS (
                      SELECT 1 FROM pulse_ratings pr
                      WHERE pr.paper_id = p.id
+                       AND pr.user_id IS NOT DISTINCT FROM $1
                        AND pr.rating IN ('up', 'save', 'open')
                        AND pr.created_at >= NOW() - INTERVAL '7 days'
                  )
              )
-           ORDER BY t.name, pt.relevance_score DESC NULLS LAST"""
+           ORDER BY t.name, pt.relevance_score DESC NULLS LAST""",
+        db_user_id,
     )
 
     if not rows:
@@ -268,4 +293,5 @@ async def run_paper_digest(
 
     # Fallback to simple digest
     logger.warning("Falling back to simple digest (API returned no data)")
-    await _simple_digest(db_pool, bot, config, owner)
+    # TODO multi-tenant: resolve db_user_id via Telegram chat → DB user pairing
+    await _simple_digest(db_pool, bot, config, owner, db_user_id=None)

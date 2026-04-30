@@ -234,6 +234,33 @@ async def test_restore_clears_dismissed():
     assert "none" in positional  # preference='none'
 
 
+@pytest.mark.asyncio
+async def test_restore_preserves_saved():
+    """PUT /restore preserves saved=TRUE so previously-saved papers return to Library.
+
+    When a paper is dismissed, it goes to Trash. Restore clears dismissed=FALSE
+    and preference='none', but does NOT touch saved — so if the paper was saved
+    before dismissal, it returns to Library (saved=TRUE); if never saved,
+    it returns to Inbox (saved=FALSE).
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 8}
+
+    result = await papers.restore_paper.__wrapped__(
+        _mock_request(),
+        paper_id=8,
+        db_pool=pool,
+    )
+
+    assert result == {"status": "ok", "paper_id": 8}
+    sql = conn.execute.await_args.args[0]
+    # restore must set dismissed and preference
+    assert "dismissed" in sql
+    assert "preference" in sql
+    # Crucially: saved must NOT appear in the SQL (so it's preserved)
+    assert "saved" not in sql
+
+
 # ---------------------------------------------------------------------------
 # Hard delete
 # ---------------------------------------------------------------------------
@@ -285,7 +312,7 @@ async def test_hard_delete_with_correct_title_succeeds():
     # fetchval: dismissed=True, title="Correct Title"
     conn.fetchval.side_effect = [True, "Correct Title"]
 
-    with patch("paper_ingestion.ingestion.embedder.delete_paper_vectors", new_callable=AsyncMock):
+    with patch("paper_ingestion.routers.papers.delete_paper_vectors", new_callable=AsyncMock):
         result = await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=12,
@@ -307,7 +334,7 @@ async def test_hard_delete_calls_qdrant():
     conn.fetchval.side_effect = [True, "The Title"]
 
     with patch(
-        "paper_ingestion.ingestion.embedder.delete_paper_vectors",
+        "paper_ingestion.routers.papers.delete_paper_vectors",
         new_callable=AsyncMock,
     ) as mock_delete:
         await papers.hard_delete_paper.__wrapped__(
@@ -495,3 +522,125 @@ async def test_unarchive_works():
     assert "archived" in sql
     # Crucially: fetchval was not called (no saved-state check for unarchive)
     conn.fetchval.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Hard delete — A1.1 / A1.2 new test cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_reorders_qdrant_after_db_commit():
+    """A1.1: DELETE FROM papers executes BEFORE delete_paper_vectors (outside transaction)."""
+    pool, conn = _make_pool_and_conn()
+    # dismissed=True, title matches
+    conn.fetchval.side_effect = [True, "Order Test"]
+
+    call_order: list[str] = []
+
+    async def _fake_execute(sql, *args):
+        if "DELETE FROM papers" in sql:
+            call_order.append("db_delete")
+
+    async def _fake_delete_vectors(paper_id):
+        call_order.append("qdrant_delete")
+
+    conn.execute.side_effect = _fake_execute
+
+    with patch(
+        "paper_ingestion.routers.papers.delete_paper_vectors",
+        side_effect=_fake_delete_vectors,
+    ):
+        result = await papers.hard_delete_paper.__wrapped__(
+            _mock_request(),
+            paper_id=50,
+            body=HardDeleteRequest(confirm_title="Order Test", also_zotero=False),
+            db_pool=pool,
+        )
+
+    assert result == {"deleted": 50}
+    assert call_order == ["db_delete", "qdrant_delete"], (
+        f"Expected db_delete before qdrant_delete, got: {call_order}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_db_rollback_does_not_call_qdrant():
+    """A1.1: If DELETE FROM papers raises, delete_paper_vectors must NOT be called."""
+    import asyncpg as _asyncpg
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.side_effect = [True, "Rollback Test"]
+    conn.execute.side_effect = _asyncpg.PostgresError("simulated DB failure")
+
+    with patch(
+        "paper_ingestion.routers.papers.delete_paper_vectors",
+        new_callable=AsyncMock,
+    ) as mock_delete:
+        with pytest.raises(_asyncpg.PostgresError):
+            await papers.hard_delete_paper.__wrapped__(
+                _mock_request(),
+                paper_id=51,
+                body=HardDeleteRequest(confirm_title="Rollback Test", also_zotero=False),
+                db_pool=pool,
+            )
+
+    mock_delete.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_qdrant_failure_logs_orphan():
+    """A1.1: If delete_paper_vectors raises after DB delete, logger.exception is called with 'orphans'."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.side_effect = [True, "Qdrant Fail"]
+
+    async def _fail_vectors(paper_id):
+        raise RuntimeError("Qdrant connection refused")
+
+    with patch(
+        "paper_ingestion.routers.papers.delete_paper_vectors",
+        side_effect=_fail_vectors,
+    ):
+        with patch.object(papers.logger, "exception") as mock_exc:
+            result = await papers.hard_delete_paper.__wrapped__(
+                _mock_request(),
+                paper_id=52,
+                body=HardDeleteRequest(confirm_title="Qdrant Fail", also_zotero=False),
+                db_pool=pool,
+            )
+
+    # DB delete was called (paper is gone)
+    delete_calls = [c for c in conn.execute.await_args_list if "DELETE FROM papers" in c.args[0]]
+    assert len(delete_calls) == 1, "DELETE FROM papers must have been called once"
+    assert delete_calls[0].args[1] == 52
+
+    # logger.exception was called and message contains 'orphans'
+    mock_exc.assert_called_once()
+    log_msg = mock_exc.call_args.args[0]
+    assert "orphans" in log_msg
+
+    # Endpoint still returns success (best-effort Qdrant cleanup)
+    assert result == {"deleted": 52}
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_confirm_title_trim():
+    """A1.2: _assert_confirm_title_matches passes when title has leading/trailing whitespace."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = "  Foo  "
+
+    # Should NOT raise — trimmed values match
+    await papers._assert_confirm_title_matches(conn, paper_id=1, confirm_title="Foo")
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_confirm_title_case_mismatch():
+    """A1.2: _assert_confirm_title_matches raises 400 when titles differ in case."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = "foo"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers._assert_confirm_title_matches(conn, paper_id=1, confirm_title="Foo")
+
+    assert exc_info.value.status_code == 400
+    assert "confirm_title" in exc_info.value.detail

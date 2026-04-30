@@ -113,6 +113,15 @@ COMMENT ON TABLE papers IS 'All ingested papers. Metadata comes from source APIs
 ALTER TABLE papers ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_papers_user ON papers(user_id) WHERE user_id IS NOT NULL;
 
+-- Phase A (migration 048): discovery_origin tracks how each paper first entered.
+-- Used by frontend to conditionally render feedback (👍/👎) buttons only on
+-- machine-recommended papers. Immutable after insert.
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS discovery_origin TEXT NOT NULL DEFAULT 'user_initiated'
+    CHECK (discovery_origin IN ('user_initiated', 'pulse', 'recommender', 'citation_batch'));
+CREATE INDEX IF NOT EXISTS idx_papers_discovery_origin ON papers(discovery_origin);
+COMMENT ON COLUMN papers.discovery_origin IS
+    'How the paper first entered the system. Immutable. Values: user_initiated (manual search/upload/Zotero/citation graph), pulse (overnight discovery), recommender (paper_recommendations), citation_batch (citation graph batch save).';
+
 -- Full-text search support (from migration 002)
 CREATE OR REPLACE FUNCTION papers_search_vector_update() RETURNS trigger
     LANGUAGE plpgsql AS $$
@@ -244,40 +253,42 @@ COMMENT ON COLUMN paper_contradictions.scanner_metadata IS
 ALTER TABLE paper_contradictions ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_contradictions_user ON paper_contradictions(user_id) WHERE user_id IS NOT NULL;
 
+-- Phase A (migration 047): paper_user_state collapsed to single-state ENUM.
+-- The 5 booleans + status enum from migration 046 (saved/dismissed/archived/status/preference)
+-- are replaced by one `state` ENUM ('inbox','to_read','reading','done','trash') plus
+-- a `state_before_trash` ENUM column for Restore. See spec §3.1.
 CREATE TABLE paper_user_state (
-    id              SERIAL PRIMARY KEY,
-    paper_id        INTEGER REFERENCES papers(id) ON DELETE CASCADE,
-    status          VARCHAR(20) DEFAULT 'new' CHECK (status IN ('new', 'reading', 'read')),
-    starred         BOOLEAN NOT NULL DEFAULT FALSE,
-    archived        BOOLEAN NOT NULL DEFAULT FALSE,
-    preference      VARCHAR(10) NOT NULL DEFAULT 'none' CHECK (preference IN ('none', 'up', 'down')),
-    user_notes      TEXT,
-    rating          SMALLINT CHECK (rating BETWEEN 1 AND 5),
-    flagged         BOOLEAN DEFAULT FALSE,
-    notified_at     TIMESTAMPTZ,
-    read_at         TIMESTAMPTZ,
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    saved           BOOLEAN NOT NULL DEFAULT FALSE,
-    dismissed       BOOLEAN NOT NULL DEFAULT FALSE,
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                  SERIAL PRIMARY KEY,
+    paper_id            INTEGER REFERENCES papers(id) ON DELETE CASCADE,
+    state               TEXT NOT NULL DEFAULT 'inbox'
+                            CHECK (state IN ('inbox', 'to_read', 'reading', 'done', 'trash')),
+    state_before_trash  TEXT
+                            CHECK (state_before_trash IS NULL
+                                   OR state_before_trash IN ('inbox', 'to_read', 'reading', 'done')),
+    starred             BOOLEAN NOT NULL DEFAULT FALSE,
+    user_notes          TEXT,
+    rating              SMALLINT CHECK (rating BETWEEN 1 AND 5),
+    flagged             BOOLEAN DEFAULT FALSE,
+    notified_at         TIMESTAMPTZ,
+    read_at             TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-COMMENT ON TABLE paper_user_state IS 'Per-paper user state: reading status, star/archive flags, notes, rating, preference, flag.';
+COMMENT ON TABLE paper_user_state IS 'Per-paper user state: lifecycle position (state), star (curation flag), reading metadata. Recommendation feedback lives in a separate table (recommendation_feedback).';
 
 -- Wave 6: per-user ownership (migration 042).
 ALTER TABLE paper_user_state ADD COLUMN IF NOT EXISTS user_id INTEGER NULL;
 CREATE INDEX IF NOT EXISTS idx_paper_user_state_user ON paper_user_state(user_id) WHERE user_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_paper_user_state_state ON paper_user_state(state);
 -- Migration 043: (paper_id, user_id) unique replaces single-paper UNIQUE.
 ALTER TABLE paper_user_state
     ADD CONSTRAINT paper_user_state_paper_id_user_id_key
     UNIQUE NULLS NOT DISTINCT (paper_id, user_id);
-COMMENT ON COLUMN paper_user_state.status IS 'Reading state: new, reading, read. Legacy archived/starred values removed in migration 046.';
-COMMENT ON COLUMN paper_user_state.starred IS 'Per-user saved/bookmarked flag independent from reading status.';
-COMMENT ON COLUMN paper_user_state.archived IS 'Per-user archive flag independent from reading status.';
-COMMENT ON COLUMN paper_user_state.preference IS 'Current per-user paper preference: none, up, or down.';
+COMMENT ON COLUMN paper_user_state.state IS 'Lifecycle position: inbox (untriaged), to_read (saved), reading (engaging), done (finished), trash (rejected). Replaces 5 booleans + status enum from migration 046.';
+COMMENT ON COLUMN paper_user_state.state_before_trash IS 'For trash rows: the state to restore to. NULL for non-trash rows.';
+COMMENT ON COLUMN paper_user_state.starred IS 'Per-user favourite flag, orthogonal to state. Triggers zotero.push when project-linked.';
 COMMENT ON COLUMN paper_user_state.flagged IS 'User flagged this summary as potentially inaccurate.';
-COMMENT ON COLUMN paper_user_state.saved IS 'Triage axis: user has explicitly saved this paper for later attention.';
-COMMENT ON COLUMN paper_user_state.dismissed IS 'Triage axis: user dismissed this paper from their feed.';
 -- Migration 046: updated_at trigger (set_updated_at function defined in migration 042).
 DROP TRIGGER IF EXISTS set_updated_at_paper_user_state ON paper_user_state;
 CREATE TRIGGER set_updated_at_paper_user_state
@@ -732,21 +743,39 @@ CREATE INDEX IF NOT EXISTS idx_pulse_cards_deck_rank
     ON pulse_cards(deck_id, rank);
 CREATE INDEX IF NOT EXISTS idx_pulse_cards_user ON pulse_cards(user_id) WHERE user_id IS NOT NULL;
 
--- Pulse ratings — feedback loop, collected from Phase 1 onward
-CREATE TABLE IF NOT EXISTS pulse_ratings (
-    id              SERIAL PRIMARY KEY,
-    paper_id        INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-    user_id         INTEGER,  -- NULL in single-tenant mode; forward-compatible for multi-user
-    rating          VARCHAR(16) NOT NULL
-        CHECK (rating IN ('up', 'down', 'save', 'dismiss', 'open')),
-    source          VARCHAR(32) NOT NULL DEFAULT 'pulse',  -- allows future non-Pulse ratings
-    created_at      TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT pulse_ratings_paper_user_uniq UNIQUE NULLS NOT DISTINCT (paper_id, user_id)
+-- Phase A (migration 049): recommendation_feedback replaces pulse_ratings.
+-- Single source of truth for recommendation-quality user signals (👍/👎/🗑+👎).
+-- Decoupled from paper_user_state.state lifecycle on purpose: 👎 does not trash
+-- a paper, Trash does not write 👎. Pulse stage-2 reranker (L1), pulse stage-1
+-- cosine penalty (L2), and recommender hard exclusion + topic dampening (L3)
+-- all read from this single table. See spec §3.3 + §7.
+CREATE TABLE IF NOT EXISTS recommendation_feedback (
+    id              BIGSERIAL PRIMARY KEY,
+    paper_id        BIGINT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    user_id         BIGINT,                                       -- NULL = single-tenant
+    signal          TEXT NOT NULL CHECK (signal IN ('positive', 'negative')),
+    source          TEXT NOT NULL CHECK (source IN (
+        'pulse_thumbs',          -- 👍/👎 on Pulse Deck card
+        'feed_thumbs',           -- 👍/👎 on Inbox/Library row (Pulse-origin only)
+        'paper_detail_thumbs',   -- 👍/👎 on Paper Detail page
+        'dismiss_combined'       -- 🗑+👎 combined button
+    )),
+    topic_id        BIGINT REFERENCES topics(id) ON DELETE SET NULL,
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT recommendation_feedback_paper_user_source_uniq
+        UNIQUE NULLS NOT DISTINCT (paper_id, user_id, source)
 );
-CREATE INDEX IF NOT EXISTS idx_pulse_ratings_paper
-    ON pulse_ratings(paper_id);
-CREATE INDEX IF NOT EXISTS idx_pulse_ratings_created
-    ON pulse_ratings(created_at DESC);
+
+CREATE INDEX IF NOT EXISTS recommendation_feedback_paper_idx
+    ON recommendation_feedback (paper_id);
+CREATE INDEX IF NOT EXISTS recommendation_feedback_signal_recent_idx
+    ON recommendation_feedback (signal, created_at DESC);
+CREATE INDEX IF NOT EXISTS recommendation_feedback_topic_idx
+    ON recommendation_feedback (topic_id) WHERE topic_id IS NOT NULL;
+
+COMMENT ON TABLE recommendation_feedback IS
+    'Single source of truth for recommendation-quality user signals. Replaces pulse_ratings (dropped in migration 049).';
 
 CREATE TABLE IF NOT EXISTS pulse_models (
     id              SERIAL PRIMARY KEY,

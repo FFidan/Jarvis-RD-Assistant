@@ -216,3 +216,51 @@ def test_resolve_secret_row_handles_memoryview_ciphertext(valid_key) -> None:
         {"key": "zotero.api_key", "value": None, "encrypted_value": memoryview(ciphertext)}
     )
     assert resolve_secret_row(row) == "from-memoryview"
+
+
+# ---------------------------------------------------------------------------
+# resolve_secret_row — tightened typing (W4-T4)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_secret_row_dict_encrypted(valid_key) -> None:
+    """Plain dict with encrypted_value → returns decrypted value."""
+    ciphertext = encrypt_secret("dict-encrypted-secret")
+    row: dict[str, object] = {"encrypted_value": ciphertext.encode(), "value": None}
+    assert resolve_secret_row(row) == "dict-encrypted-secret"
+
+
+def test_resolve_secret_row_dict_legacy_plaintext(valid_key) -> None:
+    """Plain dict with value (legacy plaintext path) → returns it directly."""
+    row: dict[str, object] = {"encrypted_value": None, "value": "legacy-via-dict"}
+    assert resolve_secret_row(row) == "legacy-via-dict"
+
+
+def test_resolve_secret_row_none_input() -> None:
+    """Passing None returns None without raising."""
+    assert resolve_secret_row(None) is None
+
+
+def test_resolve_secret_row_custom_mapping(valid_key) -> None:
+    """A custom Mapping subclass (no .get override) still works correctly."""
+    from collections.abc import Iterator
+    from collections.abc import Mapping as AbcMapping
+
+    class MinimalMapping(AbcMapping[str, object]):
+        """Implements only the three abstract methods required by Mapping."""
+
+        def __init__(self, data: dict[str, object]) -> None:
+            self._data = data
+
+        def __getitem__(self, key: str) -> object:
+            return self._data[key]
+
+        def __iter__(self) -> Iterator[str]:
+            return iter(self._data)
+
+        def __len__(self) -> int:
+            return len(self._data)
+
+    ciphertext = encrypt_secret("mapping-secret")
+    row = MinimalMapping({"encrypted_value": ciphertext.encode(), "value": None})
+    assert resolve_secret_row(row) == "mapping-secret"

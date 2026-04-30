@@ -10,6 +10,7 @@ from typing import Any
 
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from paper_ingestion.pulse.scoring import ScoredCandidate
+from paper_ingestion.queries.predicates import IS_ARCHIVED_SQL
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ async def _persist_deck_inner(
     cards: list[ScoredCandidate],
     stats: dict,
     degraded_reason: str | None = None,
+    user_id: int | None = None,
 ) -> int:
     """Execute the deck-persistence SQL on an existing connection.
 
@@ -52,17 +54,28 @@ async def _persist_deck_inner(
     ``persist_deck`` so that callers can share a connection (and therefore
     a transaction) with other writes such as ``upsert_paper``.
 
+    Parameters
+    ----------
+    user_id:
+        The user this deck belongs to.  ``None`` means single-tenant mode
+        (matches ``paper_user_state`` rows where ``user_id IS NULL``).  In
+        multi-tenant deployments pass the concrete user PK so that
+        archived/dismissed state for *this* user is correctly applied.
+
     Returns
     -------
     int
         The number of pulse_cards rows successfully inserted.
     """
-    # Upsert pulse_decks row with card_count=0 initially — returns the deck id
+    # Upsert pulse_decks row with card_count=0 initially — returns the deck id.
+    # ON CONFLICT targets (deck_date, user_id) — the composite UNIQUE NULLS NOT
+    # DISTINCT constraint added by migration 043 for multi-tenant support.
     deck_id = await conn.fetchval(
         """
-        INSERT INTO pulse_decks (deck_date, card_count, generated_at, stats, degraded_reason)
-        VALUES ($1, 0, NOW(), $2::jsonb, $3)
-        ON CONFLICT (deck_date) DO UPDATE
+        INSERT INTO pulse_decks
+            (deck_date, user_id, card_count, generated_at, stats, degraded_reason)
+        VALUES ($1, $4, 0, NOW(), $2::jsonb, $3)
+        ON CONFLICT (deck_date, user_id) DO UPDATE
             SET card_count       = 0,
                 generated_at     = EXCLUDED.generated_at,
                 stats            = EXCLUDED.stats,
@@ -72,6 +85,7 @@ async def _persist_deck_inner(
         deck_date,
         stats,
         degraded_reason,
+        user_id,
     )
 
     # Delete old cards for this deck (idempotent replace)
@@ -84,7 +98,7 @@ async def _persist_deck_inner(
             sc.reasoning_confidence.value if sc.reasoning_confidence is not None else None
         )
         inserted_id = await conn.fetchval(
-            """
+            f"""
             INSERT INTO pulse_cards
                 (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
                  reasoning, signals, reasoning_verified, reasoning_confidence)
@@ -92,9 +106,9 @@ async def _persist_deck_inner(
             FROM papers p
             LEFT JOIN paper_user_state pus
                    ON pus.paper_id = p.id
-                  AND pus.user_id IS NOT DISTINCT FROM NULL
+                  AND pus.user_id IS NOT DISTINCT FROM $11
             WHERE p.external_id = $2
-              AND COALESCE(pus.archived, FALSE) = FALSE
+              AND NOT {IS_ARCHIVED_SQL}
               AND COALESCE(pus.dismissed, FALSE) = FALSE
             ON CONFLICT (deck_id, paper_id) DO NOTHING
             RETURNING id
@@ -109,6 +123,7 @@ async def _persist_deck_inner(
             sc.signals,
             sc.reasoning_verified,
             reasoning_confidence_str,
+            user_id,
         )
         if inserted_id is not None:
             successes += 1
@@ -135,6 +150,7 @@ async def persist_deck(
     stats: dict,
     conn: Any | None = None,
     degraded_reason: str | None = None,
+    user_id: int | None = None,
 ) -> int:
     """Persist a pulse deck to the database in a single transaction.
 
@@ -162,6 +178,11 @@ async def persist_deck(
         Optional human-readable string explaining why the deck was produced
         with reduced quality (e.g. LLM timeout or stage2 fallback).  Stored
         in the ``pulse_decks.degraded_reason`` column added by migration 023.
+    user_id:
+        The user this deck belongs to.  ``None`` means single-tenant mode
+        (matches ``paper_user_state`` rows where ``user_id IS NULL``).  In
+        multi-tenant deployments pass the concrete user PK so that
+        archived/dismissed state for *this* user is correctly applied.
 
     Returns
     -------
@@ -169,12 +190,12 @@ async def persist_deck(
         The number of pulse_cards rows successfully inserted.
     """
     if conn is not None:
-        return await _persist_deck_inner(conn, deck_date, cards, stats, degraded_reason)
+        return await _persist_deck_inner(conn, deck_date, cards, stats, degraded_reason, user_id)
 
     async with db_pool.acquire() as acquired_conn:
         async with acquired_conn.transaction():
             return await _persist_deck_inner(
-                acquired_conn, deck_date, cards, stats, degraded_reason
+                acquired_conn, deck_date, cards, stats, degraded_reason, user_id
             )
 
 

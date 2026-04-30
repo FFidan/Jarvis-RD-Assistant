@@ -3,6 +3,11 @@
 Provides a small, focused set of functions that prevent prompt injection
 via angle-bracket tag forgery in LLM prompts.  All LLM call sites that
 interpolate untrusted user or paper text should use these helpers.
+
+Out of scope: ``${...}``, ``{{...}}``, backtick blocks, Jinja templates.
+The ``escape`` and ``strip`` modes both flatten BIDI/zero-width chars but
+do not recognise template syntax.  If a templating engine is introduced
+into LLM prompts, add a ``mode='template'`` branch to :func:`safe_for_prompt`.
 """
 
 from __future__ import annotations
@@ -75,8 +80,10 @@ def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     """
     if text is None:
         text = ""
+    # _CTRL_RE removes BIDI + zero-width chars in both escape and strip modes;
+    # no separate _strip_bidi_zw pass needed.
     if mode == "escape":
-        return _CTRL_RE.sub("", _strip_bidi_zw(text)).replace("<", "&lt;").replace(">", "&gt;")
+        return _CTRL_RE.sub("", text).replace("<", "&lt;").replace(">", "&gt;")
     if mode == "strip":
         return _CTRL_RE.sub("", text)
     if mode == "delimit":

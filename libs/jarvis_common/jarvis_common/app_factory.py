@@ -45,7 +45,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from jarvis_common.auth import refresh_api_key_cache, validate_production_config
-from jarvis_common.crypto import validate_encrypted_config_rows
+from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
 from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.error_handlers import (
     generic_exception_handler,
@@ -110,7 +110,11 @@ class ServiceLifespanConfig:
     http_client_kwargs: dict[str, Any] = field(default_factory=dict)
     jobs_worker_kinds: set[str] = field(default_factory=set)
     custom_init_tasks: list[LifespanHook] = field(default_factory=list)
-    custom_teardown_tasks: list[LifespanHook] = field(default_factory=list)
+    custom_teardown_tasks: list[LifespanHook | None] = field(default_factory=list)
+    # custom_init_tasks and custom_teardown_tasks MUST have equal length. For
+    # init hooks that have no teardown counterpart, pad with None at the same
+    # index. The runtime asserts the contract on startup and raises ValueError
+    # on mismatch.
 
 
 def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
@@ -152,9 +156,12 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
 
     1. ``validate_production_config()``
     2. asyncpg pool creation (env-var-tunable size, with ``init_pg_connection``)
-    3. ``validate_encrypted_config_rows`` so encrypted secrets fail-fast on boot
-    4. ``httpx.AsyncClient`` creation with the service-specific timeout
-    5. each ``custom_init_tasks`` hook in order
+    3. ``httpx.AsyncClient`` creation with the service-specific timeout
+    4. ``validate_encrypted_config_rows`` so encrypted secrets fail-fast on boot
+       (before any custom hook runs; schema-missing errors are downgraded to a warning)
+    5. each ``custom_init_tasks`` hook in order; if a hook raises, already-completed
+       hooks have their corresponding ``custom_teardown_tasks`` entry called in reverse
+       order before the exception propagates
     6. auth-config status log line
     7. jobs worker start (if ``jobs_worker_kinds`` non-empty)
     8. yield
@@ -168,6 +175,9 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         validate_production_config()
+        # Register SIGHUP handler so operators can rotate CONFIG_ENC_KEY without
+        # a full process restart.  No-op on platforms without SIGHUP.
+        reload_fernet_on_sighup()
 
         db_pool = None
         http_client = None
@@ -181,9 +191,8 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             http_client = httpx.AsyncClient(**http_kwargs)
             app.state.http_client = http_client
 
-            for hook in config.custom_init_tasks:
-                await hook(app)
-
+            # Validate encrypted config rows BEFORE custom hooks so a bad
+            # schema fails fast and hooks never see a partially-initialized DB.
             try:
                 await validate_encrypted_config_rows(db_pool)
             except (asyncpg.UndefinedTableError, asyncpg.UndefinedColumnError):
@@ -191,6 +200,36 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
                     "validate_encrypted_config_rows skipped: user_config table not yet available"
                     " (fresh DB before migrations run)"
                 )
+
+            # Run custom init hooks.  If one raises, compensate by running the
+            # teardown counterparts for every hook that already succeeded.
+            completed_hooks: list[LifespanHook] = []
+            # Equal-length contract: each init hook MUST have a corresponding teardown
+            # hook at the same index (use None as a placeholder for hooks without a
+            # teardown). zip() would silently truncate on mismatch and lose teardown
+            # hooks; assert eagerly to surface the bug at startup.
+            if len(config.custom_init_tasks) != len(config.custom_teardown_tasks):
+                raise ValueError(
+                    f"custom_init_tasks ({len(config.custom_init_tasks)}) and "
+                    f"custom_teardown_tasks ({len(config.custom_teardown_tasks)}) "
+                    f"must have equal length; pad with None for hooks without teardown."
+                )
+            teardown_map = dict(
+                zip(config.custom_init_tasks, config.custom_teardown_tasks, strict=True)
+            )
+            try:
+                for hook in config.custom_init_tasks:
+                    await hook(app)
+                    completed_hooks.append(hook)
+            except Exception:
+                for done in reversed(completed_hooks):
+                    compensate = teardown_map.get(done)
+                    if compensate is not None:
+                        try:
+                            await compensate(app)
+                        except Exception:  # noqa: BLE001
+                            logger.exception("compensating teardown failed for %s", done)
+                raise
 
             _log_auth_status()
 
@@ -203,6 +242,8 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             await _stop_jobs_worker(app)
 
             for hook in config.custom_teardown_tasks:
+                if hook is None:
+                    continue
                 try:
                     await hook(app)
                 except Exception:  # noqa: BLE001
@@ -316,7 +357,9 @@ def configure_middleware_and_errors(
     )
 
     # 4. ProxyHeadersMiddleware -- outermost.
-    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxy_hosts)
+    # uvicorn vs starlette ASGI-scope stubs are nominally incompatible despite
+    # being structurally identical; safe to ignore until upstream stubs reconcile.
+    app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=trusted_proxy_hosts)  # type: ignore[reportArgumentType]
 
     # Standardized error handlers
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)  # type: ignore[arg-type]

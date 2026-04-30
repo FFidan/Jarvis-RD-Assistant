@@ -58,7 +58,7 @@ export function BulkToolbar({ surface }: BulkToolbarProps) {
 
   return (
     <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-2">
-      <span className="text-sm font-medium">
+      <span aria-live="polite" className="text-sm font-medium">
         {selectedIds.size} selected
       </span>
       {actions.map((action) => (

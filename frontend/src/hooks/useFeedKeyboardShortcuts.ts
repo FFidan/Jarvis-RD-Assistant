@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import type { SurfaceView } from '@/types';
 
 interface FeedShortcutCallbacks {
@@ -19,6 +19,20 @@ export function useFeedKeyboardShortcuts(
   surface: SurfaceView,
   callbacks: FeedShortcutCallbacks,
 ) {
+  // Keep refs up-to-date every render so the stable handler always reads the
+  // latest values without needing to re-register the listener.
+  const surfaceRef = useRef(surface);
+  const callbacksRef = useRef(callbacks);
+
+  useEffect(() => {
+    surfaceRef.current = surface;
+  });
+
+  useEffect(() => {
+    callbacksRef.current = callbacks;
+  });
+
+  // Register the listener exactly once on mount; read from refs inside.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       // Ignore when typing in an input/textarea/contenteditable
@@ -34,47 +48,50 @@ export function useFeedKeyboardShortcuts(
       // Allow modifier-free single-key shortcuts only (avoid intercepting Cmd+K etc.)
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
+      const cb = callbacksRef.current;
+      const surf = surfaceRef.current;
+
       switch (e.key) {
         case 'j':
-          callbacks.onNext?.();
+          cb.onNext?.();
           break;
         case 'k':
-          callbacks.onPrev?.();
+          cb.onPrev?.();
           break;
         case 's':
           if (e.shiftKey) {
-            callbacks.onSaveAndStar?.();
-          } else if (surface === 'inbox') {
-            callbacks.onSave?.();
+            cb.onSaveAndStar?.();
+          } else if (surf === 'inbox') {
+            cb.onSave?.();
           } else {
-            callbacks.onStar?.();
+            cb.onStar?.();
           }
           break;
         case 'e':
-          if (surface === 'library' || surface === 'starred' || surface === 'reading') {
-            callbacks.onArchive?.();
+          if (surf === 'library' || surf === 'starred' || surf === 'reading') {
+            cb.onArchive?.();
           }
           break;
         case 'd':
-          callbacks.onDismiss?.();
+          cb.onDismiss?.();
           break;
         case 'r':
-          callbacks.onMarkRead?.();
+          cb.onMarkRead?.();
           break;
         case 'o':
         case 'Enter':
-          callbacks.onOpen?.();
+          cb.onOpen?.();
           break;
         case '?':
-          callbacks.onCheatSheet?.();
+          cb.onCheatSheet?.();
           break;
         case 'Escape':
-          callbacks.onClearSelection?.();
+          cb.onClearSelection?.();
           break;
       }
     };
 
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [surface, callbacks]);
+  }, []); // mount-once — surface and callbacks are read via refs
 }

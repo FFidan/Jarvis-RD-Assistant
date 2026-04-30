@@ -159,6 +159,7 @@ class TestConfigureLifespan:
             service_name="test_service_leak",
             jobs_worker_kinds=set(),
             custom_init_tasks=[bad_init],
+            custom_teardown_tasks=[None],
         )
 
         fake_pool = AsyncMock()

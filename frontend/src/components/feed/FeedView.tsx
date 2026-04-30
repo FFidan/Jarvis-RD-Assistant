@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import {
   fetchFeed,
   savePaper,
@@ -14,6 +15,9 @@ import {
 } from '@/lib/api';
 import type { SurfaceView } from '@/types';
 import { FeedPaperRow } from './FeedPaperRow';
+import { BulkToolbar } from './BulkToolbar';
+import { useBulkSelection } from '@/stores/bulk-selection-store';
+import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
 import {
@@ -26,6 +30,10 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Inbox, Library, Star, Archive, BookOpen, Trash2 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+const onErrorToast = (label: string) => (err: unknown) =>
+  toast.error(err instanceof Error ? err.message : `${label} failed`);
 
 interface FeedViewProps {
   surface: SurfaceView;
@@ -33,7 +41,7 @@ interface FeedViewProps {
 }
 
 // Per-surface empty state copy
-const EMPTY_STATE: Record<string, { icon: React.ElementType; title: string; description: string }> = {
+const EMPTY_STATE: Record<string, { icon: LucideIcon; title: string; description: string }> = {
   inbox: {
     icon: Inbox,
     title: 'Inbox is empty',
@@ -86,6 +94,12 @@ export function FeedView({ surface, filter }: FeedViewProps) {
   const [hardDeleteTarget, setHardDeleteTarget] = useState<{ id: number; title: string } | null>(null);
   const [hardDeletePending, setHardDeletePending] = useState(false);
 
+  // Keyboard-navigation focused row index (j/k)
+  const [focusedIdx, setFocusedIdx] = useState<number>(0);
+
+  // Bulk selection (subscribe to selectedIds for re-renders; mutate via getState())
+  const selectedIds = useBulkSelection((s) => s.selectedIds);
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['papers-feed', surface, filter],
     queryFn: () => fetchFeed({ view: surface, filter }),
@@ -103,41 +117,49 @@ export function FeedView({ surface, filter }: FeedViewProps) {
   const saveMutation = useMutation({
     mutationFn: (paperId: number) => savePaper(paperId, { star: false }),
     onSuccess: invalidate,
+    onError: onErrorToast('Save'),
   });
 
   const saveAndStarMutation = useMutation({
     mutationFn: (paperId: number) => savePaper(paperId, { star: true }),
     onSuccess: invalidate,
+    onError: onErrorToast('Save & Star'),
   });
 
   const unsaveMutation = useMutation({
     mutationFn: unsavePaper,
     onSuccess: invalidate,
+    onError: onErrorToast('Unsave'),
   });
 
   const markReadMutation = useMutation({
     mutationFn: markPaperRead,
     onSuccess: invalidate,
+    onError: onErrorToast('Mark read'),
   });
 
   const starMutation = useMutation({
     mutationFn: bookmarkPaper,
     onSuccess: invalidate,
+    onError: onErrorToast('Star'),
   });
 
   const archiveMutation = useMutation({
     mutationFn: archivePaper,
     onSuccess: invalidate,
+    onError: onErrorToast('Archive'),
   });
 
   const dismissMutation = useMutation({
     mutationFn: (paperId: number) => dismissPaper(paperId),
     onSuccess: invalidate,
+    onError: onErrorToast('Dismiss'),
   });
 
   const restoreMutation = useMutation({
     mutationFn: restorePaper,
     onSuccess: invalidate,
+    onError: onErrorToast('Restore'),
   });
 
   const hardDeleteMutation = useMutation({
@@ -245,6 +267,49 @@ export function FeedView({ surface, filter }: FeedViewProps) {
     hardDeleteMutation.mutate({ id: hardDeleteTarget.id, title: hardDeleteTarget.title });
   }, [hardDeleteTarget, hardDeleteMutation]);
 
+  // ── Keyboard shortcuts (j/k navigation + surface-aware row actions) ───────
+
+  const focusedPaperId = useMemo<number | null>(() => {
+    if (papers.length === 0) return null;
+    const idx = Math.min(focusedIdx, papers.length - 1);
+    return papers[idx]?.id ?? null;
+  }, [papers, focusedIdx]);
+
+  const shortcutCallbacks = useMemo(
+    () => ({
+      onNext: () => {
+        if (papers.length === 0) return;
+        setFocusedIdx((i) => Math.min(i + 1, papers.length - 1));
+      },
+      onPrev: () => {
+        if (papers.length === 0) return;
+        setFocusedIdx((i) => Math.max(i - 1, 0));
+      },
+      onSave: focusedPaperId != null ? () => onSave(focusedPaperId) : undefined,
+      onStar: focusedPaperId != null ? () => onStar(focusedPaperId) : undefined,
+      onSaveAndStar:
+        focusedPaperId != null ? () => onSaveAndStar(focusedPaperId) : undefined,
+      onArchive: focusedPaperId != null ? () => onArchive(focusedPaperId) : undefined,
+      onDismiss: focusedPaperId != null ? () => onDismiss(focusedPaperId) : undefined,
+      onMarkRead: focusedPaperId != null ? () => onMarkRead(focusedPaperId) : undefined,
+      onOpen: focusedPaperId != null ? () => onView(focusedPaperId) : undefined,
+      onClearSelection: () => useBulkSelection.getState().clear(),
+    }),
+    [
+      papers.length,
+      focusedPaperId,
+      onSave,
+      onStar,
+      onSaveAndStar,
+      onArchive,
+      onDismiss,
+      onMarkRead,
+      onView,
+    ],
+  );
+
+  useFeedKeyboardShortcuts(surface, shortcutCallbacks);
+
   // --- Surface-aware callback sets ---
 
   function rowCallbacks(paperId: number) {
@@ -270,7 +335,7 @@ export function FeedView({ surface, filter }: FeedViewProps) {
       return {
         onView,
         onRestore: () => onRestore(paperId),
-        onHardDelete: (title: string) => onHardDelete(paperId, title),
+        onHardDelete: (id: number, title: string) => onHardDelete(id, title),
         restorePending: pendingRestore.has(paperId),
       };
     }
@@ -314,6 +379,8 @@ export function FeedView({ surface, filter }: FeedViewProps) {
 
   return (
     <>
+      <BulkToolbar surface={surface} />
+
       <div className="space-y-4 pt-4">
         {papers.length === 0 ? (
           <EmptyState
@@ -335,12 +402,10 @@ export function FeedView({ surface, filter }: FeedViewProps) {
                 <FeedPaperRow
                   key={paper.id}
                   paper={paper}
-                  onMarkRead={'onMarkRead' in callbacks ? callbacks.onMarkRead : undefined}
-                  markReadPending={'markReadPending' in callbacks ? callbacks.markReadPending : false}
-                  onArchive={'onArchive' in callbacks ? callbacks.onArchive : undefined}
-                  archivePending={'archivePending' in callbacks ? callbacks.archivePending : false}
-                  onView={callbacks.onView}
+                  {...callbacks}
                   viewLabel="View Details"
+                  bulkSelected={selectedIds.has(paper.id)}
+                  onBulkToggle={(id) => useBulkSelection.getState().toggle(id)}
                 />
               );
             })}

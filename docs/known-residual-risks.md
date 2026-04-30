@@ -1,8 +1,38 @@
 # Known Residual Risks
 
-_Last updated: 2026-04-28_
+_Last updated: 2026-04-30_
 
 This document tracks acknowledged-but-deferred risks. Each entry links the originating audit ID and the rationale for deferring the full fix.
+
+Related docs:
+
+- [../AGENTS.md](../AGENTS.md) - when agents must consult this file.
+- [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - how residual risks affect planning and closeout.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - runtime boundaries affected by residual risks.
+- [plans/2026-04-29-refreshed-desloppify-score-work.md](plans/2026-04-29-refreshed-desloppify-score-work.md) - current manual
+  score-work plan after the Desloppify refresh.
+
+## DESLOPPIFY-TRIAGE-001 — review issue IDs cannot pass observe confirmation
+
+**Current state:** the 2026-04-29 Desloppify refresh imported 62 current review
+issues, and the staged observe runner analysed them. Confirmation failed because
+Desloppify's observe citation parser only accepts issue IDs shaped like
+`review::deadbeef` or bare hex suffixes, while current review IDs are
+descriptive strings such as `review::.::holistic::type_safety::...`.
+
+**Impact:** staged triage can produce useful output, but the confirmation gate
+cannot be completed for the refreshed review queue without a Desloppify parser
+fix or a changed issue-ID format.
+
+**Mitigation:** keep the run artifacts under `.desloppify/triage_runs/` and use
+[docs/plans/2026-04-29-refreshed-desloppify-score-work.md](plans/2026-04-29-refreshed-desloppify-score-work.md) as the current
+manual score-work plan.
+
+**Reopen criteria:** before relying on Desloppify staged triage as an automated
+gate again, update the parser to accept descriptive review IDs and rerun
+`desloppify plan triage --run-stages --runner codex`.
+
+---
 
 ## PI-EDGE-002 / PI-EDGE-004 — paper-ownership row enforcement — CLOSED (Sprint 4)
 
@@ -159,3 +189,46 @@ Recommended WS-6C ticket.
 `POST /api/search` performs external-source fetch + DB upsert via
 `pdf_workflow.upsert_paper`, which doesn't currently stamp `user_id` on the new
 row. Multi-user end-to-end isolation requires this. Recommended follow-up.
+
+---
+
+## WS-AH / WS-AH2 — 2026-04-29/30 audit items — CLOSED (Sprint WS-AH2)
+
+All items below were raised in the 2026-04-29 deep audit and closed in commits
+`c6cfd14..6adef70` (WS-AH2, merged 2026-04-30).
+
+| ID | Description | Closing commit |
+|---|---|---|
+| H2 | Hard-delete PG DELETE now commits inside transaction; Qdrant cleanup runs outside as best-effort try/except | c6cfd14 |
+| M8 | `_assert_confirm_title_matches` strips whitespace from both sides before comparing | c6cfd14 |
+| DRY-1 | `IS_ARCHIVED_SQL` predicate canonical constant propagated across `papers.py` (5 sites), `feed_query.py`, and `pulse/deck.py` | c6cfd14, 6e82103 |
+| NI-1 | `pulse_decks` INSERT now explicitly binds `user_id` in the column list (was omitted, causing every deck to upsert into the NULL slot) | 6e82103 |
+| NI-2 / M11 | `_simple_digest` accepts `db_user_id: int \| None` kwarg; all three subqueries bind it via `IS NOT DISTINCT FROM $1`; caller passes `db_user_id=None` with a multi-tenant TODO | 6785cc8 |
+| L12 | Legacy `status='starred'` backfill covered by migration 046; one-line note added confirming no warning needed for post-backfill rows | 6785cc8 |
+| NI-3 | `HardDeleteModal` mutation gains `onError` toast handler; backend rejections no longer silently freeze the modal | bc66ddb |
+| H5 (bulk) | Bulk selection now clears via `useEffect([surface])` on every surface change including browser back/forward and deep-links, not only imperative chip-handler calls | ef7b3e0 |
+| NI-5 | `app_factory` `zip(strict=True)` + eager length check enforce equal-length `init/teardown` contract; `None` padding supported for hooks without teardown | a65ede4 |
+| NI-6 | Migration-lint script anchors its `cwd` to the repo root, not the caller's shell cwd | 6b8b83e |
+**Still open from Sprint 6:** M1 (multi-tenant user resolver), zotero.remove handler, inbox auto-prune cron, trash auto-purge cron, bulk-dismiss-by-topic, saved-search alerts, and migration 046 transition guard retirement — all tracked in the Sprint 6 deferrals section above.
+
+**Forthcoming (Phase A — Paper Lifecycle Redesign):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). [docs/specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) collapses that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). When Phase A ships, the legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` will be **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow Phase A; see the META plan at `~/.claude/plans/nifty-swinging-bee.md`.
+
+---
+
+## Falsified findings — 2026-04-29 audit
+
+The deep-audit (commit af1af21) flagged two findings that direct re-Read against HEAD falsified:
+
+### M5 — `safe_for_prompt(mode="strip")` does NOT silently pass BIDI
+
+**Audit claim:** `_strip_bidi_zw` is only called in the `escape` branch, so `mode="strip"` leaks BIDI control chars.
+
+**Falsification:** `_CTRL_RE` (`libs/jarvis_common/jarvis_common/prompt_safety.py:13-15`) explicitly includes the BIDI ranges `‪-‮⁦-⁩`. The `_CTRL_RE.sub(...)` call runs in BOTH modes. The `_strip_bidi_zw(text)` call inside the escape branch was therefore a redundant no-op (removed in this sprint as dead-code cleanup) — not a security gap.
+
+### M13 — Telegram `paper_save_callback` body `{"star": False}` does NOT un-star
+
+**Audit claim:** posting `{star: false}` to `PUT /save` un-stars previously-starred papers.
+
+**Falsification:** `services/paper_ingestion/paper_ingestion/routers/papers.py:705-706` — `if body.star: extra["starred"] = True`. The backend ONLY writes `starred=TRUE` when truthy; `star=False` is a no-op for the starred flag. Existing payload is correct.
+
+These records exist so future auditors don't re-raise the same falsified findings.

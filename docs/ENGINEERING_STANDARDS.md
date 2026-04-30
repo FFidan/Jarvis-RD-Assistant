@@ -1,0 +1,111 @@
+# Engineering Standards
+
+This document is the durable engineering standard for JARVIS RD Assistant.
+`AGENTS.md` links here instead of duplicating these rules.
+
+Related docs:
+
+- [../AGENTS.md](../AGENTS.md) - short injected guide and truth hierarchy.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - where these standards apply across services.
+- [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - evidence and verification workflow for agents.
+- [PRD.md](PRD.md) - product requirements behind user-facing behavior.
+
+## Python
+
+- Python 3.12+ with type hints on public function signatures.
+- Pydantic v2 for request, response, and domain models.
+- Async I/O for service code (`asyncpg`, `httpx`, FastAPI dependencies).
+- NumPy-style docstrings for public modules, classes, and functions.
+- Avoid docstrings on trivial private helpers unless they clarify a real
+  contract or side effect.
+- Use `ruff` for lint and formatting. Keep line length at 100.
+- No hidden global mutable state for runtime collaborators. Pass dependencies
+  through FastAPI dependencies, app state, explicit context objects, or job
+  context.
+
+## TypeScript And Frontend
+
+- React 19 + TypeScript + Vite + Shadcn/ui + TanStack Query v5.
+- The frontend is not passive; it contains workflow assumptions. Backend and
+  frontend contracts must be verified together.
+- A failed request must render as an error/degraded state, not as an empty state.
+- Disable primary CTAs until prerequisites are satisfied.
+- Status indicators must preserve structured degraded states.
+- User-facing changes require frontend tests and, when practical, a live smoke
+  check against `http://127.0.0.1:3001`.
+
+## API
+
+- HTTP endpoints use `/api/resource` REST-style paths.
+- Long-running operations should use the unified jobs API unless there is an
+  explicit reason not to.
+- Async work acceptance should return HTTP 202 with a stable job envelope.
+- Validate payloads at the boundary. Avoid `dict[str, Any]` for public job
+  payloads when a Pydantic model exists.
+- Sanitize SSE errors before sending them to the frontend. Use the shared
+  `routers/_sse.py` helpers (`sse_event()`, `SSE_DONE`) for all SSE responses
+  in `paper_ingestion`; do not inline SSE formatting.
+- Health endpoints should report dependency degradation honestly.
+- FastAPI lifespan setup must use `configure_lifespan` from
+  `jarvis_common.app_factory`. The equal-length contract requires every init
+  hook to have a corresponding teardown entry (pad with `None` if no teardown
+  is needed); mismatches raise at startup.
+
+## Database
+
+- Schema starts in `db/init.sql`; migrations live in `db/migrations/`.
+- Use parameterized SQL (`$1`, `$2`), never string interpolation for values.
+- Prefer `TIMESTAMPTZ` for timestamps.
+- Use JSONB for flexible evolving values.
+- Tables should include `created_at TIMESTAMPTZ DEFAULT NOW()` unless there is a
+  documented exception.
+- Use `ON DELETE CASCADE` when the parent owns the child.
+- When writing to `user_config.value`, do not `json.dumps()` values inserted with
+  `::jsonb`; asyncpg's JSONB codec handles serialization.
+- Migration files must not contain bare DDL outside a transaction. Run
+  `bash scripts/check-migrations-no-tx.sh` to verify before adding a migration.
+- Archived-state predicate logic is centralised in
+  `paper_ingestion/queries/predicates.py` (`IS_ARCHIVED_SQL`,
+  `IS_NOT_ARCHIVED_SQL`). Use these constants; never duplicate the condition
+  inline. Run `bash scripts/check-archived-predicate.sh` to detect drift.
+
+## Anti-Hallucination Invariants
+
+LLM-generated scientific content must remain evidence-backed:
+
+- Paper metadata comes from source APIs, never from the LLM.
+- Every generated finding must carry an exact quote and page number when based
+  on PDF content.
+- Run quote verification before storing findings.
+- Drop unverifiable findings; do not ask another LLM to repair them.
+- If most findings fail verification, lower confidence; if all fail, fall back
+  to the original abstract.
+- Generate page snapshots for verified findings where the workflow supports it.
+- KG entity relationships must only persist verified evidence quotes.
+- Escape or delimit untrusted text with `jarvis_common.prompt_safety` before
+  inserting it into LLM prompts.
+- Prompt templates belong in version-controlled code, not external workflow
+  nodes.
+
+## Jobs
+
+- Shared job primitives live in `libs/jarvis_common/jarvis_common/jobs.py`.
+- Services register handlers explicitly at startup or through documented import
+  side effects. Verify every worker kind has a registered handler before relying
+  on it.
+- Tests that register handlers must isolate `_HANDLERS` with the service
+  fixture that snapshots and restores the registry.
+- Job handlers should parse payloads into typed models before use.
+
+## Testing
+
+- Python unit and integration tests live under `services/*/tests` and
+  `libs/jarvis_common/tests`.
+- Repo-root pytest uses importlib mode and excludes `live_pg`, `integration`,
+  and `slow` by default.
+- Docker-backed tests are required for behavior that depends on live Postgres,
+  Qdrant, service networking, or container-only import/runtime behavior.
+- Frontend unit tests use Vitest. Browser regression tests use Playwright lanes:
+  mocked, live smoke, and mutating live flows.
+- Test coverage should scale with blast radius. Shared contracts need broader
+  tests than local helper cleanups.
