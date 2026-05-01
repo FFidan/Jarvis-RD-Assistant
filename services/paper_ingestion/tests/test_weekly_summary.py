@@ -177,8 +177,12 @@ async def test_generate_weekly_summary_top_papers_structure():
     assert paper["relevance_score"] == 0.95
 
 
-async def test_generate_weekly_summary_uses_api_key_with_master_key_fallback(monkeypatch):
-    """Weekly summary should use API_KEY first, but still honor MASTER_KEY as a fallback."""
+async def test_generate_weekly_summary_calls_llm_without_auth_headers():
+    """Weekly summary calls LiteLLM without Authorization headers.
+
+    LiteLLM runs as a no-auth loopback proxy; auth was removed in Wave 1 of
+    the Round-15 audit.
+    """
     rows = [
         _make_paper_row(1, "Paper A", "NLP", summary_brief="NLP finding A"),
         _make_paper_row(2, "Paper B", "NLP", summary_brief="NLP finding B"),
@@ -190,16 +194,12 @@ async def test_generate_weekly_summary_uses_api_key_with_master_key_fallback(mon
     http_client = AsyncMock()
     http_client.post.return_value = response
 
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
-
     result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     assert result["topics"][0]["summary"] == "fallback"
     http_client.post.assert_awaited_once()
-    assert http_client.post.await_args.kwargs["headers"] == {
-        "Authorization": "Bearer master-secret"
-    }
+    # No auth headers — LiteLLM loopback proxy requires none.
+    assert http_client.post.await_args.kwargs.get("headers", {}) == {}
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +213,7 @@ async def test_excludes_unengaged_papers():
     The SQL engagement filter excludes it; the mock simulates that by returning
     an empty row list (what the filtered query would produce).
     """
-    # Paper P is in the window but has no paper_user_state and no pulse_ratings.
+    # Paper P is in the window but has no paper_user_state and no recommendation_feedback.
     # The engagement-filtered SQL returns no rows for it.
     db_pool = _make_pool([])
 
@@ -247,9 +247,10 @@ async def test_includes_saved_papers():
 
 
 async def test_includes_positively_rated_pulse_papers():
-    """Paper with a Pulse 'up' rating is included in the summary.
+    """Paper with a Pulse positive signal is included in the summary.
 
-    The SQL includes it via pulse_ratings.rating = 'up'; the mock returns the row.
+    The SQL includes it via recommendation_feedback.signal = 'positive'
+    AND source IN ('pulse_thumbs', 'dismiss_combined'); the mock returns the row.
     """
     row_r = _make_paper_row(43, "Paper R — Upvoted", "CV", summary_brief="Upvoted finding")
     db_pool = _make_pool([row_r])

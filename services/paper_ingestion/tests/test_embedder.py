@@ -54,10 +54,8 @@ async def test_chunk_text_with_page_boundaries():
     assert chunks[-1].page_number == 2
 
 
-async def test_embed_texts_uses_shared_litellm_config_fallback(monkeypatch):
-    """Embedder should pick up the shared base URL and MASTER_KEY fallback."""
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
+    """Embedder should pick up the shared base URL (transparent proxy, no auth headers)."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
 
     response = MagicMock()
@@ -74,7 +72,7 @@ async def test_embed_texts_uses_shared_litellm_config_fallback(monkeypatch):
     mock_http.post.assert_awaited_once_with(
         "http://litellm.test:4000/v1/embeddings",
         json={"model": "embed", "input": ["test text"]},
-        headers={"Authorization": "Bearer master-secret"},
+        headers={},
         timeout=60.0,
     )
 

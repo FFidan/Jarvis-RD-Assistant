@@ -16,7 +16,7 @@ def _make_generator() -> tuple[CardGenerator, AsyncMock]:
     http_client = AsyncMock(spec=httpx.AsyncClient)
     generator = CardGenerator(
         http_client=http_client,
-        litellm_config=LiteLLMConfig(base_url="http://litellm:4000", api_key="secret"),
+        litellm_config=LiteLLMConfig(base_url="http://litellm:4000"),
     )
     return generator, http_client
 

@@ -60,7 +60,7 @@ async def _warn_multitenant_stub(app: FastAPI) -> None:
 
 async def _init_fsrs_and_generators(app: FastAPI) -> None:
     """Load FSRS retention from user_config + construct CardGenerator + AnkiExporter."""
-    from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
+    from jarvis_common.llm_client import get_litellm_config
 
     desired_retention = 0.9
     try:
@@ -74,7 +74,7 @@ async def _init_fsrs_and_generators(app: FastAPI) -> None:
     except Exception:
         logger.error("Could not load fsrs.desired_retention, using default 0.9", exc_info=True)
 
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
     app.state.fsrs_manager = FSRSManager(desired_retention=desired_retention)
     app.state.card_generator = CardGenerator(
         http_client=app.state.http_client,

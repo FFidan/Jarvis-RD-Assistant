@@ -747,6 +747,7 @@ async def test_restore_paper_returns_state_before_trash_to_state():
     null-state_before_trash case implicitly (defensive default)."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
+    conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.restore_paper.__wrapped__(request, 42, db_pool=pool)
@@ -762,6 +763,29 @@ async def test_restore_paper_returns_state_before_trash_to_state():
         None,
     )
     assert restore_sql is not None, f"Expected restore SQL with COALESCE; got {sql_calls}"
+
+
+@pytest.mark.asyncio
+async def test_restore_paper_non_trash_returns_409():
+    """W1.2 precondition: restore on a non-trash paper must raise 409.
+
+    A paper in 'inbox' (or any non-trash state) must not be silently demoted
+    to inbox; the state machine requires the paper to be in 'trash' first.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=42)
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_state: NOT in trash
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.restore_paper.__wrapped__(request, 42, db_pool=pool)
+
+    assert exc_info.value.status_code == 409
+    # Confirm _restore_paper was NOT called (no COALESCE execute in sql_calls).
+    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    assert not any("COALESCE(state_before_trash, 'inbox')" in sql for sql in sql_calls), (
+        f"_restore_paper must not run when precondition fails; got {sql_calls}"
+    )
 
 
 @pytest.mark.asyncio
@@ -1044,6 +1068,7 @@ async def test_bulk_mark_done_action_sets_state_done():
 @pytest.mark.asyncio
 async def test_bulk_restore_action_uses_coalesce_state_before_trash():
     pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
     body = BulkActionRequest(paper_ids=[1], action="restore")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
@@ -1053,6 +1078,32 @@ async def test_bulk_restore_action_uses_coalesce_state_before_trash():
     sql_calls = [call.args[0] for call in conn.execute.await_args_list]
     assert any("COALESCE(state_before_trash, 'inbox')" in sql for sql in sql_calls), (
         f"Expected restore SQL pattern; got {sql_calls}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_restore_non_trash_papers_surfaces_failures():
+    """W1.2 precondition (bulk): restore on non-trash papers records them in 'failed'.
+
+    bulk_action_papers uses per-paper savepoints; a 409 from
+    _assert_paper_in_state is caught and surfaced in the 'failed' list.
+    The papers' states must remain unchanged (no COALESCE execute issued).
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_state: NOT in trash
+    body = BulkActionRequest(paper_ids=[10, 20], action="restore")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+
+    assert result["succeeded"] == [], f"No papers should succeed; got {result['succeeded']}"
+    assert len(result["failed"]) == 2, f"Both papers should fail; got {result['failed']}"
+    failed_ids = {entry["paper_id"] for entry in result["failed"]}
+    assert failed_ids == {10, 20}
+    # _restore_paper must NOT have run for any paper.
+    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    assert not any("COALESCE(state_before_trash, 'inbox')" in sql for sql in sql_calls), (
+        f"_restore_paper must not run when precondition fails; got {sql_calls}"
     )
 
 

@@ -28,7 +28,7 @@ cp .env.example .env   # setup.sh does this for you
 ./setup.sh             # pick option 1 at the access-mode prompt
 ```
 
-`setup.sh` generates `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `N8N_JWT_SECRET`, `LITELLM_MASTER_KEY`, and `JARVIS_API_KEY`, then brings the stack up. Dashboard lives at `https://localhost:3001`.
+`setup.sh` generates `POSTGRES_PASSWORD`, `N8N_ENCRYPTION_KEY`, `N8N_JWT_SECRET`, and `JARVIS_API_KEY`, then brings the stack up. Dashboard lives at `https://localhost:3001`.
 
 ### Self-signed cert — browser acceptance
 

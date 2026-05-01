@@ -14,7 +14,6 @@ import httpx
 from fastapi import HTTPException
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_LONG,
     ChatCompletionOptions,
     get_litellm_config,
@@ -219,7 +218,7 @@ async def generate_paper_summary(
     )
 
     # --- Phase 2: call LiteLLM (no connection held) ---
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
     try:
         raw_content = await request_chat_completion_content(
             http_client,

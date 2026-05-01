@@ -12,8 +12,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 DEFAULT_LITELLM_BASE_URL = "http://litellm:4000"
-DEFAULT_LITELLM_PRIMARY_ENV_NAME = "LITELLM_API_KEY"
-LITELLM_FALLBACK_ENV_NAMES = ("LITELLM_MASTER_KEY",)
 LLM_TIMEOUT_SHORT = 30.0
 LLM_TIMEOUT_DEFAULT = 120.0
 LLM_TIMEOUT_LONG = 300.0
@@ -21,10 +19,15 @@ LLM_TIMEOUT_LONG = 300.0
 
 @dataclass(frozen=True)
 class LiteLLMConfig:
-    """Resolved LiteLLM connection settings."""
+    """Resolved LiteLLM connection settings.
+
+    litellm runs as a transparent loopback proxy (127.0.0.1:4000) fronting
+    Ollama only; no auth is required.  Cloud LLM keys flow direct
+    app→provider via encrypted user_config rows, bypassing litellm entirely.
+    Reintroduce api_key here only if port 4000 is ever exposed beyond loopback.
+    """
 
     base_url: str
-    api_key: str
 
 
 @dataclass(frozen=True)
@@ -48,26 +51,24 @@ class ChatCompletionOptions:
 def get_litellm_config(
     *,
     base_url_default: str = DEFAULT_LITELLM_BASE_URL,
-    primary_env_name: str = DEFAULT_LITELLM_PRIMARY_ENV_NAME,
-    fallback_env_names: tuple[str, ...] = (),
 ) -> LiteLLMConfig:
-    """Resolve LiteLLM base URL and auth settings from the environment."""
-    api_key = os.environ.get(primary_env_name, "")
-    if not api_key:
-        for env_name in fallback_env_names:
-            api_key = os.environ.get(env_name, "")
-            if api_key:
-                break
+    """Resolve LiteLLM base URL from the environment.
 
+    No auth is wired: litellm runs as a transparent loopback proxy and needs
+    no master_key.  See LiteLLMConfig docstring for the rationale.
+    """
     return LiteLLMConfig(
         base_url=os.environ.get("LITELLM_BASE_URL", base_url_default),
-        api_key=api_key,
     )
 
 
-def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:
-    """Build auth headers for a LiteLLM request."""
-    return {"Authorization": f"Bearer {config.api_key}"} if config.api_key else {}
+def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG001
+    """Return auth headers for a LiteLLM request.
+
+    Always returns an empty dict: litellm runs as a transparent loopback proxy
+    with no master_key.  The parameter is kept for call-site compatibility.
+    """
+    return {}
 
 
 def strip_think_blocks(raw: str) -> str:

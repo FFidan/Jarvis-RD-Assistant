@@ -31,10 +31,11 @@ async def compute_citation_signals(
                 SELECT id FROM papers WHERE external_id = ANY($1::text[])
             ),
             liked AS (
-                SELECT DISTINCT pr.paper_id AS id
-                FROM pulse_ratings pr
-                WHERE pr.rating IN ('up', 'save', 'open')
-                ORDER BY pr.paper_id DESC
+                SELECT DISTINCT rf.paper_id AS id
+                FROM recommendation_feedback rf
+                WHERE rf.signal = 'positive'
+                  AND rf.source IN ('pulse_thumbs', 'dismiss_combined')
+                ORDER BY rf.paper_id DESC
                 LIMIT 100
             ),
             relevant AS (

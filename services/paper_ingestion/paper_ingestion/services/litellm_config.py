@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 import yaml
 from jarvis_common.crypto import resolve_secret_row
-from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
+from jarvis_common.llm_client import get_litellm_config
 
 logger = logging.getLogger(__name__)
 
@@ -269,12 +269,11 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
         ]
     }
     try:
-        litellm_cfg = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+        litellm_cfg = get_litellm_config()
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/config/update",
                 json=payload,
-                headers={"Authorization": f"Bearer {litellm_cfg.api_key}"},
             )
         if resp.status_code < 400:
             logger.info(
@@ -305,15 +304,12 @@ async def reload_litellm() -> bool:
     """
     try:
         # A5: use shared helper instead of local _get_litellm_key
-        litellm_cfg = get_litellm_config(
-            fallback_env_names=LITELLM_FALLBACK_ENV_NAMES,
-        )
+        litellm_cfg = get_litellm_config()
         async with httpx.AsyncClient(timeout=5.0) as client:
             # LiteLLM proxy supports config reload via internal API
             resp = await client.post(
                 f"{litellm_cfg.base_url}/config/update",
                 json={},
-                headers={"Authorization": f"Bearer {litellm_cfg.api_key}"},
             )
             if resp.status_code < 400:
                 logger.info("LiteLLM config reloaded successfully")

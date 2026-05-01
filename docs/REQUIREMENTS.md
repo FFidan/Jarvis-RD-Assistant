@@ -272,12 +272,11 @@ JARVIS uses Docker Secrets for sensitive runtime values. Each secret is stored i
 | Secret name | Mount path | Consuming service(s) | Env var resolved |
 |-------------|-----------|----------------------|-----------------|
 | `postgres_password` | `/run/secrets/postgres_password` | `postgres`, `n8n` | `POSTGRES_PASSWORD_FILE` |
-| `litellm_master_key` | `/run/secrets/litellm_master_key` | `litellm` (via `entrypoint.sh`) | `LITELLM_MASTER_KEY` (set in entrypoint) |
 | `jarvis_api_key` | `/run/secrets/jarvis_api_key` | `paper_ingestion`, `learning_engine` | `JARVIS_API_KEY_FILE` |
 | `qdrant_api_key` | `/run/secrets/qdrant_api_key` | `qdrant`, `paper_ingestion`, `learning_engine` | `QDRANT_API_KEY_FILE` |
 | `telegram_bot_token` | `/run/secrets/telegram_bot_token` | `telegram_bot` | `TELEGRAM_BOT_TOKEN_FILE` |
 
-All five secret files must exist (even if empty for optional services) before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager.
+All four secret files must exist (even if empty for optional services) before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager. (LiteLLM previously had a fifth `litellm_master_key` secret; W1.1 of round-15 closeout dropped it because litellm runs loopback-only and fronts only Ollama — see `litellm/config.yaml` header.)
 
 Plain environment variable fallbacks (e.g., `JARVIS_API_KEY`, `QDRANT_API_KEY`) remain accepted for backwards compatibility and local dev without Docker Secrets.
 

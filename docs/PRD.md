@@ -270,7 +270,7 @@ These features shipped in the Sprint 5 hardening pass (commits up to `4b4805d`):
 - **Pulse weight clamping**: scoring signal weights are now validated and clamped to [0.0, 1.0] on write; malformed weight vectors no longer silently corrupt the scoring pipeline.
 - **Sub-hourly cron guard**: `pulse.cron` values with intervals shorter than 1 hour are rejected at the settings layer with a clear validation error.
 - **Migration 043**: `multiuser_unique_constraints` — unique constraints scoped by `user_id` on `pulse_decks`, `papers`, `cards`, and related tables; groundwork for multi-tenant enforcement.
-- **Docker Secrets**: five secrets wired end-to-end — `postgres_password`, `litellm_master_key`, `jarvis_api_key`, `qdrant_api_key`, `telegram_bot_token` — all consumed via `_FILE` env var convention. See `docs/REQUIREMENTS.md § Secrets & Files`.
+- **Docker Secrets**: four secrets wired end-to-end — `postgres_password`, `jarvis_api_key`, `qdrant_api_key`, `telegram_bot_token` — all consumed via `_FILE` env var convention. See `docs/REQUIREMENTS.md § Secrets & Files`. (LiteLLM previously had a fifth `litellm_master_key` secret; round-15 W1.1 dropped it — litellm runs loopback-only and fronts only Ollama.)
 
 ### Shipped in Sprint 6 (2026-04-28)
 

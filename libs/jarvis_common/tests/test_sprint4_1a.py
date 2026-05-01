@@ -102,7 +102,7 @@ async def test_call_llm_json_value_accepts_scalar_when_opted_in() -> None:
     """allow_scalar=True must accept scalar JSON values like integers and booleans."""
     from jarvis_common import llm_client
 
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000", api_key="")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     # Integer scalar
     client = _make_http_client_with_content("42")
@@ -138,7 +138,7 @@ async def test_call_llm_json_value_rejects_scalar_by_default() -> None:
     """Without allow_scalar=True, scalar responses must still raise ValueError."""
     from jarvis_common import llm_client
 
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000", api_key="")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
     client = _make_http_client_with_content("42")
 
     with pytest.raises(ValueError, match="non-JSON content"):
@@ -150,7 +150,7 @@ async def test_call_llm_json_value_still_accepts_object() -> None:
     """allow_scalar=False must still accept JSON objects (no regression)."""
     from jarvis_common import llm_client
 
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000", api_key="")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
     client = _make_http_client_with_content('{"key": "value"}')
 
     result = await llm_client.call_llm_json_value(client, "Give me object", config=config)
@@ -162,7 +162,7 @@ async def test_call_llm_json_value_still_accepts_array() -> None:
     """allow_scalar=False must still accept JSON arrays (no regression)."""
     from jarvis_common import llm_client
 
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000", api_key="")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
     client = _make_http_client_with_content("[1, 2, 3]")
 
     result = await llm_client.call_llm_json_value(client, "Give me array", config=config)

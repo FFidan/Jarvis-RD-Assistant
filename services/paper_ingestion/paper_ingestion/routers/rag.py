@@ -14,7 +14,6 @@ from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     get_litellm_config,
@@ -164,7 +163,7 @@ async def ask_paper(
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
 
     try:
         answer = await request_chat_completion_content(
@@ -321,7 +320,7 @@ async def ask_cross_paper(
 
     smart_model = get_smart_model()
 
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
 
     try:
         answer = await request_chat_completion_content(

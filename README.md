@@ -92,7 +92,7 @@ If you would rather not run `setup.sh`, you can bring the stack up by hand. Copy
 ```bash
 cp .env.example .env
 # Fill in POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, N8N_JWT_SECRET,
-# LITELLM_MASTER_KEY, and JARVIS_API_KEY with: openssl rand -hex 32
+# and JARVIS_API_KEY with: openssl rand -hex 32
 bash scripts/init-dirs.sh
 source versions.env    # optional — docker-compose.yml has fallbacks
 docker compose up -d
@@ -138,7 +138,6 @@ Alternatives, in rough order of simplicity: **Tailscale** (mesh VPN, zero config
 |----------|-------------|
 | `POSTGRES_PASSWORD` | Database password |
 | `N8N_ENCRYPTION_KEY` | n8n credential encryption key |
-| `LITELLM_MASTER_KEY` | LiteLLM API gateway key |
 | `JARVIS_API_KEY` | API key for backend auth. Must be at least 32 characters in production. Generate with `openssl rand -hex 32`. |
 | `ENVIRONMENT` | Set to `production` for any non-local deployment. In `production`, the service refuses to start if `DEV_MODE=true` or if `JARVIS_API_KEY` is unset / shorter than 32 chars. |
 

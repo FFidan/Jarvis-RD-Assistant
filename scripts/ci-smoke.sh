@@ -17,7 +17,6 @@ cleanup() {
 trap cleanup EXIT
 
 printf '%s\n' "smoke-postgres-password" > "$TMP_DIR/postgres_password.txt"
-printf '%s\n' "sk-smoke-litellm-master-key" > "$TMP_DIR/litellm_master_key.txt"
 printf '%s\n' "smoke-jarvis-api-key" > "$TMP_DIR/jarvis_api_key.txt"
 printf '%s\n' "smoke-telegram-token" > "$TMP_DIR/telegram_bot_token.txt"
 printf '%s\n' "smoke-qdrant-api-key" > "$TMP_DIR/qdrant_api_key.txt"
@@ -26,8 +25,6 @@ cat > "$OVERRIDE_FILE" <<YAML
 secrets:
   postgres_password:
     file: $TMP_DIR/postgres_password.txt
-  litellm_master_key:
-    file: $TMP_DIR/litellm_master_key.txt
   jarvis_api_key:
     file: $TMP_DIR/jarvis_api_key.txt
   telegram_bot_token:

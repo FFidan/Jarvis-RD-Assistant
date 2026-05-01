@@ -1,46 +1,38 @@
-"""Tests for the LiteLLM Docker entrypoint shell script."""
+"""Tests verifying that the LiteLLM transparent-proxy configuration is in place.
+
+Wave 1, Round-15 audit: litellm/entrypoint.sh was deleted and master_key removed
+from litellm/config.yaml because litellm is loopback-only and needs no auth.
+"""
 
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 
 
-def test_litellm_entrypoint_execs_binary_with_compose_args(tmp_path: Path) -> None:
-    """Entrypoint must call ``litellm "$@"`` so compose command args are preserved."""
+def test_litellm_entrypoint_deleted() -> None:
+    """litellm/entrypoint.sh must not exist (transparent proxy, no auth required)."""
     repo_root = Path(__file__).resolve().parents[3]
     entrypoint = repo_root / "litellm" / "entrypoint.sh"
-
-    secret_file = tmp_path / "litellm_master_key"
-    secret_file.write_text("test-master-key\n", encoding="utf-8")
-
-    bin_dir = tmp_path / "bin"
-    bin_dir.mkdir()
-    stub = bin_dir / "litellm"
-    stub.write_text(
-        "#!/bin/sh\n"
-        'printf "%s" "$LITELLM_MASTER_KEY" > "$JARVIS_STUB_OUT/master_key"\n'
-        'printf "%s\\n" "$@" > "$JARVIS_STUB_OUT/args"\n',
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-
-    env = {
-        **os.environ,
-        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-        "JARVIS_STUB_OUT": str(tmp_path),
-        "LITELLM_MASTER_KEY_FILE": str(secret_file),
-    }
-    subprocess.run(
-        ["/bin/sh", str(entrypoint), "--config", "/app/config.yaml"],
-        env=env,
-        check=True,
-        timeout=30,
+    assert not entrypoint.exists(), (
+        "litellm/entrypoint.sh still exists but was removed in Wave 1 of the "
+        "Round-15 audit.  Delete it and remove the entrypoint: reference from "
+        "docker-compose.yml to complete the transparent-proxy migration."
     )
 
-    assert (tmp_path / "master_key").read_text(encoding="utf-8") == "test-master-key"
-    assert (tmp_path / "args").read_text(encoding="utf-8").splitlines() == [
-        "--config",
-        "/app/config.yaml",
-    ]
+
+def test_litellm_config_has_no_master_key() -> None:
+    """litellm/config.yaml must not contain an active master_key setting."""
+    import re
+
+    repo_root = Path(__file__).resolve().parents[3]
+    config_path = repo_root / "litellm" / "config.yaml"
+    assert config_path.exists(), "litellm/config.yaml not found"
+    content = config_path.read_text(encoding="utf-8")
+    # Strip comments, then check no `master_key:` setting remains.
+    uncommented = "\n".join(
+        line for line in content.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert not re.search(r"\bmaster_key\s*:", uncommented), (
+        "litellm/config.yaml still contains an active master_key setting.  Remove it "
+        "to complete the transparent-proxy migration (Wave 1, Round-15 audit)."
+    )

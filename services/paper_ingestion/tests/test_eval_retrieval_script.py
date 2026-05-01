@@ -61,12 +61,11 @@ def _async_client_cm(client):
 
 
 @pytest.mark.asyncio
-async def test_embed_text_calls_litellm_with_configured_headers(monkeypatch):
-    """embed_text sends the request to the configured LiteLLM endpoint."""
+async def test_embed_text_calls_litellm_with_configured_url(monkeypatch):
+    """embed_text sends the request to the configured LiteLLM endpoint (no auth headers)."""
     module = _load_eval_retrieval(
         monkeypatch,
         LITELLM_BASE_URL="http://litellm.test:4000",
-        LITELLM_API_KEY="secret-token",
         EMBEDDING_MODEL="embed-custom",
     )
     response = MagicMock()
@@ -82,7 +81,7 @@ async def test_embed_text_calls_litellm_with_configured_headers(monkeypatch):
     client.post.assert_awaited_once_with(
         "http://litellm.test:4000/v1/embeddings",
         json={"model": "embed-custom", "input": ["What did the paper show?"]},
-        headers={"Authorization": "Bearer secret-token"},
+        headers={},
         timeout=60.0,
     )
 

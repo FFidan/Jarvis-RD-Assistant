@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 import httpx
 import tiktoken
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     build_litellm_headers,
     get_litellm_config,
 )
@@ -290,7 +289,7 @@ class Embedder:
         if not texts:
             return []
 
-        litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+        litellm_config = get_litellm_config()
         try:
             response = await self.http_client.post(
                 f"{litellm_config.base_url}/v1/embeddings",

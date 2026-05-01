@@ -42,7 +42,7 @@ Fixed in commits 9fea1b6 + 0285f05. Migration 042 added `papers.user_id`; jobs, 
 
 ## DOCKER-001 / DOCKER-002 / DOCKER-005 — Secret env vars — CLOSED (Sprint 4)
 
-Fixed in commit 9fa6161. DOCKER-001: `POSTGRES_PASSWORD` moved to Docker Secret; `DATABASE_URL` assembled from `_FILE`-mounted secret. DOCKER-002: `LITELLM_MASTER_KEY` moved to Docker Secret via entrypoint wrapper. DOCKER-005: `PGPASSWORD` in backup sidecar replaced with `.pgpass`-via-Docker-Secret. No longer deferred.
+Fixed in commit 9fa6161. DOCKER-001: `POSTGRES_PASSWORD` moved to Docker Secret; `DATABASE_URL` assembled from `_FILE`-mounted secret. DOCKER-002: `LITELLM_MASTER_KEY` was moved to Docker Secret via entrypoint wrapper, then **dropped entirely** in round-15 W1.1 (2026-05-02): litellm runs loopback-only and fronts only Ollama, so `master_key` was a no-op auth layer that introduced a 401 failure mode whenever app-side `LITELLM_API_KEY` and litellm-side `LITELLM_MASTER_KEY` env vars drifted apart. See `docs/CHANGELOG.md [1.4.0]`. DOCKER-005: `PGPASSWORD` in backup sidecar replaced with `.pgpass`-via-Docker-Secret. No longer deferred.
 
 ---
 

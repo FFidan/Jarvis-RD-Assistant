@@ -16,7 +16,6 @@ import asyncpg
 import httpx
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     call_llm,
@@ -524,7 +523,7 @@ async def _classify_candidate(
             timeout=LLM_TIMEOUT_DEFAULT,
             response_format={"type": "json_object"},
         ),
-        config=get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES),
+        config=get_litellm_config(),
     )
     if not parsed.get("is_contradiction"):
         return None

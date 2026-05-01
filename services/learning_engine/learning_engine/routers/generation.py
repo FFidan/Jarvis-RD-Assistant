@@ -64,13 +64,13 @@ async def generate_cards_core(
     -------
     dict with keys: cards_created (int), cards (list), confidence (str)
     """
-    from jarvis_common.llm_client import LITELLM_FALLBACK_ENV_NAMES, get_litellm_config
+    from jarvis_common.llm_client import get_litellm_config
 
     # Lazily create dependencies when running inside a job handler
     if fsrs_manager is None:
         fsrs_manager = FSRSManager()
     if card_generator is None:
-        litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+        litellm_config = get_litellm_config()
         card_generator = CardGenerator(
             http_client=http_client,
             litellm_config=litellm_config,

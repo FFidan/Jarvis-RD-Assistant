@@ -29,7 +29,7 @@ def mock_client():
 
 @pytest.fixture()
 def config():
-    return LiteLLMConfig(base_url="http://test:4000", api_key="test-key")
+    return LiteLLMConfig(base_url="http://test:4000")
 
 
 async def test_embed_texts_empty_returns_empty(mock_client, config):
@@ -113,7 +113,7 @@ async def test_embed_texts_sends_correct_payload(mock_client, config):
     mock_client.post.assert_awaited_once_with(
         "http://test:4000/v1/embeddings",
         json={"model": "embed", "input": ["hello"]},
-        headers={"Authorization": "Bearer test-key"},
+        headers={},
         timeout=60.0,
     )
 

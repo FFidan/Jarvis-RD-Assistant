@@ -40,8 +40,11 @@ def _row(paper_id: int, topic_name: str) -> dict:
     }
 
 
-async def test_generate_weekly_summary_uses_master_key_fallback(monkeypatch):
-    """Digest should fall back to MASTER_KEY when API_KEY is unset."""
+async def test_generate_weekly_summary_sends_no_auth_headers(monkeypatch):
+    """Digest should not send Authorization headers to LiteLLM.
+
+    LiteLLM runs as a no-auth loopback proxy (Wave 1, Round-15 audit).
+    """
     http_client = AsyncMock()
     response = MagicMock()
     response.raise_for_status = MagicMock()
@@ -49,22 +52,22 @@ async def test_generate_weekly_summary_uses_master_key_fallback(monkeypatch):
         "choices": [{"message": {"content": '{"themes": [], "summary": "ok"}'}}]
     }
     http_client.post.return_value = response
-
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
 
     pool = _make_pool([_row(1, "NLP"), _row(2, "NLP")])
     result = await generate_weekly_summary(pool, http_client)
 
     assert result["topics"][0]["summary"] == "ok"
     http_client.post.assert_awaited_once()
-    assert http_client.post.await_args.kwargs["headers"] == {
-        "Authorization": "Bearer master-secret"
-    }
+    # No auth headers — LiteLLM loopback proxy requires none.
+    assert http_client.post.await_args.kwargs.get("headers", {}) == {}
 
 
-async def test_generate_weekly_summary_prefers_api_key(monkeypatch):
-    """Digest should prefer the standard API key when both env vars are present."""
+async def test_generate_weekly_summary_ignores_api_key_env(monkeypatch):
+    """Digest should not send API key even when env vars are set.
+
+    Auth was removed from LiteLLM calls in Wave 1 of the Round-15 audit.
+    These env vars are now ignored.
+    """
     http_client = AsyncMock()
     response = MagicMock()
     response.raise_for_status = MagicMock()
@@ -73,13 +76,10 @@ async def test_generate_weekly_summary_prefers_api_key(monkeypatch):
     }
     http_client.post.return_value = response
 
-    monkeypatch.setenv("LITELLM_API_KEY", "api-secret")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
-
     pool = _make_pool([_row(1, "NLP"), _row(2, "NLP")])
     await generate_weekly_summary(pool, http_client)
 
-    assert http_client.post.await_args.kwargs["headers"] == {"Authorization": "Bearer api-secret"}
+    assert http_client.post.await_args.kwargs.get("headers", {}) == {}
 
 
 async def test_generate_weekly_summary_honors_explicit_base_url_override(monkeypatch):

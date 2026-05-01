@@ -10,16 +10,13 @@ from jarvis_common import llm_client
 
 @pytest.mark.asyncio
 async def test_call_llm_posts_expected_payload(monkeypatch):
-    """call_llm should send the standard JSON-object completion payload."""
+    """call_llm should send the standard JSON-object completion payload (no auth headers)."""
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {"choices": [{"message": {"content": '{"answer": "ok"}'}}]}
     http_client = AsyncMock()
     http_client.post.return_value = response
-    config = llm_client.LiteLLMConfig(
-        base_url="http://litellm.test:4000",
-        api_key="secret",
-    )
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     result = await llm_client.call_llm(
         http_client,
@@ -42,7 +39,7 @@ async def test_call_llm_posts_expected_payload(monkeypatch):
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         },
-        headers={"Authorization": "Bearer secret"},
+        headers={},
         timeout=120.0,
     )
 
@@ -61,52 +58,33 @@ async def test_call_llm_strips_think_blocks(monkeypatch):
     result = await llm_client.call_llm(
         http_client,
         "Summarize this.",
-        config=llm_client.LiteLLMConfig(
-            base_url="http://litellm.test:4000",
-            api_key="",
-        ),
+        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
     )
 
     assert result == {"answer": "clean"}
 
 
-def test_get_litellm_config_uses_fallback_env(monkeypatch):
-    """Fallback auth envs should be used when the primary key is unset."""
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
-    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
-
-    config = llm_client.get_litellm_config(
-        primary_env_name="LITELLM_API_KEY",
-        fallback_env_names=("LITELLM_MASTER_KEY",),
-    )
-
-    assert config == llm_client.LiteLLMConfig(
-        base_url="http://litellm.test:4000",
-        api_key="master-secret",
-    )
-
-
-def test_get_litellm_config_defaults_to_primary_key_only(monkeypatch):
-    """Default config resolution should not widen fallback behavior for other callers."""
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
+def test_get_litellm_config_reads_base_url_from_env(monkeypatch):
+    """get_litellm_config should resolve LITELLM_BASE_URL from environment."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
 
     config = llm_client.get_litellm_config()
 
-    assert config == llm_client.LiteLLMConfig(
-        base_url="http://litellm.test:4000",
-        api_key="",
-    )
+    assert config == llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
 
-def test_build_litellm_headers_omits_auth_without_key():
-    """Empty API keys should not produce an Authorization header."""
-    config = llm_client.LiteLLMConfig(
-        base_url="http://litellm.test:4000",
-        api_key="",
-    )
+def test_get_litellm_config_uses_default_url(monkeypatch):
+    """get_litellm_config should fall back to DEFAULT_LITELLM_BASE_URL."""
+    monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+
+    config = llm_client.get_litellm_config()
+
+    assert config.base_url == llm_client.DEFAULT_LITELLM_BASE_URL
+
+
+def test_build_litellm_headers_always_returns_empty_dict():
+    """build_litellm_headers must return {} — transparent proxy, no auth."""
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     assert llm_client.build_litellm_headers(config) == {}
 
@@ -170,10 +148,7 @@ async def test_request_chat_completion_content_forwards_response_format():
             timeout=45.0,
             response_format={"type": "json_object"},
         ),
-        config=llm_client.LiteLLMConfig(
-            base_url="http://litellm.test:4000",
-            api_key="",
-        ),
+        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
     )
 
     assert result == '{"answer":"ok"}'
@@ -206,10 +181,7 @@ async def test_call_llm_json_value_parses_array_payload():
         http_client,
         "Decompose this.",
         options=llm_client.ChatCompletionOptions(),
-        config=llm_client.LiteLLMConfig(
-            base_url="http://litellm.test:4000",
-            api_key="",
-        ),
+        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
     )
 
     assert result == ["a", "b"]
@@ -232,10 +204,7 @@ async def test_embed_texts_sorts_embeddings_by_index():
     result = await llm_client.embed_texts(
         http_client,
         ["first", "second"],
-        config=llm_client.LiteLLMConfig(
-            base_url="http://litellm.test:4000",
-            api_key="",
-        ),
+        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
     )
 
     assert result == [[1.0], [2.0]]

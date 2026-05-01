@@ -154,7 +154,6 @@ fi
 # -----------------------------------------------------------------------------
 info "Generating secrets..."
 POSTGRES_PASSWORD="$(openssl rand -hex 24)"
-LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
 JARVIS_API_KEY="$(openssl rand -hex 32)"
 N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
 N8N_JWT_SECRET="$(openssl rand -hex 32)"
@@ -168,7 +167,6 @@ ok "Secrets generated."
 # overwrites and re-chmodds all files.
 mkdir -p secrets
 printf '%s' "$POSTGRES_PASSWORD" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
-printf '%s' "$LITELLM_MASTER_KEY" > secrets/litellm_master_key.txt && chmod 600 secrets/litellm_master_key.txt
 printf '%s' "$JARVIS_API_KEY"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
 # Generate and write Qdrant API key secret (used by both Qdrant service and app services via _FILE)
 QDRANT_API_KEY="$(openssl rand -hex 24)"
@@ -360,7 +358,6 @@ trap cleanup_tmp EXIT
 sub_value() {
   case "$1" in
     POSTGRES_PASSWORD)        printf '%s' "$POSTGRES_PASSWORD" ;;
-    LITELLM_MASTER_KEY)       printf '%s' "$LITELLM_MASTER_KEY" ;;
     JARVIS_API_KEY)           printf '%s' "$JARVIS_API_KEY" ;;
     JARVIS_CONFIG_KEY)        printf '%s' "$JARVIS_CONFIG_KEY" ;;
     N8N_ENCRYPTION_KEY)       printf '%s' "$N8N_ENCRYPTION_KEY" ;;

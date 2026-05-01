@@ -72,8 +72,9 @@ router_settings:
   allowed_fails: 2
   retry_after: 5
 
-general_settings:
-  master_key: "os.environ/LITELLM_MASTER_KEY"
+# No master_key: litellm runs loopback-only (127.0.0.1:4000) and fronts Ollama only.
+# Cloud LLM keys flow direct app→provider via encrypted user_config; reintroduce
+# auth only if port 4000 is exposed beyond loopback.
 
 litellm_settings:
   drop_params: true

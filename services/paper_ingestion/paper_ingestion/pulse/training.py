@@ -41,10 +41,11 @@ async def train_classifier_model(db_pool: Any, *, min_ratings: int = MIN_RATINGS
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT pc.signals, pr.rating
-            FROM pulse_ratings pr
-            JOIN pulse_cards pc ON pc.paper_id = pr.paper_id
-            ORDER BY pr.created_at DESC
+            SELECT pc.signals, rf.signal AS rating
+            FROM recommendation_feedback rf
+            JOIN pulse_cards pc ON pc.paper_id = rf.paper_id
+            WHERE rf.source IN ('pulse_thumbs', 'dismiss_combined')
+            ORDER BY rf.created_at DESC
             LIMIT 1000
             """
         )
@@ -56,7 +57,7 @@ async def train_classifier_model(db_pool: Any, *, min_ratings: int = MIN_RATINGS
             "degradation_reason": f"need at least {min_ratings} ratings",
         }
 
-    labels = [1 if row["rating"] in {"up", "save", "open"} else 0 for row in rows]
+    labels = [1 if row["rating"] == "positive" else 0 for row in rows]
     if len(set(labels)) < 2:
         return {
             "trained": False,

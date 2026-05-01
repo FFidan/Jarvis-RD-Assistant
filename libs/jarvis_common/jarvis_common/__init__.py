@@ -45,7 +45,6 @@ from jarvis_common.http_rate_limiter import create_limiter, rate_limit_exceeded_
 from jarvis_common.jobs import KEEPALIVE_INTERVAL, MAX_STREAM_SECONDS, stream_job_events
 from jarvis_common.llm_client import (
     DEFAULT_LITELLM_BASE_URL,
-    LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
     LLM_TIMEOUT_LONG,
     LLM_TIMEOUT_SHORT,
@@ -136,7 +135,6 @@ __all__ = [
     "LLM_TIMEOUT_DEFAULT",
     "LLM_TIMEOUT_LONG",
     "LLM_TIMEOUT_SHORT",
-    "LITELLM_FALLBACK_ENV_NAMES",
     "read_secret",
     "compute_streak",
     "KEEPALIVE_INTERVAL",

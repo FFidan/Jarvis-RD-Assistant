@@ -11,17 +11,13 @@ x-shared-env: &shared-env
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
-  # LITELLM_API_KEY is injected via Docker Secret in litellm/entrypoint.sh; not passed to app services.
+  # litellm runs as a transparent loopback proxy (no auth). See litellm/config.yaml header.
   QDRANT_URL: http://qdrant:6333
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
   EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
   # JARVIS_API_KEY is injected via Docker Secret (_FILE convention); plain env var kept as fallback
   JARVIS_API_KEY: ${JARVIS_API_KEY:-}
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
-  # LITELLM_API_KEY: app services authenticate to litellm proxy with the same key litellm validates against (LITELLM_MASTER_KEY).
-  # Without this, build_litellm_headers() in libs/jarvis_common/jarvis_common/llm_client.py sends an empty Authorization
-  # header and litellm responds 401 — breaking embeddings, Pulse generation, and any LLM call. Wired in Wave 7 (B.1).
-  LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-}
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost:3001}
@@ -205,14 +201,11 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-      - ./litellm/entrypoint.sh:/entrypoint.sh:ro
-    entrypoint: ["/bin/sh", "/entrypoint.sh"]
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-    secrets:
-      - litellm_master_key
     command: ["--config", "/app/config.yaml"]
+    # litellm runs as transparent loopback proxy (no auth). See litellm/config.yaml header.
     mem_limit: 4g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')\""]
@@ -490,8 +483,6 @@ networks:
 secrets:
   postgres_password:
     file: ./secrets/postgres_password.txt
-  litellm_master_key:
-    file: ./secrets/litellm_master_key.txt
   jarvis_api_key:
     file: ./secrets/jarvis_api_key.txt
   telegram_bot_token:

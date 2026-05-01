@@ -15,7 +15,6 @@ import httpx
 from fastapi import HTTPException
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     build_litellm_headers,
     get_litellm_config,
 )
@@ -314,7 +313,7 @@ async def stream_rag_events(
     db_pool: "asyncpg.Pool | None" = None,
 ):
     """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
     full_answer = ""
     try:
         async with http_client.stream(

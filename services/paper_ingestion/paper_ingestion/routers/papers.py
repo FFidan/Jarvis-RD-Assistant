@@ -492,6 +492,7 @@ async def _apply_bulk_action(
     elif action == "mark_done":
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     elif action == "restore":
+        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
         await _restore_paper(conn, paper_id, user_id)
     elif action == "star":
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
@@ -708,6 +709,7 @@ async def restore_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
+        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
         await _restore_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
 

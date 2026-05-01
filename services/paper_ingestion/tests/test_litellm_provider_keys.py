@@ -140,9 +140,8 @@ async def test_update_litellm_model_injects_cloud_key(monkeypatch):
     plaintext_key = "sk-ant-api-test-key"
     ciphertext = encrypt_secret(plaintext_key)
 
-    # Wire env so get_litellm_config() finds a base_url + api_key.
+    # Wire env so get_litellm_config() finds the base_url.
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm-test:4000")
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-test-key")
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {

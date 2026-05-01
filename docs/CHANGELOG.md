@@ -2,6 +2,20 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.4.0] - 2026-05-02 — Round 15 audit closeout, Wave 1 (production unblockers)
+
+### Fixed
+- **W1.1 LiteLLM transparent loopback proxy** — dropped `master_key`, `LITELLM_API_KEY` env wiring, `LITELLM_FALLBACK_ENV_NAMES`, and the `litellm_master_key` Docker secret. Litellm runs loopback-only (`127.0.0.1:4000`) and fronts only Ollama; cloud LLMs (OpenAI/Anthropic/Google) bypass it entirely via encrypted `user_config` keys. `master_key` was a security no-op that introduced a 401 failure mode whenever `LITELLM_API_KEY` and `LITELLM_MASTER_KEY` drifted apart in env wiring. Deleted `litellm/entrypoint.sh` (sole purpose was env injection). `build_litellm_headers()` now always returns `{}`. Reversible if port 4000 is ever exposed beyond loopback. Updates 7 test files + 5 doc files (README, REQUIREMENTS, DEPLOYMENT, PRD, ci-smoke). Closes audit `F-LITELLM-01`.
+- **W1.2 Restore precondition guard** (single + bulk) — `PUT /api/papers/{id}/restore` and the bulk-action restore branch both lacked a `state='trash'` precondition; calling restore on inbox/reading/done/already-not-trashed silently demoted papers to inbox. Mirrored the `hard_delete_paper` precedent: `_assert_paper_in_state(state="trash")` before `_restore_paper`. Two new regression tests. Closes audit `H-LC-3`.
+- **W1.3 Pulse training: pulse_ratings → recommendation_feedback** — migration 049 dropped `pulse_ratings`; `train_classifier_model` still referenced it and would crash on first invocation. Swap to `recommendation_feedback` with binary `signal` mapping (`'positive'`→1, `'negative'`→0) and `source IN ('pulse_thumbs','dismiss_combined')` predicate. Drops the old 5-state mapping. Closes `C-3`.
+- **W1.4 Pulse citation_signals: same swap + log clarity** — `compute_citation_signals` referenced the dropped table; the exception was swallowed by a broad `except` in `pulse/job.py`, silently degrading the pulse deck. Swap to `recommendation_feedback`; preserve the broad-except but emit `exc_info` with `extra={"stage": "citation_signals"}` so future regressions surface in observability. Closes `C-4`.
+- **W1.5 Weekly summary: same swap + docstring** — `generate_weekly_summary`'s EXISTS branch referenced the dropped table; would crash whenever any candidate paper exists (not swallowed). Swap to `recommendation_feedback` with same predicate. Update docstring to drop the legacy `paper_user_state.status` reference (Phase A renamed `status`→`state` with different values). Closes `C-5`.
+
+### Notes
+- Source plan: `docs/plans/2026-05-02-round-15-audit-closeout.md` (Wave 1 of 5).
+- Branch: `audit/round-15-w1-unblockers`.
+- Pyright clean (0 errors). 1859 backend tests pass. Live Pulse + L3 feedback verification deferred to PR-time.
+
 ## [1.3.0] - 2026-05-01
 
 ### Behavior

@@ -4,8 +4,9 @@ Groups recent papers by topic and synthesizes cross-paper themes
 using LLM analysis for each topic cluster.
 
 Only papers the user has actively engaged with are included:
-- Library UI engagement: paper_user_state.status IN ('starred', 'reading', 'read')
-- Pulse card engagement: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
+- Library UI engagement: paper_user_state.starred = TRUE or state IN ('reading', 'done')
+- Pulse card engagement: recommendation_feedback.signal = 'positive'
+  AND source IN ('pulse_thumbs', 'dismiss_combined') within the same window
 
 This is the Model C (Complementary) guarantee: Weekly Summary reflects
 what the user actually engaged with, not the full Pulse candidate firehose.
@@ -19,7 +20,6 @@ import asyncpg
 import httpx
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
-    LITELLM_FALLBACK_ENV_NAMES,
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     LiteLLMConfig,
@@ -71,25 +71,23 @@ async def generate_weekly_summary(
     """Generate per-topic digests for papers the user engaged with in the lookback window.
 
     Only papers with active user engagement are included (Model C — Complementary):
-    - Library UI: paper_user_state.status IN ('starred', 'reading', 'read')
-    - Pulse cards: pulse_ratings.rating IN ('up', 'save', 'open') within the same window
+    - Library UI: paper_user_state.starred = TRUE or state IN ('reading', 'done')
+    - Pulse cards: recommendation_feedback.signal = 'positive' AND source IN
+      ('pulse_thumbs', 'dismiss_combined') within the same window
 
-    Papers passively surfaced by Pulse but never rated or saved are excluded,
+    Papers passively surfaced by Pulse but never acted on are excluded,
     preventing the Weekly Summary from becoming a noise-generator.
 
     Parameters
     ----------
     user_id:
-        When provided, restricts ``paper_user_state`` and ``pulse_ratings``
+        When provided, restricts ``paper_user_state`` and ``recommendation_feedback``
         lookups to the given user.  ``None`` (default) aggregates across all
         users, preserving backwards-compatible global behaviour.
     """
-    litellm_config = get_litellm_config(fallback_env_names=LITELLM_FALLBACK_ENV_NAMES)
+    litellm_config = get_litellm_config()
     if litellm_url is not None:
-        litellm_config = LiteLLMConfig(
-            base_url=litellm_url,
-            api_key=litellm_config.api_key,
-        )
+        litellm_config = LiteLLMConfig(base_url=litellm_url)
 
     cutoff = datetime.now(UTC) - timedelta(days=days)
 
@@ -119,11 +117,12 @@ async def generate_weekly_summary(
                   )
                   OR
                   EXISTS (
-                      SELECT 1 FROM pulse_ratings pr
-                      WHERE pr.paper_id = p.id
-                        AND pr.rating IN ('up', 'save', 'open')
-                        AND pr.created_at >= $1
-                        AND pr.user_id IS NOT DISTINCT FROM $2
+                      SELECT 1 FROM recommendation_feedback rf
+                      WHERE rf.paper_id = p.id
+                        AND rf.signal = 'positive'
+                        AND rf.source IN ('pulse_thumbs', 'dismiss_combined')
+                        AND rf.created_at >= $1
+                        AND rf.user_id IS NOT DISTINCT FROM $2
                   )
               )
             ORDER BY t.name, pt.relevance_score DESC NULLS LAST

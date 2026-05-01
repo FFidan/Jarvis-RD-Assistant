@@ -14,7 +14,6 @@ Environment variables (reads from .env or system environment):
     QDRANT_HOST         - Qdrant hostname (default: localhost)
     QDRANT_PORT         - Qdrant port (default: 6333)
     LITELLM_BASE_URL    - LiteLLM proxy URL (default: http://localhost:4000)
-    LITELLM_API_KEY     - LiteLLM API key (default: empty)
     EMBEDDING_MODEL     - LiteLLM model alias (default: embed)
     EMBEDDING_MODEL_NAME- Actual model name for tracking (default: nomic-embed-text)
     EMBEDDING_DIMENSION - Vector dimension (default: 768)
@@ -52,11 +51,10 @@ else:
     from _db import get_dsn
 
 from jarvis_common.llm_client import (  # noqa: E402
-    LiteLLMConfig,
-    get_litellm_config,
-)
-from jarvis_common.llm_client import (  # noqa: E402
     embed_texts as embed_texts_shared,
+)
+from jarvis_common.llm_client import (
+    get_litellm_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -65,7 +63,6 @@ from jarvis_common.llm_client import (  # noqa: E402
 
 LITELLM_CONFIG = get_litellm_config(base_url_default="http://localhost:4000")
 LITELLM_BASE_URL = LITELLM_CONFIG.base_url
-LITELLM_API_KEY = LITELLM_CONFIG.api_key
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "nomic-embed-text")
 EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "768"))
@@ -84,10 +81,7 @@ async def embed_texts(client: httpx.AsyncClient, texts: list[str]) -> list[list[
         texts,
         model=EMBEDDING_MODEL,
         timeout=120.0,
-        config=LiteLLMConfig(
-            base_url=LITELLM_BASE_URL,
-            api_key=LITELLM_API_KEY,
-        ),
+        config=LITELLM_CONFIG,
     )
 
 

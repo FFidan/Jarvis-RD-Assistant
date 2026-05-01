@@ -84,8 +84,6 @@ async def test_embed_texts_empty_list():
 async def test_embed_texts_returns_embeddings(monkeypatch):
     """embed_texts posts to LiteLLM and returns ordered embedding vectors."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
 
     e = _make_embedder()
     e.http_client.post.return_value = _embed_response(2)

@@ -204,12 +204,10 @@ async def teststream_rag_events_error_handling():
     assert events[1].strip() == "data: [DONE]"
 
 
-async def teststream_rag_events_uses_shared_litellm_config_fallback(monkeypatch):
-    """Streaming RAG should reuse the shared LiteLLM base URL and key fallback."""
+async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch):
+    """Streaming RAG should use the shared LiteLLM base URL (transparent proxy, no auth)."""
     from paper_ingestion.rag.streaming import stream_rag_events
 
-    monkeypatch.delenv("LITELLM_API_KEY", raising=False)
-    monkeypatch.setenv("LITELLM_MASTER_KEY", "master-secret")
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
 
     mock_client = AsyncMock(spec=httpx.AsyncClient)
@@ -238,7 +236,7 @@ async def teststream_rag_events_uses_shared_litellm_config_fallback(monkeypatch)
             "temperature": 0.1,
             "max_tokens": 700,
         },
-        headers={"Authorization": "Bearer master-secret"},
+        headers={},
         timeout=300.0,
     )
 

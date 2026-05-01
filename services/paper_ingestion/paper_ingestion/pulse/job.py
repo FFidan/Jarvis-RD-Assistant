@@ -261,7 +261,11 @@ async def run_pulse(
         ]
     except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
         degraded_reason = degraded_reason or f"optional Pulse Phase 2 signals unavailable: {exc}"
-        logger.warning("pulse.optional_signals failed", exc_info=True)
+        logger.warning(
+            "citation_signals failed; pulse degraded",
+            exc_info=exc,
+            extra={"stage": "citation_signals"},
+        )
     stats["classifier"] = classifier_meta or {
         "available": False,
         "feature_names": FEATURE_NAMES,
