@@ -15,6 +15,18 @@
 -- =============================================================================
 
 -- =============================================================================
+-- SHARED HELPERS
+-- =============================================================================
+-- Defined here (rather than alongside its consuming triggers near the bottom of
+-- the file) because triggers from migrations 046+ reference set_updated_at()
+-- before the section that originally introduced it (migration 042). The
+-- CREATE OR REPLACE block further down is harmless — it idempotently re-applies
+-- the same body and then attaches the legacy migration-042 triggers.
+
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$ LANGUAGE plpgsql;
+
+-- =============================================================================
 -- SHARED / CONFIGURATION
 -- =============================================================================
 
@@ -674,7 +686,9 @@ CREATE INDEX IF NOT EXISTS idx_review_logs_card ON review_logs(card_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_papers_source_type ON papers(source_type);
-CREATE INDEX IF NOT EXISTS idx_paper_user_state_status ON paper_user_state(status);
+-- (Phase A migration 047 collapsed paper_user_state.status into the state ENUM;
+-- the replacement idx_paper_user_state_state index is created above alongside
+-- the table definition at line ~295.)
 
 -- Sprint 7 B5: functional indexes for search-preview candidate-key matching
 -- (mirrors db/migrations/045_papers_search_preview_indexes.sql).
@@ -949,3 +963,22 @@ DROP TRIGGER IF EXISTS trg_extraction_templates_updated_at ON extraction_templat
 CREATE TRIGGER trg_extraction_templates_updated_at
     BEFORE UPDATE ON extraction_templates
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- =============================================================================
+-- SCHEMA-MIGRATIONS BOOTSTRAP
+-- =============================================================================
+-- This file mirrors the post-migration steady state for fresh installs. Pre-
+-- populate schema_migrations so the runtime migrations runner skips every
+-- versioned migration that is already baked into this schema. Without this,
+-- the runner would re-apply migrations whose backfill UPDATEs reference legacy
+-- columns this file has already dropped (e.g. paper_user_state.status, removed
+-- by migration 047).
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    applied_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO schema_migrations (version)
+SELECT generate_series(1, 49)
+ON CONFLICT (version) DO NOTHING;

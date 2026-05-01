@@ -10,9 +10,6 @@
 
 export type SourceType = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed' | 'local';
 
-/** @deprecated post-046: 'archived' and 'starred' are no longer valid status values; use user_state booleans instead */
-export type PaperStatus = 'new' | 'reading' | 'read' | 'archived' | 'starred';
-
 export type Confidence = 'HIGH' | 'MEDIUM' | 'LOW';
 
 export type PriorityLevel = 'must-read' | 'recommended' | 'background' | 'unscored';
@@ -36,6 +33,10 @@ export interface Paper {
   metadata: Record<string, unknown>;
   discovered_at: string | null;
   created_at: string;
+  // Phase A — migration 048 added discovery_origin; migration 049 + recommendation_feedback
+  // joined surface produces recent_feedback. Optional because legacy callers may not have them.
+  discovery_origin?: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
+  recent_feedback?: RecentFeedback | null;
 }
 
 export interface KeyFinding {
@@ -92,28 +93,6 @@ export interface PaperDetail {
 }
 
 // --- Feed ---
-
-export interface FeedPaper extends Paper {
-  summary_brief: string | null;
-  tldr: string | null;
-  confidence: Confidence | null;
-  /** @deprecated post-046; use user_state booleans (starred, archived, etc.) */
-  user_status: string | null;
-  /** post-046 structured state; preferred over user_status */
-  user_state?: UserState | null;
-  starred?: boolean;
-  archived?: boolean;
-  preference?: 'none' | 'up' | 'down';
-  rating: number | null;
-  priority_level?: string;
-  has_chunks?: boolean;
-  has_summary?: boolean;
-  recommendation_score?: number | null;
-  recommendation_reason?: string | null;
-  recommendation_modes?: string[] | null;
-  note_match_count?: number;
-  note_snippet?: string | null;
-}
 
 export interface FeedResponse {
   papers: FeedPaper[];
@@ -656,47 +635,162 @@ export interface SearchPreviewResponse {
   degraded_sources: string[];
   source_errors: Record<string, SearchPreviewSourceError>;
 }
-// --- User State ---
+// =============================================================================
+// Phase A Lifecycle Redesign types (Wave 2.2 — legacy types removed)
+// =============================================================================
 
+// --- Phase A core enums ---
+
+/** Phase A lifecycle state per spec §2 (post-2026-04-29 redesign). */
+export type LifecycleState = 'inbox' | 'to_read' | 'reading' | 'done' | 'trash';
+
+/** State that the paper had before being trashed (for restore). null when never trashed. */
+export type StateBeforeTrash = 'inbox' | 'to_read' | 'reading' | 'done' | null;
+
+// --- Phase A User State ---
+
+/** User state per spec §9.1 (Phase A redesign). */
 export interface UserState {
-  status: 'new' | 'reading' | 'read';
-  saved: boolean;
-  dismissed: boolean;
+  state: LifecycleState;
+  state_before_trash: StateBeforeTrash;
   starred: boolean;
-  archived: boolean;
-  preference: 'none' | 'up' | 'down';
   rating: number | null;
   user_notes: string | null;
   flagged: boolean;
   updated_at: string | null;
 }
 
-/** API response shape from PUT /api/papers/{id}/user-state (post-migration-046). */
+/** User-state envelope returned by lifecycle endpoints (spec §9.1). */
 export interface UserStateResponse {
-  status: 'new' | 'reading' | 'read';
-  saved: boolean;
-  dismissed: boolean;
+  state: LifecycleState;
+  state_before_trash: StateBeforeTrash;
   starred: boolean;
-  archived: boolean;
-  preference: 'none' | 'up' | 'down';
   rating: number | null;
   user_notes: string | null;
   flagged: boolean;
   updated_at: string | null;
 }
 
-export type SurfaceView = 'inbox' | 'library' | 'starred' | 'archived' | 'reading' | 'trash' | 'search' | 'ask';
+// --- Phase A Feedback ---
 
-export type BulkAction = 'save' | 'unsave' | 'dismiss' | 'archive' | 'unarchive' | 'mark_read' | 'star' | 'unstar';
+export interface RecentFeedback {
+  signal: 'positive' | 'negative';
+  source: 'pulse_thumbs' | 'feed_thumbs' | 'paper_detail_thumbs' | 'dismiss_combined';
+  created_at: string;
+}
 
+// --- Phase A Paper Response ---
+
+/** Canonical paper response per Phase A redesign (grounded against PaperResponse + PaperBase in models/papers.py). */
+export interface LifecyclePaperResponse {
+  id: number;
+  external_id: string;
+  source_type: SourceType;
+  title: string;
+  authors: string[];
+  abstract: string | null;
+  published_date: string | null;
+  url: string | null;
+  pdf_url: string | null;
+  pdf_local_path: string | null;
+  pdf_downloaded: boolean;
+  discovered_at: string | null;
+  priority_score: number | null;
+  citation_count: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  discovery_origin: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
+  user_state: UserStateResponse | null;
+  recent_feedback: RecentFeedback | null;
+}
+
+// --- Phase A Feed Paper ---
+
+/**
+ * Feed-level paper per Phase A redesign.
+ * Grounded against FeedPaper (models/papers.py:290-307) which extends PaperResponse.
+ * Fields: summary_brief, tldr, confidence, state, state_before_trash, starred, rating,
+ *         priority_level, has_chunks, has_summary, recommendation_score,
+ *         recommendation_reason, recommendation_modes, note_match_count, note_snippet.
+ * Note: priority_score comes from PaperResponse (via PaperBase); user_status removed in Phase A.
+ */
+export interface FeedPaper extends LifecyclePaperResponse {
+  state: LifecycleState;
+  state_before_trash: StateBeforeTrash;
+  starred: boolean;
+  rating: number | null;
+  summary_brief?: string | null;
+  tldr?: string | null;
+  confidence?: Confidence | null;
+  priority_level?: string | null;
+  has_chunks?: boolean;
+  has_summary?: boolean;
+  recommendation_score?: number | null;
+  recommendation_reason?: string | null;
+  recommendation_modes?: string[] | null;
+  note_match_count?: number;
+  note_snippet?: string | null;
+}
+
+// --- Phase A Bulk Actions ---
+
+/**
+ * Bulk action enum per BulkActionRequest in models/papers.py:582-597 (Phase A).
+ */
+export type BulkAction =
+  | 'save' | 'skip' | 'trash'
+  | 'mark_reading' | 'mark_done' | 'restore'
+  | 'star' | 'unstar'
+  | 'feedback_positive' | 'feedback_negative';
+
+// --- Phase A Surface / Filter Views ---
+
+/** Library sub-chip filter per spec §5.4. */
+export type LibraryFilter = 'starred' | 'reading' | 'to_read' | 'done';
+
+/** Top-level feed surface per spec §5.4 (5 surfaces). */
+export type SurfaceView = 'inbox' | 'library' | 'search' | 'ask' | 'trash';
+
+// --- Phase A Feed Counts ---
+
+/**
+ * Feed counts per spec §6 — 10 named views.
+ * Grounded against FeedCountsResponse in models/papers.py:600-612.
+ */
 export interface FeedCountsResponse {
   inbox: number;
   library: number;
-  starred: number;
-  archived: number;
+  reading_list: number;
   reading: number;
+  done: number;
+  starred: number;
   trash: number;
-  all_active: number;
+  active: number;
+  kept: number;
+  all_non_trash: number;
+}
+
+// --- Phase A Feedback CRUD ---
+
+export interface FeedbackListItem {
+  paper_id: number;
+  title: string;
+  signal: 'positive' | 'negative';
+  source: 'pulse_thumbs' | 'feed_thumbs' | 'paper_detail_thumbs' | 'dismiss_combined';
+  reason: string | null;
+  topic_id: number | null;
+  topic_name: string | null;
+  created_at: string;
+}
+
+export interface FeedbackListResponse {
+  items: FeedbackListItem[];
+  total: number;
+}
+
+export interface DeleteFeedbackResponse {
+  deleted: number;
+  topic_id: number;
 }
 
 // --- Citation Relation ---

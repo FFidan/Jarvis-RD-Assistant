@@ -1,7 +1,11 @@
 """Tests for Telegram bot inline-keyboard callback handlers.
 
-Covers: paper_detail, paper_bookmark, project_detail, task_done, start_review.
-Each handler is tested directly with mocked Update + Context objects.
+Covers: paper_detail, paper_action (9 lifecycle actions), paper_feedback,
+project_detail, task_done, start_review.  Legacy bookmark/dismiss/save tests
+replaced by the new dispatcher pattern (T1).
+
+WS-AH2 H1 invariant: every test for the dispatcher callbacks asserts
+``query.answer.call_count == 1`` on every execution path.
 """
 
 from __future__ import annotations
@@ -11,15 +15,33 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import telegram
 from telegram_bot.config import BotConfig
-from telegram_bot.handlers.callback_handler import (  # noqa: E402
-    paper_bookmark_callback,
+from telegram_bot.handlers import rate_limit as _rate_limit_mod
+from telegram_bot.handlers.callback_handler import (
+    paper_action_callback,
     paper_detail_callback,
-    paper_dismiss_callback,
-    paper_save_callback,
+    paper_feedback_callback,
     project_detail_callback,
     start_review_callback,
     task_done_callback,
 )
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
+    """Clear the rate-limiter's in-memory timestamp store before every test.
+
+    The rate_limit decorator uses a module-level defaultdict keyed by
+    ``chat_id:func_name``.  Without this fixture, tests that share chat_id
+    12345 and the same handler accumulate timestamps and trip the limit.
+    """
+    _rate_limit_mod._timestamps.clear()
+    yield
+    _rate_limit_mod._timestamps.clear()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -39,8 +61,8 @@ def _make_config() -> BotConfig:
     )
 
 
-def _make_callback_update_and_context(callback_data: str, chat_id=_TEST_CHAT_ID):
-    """Build mock Update + Context for callback query handlers."""
+def _make_callback_update_and_context(callback_data: str, chat_id: int = _TEST_CHAT_ID):
+    """Build (Update, Context, mock_db, mock_http) tuple for callback tests."""
     update = MagicMock()
     update.effective_chat = MagicMock()
     update.effective_chat.id = chat_id
@@ -135,57 +157,429 @@ async def test_paper_detail_callback_includes_api_key_header():
 
 
 # ---------------------------------------------------------------------------
-# Tests: paper_bookmark
+# Tests: paper_action_callback — happy paths (9 lifecycle actions)
+# ---------------------------------------------------------------------------
+
+
+def _make_action_mock_http() -> AsyncMock:
+    """Return a mock_http whose .request() returns a successful response."""
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.request.return_value = mock_resp
+    return mock_http
+
+
+@pytest.mark.asyncio
+async def test_paper_action_save():
+    """paper_action_callback: save action — PUT /save, single answer '💾 Saved', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:save:42")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "💾 Saved"
+    query.message.reply_text.assert_awaited_once()
+    reply_text = query.message.reply_text.call_args[0][0]
+    assert "42" in reply_text and "💾 Saved" in reply_text
+    # Correct HTTP call: PUT .../42/save
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/42/save" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_skip():
+    """paper_action_callback: skip action — PUT /skip, single answer '⏩ Skipped', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:skip:7")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "⏩ Skipped"
+    query.message.reply_text.assert_awaited_once()
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/7/skip" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_reading():
+    """paper_action_callback: reading — PUT /reading, single answer '📖 Marked Reading', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:reading:10")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "📖 Marked Reading"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/10/reading" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_done():
+    """paper_action_callback: done action — PUT /done, single answer '✓ Marked Done', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:done:5")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "✓ Marked Done"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/5/done" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_trash():
+    """paper_action_callback: trash action — PUT /trash, single answer '🗑 Trashed', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:trash:99")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "🗑 Trashed"
+    query.message.reply_text.assert_awaited_once()
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/99/trash" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_restore():
+    """paper_action_callback: restore action — PUT /restore, single answer '↩ Restored', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:restore:3")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "↩ Restored"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/3/restore" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_trash_reject():
+    """paper_action_callback: trash_reject — PUT /trash_and_reject (suffix differs), H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:trash_reject:21")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "🗑+👎 Trashed & Rejected"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    # URL suffix is trash_and_reject, NOT trash_reject
+    assert "/api/papers/21/trash_and_reject" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_star():
+    """paper_action_callback: star action — PUT /star, single answer '⭐ Starred', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:star:8")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "⭐ Starred"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/8/star" in call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_paper_action_unstar():
+    """paper_action_callback: unstar action — PUT /unstar, single answer '☆ Unstarred', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:unstar:15")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "☆ Unstarred"
+    mock_http.request.assert_awaited_once()
+    call_args = mock_http.request.await_args
+    assert call_args[0][0] == "PUT"
+    assert "/api/papers/15/unstar" in call_args[0][1]
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_action_callback — failure paths
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_paper_bookmark_success():
-    """paper_bookmark callback bookmarks a paper via the HTTP endpoint."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_7")
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_http.put.return_value = mock_resp
+async def test_paper_action_failure_save():
+    """On HTTP failure, query.answer carries error text; NO reply_text; H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:save:42")
+    mock_http = AsyncMock()
+    mock_http.request.side_effect = Exception("Connection refused")
+    context.application.bot_data["http_client"] = mock_http
 
-    await paper_bookmark_callback(update, context)
+    await paper_action_callback(update, context)
 
-    update.callback_query.answer.assert_awaited_once()
-    mock_http.put.assert_awaited_once()
-    call_args = mock_http.put.await_args
-    assert "/api/papers/7/bookmark" in call_args[0][0]
-    text = update.callback_query.message.reply_text.call_args[0][0]
-    assert "bookmarked" in text.lower() or "7" in text
-
-
-@pytest.mark.asyncio
-async def test_paper_bookmark_callback_calls_http_endpoint():
-    """paper_bookmark_callback PUTs to the bookmark endpoint with correct paper_id and X-API-Key."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_42")
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_http.put.return_value = mock_resp
-
-    await paper_bookmark_callback(update, context)
-
-    mock_http.put.assert_awaited_once()
-    call_args = mock_http.put.await_args
-    url = call_args[0][0]
-    headers = call_args[1]["headers"]
-    assert "/api/papers/42/bookmark" in url
-    assert headers.get("X-API-Key") == "test-key"
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "save failed — try again later"
+    # No reply_text on failure path
+    query.message.reply_text.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_paper_bookmark_callback_handles_api_failure():
-    """paper_bookmark_callback sends an error message when the HTTP call fails."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper_bookmark_99")
-    mock_http.put.side_effect = Exception("Connection refused")
+async def test_paper_action_failure_trash():
+    """On HTTP failure for trash, error text in answer; no reply_text; H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:trash:99")
+    mock_http = AsyncMock()
+    mock_http.request.side_effect = Exception("timeout")
+    context.application.bot_data["http_client"] = mock_http
 
-    await paper_bookmark_callback(update, context)
+    await paper_action_callback(update, context)
 
-    update.callback_query.answer.assert_awaited_once()
-    text = update.callback_query.message.reply_text.call_args[0][0]
-    assert "failed" in text.lower() or "bookmark" in text.lower()
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "trash failed — try again later"
+    query.message.reply_text.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_action_callback — bad data path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_action_invalid_callback_data():
+    """Invalid action name — query.answer called once (bare), no HTTP call; H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:invalid_action:42")
+    mock_http = AsyncMock()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1 — bare answer on bad data
+    mock_http.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_action_auth_fail_answers_query():
+    """H1 regression guard: an unauthorised callback still answers the query.
+
+    Without this, the Telegram client spins indefinitely on auth-rejected
+    callbacks (Wave-3 review SB-2).
+    """
+    # Use a chat_id that does NOT match _make_config().telegram_chat_id so
+    # auth_check returns False against both the env path and the DB path.
+    update, context, mock_db, mock_http = _make_callback_update_and_context(
+        "paper:save:42", chat_id=99999
+    )
+    # auth_check's DB fallback queries user_config; return None to take the
+    # explicit "no owner paired" reject path.
+    mock_db.fetchval.return_value = None
+
+    await paper_action_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1 — auth-fail still answers
+    mock_http.request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_auth_fail_answers_query():
+    """H1 regression guard for paper_feedback_callback (Wave-3 review SB-2)."""
+    update, context, mock_db, mock_http = _make_callback_update_and_context(
+        "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
+    )
+    mock_db.fetchval.return_value = None
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1
+    mock_http.post.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_feedback_callback — happy paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_positive_pulse_thumbs():
+    """Positive feedback via pulse_thumbs — POST /feedback, '👍 Recorded', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_pos:42:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "👍 Recorded"
+    mock_http.post.assert_awaited_once()
+    call_args = mock_http.post.await_args
+    assert "/api/papers/42/feedback" in call_args[0][0]
+    assert call_args[1]["json"] == {"signal": "positive", "source": "pulse_thumbs"}
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_negative_pulse_thumbs():
+    """Negative feedback via pulse_thumbs — POST /feedback, '👎 Recorded', H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_neg:42:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "👎 Recorded"
+    mock_http.post.assert_awaited_once()
+    call_args = mock_http.post.await_args
+    assert "/api/papers/42/feedback" in call_args[0][0]
+    assert call_args[1]["json"] == {"signal": "negative", "source": "pulse_thumbs"}
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_feed_thumbs_accepted():
+    """feed_thumbs source value is accepted by the regex and processed without error; H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_pos:10:feed_thumbs")
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "👍 Recorded"
+    call_args = mock_http.post.await_args
+    assert call_args[1]["json"]["source"] == "feed_thumbs"
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_paper_detail_thumbs_accepted():
+    """paper_detail_thumbs source value is accepted by the regex and processed; H1."""
+    update, context, _, _ = _make_callback_update_and_context(
+        "paper:feedback_neg:33:paper_detail_thumbs"
+    )
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "👎 Recorded"
+    call_args = mock_http.post.await_args
+    assert call_args[1]["json"]["source"] == "paper_detail_thumbs"
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_dismiss_combined_accepted():
+    """dismiss_combined source value is accepted by the regex and processed; H1."""
+    update, context, _, _ = _make_callback_update_and_context(
+        "paper:feedback_neg:77:dismiss_combined"
+    )
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    call_args = mock_http.post.await_args
+    assert call_args[1]["json"]["source"] == "dismiss_combined"
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_feedback_callback — failure path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_failure():
+    """On HTTP failure, query.answer carries 'Feedback failed' text; H1."""
+    update, context, _, _ = _make_callback_update_and_context("paper:feedback_pos:42:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_http.post.side_effect = Exception("Connection refused")
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1
+    assert query.answer.await_args[1].get("text") == "Feedback failed — try again later"
+
+
+# ---------------------------------------------------------------------------
+# Tests: paper_feedback_callback — bad data path
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_invalid_callback_data():
+    """Invalid source value — regex rejects, query.answer called once bare; H1."""
+    update, context, _, _ = _make_callback_update_and_context(
+        "paper:feedback_pos:42:unknown_source"
+    )
+    mock_http = AsyncMock()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    query = update.callback_query
+    assert query.answer.call_count == 1  # H1 — bare answer on bad data
+    mock_http.post.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +632,7 @@ async def test_project_detail_not_found():
 @pytest.mark.asyncio
 async def test_task_done_success():
     """task_done callback marks a task as done."""
-    update, context, mock_db, _ = _make_callback_update_and_context("task_done_10")
+    update, context, *_ = _make_callback_update_and_context("task_done_10")
 
     with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
@@ -255,7 +649,7 @@ async def test_task_done_success():
 @pytest.mark.asyncio
 async def test_task_done_not_found():
     """task_done callback sends 'not found' when task does not exist."""
-    update, context, mock_db, _ = _make_callback_update_and_context("task_done_999")
+    update, context, *_ = _make_callback_update_and_context("task_done_999")
 
     with patch("telegram_bot.handlers.callback_handler.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
@@ -343,87 +737,3 @@ def test_start_review_not_registered_in_callback_handler():
         f"start_review should NOT be registered via register_callback_handlers "
         f"(ConversationHandler owns it). Found patterns: {registered_patterns}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Tests: paper_save_callback  (NEW-H1 — single query.answer() per path)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_paper_save_callback_success_answers_once_with_text():
-    """On HTTP 200, query.answer is called exactly once with the success text."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:save:42")
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_http.put.return_value = mock_resp
-
-    await paper_save_callback(update, context)
-
-    query = update.callback_query
-    query.answer.assert_awaited_once()
-    call_kwargs = query.answer.await_args[1]
-    assert call_kwargs.get("text") == "✅ Saved"
-    # reply_text should also be called with the confirmation message
-    query.message.reply_text.assert_awaited_once()
-    assert "42" in query.message.reply_text.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_paper_save_callback_failure_answers_bare_and_replies_error():
-    """On HTTP failure, query.answer() (no text) clears spinner; reply_text carries the error."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:save:42")
-    mock_http.put.side_effect = Exception("Connection refused")
-
-    await paper_save_callback(update, context)
-
-    query = update.callback_query
-    # Exactly one answer call, bare (no text kwarg / text is None/missing)
-    query.answer.assert_awaited_once()
-    call_kwargs = query.answer.await_args[1]
-    assert not call_kwargs.get("text")
-    # User-visible error via reply_text
-    query.message.reply_text.assert_awaited_once()
-    assert "Failed" in query.message.reply_text.call_args[0][0]
-
-
-# ---------------------------------------------------------------------------
-# Tests: paper_dismiss_callback  (NEW-H1 — single query.answer() per path)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_paper_dismiss_callback_success_answers_once_with_text():
-    """On HTTP 200, query.answer is called exactly once with the success text."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:dismiss:99")
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status = MagicMock()
-    mock_http.put.return_value = mock_resp
-
-    await paper_dismiss_callback(update, context)
-
-    query = update.callback_query
-    query.answer.assert_awaited_once()
-    call_kwargs = query.answer.await_args[1]
-    assert call_kwargs.get("text") == "🗑 Dismissed"
-    # reply_text should also be called with the confirmation message
-    query.message.reply_text.assert_awaited_once()
-    assert "99" in query.message.reply_text.call_args[0][0]
-
-
-@pytest.mark.asyncio
-async def test_paper_dismiss_callback_failure_answers_bare_and_replies_error():
-    """On HTTP failure, query.answer() (no text) clears spinner; reply_text carries the error."""
-    update, context, _mock_db, mock_http = _make_callback_update_and_context("paper:dismiss:99")
-    mock_http.put.side_effect = Exception("Connection refused")
-
-    await paper_dismiss_callback(update, context)
-
-    query = update.callback_query
-    # Exactly one answer call, bare (no text kwarg / text is None/missing)
-    query.answer.assert_awaited_once()
-    call_kwargs = query.answer.await_args[1]
-    assert not call_kwargs.get("text")
-    # User-visible error via reply_text
-    query.message.reply_text.assert_awaited_once()
-    assert "Failed" in query.message.reply_text.call_args[0][0]

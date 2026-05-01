@@ -142,19 +142,20 @@ async def _simple_digest(
     owner : int
         Resolved owner chat ID for Bot.send_message (Telegram chat ID, NOT a DB user PK).
     db_user_id : int | None, keyword-only
-        DB user PK for paper_user_state / pulse_ratings scoping. ``None``
+        DB user PK for paper_user_state / recommendation_feedback scoping. ``None``
         (default) means single-tenant mode and matches NULL rows via
         ``IS NOT DISTINCT FROM``. Multi-tenant callers must resolve the
         Telegram chat → DB user via the (yet-to-be-wired) pairing table
         and pass the concrete PK; see ARCHITECTURE.md "Authentication
         and Ownership".
     """
-    # Note: legacy status='starred' rows were backfilled to starred=TRUE by
-    # migration 044; this digest relies on the boolean column only.
-    # NB: the archived predicate below mirrors IS_ARCHIVED_SQL from
-    # services/paper_ingestion/paper_ingestion/queries/predicates.py — duplicated
-    # here because telegram_bot is a separate deployable service and we don't
-    # cross-import paper_ingestion modules at runtime.
+    # Phase A migration: digest now reads state ENUM (state IN ('trash','done')
+    # for the exclude guard; state IN ('reading','done') for include) plus
+    # recommendation_feedback (signal='positive', source='pulse_thumbs') for the
+    # 7-day positive-feedback window. The legacy pulse_ratings table was DROPPED
+    # in Wave 1cd. We duplicate the query inline rather than import from
+    # paper_ingestion.queries.predicates.VIEW_PREDICATES because telegram_bot
+    # is a separate deployable service.
     rows = await db_pool.fetch(
         """SELECT p.id, p.title, p.url, p.published_date, p.authors,
                   t.name as topic_name, pt.relevance_score,
@@ -168,10 +169,7 @@ async def _simple_digest(
                  SELECT 1 FROM paper_user_state pus
                   WHERE pus.paper_id = p.id
                     AND pus.user_id IS NOT DISTINCT FROM $1
-                    AND (
-                        (COALESCE(pus.archived, FALSE) OR pus.status = 'archived')
-                        OR COALESCE(pus.dismissed, FALSE)
-                    )
+                    AND pus.state IN ('trash', 'done')
              )
              AND (
                  EXISTS (
@@ -179,16 +177,17 @@ async def _simple_digest(
                      WHERE pus2.paper_id = p.id
                        AND pus2.user_id IS NOT DISTINCT FROM $1
                        AND (
-                           COALESCE(pus2.starred, FALSE)
-                           OR pus2.status IN ('reading', 'read')
+                           COALESCE(pus2.starred, FALSE) = TRUE
+                           OR pus2.state = 'reading'
                        )
                  )
                  OR EXISTS (
-                     SELECT 1 FROM pulse_ratings pr
-                     WHERE pr.paper_id = p.id
-                       AND pr.user_id IS NOT DISTINCT FROM $1
-                       AND pr.rating IN ('up', 'save', 'open')
-                       AND pr.created_at >= NOW() - INTERVAL '7 days'
+                     SELECT 1 FROM recommendation_feedback rf
+                     WHERE rf.paper_id = p.id
+                       AND rf.user_id IS NOT DISTINCT FROM $1
+                       AND rf.signal = 'positive'
+                       AND rf.source = 'pulse_thumbs'
+                       AND rf.created_at >= NOW() - INTERVAL '7 days'
                  )
              )
            ORDER BY t.name, pt.relevance_score DESC NULLS LAST""",

@@ -114,6 +114,9 @@ export function PaperDetailPage() {
         hasChunks={chunks.length > 0}
         hasSummary={summary !== null}
         pulseProcessButton={processPulse}
+        discoveryOrigin={paper.discovery_origin ?? 'user_initiated'}
+        recentFeedback={paper.recent_feedback ?? null}
+        state={user_state?.state ?? 'inbox'}
       />
       <UserStateForm paperId={paperId} userState={user_state} />
       <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />

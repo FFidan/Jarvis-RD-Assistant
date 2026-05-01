@@ -236,34 +236,6 @@ def make_pulse_card_row(
     )
 
 
-def make_pulse_rating_row(
-    paper_id: int = 42,
-    rating: str = "up",
-    source: str = "pulse",
-) -> FakeRecord:
-    """Return a FakeRecord matching the pulse_ratings schema.
-
-    Parameters
-    ----------
-    paper_id:
-        FK to papers.id.
-    rating:
-        One of ``'up'``, ``'down'``, ``'save'``, ``'dismiss'``, ``'open'``.
-    source:
-        Origin of the rating; defaults to ``'pulse'``. Reserved for future
-        non-Pulse rating sources (e.g. library UI thumbs).
-    """
-    return FakeRecord(
-        {
-            "id": 1,
-            "paper_id": paper_id,
-            "rating": rating,
-            "source": source,
-            "created_at": "2024-01-15T08:30:00+00:00",
-        }
-    )
-
-
 def make_pdf_resolution_row(
     doi: str | None = "10.1234/example",
     arxiv_id: str | None = None,

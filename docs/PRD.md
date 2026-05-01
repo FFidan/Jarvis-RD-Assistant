@@ -73,13 +73,13 @@ browser, without hallucinated claims, in under 2 minutes of reading.
 - **US-103:** As a researcher, I want every factual claim in a summary to be accompanied by an exact quote and page number from the source paper so that I can verify accuracy.
 - **US-104:** As a researcher, I want JARVIS to flag when it has low confidence in a summary so that I know when to read the original myself.
 - **US-105:** As a researcher, I want to reply to a briefing on Telegram to get an extended summary of a specific paper so that I can dive deeper without leaving the chat.
-- **US-106:** As a researcher, I want to star/bookmark a paper from Telegram so that it is saved to my reading list.
+- **US-106:** As a researcher, I want to **save or star** a paper from Telegram so that it is added to my reading list (saved → state='to_read') or marked as a favourite (starred).
 - **US-107:** As a researcher, I want to search my past briefings by keyword or date on the dashboard so that I can find a paper I vaguely remember.
 - **US-108:** As a researcher, I want to see contradictions between papers flagged automatically so that I notice conflicting claims across my reading.
 
 ### 2.3 Learning Engine Module
 
-- **US-201:** As a researcher, I want JARVIS to automatically generate flashcards from papers I have bookmarked so that I retain key findings without manual card creation.
+- **US-201:** As a researcher, I want JARVIS to automatically generate flashcards from papers I have **starred or saved** so that I retain key findings without manual card creation.
 - **US-202:** As a researcher, I want flashcards to include the source paper citation and a link so that I can always trace a fact back to its origin.
 - **US-203:** As a researcher, I want to receive spaced repetition review prompts on Telegram at optimal intervals so that I retain knowledge long-term.
 - **US-204:** As a researcher, I want to rate my recall directly in Telegram so that the scheduling algorithm adapts to my actual retention.
@@ -92,7 +92,7 @@ browser, without hallucinated claims, in under 2 minutes of reading.
 - **US-301:** As a researcher, I want to create a project with a name, description, and deadline on the dashboard so that I can track my active work.
 - **US-302:** As a researcher, I want to add milestones with due dates to a project so that I break large goals into manageable steps.
 - **US-303:** As a researcher, I want to receive Telegram reminders before a milestone is due so that I do not miss deadlines.
-- **US-304:** As a researcher, I want to link bookmarked papers to a project so that my reading list is organized by project context.
+- **US-304:** As a researcher, I want to link **starred or saved** papers to a project so that my reading list is organized by project context.
 - **US-305:** As a researcher, I want to see a project overview on the dashboard showing progress, linked papers, and upcoming milestones.
 - **US-306:** As a researcher, I want to quickly check project status via Telegram so that I can get updates on the go.
 
@@ -132,7 +132,7 @@ A ChatGPT-Pulse-inspired subsystem that discovers new papers from external sourc
 - Phase 1 sources: arXiv (existing plugin, extended), Semantic Scholar (existing, extended), OpenAlex (new plugin, free key required), PubMed (new plugin, enabled by default, optional key for rate limit upgrade).
 - Hybrid scoring pipeline: Stage 1 embedding similarity to library centroid + topic embeddings with recency decay → Stage 2 LLM relevance and novelty scoring (local Ollama fast model) on top 50 candidates → Stage 3 weighted combination with author-match bonus.
 - Morning delivery at configurable time (default 08:00) as a small card deck (5-10 cards) via the My Day page widget and optional Telegram message.
-- Lightweight feedback buttons per card: 👍 like, 👎 dismiss, 💾 save to reading queue, 📖 open paper detail. Ratings persisted to a new `pulse_ratings` table.
+- Lightweight feedback buttons per card: 👍 positive, 👎 negative, 🗑+👎 trash-and-reject (combined), 💾 save to reading queue (lifecycle only), 📖 open paper detail. Per-paper feedback persisted to the recommendation_feedback table; save writes to paper_user_state.state='to_read'.
 - "Why this paper?" transparency popover on every card, displaying matched topics, matched authors, per-signal scores, and the LLM's one-sentence reasoning.
 - Ephemeral UX: today's deck shows in the main widget; after 24 hours it rolls into Pulse History tab on the Research Feed.
 - Graceful degradation: Pulse runs with any subset of sources enabled. No keys required for baseline operation (arXiv + PubMed both ship enabled by default).
@@ -143,7 +143,7 @@ A ChatGPT-Pulse-inspired subsystem that discovers new papers from external sourc
 - New backend package `services/paper_ingestion/paper_ingestion/pulse/` contains all Pulse logic: `job.py` (overnight orchestrator), `profile.py` (load user profile), `discovery.py` (parallel source fan-out), `scoring.py` (3-stage pipeline), `prompts.py` (version-controlled LLM system prompt), `deck.py` (deck assembly and persistence), `resolver.py` (PDF resolution chain).
 - New source plugins: `services/paper_ingestion/paper_ingestion/sources/openalex_source.py` and `pubmed_source.py`.
 - Existing `PaperSource` ABC extended with two optional methods (`fetch_new_since`, `get_recommendations`) that default to empty lists so legacy sources do not need modification.
-- New database tables: `pulse_decks`, `pulse_cards`, `pulse_ratings`, `pdf_resolutions`. New optional column: `topics.description`.
+- New database tables: pulse_decks, pulse_cards, pdf_resolutions (Phase-1, migration 018), and recommendation_feedback (Phase-A, migration 049 — replaces the dropped pulse_ratings table). New optional column: `topics.description`.
 - New API router `services/paper_ingestion/paper_ingestion/routers/pulse.py` exposes six endpoints: `POST /api/pulse/generate`, `GET /api/pulse/today`, `GET /api/pulse/history`, `POST /api/pulse/rate`, `GET /api/pulse/explain/{card_id}`, `GET /api/pulse/stats`.
 - New frontend components: `PulseDeck` (My Day widget), `PulseCard` (card component matching existing Research Feed card style), `WhyPopover` (transparency dialog), and a reusable `InfoTooltip` primitive (generalized `(i)` info tooltip for Settings).
 - Settings extensions: Topics gain optional description field, Automation retains general scheduling controls (Pulse controls moved to dedicated tab), Sources gain API-key fields and provider tooltips. A new dedicated **Pulse** settings tab consolidates enable/schedule/scoring weights/manual generate/diagnostics, replacing the former "Recommendations" tab.
@@ -161,7 +161,7 @@ The former weekly digest feature, renamed from `digest.py` to `weekly_summary.py
 - Runs weekly (default Monday 09:00) via the existing `/api/digest` endpoint (URL unchanged after rename).
 - Delivered via the Research Feed weekly summary section and optional Telegram weekly digest message.
 
-**Engagement filter (narrowed during Phase 1 rename):** the SQL query now explicitly excludes papers that appeared in a Pulse deck but received no engagement (no save, no upvote, no open). Weekly Summary reflects only papers with `user_state IN ('saved', 'reading', 'read')` or with a positive `pulse_ratings` entry in the last 7 days. This is Model C — complementary, zero-overlap with Pulse by construction rather than by convention.
+**Engagement filter (narrowed during Phase 1 rename):** the SQL query now explicitly excludes papers that appeared in a Pulse deck but received no engagement (no save, no upvote, no open). Weekly Summary reflects only papers with paper_user_state.starred = TRUE or state IN ('reading', 'done') or with a positive recommendation_feedback entry (signal='positive', source='pulse_thumbs') in the last 7 days. (Lifecycle schema collapsed in Phase A migrations 047-049.) This is Model C — complementary, zero-overlap with Pulse by construction rather than by convention.
 
 **Complementarity guarantee (Model C):** Pulse and Weekly Summary answer different questions with different temporal stances and different corpora. Pulse is forward-looking ("what should I read today?"), external-corpus, daily, card-shaped. Weekly Summary is backward-looking ("what did my reading this week mean?"), internal-library-only, weekly, narrative-themes-shaped. They share infrastructure (embedder, LLM client, topics, authors) but never duplicate output. A dedicated drift-prevention test in `test_weekly_summary.py` asserts that Pulse-pending papers never leak into Weekly Summary output.
 
@@ -185,7 +185,7 @@ Features shipped in v1 that form the foundation Pulse and Weekly Summary build o
 ### 3.2 Learning Engine
 
 **Core (v1):**
-- Auto-generation of flashcards from bookmarked papers
+- Auto-generation of flashcards from starred or saved papers
 - Each card carries source citation + evidence quote + PDF snapshot
 - FSRS-based scheduling (py-fsrs)
 - Telegram-based review sessions with recall rating
@@ -266,7 +266,7 @@ These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent au
 
 These features shipped in the Sprint 5 hardening pass (commits up to `4b4805d`):
 
-- **Bookmark UI + REST** (migration 043): full bookmark toggle wired end-to-end — frontend button, `PATCH /api/papers/{id}/bookmark` REST endpoint, `papers.is_bookmarked` column, and per-user uniqueness constraints from migration 043 (`multiuser_unique_constraints`). Replaces the earlier stub implementation.
+- **Save/Star UI + REST** (migration 043, superseded by Phase A migration 047): historical Sprint-5 entry — introduced a `PATCH /api/papers/{id}/bookmark` endpoint backed by a `papers.is_bookmarked` column and per-user uniqueness constraints. **Both column and endpoint were removed in Phase A**; replaced by the canonical `state` ENUM (`inbox`/`to_read`/`reading`/`done`/`trash`) plus orthogonal `papers.starred` BOOLEAN, addressed via `PUT /api/papers/{id}/save` and `PUT /api/papers/{id}/star` (see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) §3 + §8).
 - **Pulse weight clamping**: scoring signal weights are now validated and clamped to [0.0, 1.0] on write; malformed weight vectors no longer silently corrupt the scoring pipeline.
 - **Sub-hourly cron guard**: `pulse.cron` values with intervals shorter than 1 hour are rejected at the settings layer with a clear validation error.
 - **Migration 043**: `multiuser_unique_constraints` — unique constraints scoped by `user_id` on `pulse_decks`, `papers`, `cards`, and related tables; groundwork for multi-tenant enforcement.
@@ -439,7 +439,7 @@ Each paper summary must include:
 | Metric | Target |
 |---|---|
 | Briefing interaction rate | > 70% of delivered briefings |
-| Papers bookmarked per week | >= 3 |
+| Papers starred or saved per week | >= 3 |
 | Review sessions per week | >= 4 |
 | Dashboard visits per week | >= 2 |
 
@@ -556,7 +556,7 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 - Sources: arXiv (extend), Semantic Scholar (extend), OpenAlex (new plugin), PubMed (new plugin, enabled by default).
 - PDF resolution chain: arXiv → Unpaywall fallback.
 - Delivery: My Day widget, Research Feed "Today's Pulse" / "Pulse History" tabs, optional Telegram morning message.
-- Feedback: 👍 / 👎 / 💾 / 📖 / dismiss buttons; ratings persisted to `pulse_ratings` table from day one.
+- Feedback: 👍 / 👎 / 🗑+👎 / 💾 / 📖 buttons; feedback persisted to recommendation_feedback table; save writes to paper_user_state.state='to_read'.
 - Transparency: "Why this paper?" popover on every card, showing per-signal breakdown and LLM reasoning.
 - Rename: `digest.py` → `weekly_summary.py`, with SQL filter narrowed to engaged papers only (Model C non-overlap with Pulse).
 - Existing telegram_bot `research_pulse.py` gutted and rewritten from ~164 lines to ~94 lines as a thin delivery wrapper over `GET /api/pulse/today`, with inline 👍/👎/💾 rating callbacks wired to `POST /api/pulse/rate`.
@@ -568,7 +568,7 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 
 #### 8.5.2 Phase 2 (deferred, after Phase 1 is daily-driver stable)
 
-- Per-user logistic-regression classifier trained nightly on the `pulse_ratings` table (scikit-learn). Becomes Stage 4 of the scoring pipeline once ≥30 ratings exist. No cold-start problem because Phase 1 collects ratings silently from day one.
+- Per-user logistic-regression classifier trained nightly on the `recommendation_feedback` table (scikit-learn). Becomes Stage 4 of the scoring pipeline once ≥30 ratings exist. No cold-start problem because Phase 1 collects feedback silently from day one.
 - Citation graph scoring signals using the existing T3-1 citation graph: PageRank on the local subgraph surfaces foundational papers; Adamic/Adar link prediction finds papers sharing rare citation partners.
 - "Missing Foundational Papers" widget — flags papers that are heavily cited within the user's library but missing from it.
 - BERTopic dynamic topic modeling monthly job → "Rising Topics in Your Field" widget.

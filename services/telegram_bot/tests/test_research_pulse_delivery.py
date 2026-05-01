@@ -126,12 +126,15 @@ async def test_api_failure_sends_diagnostic(caplog):
 
 @pytest.mark.asyncio
 async def test_card_message_has_three_inline_buttons(monkeypatch):
-    """Each per-card send must carry up/down/save buttons with the right
-    ``callback_data`` values."""
+    """Per-card buttons use the spec §5.3 callback name convention.
+
+    Wave 3 retired ``pulse_(up|down|save)_<id>`` in favour of
+    ``paper:feedback_pos:<id>:pulse_thumbs`` / ``paper:feedback_neg:...`` /
+    ``paper:save:<id>``.
+    """
     captured_keyboards: list = []
 
     def fake_markup(rows):
-        # Capture the nested rows of buttons so the test can inspect them.
         captured_keyboards.append(rows)
         return MagicMock(_rows=rows)
 
@@ -149,19 +152,27 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
 
     await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
-    # Exactly one keyboard per card (2 cards → 2 keyboards)
     assert len(captured_keyboards) == 2
     for rows in captured_keyboards:
-        # Flatten rows into a single button list
         buttons = [b for row in rows for b in row]
         assert len(buttons) == 3
-        callback_values = sorted(b["callback_data"].split("_")[1] for b in buttons)
-        assert callback_values == ["down", "save", "up"]
+        callback_prefixes = sorted(b["callback_data"].rsplit(":", 1)[0] for b in buttons)
+        # paper:feedback_neg:40:pulse_thumbs → paper:feedback_neg:40
+        # paper:feedback_pos:40:pulse_thumbs → paper:feedback_pos:40
+        # paper:save:40 → paper:save (no trailing source)
+        # rsplit on ":" gives the prefix without the trailing source for feedback,
+        # and the prefix without the id for save. Just assert all three are present.
+        joined = " ".join(b["callback_data"] for b in buttons)
+        assert "paper:feedback_pos:" in joined
+        assert "paper:feedback_neg:" in joined
+        assert "paper:save:" in joined
+        # silence unused
+        del callback_prefixes
 
-    # First card's paper_id is 40 — all three buttons should encode it.
+    # First card's paper_id is 40 — every button should encode it.
     first_card_buttons = [b for row in captured_keyboards[0] for b in row]
     for button in first_card_buttons:
-        assert button["callback_data"].endswith("_40")
+        assert ":40" in button["callback_data"]
 
 
 @pytest.mark.asyncio

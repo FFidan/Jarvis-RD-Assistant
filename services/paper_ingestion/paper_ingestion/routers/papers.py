@@ -1,6 +1,7 @@
 """Paper CRUD and metadata endpoints."""
 
 import logging
+from datetime import UTC, datetime
 from typing import Annotated
 
 import asyncpg
@@ -335,11 +336,6 @@ async def batch_save_papers(
     return results
 
 
-# ---------------------------------------------------------------------------
-# POST /api/papers/{paper_id}/feedback  — writes to recommendation_feedback
-# ---------------------------------------------------------------------------
-
-
 @router.post("/{paper_id}/feedback", response_model=FeedbackResponse)
 @limiter.limit("60/minute")
 async def submit_feedback(
@@ -358,15 +354,8 @@ async def submit_feedback(
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
-            row = await conn.fetchrow(
-                """INSERT INTO recommendation_feedback
-                       (paper_id, user_id, signal, source, reason)
-                   VALUES ($1, $2, $3, $4, $5)
-                   ON CONFLICT (paper_id, user_id, source) DO UPDATE
-                     SET signal = EXCLUDED.signal,
-                         reason = EXCLUDED.reason,
-                         created_at = NOW()
-                   RETURNING paper_id, signal, source, created_at""",
+            await _upsert_recommendation_feedback(
+                conn,
                 paper_id,
                 user_id,
                 body.signal,
@@ -375,8 +364,12 @@ async def submit_feedback(
             )
         except asyncpg.ForeignKeyViolationError as e:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e
-    assert row is not None  # RETURNING guarantees a row on success
-    return FeedbackResponse(**dict(row))
+    return FeedbackResponse(
+        paper_id=paper_id,
+        signal=body.signal,
+        source=body.source,
+        created_at=datetime.now(UTC),
+    )
 
 
 # ---------------------------------------------------------------------------

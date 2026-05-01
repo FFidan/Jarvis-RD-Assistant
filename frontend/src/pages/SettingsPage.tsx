@@ -1,3 +1,4 @@
+import { useSearchParams } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TopicSection } from '@/components/settings/TopicSection';
 import { SourcesList } from '@/components/settings/SourcesList';
@@ -11,12 +12,39 @@ import { PairTelegram } from '@/components/setup/PairTelegram';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 
+const VALID_TABS = new Set([
+  'topics',
+  'sources',
+  'authors',
+  'ingestion',
+  'automation',
+  'extraction',
+  'pulse',
+  'timer',
+  'providers',
+  'integrations',
+]);
+
 export function SettingsPage() {
+  // Wave 7 (C.1) — URL-synced tab. Audit B5 reported that deep-links into
+  // /settings sub-sections did not preserve which tab was active. Fix: read
+  // ?tab= from URL on mount; update URL on tab change so links are
+  // shareable. Falls back to 'topics' for missing/invalid values.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab');
+  const activeTab = requestedTab && VALID_TABS.has(requestedTab) ? requestedTab : 'topics';
+
+  const handleTabChange = (value: string) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', value);
+    setSearchParams(next, { replace: true });
+  };
+
   return (
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Settings</h1>
 
-      <Tabs defaultValue="topics">
+      <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList className="overflow-x-auto scrollbar-thin flex-nowrap">
           <TabsTrigger value="topics">Topics</TabsTrigger>
           <TabsTrigger value="sources">Sources</TabsTrigger>

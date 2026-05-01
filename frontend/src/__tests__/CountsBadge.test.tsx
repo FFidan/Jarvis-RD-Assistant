@@ -7,6 +7,8 @@ vi.mock('@/lib/api', () => ({
   useFeedCounts: vi.fn(),
 }));
 
+const EMPTY_COUNTS = { inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0 };
+
 describe('CountsBadge', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,7 +34,7 @@ describe('CountsBadge', () => {
 
   it('renders nothing when count is 0 (zero is suppressed)', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 0 },
+      data: EMPTY_COUNTS,
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     const { container } = render(<CountsBadge surface="inbox" />);
@@ -41,7 +43,7 @@ describe('CountsBadge', () => {
 
   it('renders the count when count is a positive number', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 5, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 5 },
+      data: { ...EMPTY_COUNTS, inbox: 5, active: 5, all_non_trash: 5 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="inbox" />);
@@ -50,7 +52,7 @@ describe('CountsBadge', () => {
 
   it('renders the library count for surface="library"', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 12, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 12 },
+      data: { ...EMPTY_COUNTS, library: 12, all_non_trash: 12 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="library" />);
@@ -59,7 +61,7 @@ describe('CountsBadge', () => {
 
   it('renders "999+" when count exceeds 999', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 1000, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 1000 },
+      data: { ...EMPTY_COUNTS, inbox: 1000, active: 1000, all_non_trash: 1000 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="inbox" />);
@@ -69,7 +71,7 @@ describe('CountsBadge', () => {
 
   it('renders "999+" for count exactly 1000', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 1000, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 1000 },
+      data: { ...EMPTY_COUNTS, library: 1000, all_non_trash: 1000 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="library" />);
@@ -78,7 +80,7 @@ describe('CountsBadge', () => {
 
   it('renders the count as text for count exactly 999', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 999, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 999 },
+      data: { ...EMPTY_COUNTS, inbox: 999, active: 999, all_non_trash: 999 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="inbox" />);
@@ -88,7 +90,7 @@ describe('CountsBadge', () => {
 
   it('renders the trash count for surface="trash"', () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 0, starred: 0, archived: 0, reading: 0, trash: 3, all_active: 0 },
+      data: { ...EMPTY_COUNTS, trash: 3 },
       isLoading: false,
     } as ReturnType<typeof useFeedCounts>);
     render(<CountsBadge surface="trash" />);

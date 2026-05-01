@@ -142,13 +142,13 @@ async def auto_detect_authors(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT author_name,
-                      bool_or(COALESCE(starred, FALSE) OR status = 'starred') AS is_starred,
+                      bool_or(COALESCE(starred, FALSE)) AS is_starred,
                       max(rating) AS max_rating
             FROM (
-                SELECT unnest(p.authors) AS author_name, pus.status, pus.starred, pus.rating
+                SELECT unnest(p.authors) AS author_name, pus.starred, pus.rating
                 FROM papers p
                 JOIN paper_user_state pus ON p.id = pus.paper_id
-                WHERE COALESCE(pus.starred, FALSE) OR pus.status = 'starred' OR pus.rating >= 4
+                WHERE pus.starred = TRUE OR pus.rating >= 4
             ) sub
             GROUP BY author_name"""
         )

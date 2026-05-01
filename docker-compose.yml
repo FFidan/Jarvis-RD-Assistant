@@ -18,6 +18,10 @@ x-shared-env: &shared-env
   # JARVIS_API_KEY is injected via Docker Secret (_FILE convention); plain env var kept as fallback
   JARVIS_API_KEY: ${JARVIS_API_KEY:-}
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
+  # LITELLM_API_KEY: app services authenticate to litellm proxy with the same key litellm validates against (LITELLM_MASTER_KEY).
+  # Without this, build_litellm_headers() in libs/jarvis_common/jarvis_common/llm_client.py sends an empty Authorization
+  # header and litellm responds 401 — breaking embeddings, Pulse generation, and any LLM call. Wired in Wave 7 (B.1).
+  LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-}
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost:3001}

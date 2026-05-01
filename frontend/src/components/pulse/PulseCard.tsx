@@ -1,9 +1,12 @@
 import * as React from 'react';
-import { ThumbsUp, ThumbsDown, Bookmark, HelpCircle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Trash2, ThumbsDown, Bookmark, HelpCircle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { WhyPopover } from '@/components/pulse/WhyPopover';
+import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 import {
   Tooltip,
   TooltipContent,
@@ -11,6 +14,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { trashAndRejectPaper } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
 
 export interface PulseCardProps {
@@ -18,6 +22,13 @@ export interface PulseCardProps {
   onRate: (paperId: number, rating: PulseRating) => void;
   onOpen?: (paperId: number) => void;
   rated?: boolean;
+  /**
+   * Hide the 🗑+👎 (Trash & Reject) action — used by the My Day Pulse Preview
+   * (top-3 widget) per spec §5.2 lines 345-346 which differentiates the full
+   * Pulse Deck card (👍/👎/💾/🗑+👎) from the My Day Pulse Preview (👍/👎/💾).
+   * The full /pulse Pulse Deck page leaves this default (false) → all 4 actions.
+   */
+  hideTrashAndReject?: boolean;
 }
 
 /**
@@ -28,7 +39,15 @@ export interface PulseCardProps {
  * layout with a primary content column and an action rail). Clicking the
  * card body (outside the action buttons) calls `onOpen(paper_id)`.
  */
-export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProps) {
+export function PulseCard({
+  card,
+  onRate,
+  onOpen,
+  rated = false,
+  hideTrashAndReject = false,
+}: PulseCardProps) {
+  const queryClient = useQueryClient();
+
   const authorsDisplay = React.useMemo(() => {
     const first = card.paper_authors.slice(0, 3).join(', ');
     return card.paper_authors.length > 3 ? `${first}, ...` : first;
@@ -39,6 +58,20 @@ export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProp
   };
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  const trashAndRejectMut = useMutation({
+    mutationFn: () => trashAndRejectPaper(card.paper_id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pulse-deck'] });
+      queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
+      queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+      toast.success('Trashed and excluded similar topics');
+    },
+    onError: (err) =>
+      toast.error('Failed to trash & reject', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      }),
+  });
 
   return (
     <div
@@ -122,30 +155,16 @@ export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProp
           onClick={stop}
         >
           <div className="flex gap-1">
-            <Button
-              variant="outline"
+            {/* Pulse-deck cards are always discovery_origin='pulse' by definition (spec §5.2).
+                PulseCardResponse model does not surface the field; we hardcode it for the
+                FeedbackButtons gate. */}
+            <FeedbackButtons
+              paperId={card.paper_id}
+              discoveryOrigin="pulse"
+              source="pulse_thumbs"
+              recentFeedback={null}
               size="sm"
-              aria-label="Thumbs up"
-              disabled={rated}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRate(card.paper_id, 'up');
-              }}
-            >
-              <ThumbsUp className="h-3.5 w-3.5" />
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              aria-label="Thumbs down"
-              disabled={rated}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRate(card.paper_id, 'down');
-              }}
-            >
-              <ThumbsDown className="h-3.5 w-3.5" />
-            </Button>
+            />
             <Button
               variant="outline"
               size="sm"
@@ -158,6 +177,20 @@ export function PulseCard({ card, onRate, onOpen, rated = false }: PulseCardProp
             >
               <Bookmark className="h-3.5 w-3.5" />
             </Button>
+            {!hideTrashAndReject && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={trashAndRejectMut.isPending}
+                onClick={() => trashAndRejectMut.mutate()}
+                title="Trash and don't recommend similar"
+                aria-label="Trash and reject"
+              >
+                <Trash2 size={14} />
+                <ThumbsDown size={12} className="ml-0.5 -mr-0.5" />
+              </Button>
+            )}
           </div>
           <WhyPopover
             cardId={card.card_id}

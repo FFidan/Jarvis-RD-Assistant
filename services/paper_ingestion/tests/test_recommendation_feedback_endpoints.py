@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.routers import recommendation_feedback
+from paper_ingestion.routers._paper_helpers import _upsert_recommendation_feedback
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -262,3 +263,66 @@ async def test_delete_scopes_by_user_id():
 
     sql = conn.execute.call_args.args[0]
     assert "user_id IS NOT DISTINCT FROM" in sql
+
+
+# ---------------------------------------------------------------------------
+# _upsert_recommendation_feedback helper — topic_id stamping tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_helper_looks_up_primary_topic_when_topic_id_omitted():
+    """When topic_id is not supplied, the helper looks up the highest-relevance
+    topic from paper_topics and stamps it on the INSERT."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 42  # primary topic from lookup
+
+    await _upsert_recommendation_feedback(
+        conn,
+        paper_id=10,
+        user_id=None,
+        signal="negative",
+        source="feed_thumbs",
+        reason=None,
+        # topic_id omitted — helper must perform the lookup
+    )
+
+    # fetchval should have been called with the paper_topics lookup SQL + paper_id=10
+    conn.fetchval.assert_awaited_once()
+    fetchval_sql = conn.fetchval.await_args.args[0]
+    assert "paper_topics" in fetchval_sql
+    assert "ORDER BY relevance_score DESC NULLS LAST" in fetchval_sql
+    assert "LIMIT 1" in fetchval_sql
+    assert conn.fetchval.await_args.args[1] == 10  # paper_id param
+
+    # execute should have been called with topic_id=42 as the 6th positional arg
+    conn.execute.assert_awaited_once()
+    exec_args = conn.execute.await_args.args
+    assert "topic_id" in exec_args[0]  # column present in INSERT SQL
+    assert exec_args[6] == 42  # $6 = topic_id
+
+
+@pytest.mark.asyncio
+async def test_helper_uses_provided_topic_id_when_given():
+    """When topic_id is explicitly supplied, no lookup is performed and the
+    provided value is passed directly to the INSERT."""
+    conn = AsyncMock()
+
+    await _upsert_recommendation_feedback(
+        conn,
+        paper_id=20,
+        user_id=5,
+        signal="positive",
+        source="pulse_thumbs",
+        reason=None,
+        topic_id=99,
+    )
+
+    # fetchval must NOT have been called — no lookup needed
+    conn.fetchval.assert_not_awaited()
+
+    # execute must have been called with topic_id=99 as the 6th positional arg
+    conn.execute.assert_awaited_once()
+    exec_args = conn.execute.await_args.args
+    assert "topic_id" in exec_args[0]
+    assert exec_args[6] == 99  # $6 = topic_id

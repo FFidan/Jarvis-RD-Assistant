@@ -20,7 +20,7 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 - **Discovery & Pulse** -- Overnight proactive discovery of new papers from arXiv, Semantic Scholar, OpenAlex, and PubMed. Scores candidates against your research interests using embedding similarity plus LLM relevance ranking, then delivers a small curated card deck each morning via the My Day preview and optional Telegram. Lightweight 👍/👎/💾 feedback on cards shapes tomorrow's recommendations. Pulse settings (enable/schedule/scoring weights/diagnostics) live in Settings → Pulse tab.
 
-- **Bookmarks** -- One-click bookmark toggle via `PUT /api/papers/{id}/bookmark`. Bookmarked papers are surfaced in the Research Feed and are accessible via the 💾 button in Telegram paper listings and Pulse cards.
+- **Save & Star** -- Triage papers with PUT /api/papers/{id}/save (state='to_read') and curate favourites with PUT /api/papers/{id}/star. Lifecycle states (inbox / to_read / reading / done / trash) and the orthogonal star are surfaced in the Research Feed. The 💾 button in Telegram paper listings and Pulse cards triggers paper:save:<id>.
 
 ### Key Design Choices
 
@@ -197,6 +197,7 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 | `/start` | Pair this chat with your JARVIS install (first use) / greet you (subsequent uses). | per-user default | Any chat; pairing code required on first use |
 | `/help` | List available commands. | per-user default | Paired chat only |
 | `/papers` | Show the latest papers in your library. | per-user default | Paired chat only |
+| `/inbox` | Show inbox papers (state='inbox') with origin-conditional 👍/👎/🗑+👎 keyboard. Maps to GET /api/papers/feed?view=inbox. | per-user default | Paired chat only |
 | `/stats` | Library stats — paper count, review streak, starred count. | per-user default | Paired chat only |
 | `/briefing` | Generate an on-demand research briefing for today. | per-user default | Paired chat only |
 | `/projects` | List your projects with progress indicators. | per-user default | Paired chat only |
@@ -204,7 +205,7 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 | `/done <task_id>` | Mark a task done. | per-user default | Paired chat only |
 | `/newproject <name>` | Create a new project. | per-user default | Paired chat only |
 | `/focus [minutes]` | Start a Pomodoro focus session (default 25 min). Sends an alarm message when the timer expires and logs the session. Cancel a running session by calling `/focus` again with a new duration. | 3 per 60s | Paired chat only |
-| `/next` | Show the highest-scored paper recommendation from `paper_recommendations` that has not been dismissed. | per-user default | Paired chat only |
+| `/next` | Show today's top Pulse card via GET /api/pulse/today?limit=1. | per-user default | Paired chat only |
 | `/pulse_now` | Generate today's Pulse deck on demand. | 1 per 60s; 300s cooldown | Paired chat only |
 | `/review` | Begin an FSRS flashcard review session. Shows cards one at a time with Again / Hard / Good / Easy inline buttons. Session continues until no cards remain or you send `/cancel`. | None on entry | Paired chat only |
 
@@ -212,8 +213,8 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 
 #### Inline Interactions
 
-- **Pulse card rating** — each Pulse card has 👍 / 👎 / 💾 buttons (`pulse_up_<id>`, `pulse_down_<id>`, `pulse_save_<id>`). Ratings feed the Phase-2 relevance classifier.
-- **Paper drill-down** — paper list entries expose a detail button (`paper_detail_<id>`) and a 💾 bookmark button (`paper_bookmark_<id>`).
+- **Pulse card rating** — each Pulse card has 👍 / 👎 / 💾 buttons (paper:feedback_pos:<id>:pulse_thumbs, paper:feedback_neg:<id>:pulse_thumbs, paper:save:<id>). 👍/👎 write to recommendation_feedback and feed the L1+L2+L3 backend learning loop; 💾 sets lifecycle state to to_read.
+- **Paper drill-down** — paper list entries expose a detail button (paper_detail_<id>) and a 💾 save button (paper:save:<id>).
 - **Project drill-down** — project list entries expose a detail button (`project_detail_<id>`).
 - **Task-done-from-chat** — task list entries expose ✅ complete buttons (`task_done_<id>`) so you can finish a task without typing `/done`.
 - **Review flashcards in chat** — the `/review` flow uses an inline keyboard for Again / Hard / Good / Easy grading.

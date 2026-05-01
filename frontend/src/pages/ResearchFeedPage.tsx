@@ -14,7 +14,7 @@ import type {
   SearchPreviewSourceError,
   SourceConfig,
 } from '@/types';
-import type { SurfaceView, FeedCountsResponse } from '@/types';
+import type { SurfaceView, LibraryFilter, FeedCountsResponse } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { StreamingChat } from '@/components/chat/StreamingChat';
@@ -24,9 +24,8 @@ import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
 import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { FeedView } from '@/components/feed/FeedView';
 import { CountsBadge } from '@/components/feed/CountsBadge';
-import { KeyboardCheatSheet } from '@/components/feed/KeyboardCheatSheet';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
-import { BookOpen } from 'lucide-react';
+import { BookOpen, Star, BookOpen as BookOpenIcon, Library as LibraryIcon, CheckCircle } from 'lucide-react';
 
 // ─── surface definitions ────────────────────────────────────────────────────
 
@@ -38,41 +37,35 @@ const SURFACES: { value: SurfaceView; label: string; countsKey?: keyof FeedCount
   { value: 'trash', label: 'Trash', countsKey: 'trash' },
 ];
 
-type LibraryFilter = 'starred' | 'archived' | 'reading';
-
-const LIBRARY_FILTERS: { value: LibraryFilter; label: string }[] = [
-  { value: 'starred', label: '⭐ Starred' },
-  { value: 'archived', label: '📁 Archived' },
-  { value: 'reading', label: 'Reading' },
-];
-
-// URL-param guards (NEW-M16) — reject unexpected ?surface= / ?filter= values
+// URL-param guards (M16) — reject unexpected ?surface= / ?filter= values
+// Tightened to 5 top-level surfaces; starred/archived/reading are sub-filters only.
 const VALID_SURFACES: ReadonlySet<SurfaceView> = new Set<SurfaceView>([
   'inbox',
   'library',
   'search',
   'ask',
   'trash',
-  'starred',
-  'archived',
-  'reading',
 ]);
 
-const VALID_LIBRARY_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
+const VALID_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
   'starred',
-  'archived',
   'reading',
+  'to_read',
+  'done',
 ]);
 
-// Top-level filters extend LibraryFilter with the special 'pulse-this-week' value.
-type TopLevelFilter = LibraryFilter | 'pulse-this-week';
-
-const VALID_FILTERS: ReadonlySet<TopLevelFilter> = new Set<TopLevelFilter>([
-  'starred',
-  'archived',
-  'reading',
-  'pulse-this-week',
-]);
+// Library sub-chip definitions (spec §5.4 — 5 items: All + 4 filters)
+const LIBRARY_SUB_CHIPS: Array<{
+  value: LibraryFilter | undefined;
+  label: string;
+  icon: React.ReactNode;
+}> = [
+  { value: undefined, label: 'All', icon: null },
+  { value: 'starred', label: 'Starred', icon: <Star size={14} /> },
+  { value: 'reading', label: 'Reading', icon: <BookOpenIcon size={14} /> },
+  { value: 'to_read', label: 'Reading List', icon: <LibraryIcon size={14} /> },
+  { value: 'done', label: 'Done', icon: <CheckCircle size={14} /> },
+];
 
 // ─── helper ─────────────────────────────────────────────────────────────────
 
@@ -89,13 +82,15 @@ export function ResearchFeedPage() {
   const rawSurface = searchParams.get('surface');
   const rawFilter = searchParams.get('filter');
 
+  // M16: unknown surface → 'inbox' fallback
   const surface: SurfaceView =
     rawSurface && VALID_SURFACES.has(rawSurface as SurfaceView)
       ? (rawSurface as SurfaceView)
       : 'inbox';
-  const filter: TopLevelFilter | null =
-    rawFilter && VALID_FILTERS.has(rawFilter as TopLevelFilter)
-      ? (rawFilter as TopLevelFilter)
+  // Unknown filter (when surface=library) → no filter (show all library papers)
+  const filter: LibraryFilter | null =
+    rawFilter && VALID_FILTERS.has(rawFilter as LibraryFilter)
+      ? (rawFilter as LibraryFilter)
       : null;
 
   // Clear bulk selection on any surface change — handles URL-driven changes
@@ -105,25 +100,10 @@ export function ResearchFeedPage() {
     useBulkSelection.getState().clear();
   }, [surface]);
 
-  // Cheat-sheet modal (mount-once + ? listener handled below)
-  const [cheatSheetOpen, setCheatSheetOpen] = useState(false);
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const target = e.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
-      ) {
-        return;
-      }
-      if (e.key === '?') setCheatSheetOpen(true);
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, []);
+  // Cheat sheet — moved to global AppShell mount in Wave 7 (B.6).
+  // The ? keypress is bound by useFeedKeyboardShortcuts in FeedView, which
+  // dispatches to useKeyboardShortcuts.getState().open(). The TopBar icon
+  // button on every page also opens it.
 
   const { data: counts } = useFeedCounts();
 
@@ -252,20 +232,22 @@ export function ResearchFeedPage() {
 
   function setSurface(s: SurfaceView) {
     setSearchParams((prev) => {
-      prev.set('surface', s);
-      prev.delete('filter');
-      return prev;
+      const next = new URLSearchParams(prev);
+      next.set('surface', s);
+      next.delete('filter');
+      return next;
     });
   }
 
-  function setLibraryFilter(f: LibraryFilter | null) {
+  function setLibraryFilter(f: LibraryFilter | undefined) {
     setSearchParams((prev) => {
-      if (f && VALID_LIBRARY_FILTERS.has(f)) {
-        prev.set('filter', f);
+      const next = new URLSearchParams(prev);
+      if (f === undefined) {
+        next.delete('filter');
       } else {
-        prev.delete('filter');
+        next.set('filter', f);
       }
-      return prev;
+      return next;
     });
   }
 
@@ -275,8 +257,6 @@ export function ResearchFeedPage() {
 
   return (
     <div className="space-y-6">
-      <KeyboardCheatSheet open={cheatSheetOpen} onClose={() => setCheatSheetOpen(false)} />
-
       <h1 className="flex items-center gap-2 text-3xl font-bold">
         <BookOpen className="h-8 w-8" />
         Research Feed
@@ -308,35 +288,23 @@ export function ResearchFeedPage() {
         ))}
       </div>
 
-      {/* ── Library sub-chips ─────────────────────────────────────────────── */}
+      {/* ── Library sub-chips (spec §5.4 — 5 items: All + 4 filters) ────── */}
       {surface === 'library' && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Library filter">
-          <button
-            role="tab"
-            aria-selected={!filter}
-            onClick={() => setLibraryFilter(null)}
-            className={cn(
-              'inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-              !filter
-                ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
-                : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-            )}
-          >
-            All
-          </button>
-          {LIBRARY_FILTERS.map(({ value, label }) => (
+          {LIBRARY_SUB_CHIPS.map(({ value, label, icon }) => (
             <button
-              key={value}
+              key={value ?? '__all__'}
               role="tab"
-              aria-selected={filter === value}
-              onClick={() => setLibraryFilter(filter === value ? null : value)}
+              aria-selected={filter === (value ?? null)}
+              onClick={() => setLibraryFilter(value)}
               className={cn(
-                'inline-flex h-8 items-center rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                filter === value
+                'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                filter === (value ?? null)
                   ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
                   : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
               )}
             >
+              {icon}
               {label}
             </button>
           ))}
@@ -365,6 +333,13 @@ export function ResearchFeedPage() {
       {surface === 'trash' && (
         <div>
           <SectionInfo>Papers you have archived or removed from your active library.</SectionInfo>
+          {/* Amber banner — inlined from TrashView.tsx (deleted in T3.7) */}
+          <div
+            className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100 mb-3"
+            role="alert"
+          >
+            Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.
+          </div>
           <FeedView surface="trash" filter={filter} />
         </div>
       )}

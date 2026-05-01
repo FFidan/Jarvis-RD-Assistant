@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PulseCard } from '@/components/pulse/PulseCard';
+import * as api from '@/lib/api';
 import type { PulseCardItem } from '@/types';
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -16,6 +17,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
       llm_relevance: 8,
       llm_novelty: 6,
     }),
+    trashAndRejectPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
+    submitFeedback: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -32,7 +35,7 @@ const sampleCard: PulseCardItem = {
   reasoning: 'Directly extends your prior work on continuous-depth models.',
   reasoning_verified: null,
   reasoning_confidence: null,
-  signals: { topic_sim: 0.8, author_overlap: 0.2 },
+  signals: { topic_sim: 0.8, author_overlap: 0.2, l2_penalty: 0.1 },
 };
 
 function renderCard(
@@ -40,7 +43,7 @@ function renderCard(
   cardOverrides: Partial<PulseCardItem> = {},
 ) {
   const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   const onRate = props.onRate ?? vi.fn();
   const onOpen = props.onOpen;
@@ -48,6 +51,7 @@ function renderCard(
   return {
     onRate,
     onOpen,
+    queryClient,
     ...render(
       <QueryClientProvider client={queryClient}>
         <PulseCard card={card} onRate={onRate} onOpen={onOpen} />
@@ -74,26 +78,49 @@ describe('PulseCard', () => {
     ).toBeInTheDocument();
   });
 
-  it('renders up / down / save action buttons', () => {
+  it('renders save and why action buttons', () => {
     renderCard();
-    expect(screen.getByRole('button', { name: /thumbs up/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /thumbs down/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /save/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /why/i })).toBeInTheDocument();
   });
 
-  it('calls onRate with up when thumbs-up clicked', async () => {
-    const user = userEvent.setup();
-    const { onRate } = renderCard();
-    await user.click(screen.getByRole('button', { name: /thumbs up/i }));
-    expect(onRate).toHaveBeenCalledWith(42, 'up');
+  it('renders FeedbackButtons (always — pulse-origin per spec §5.2)', () => {
+    renderCard();
+    // FeedbackButtons renders thumbs up/down with these aria-labels
+    expect(screen.getByRole('button', { name: /recommend more like this/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /don't recommend like this/i })).toBeInTheDocument();
   });
 
-  it('calls onRate with down when thumbs-down clicked', async () => {
+  it('renders Trash & Reject button', () => {
+    renderCard();
+    expect(screen.getByRole('button', { name: /trash and reject/i })).toBeInTheDocument();
+  });
+
+  it('calls trashAndRejectPaper when Trash & Reject button clicked', async () => {
     const user = userEvent.setup();
-    const { onRate } = renderCard();
-    await user.click(screen.getByRole('button', { name: /thumbs down/i }));
-    expect(onRate).toHaveBeenCalledWith(42, 'down');
+    renderCard();
+    await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.trashAndRejectPaper)).toHaveBeenCalledWith(42);
+    });
+  });
+
+  it('calls submitFeedback (positive) when FeedbackButtons thumbs-up clicked', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', { name: /recommend more like this/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.submitFeedback)).toHaveBeenCalledWith(42, { signal: 'positive', source: 'pulse_thumbs' });
+    });
+  });
+
+  it('calls submitFeedback (negative) when FeedbackButtons thumbs-down clicked', async () => {
+    const user = userEvent.setup();
+    renderCard();
+    await user.click(screen.getByRole('button', { name: /don't recommend like this/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.submitFeedback)).toHaveBeenCalledWith(42, { signal: 'negative', source: 'pulse_thumbs' });
+    });
   });
 
   it('calls onRate with save when save clicked', async () => {
@@ -118,6 +145,14 @@ describe('PulseCard', () => {
     await waitFor(() => {
       expect(screen.getByRole('dialog', { name: /why this paper/i })).toBeInTheDocument();
     });
+  });
+
+  it('does not call onRate with up/down (legacy path removed)', () => {
+    // The legacy onRate(id, 'up'/'down') buttons are gone; FeedbackButtons
+    // takes over thumbs via submitFeedback. No button with the old aria-labels exists.
+    renderCard();
+    expect(screen.queryByRole('button', { name: /^thumbs up$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^thumbs down$/i })).not.toBeInTheDocument();
   });
 
   describe('reasoning verification badge', () => {

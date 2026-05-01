@@ -23,12 +23,27 @@ PULSE_TELEGRAM_TOP_N = 5
 
 
 def _pulse_keyboard(paper_id: int) -> InlineKeyboardMarkup:
+    """Pulse-delivery keyboard.
+
+    Spec §5.3 callback name convention. The legacy ``pulse_(up|down|save)_<id>``
+    handler was deleted in Wave 3; thumbs map to the per-paper feedback flow
+    and Save uses the lifecycle endpoint.
+    """
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("\U0001f44d Up", callback_data=f"pulse_up_{paper_id}"),
-                InlineKeyboardButton("\U0001f44e Down", callback_data=f"pulse_down_{paper_id}"),
-                InlineKeyboardButton("\U0001f4be Save", callback_data=f"pulse_save_{paper_id}"),
+                InlineKeyboardButton(
+                    "\U0001f44d Up",
+                    callback_data=f"paper:feedback_pos:{paper_id}:pulse_thumbs",
+                ),
+                InlineKeyboardButton(
+                    "\U0001f44e Down",
+                    callback_data=f"paper:feedback_neg:{paper_id}:pulse_thumbs",
+                ),
+                InlineKeyboardButton(
+                    "\U0001f4be Save",
+                    callback_data=f"paper:save:{paper_id}",
+                ),
             ]
         ]
     )

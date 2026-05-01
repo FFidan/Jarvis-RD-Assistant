@@ -5,39 +5,34 @@ import { toast } from 'sonner';
 import {
   fetchFeed,
   savePaper,
-  unsavePaper,
-  dismissPaper,
+  skipPaper,
+  markReading,
+  markDone,
+  trashPaper,
   restorePaper,
-  hardDeletePaper,
-  markPaperRead,
-  bookmarkPaper,
-  archivePaper,
+  starPaper,
+  unstarPaper,
 } from '@/lib/api';
-import type { SurfaceView } from '@/types';
+import type { FeedPaper, SurfaceView } from '@/types';
 import { FeedPaperRow } from './FeedPaperRow';
 import { BulkToolbar } from './BulkToolbar';
+import { HardDeleteModal } from './HardDeleteModal';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
+import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
-import { Inbox, Library, Star, Archive, BookOpen, Trash2 } from 'lucide-react';
+import { Inbox, Library, Star, BookOpen, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
-const onErrorToast = (label: string) => (err: unknown) =>
-  toast.error(err instanceof Error ? err.message : `${label} failed`);
+// NI-3: shared toastError helper — every mutation must call this on error
+const toastError = (verb: string) => (err: unknown) =>
+  toast.error(`Failed to ${verb}`, { description: err instanceof Error ? err.message : 'Unknown error' });
 
 interface FeedViewProps {
   surface: SurfaceView;
-  filter?: 'starred' | 'archived' | 'reading' | 'pulse-this-week' | null;
+  /** Library sub-chip filter. 'pulse-this-week' is passed through to the backend as-is. */
+  filter?: 'starred' | 'reading' | 'to_read' | 'done' | 'pulse-this-week' | null;
 }
 
 // Per-surface empty state copy
@@ -57,11 +52,6 @@ const EMPTY_STATE: Record<string, { icon: LucideIcon; title: string; description
     title: 'No starred papers',
     description: 'Star papers to keep track of your favourites.',
   },
-  archived: {
-    icon: Archive,
-    title: 'No archived papers',
-    description: 'Archive papers to remove them from your active feed without deleting them.',
-  },
   reading: {
     icon: BookOpen,
     title: 'Nothing in reading list',
@@ -70,7 +60,7 @@ const EMPTY_STATE: Record<string, { icon: LucideIcon; title: string; description
   trash: {
     icon: Trash2,
     title: 'Trash is empty',
-    description: 'Dismissed papers land here. You can restore them or delete them permanently.',
+    description: 'Trashed papers land here. You can restore them or delete them permanently.',
   },
 };
 
@@ -82,177 +72,81 @@ export function FeedView({ surface, filter }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Per-row pending state tracking
-  const [pendingSave, setPendingSave] = useState<Set<number>>(new Set());
-  const [pendingMarkRead, setPendingMarkRead] = useState<Set<number>>(new Set());
-  const [pendingStar, setPendingStar] = useState<Set<number>>(new Set());
-  const [pendingArchive, setPendingArchive] = useState<Set<number>>(new Set());
-  const [pendingDismiss, setPendingDismiss] = useState<Set<number>>(new Set());
-  const [pendingRestore, setPendingRestore] = useState<Set<number>>(new Set());
+  // Keyboard-navigation focused row index (j/k)
+  const [focusedIdx, setFocusedIdx] = useState<number>(0);
 
   // Hard-delete modal state
   const [hardDeleteTarget, setHardDeleteTarget] = useState<{ id: number; title: string } | null>(null);
-  const [hardDeletePending, setHardDeletePending] = useState(false);
-
-  // Keyboard-navigation focused row index (j/k)
-  const [focusedIdx, setFocusedIdx] = useState<number>(0);
 
   // Bulk selection (subscribe to selectedIds for re-renders; mutate via getState())
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['papers-feed', surface, filter],
-    queryFn: () => fetchFeed({ view: surface, filter }),
+    // fetchFeed accepts SurfaceView string
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter }),
   });
 
-  const papers = data?.papers ?? [];
+  // Cast to FeedPaper[] — backend (Wave 1ab) already returns the Phase-A shape
+  const papers = (data?.papers ?? []) as FeedPaper[];
 
-  const invalidate = useCallback(() => {
+  const invalidateFeed = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
     void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
   }, [queryClient]);
 
-  // --- Mutation helpers ---
+  // --- Lifecycle mutations (9 mutations, all with NI-3 onError) ---
 
   const saveMutation = useMutation({
-    mutationFn: (paperId: number) => savePaper(paperId, { star: false }),
-    onSuccess: invalidate,
-    onError: onErrorToast('Save'),
+    mutationFn: (paperId: number) => savePaper(paperId),
+    onSuccess: invalidateFeed,
+    onError: toastError('save paper'),
   });
 
-  const saveAndStarMutation = useMutation({
-    mutationFn: (paperId: number) => savePaper(paperId, { star: true }),
-    onSuccess: invalidate,
-    onError: onErrorToast('Save & Star'),
+  const skipMutation = useMutation({
+    mutationFn: skipPaper,
+    onSuccess: invalidateFeed,
+    onError: toastError('skip paper'),
   });
 
-  const unsaveMutation = useMutation({
-    mutationFn: unsavePaper,
-    onSuccess: invalidate,
-    onError: onErrorToast('Unsave'),
+  const markReadingMut = useMutation({
+    mutationFn: markReading,
+    onSuccess: invalidateFeed,
+    onError: toastError('mark reading'),
   });
 
-  const markReadMutation = useMutation({
-    mutationFn: markPaperRead,
-    onSuccess: invalidate,
-    onError: onErrorToast('Mark read'),
+  const markDoneMut = useMutation({
+    mutationFn: markDone,
+    onSuccess: invalidateFeed,
+    onError: toastError('mark done'),
+  });
+
+  const trashMutation = useMutation({
+    mutationFn: trashPaper,
+    onSuccess: invalidateFeed,
+    onError: toastError('trash paper'),
   });
 
   const starMutation = useMutation({
-    mutationFn: bookmarkPaper,
-    onSuccess: invalidate,
-    onError: onErrorToast('Star'),
+    mutationFn: starPaper,
+    onSuccess: invalidateFeed,
+    onError: toastError('star paper'),
   });
 
-  const archiveMutation = useMutation({
-    mutationFn: archivePaper,
-    onSuccess: invalidate,
-    onError: onErrorToast('Archive'),
-  });
-
-  const dismissMutation = useMutation({
-    mutationFn: (paperId: number) => dismissPaper(paperId),
-    onSuccess: invalidate,
-    onError: onErrorToast('Dismiss'),
+  const unstarMutation = useMutation({
+    mutationFn: unstarPaper,
+    onSuccess: invalidateFeed,
+    onError: toastError('unstar paper'),
   });
 
   const restoreMutation = useMutation({
     mutationFn: restorePaper,
-    onSuccess: invalidate,
-    onError: onErrorToast('Restore'),
+    onSuccess: invalidateFeed,
+    onError: toastError('restore paper'),
   });
 
-  const hardDeleteMutation = useMutation({
-    mutationFn: ({ id, title }: { id: number; title: string }) =>
-      hardDeletePaper(id, { confirm_title: title }),
-    onSuccess: () => {
-      setHardDeleteTarget(null);
-      setHardDeletePending(false);
-      invalidate();
-    },
-    onError: () => {
-      setHardDeletePending(false);
-    },
-  });
 
-  // --- Per-row action wrappers (track pending per paperId) ---
-
-  const addPending = (set: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) =>
-    set((prev) => new Set(prev).add(id));
-  const removePending = (set: React.Dispatch<React.SetStateAction<Set<number>>>, id: number) =>
-    set((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-
-  const onSave = useCallback(
-    (paperId: number) => {
-      addPending(setPendingSave, paperId);
-      saveMutation.mutate(paperId, { onSettled: () => removePending(setPendingSave, paperId) });
-    },
-    [saveMutation],
-  );
-
-  const onSaveAndStar = useCallback(
-    (paperId: number) => {
-      addPending(setPendingSave, paperId);
-      saveAndStarMutation.mutate(paperId, { onSettled: () => removePending(setPendingSave, paperId) });
-    },
-    [saveAndStarMutation],
-  );
-
-  const onUnsave = useCallback(
-    (paperId: number) => {
-      addPending(setPendingSave, paperId);
-      unsaveMutation.mutate(paperId, { onSettled: () => removePending(setPendingSave, paperId) });
-    },
-    [unsaveMutation],
-  );
-
-  const onMarkRead = useCallback(
-    (paperId: number) => {
-      addPending(setPendingMarkRead, paperId);
-      markReadMutation.mutate(paperId, { onSettled: () => removePending(setPendingMarkRead, paperId) });
-    },
-    [markReadMutation],
-  );
-
-  const onStar = useCallback(
-    (paperId: number) => {
-      addPending(setPendingStar, paperId);
-      starMutation.mutate(paperId, { onSettled: () => removePending(setPendingStar, paperId) });
-    },
-    [starMutation],
-  );
-
-  const onArchive = useCallback(
-    (paperId: number) => {
-      addPending(setPendingArchive, paperId);
-      archiveMutation.mutate(paperId, { onSettled: () => removePending(setPendingArchive, paperId) });
-    },
-    [archiveMutation],
-  );
-
-  const onDismiss = useCallback(
-    (paperId: number) => {
-      addPending(setPendingDismiss, paperId);
-      dismissMutation.mutate(paperId, { onSettled: () => removePending(setPendingDismiss, paperId) });
-    },
-    [dismissMutation],
-  );
-
-  const onRestore = useCallback(
-    (paperId: number) => {
-      addPending(setPendingRestore, paperId);
-      restoreMutation.mutate(paperId, { onSettled: () => removePending(setPendingRestore, paperId) });
-    },
-    [restoreMutation],
-  );
-
-  const onHardDelete = useCallback((paperId: number, title: string) => {
-    setHardDeleteTarget({ id: paperId, title });
-  }, []);
+  // --- Navigation ---
 
   const onView = useCallback(
     (paperId: number) => {
@@ -261,19 +155,16 @@ export function FeedView({ surface, filter }: FeedViewProps) {
     [navigate],
   );
 
-  const confirmHardDelete = useCallback(() => {
-    if (!hardDeleteTarget) return;
-    setHardDeletePending(true);
-    hardDeleteMutation.mutate({ id: hardDeleteTarget.id, title: hardDeleteTarget.title });
-  }, [hardDeleteTarget, hardDeleteMutation]);
+  // --- Hard-delete modal helpers ---
+
+  const openHardDelete = useCallback((paperId: number, title: string) => {
+    setHardDeleteTarget({ id: paperId, title });
+  }, []);
 
   // ── Keyboard shortcuts (j/k navigation + surface-aware row actions) ───────
 
-  const focusedPaperId = useMemo<number | null>(() => {
-    if (papers.length === 0) return null;
-    const idx = Math.min(focusedIdx, papers.length - 1);
-    return papers[idx]?.id ?? null;
-  }, [papers, focusedIdx]);
+  // Clamp focusedIdx to valid range so the hook always gets a valid index or null
+  const clampedFocusedIdx = papers.length === 0 ? null : Math.min(focusedIdx, papers.length - 1);
 
   const shortcutCallbacks = useMemo(
     () => ({
@@ -285,73 +176,30 @@ export function FeedView({ surface, filter }: FeedViewProps) {
         if (papers.length === 0) return;
         setFocusedIdx((i) => Math.max(i - 1, 0));
       },
-      onSave: focusedPaperId != null ? () => onSave(focusedPaperId) : undefined,
-      onStar: focusedPaperId != null ? () => onStar(focusedPaperId) : undefined,
-      onSaveAndStar:
-        focusedPaperId != null ? () => onSaveAndStar(focusedPaperId) : undefined,
-      onArchive: focusedPaperId != null ? () => onArchive(focusedPaperId) : undefined,
-      onDismiss: focusedPaperId != null ? () => onDismiss(focusedPaperId) : undefined,
-      onMarkRead: focusedPaperId != null ? () => onMarkRead(focusedPaperId) : undefined,
-      onOpen: focusedPaperId != null ? () => onView(focusedPaperId) : undefined,
+      onSave: (id: number) => saveMutation.mutate(id),
+      onSkip: (id: number) => skipMutation.mutate(id),
+      onMarkReading: (id: number) => markReadingMut.mutate(id),
+      onMarkDone: (id: number) => markDoneMut.mutate(id),
+      // setAside: reading → to_read via /save endpoint
+      onSetAside: (id: number) => saveMutation.mutate(id),
+      onTrash: (id: number) => trashMutation.mutate(id),
+      onStar: (id: number) => starMutation.mutate(id),
+      onUnstar: (id: number) => unstarMutation.mutate(id),
+      onRestore: (id: number) => restoreMutation.mutate(id),
+      // Shift+S: save then star (chained)
+      onSaveAndStar: (id: number) => {
+        saveMutation.mutate(id);
+        starMutation.mutate(id);
+      },
+      onOpenDetail: (id: number) => onView(id),
+      onShowCheatSheet: () => useKeyboardShortcuts.getState().open(),
       onClearSelection: () => useBulkSelection.getState().clear(),
     }),
-    [
-      papers.length,
-      focusedPaperId,
-      onSave,
-      onStar,
-      onSaveAndStar,
-      onArchive,
-      onDismiss,
-      onMarkRead,
-      onView,
-    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [papers.length, saveMutation, skipMutation, markReadingMut, markDoneMut, trashMutation, starMutation, unstarMutation, restoreMutation, onView],
   );
 
-  useFeedKeyboardShortcuts(surface, shortcutCallbacks);
-
-  // --- Surface-aware callback sets ---
-
-  function rowCallbacks(paperId: number) {
-    const base = {
-      onMarkRead,
-      onView,
-      markReadPending: pendingMarkRead.has(paperId),
-      archivePending: pendingArchive.has(paperId),
-    };
-
-    if (surface === 'inbox') {
-      return {
-        ...base,
-        onSave: () => onSave(paperId),
-        onSaveAndStar: () => onSaveAndStar(paperId),
-        onDismiss: () => onDismiss(paperId),
-        savePending: pendingSave.has(paperId),
-        dismissPending: pendingDismiss.has(paperId),
-      };
-    }
-
-    if (surface === 'trash') {
-      return {
-        onView,
-        onRestore: () => onRestore(paperId),
-        onHardDelete: (id: number, title: string) => onHardDelete(id, title),
-        restorePending: pendingRestore.has(paperId),
-      };
-    }
-
-    // library / starred / archived / reading
-    return {
-      ...base,
-      onStar: () => onStar(paperId),
-      onArchive: surface !== 'archived' ? () => onArchive(paperId) : undefined,
-      onUnarchive: surface === 'archived' ? () => onArchive(paperId) : undefined,
-      onUnsave: () => onUnsave(paperId),
-      onDismiss: () => onDismiss(paperId),
-      starPending: pendingStar.has(paperId),
-      dismissPending: pendingDismiss.has(paperId),
-    };
-  }
+  useFeedKeyboardShortcuts(surface, papers, clampedFocusedIdx, shortcutCallbacks);
 
   // --- Render ---
 
@@ -396,57 +244,49 @@ export function FeedView({ surface, filter }: FeedViewProps) {
                 : `${papers.length} papers`}
             </p>
 
-            {papers.map((paper) => {
-              const callbacks = rowCallbacks(paper.id);
-              return (
-                <FeedPaperRow
-                  key={paper.id}
-                  paper={paper}
-                  {...callbacks}
-                  viewLabel="View Details"
-                  bulkSelected={selectedIds.has(paper.id)}
-                  onBulkToggle={(id) => useBulkSelection.getState().toggle(id)}
-                />
-              );
-            })}
+            {papers.map((paper) => (
+              <FeedPaperRow
+                key={paper.id}
+                paper={paper}
+                surface={surface}
+                isSelected={selectedIds.has(paper.id)}
+                onToggleSelect={(id) => useBulkSelection.getState().toggle(id)}
+                // Lifecycle callbacks wired to mutations
+                onSave={(id) => saveMutation.mutate(id)}
+                onSkip={(id) => skipMutation.mutate(id)}
+                onMarkReading={(id) => markReadingMut.mutate(id)}
+                onMarkDone={(id) => markDoneMut.mutate(id)}
+                // setAside: /save sets state='to_read' unconditionally (grounded: routers/papers.py:527)
+                onSetAside={(id) => saveMutation.mutate(id)}
+                // reopen: Done → reading
+                onReopen={(id) => markReadingMut.mutate(id)}
+                onTrash={(id) => trashMutation.mutate(id)}
+                onStar={(id) => starMutation.mutate(id)}
+                onUnstar={(id) => unstarMutation.mutate(id)}
+                onRestore={(id) => restoreMutation.mutate(id)}
+                onHardDelete={(id) => openHardDelete(id, paper.title)}
+                onView={onView}
+                viewLabel="View Details"
+              />
+            ))}
           </>
         )}
       </div>
 
       {/* Hard-delete confirmation modal */}
-      <Dialog
-        open={hardDeleteTarget !== null}
-        onOpenChange={(open) => {
-          if (!open && !hardDeletePending) setHardDeleteTarget(null);
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Permanently delete paper?</DialogTitle>
-            <DialogDescription>
-              This will remove{' '}
-              <span className="font-medium">{hardDeleteTarget?.title}</span> and all
-              associated data. This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => setHardDeleteTarget(null)}
-              disabled={hardDeletePending}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={confirmHardDelete}
-              disabled={hardDeletePending}
-            >
-              {hardDeletePending ? 'Deleting…' : 'Delete permanently'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {hardDeleteTarget && (
+        <HardDeleteModal
+          open={hardDeleteTarget !== null}
+          onOpenChange={(open) => {
+            if (!open) setHardDeleteTarget(null);
+          }}
+          paperId={hardDeleteTarget.id}
+          paperTitle={hardDeleteTarget.title}
+          onDeleted={() => {
+            setHardDeleteTarget(null);
+          }}
+        />
+      )}
     </>
   );
 }

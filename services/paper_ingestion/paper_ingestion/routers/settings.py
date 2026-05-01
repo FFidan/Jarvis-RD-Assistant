@@ -589,10 +589,10 @@ async def papers_by_status(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT COALESCE(pus.status, 'new') AS status, COUNT(*) AS count
+            SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
             FROM papers p
             LEFT JOIN paper_user_state pus ON p.id = pus.paper_id
-            GROUP BY COALESCE(pus.status, 'new')
+            GROUP BY COALESCE(pus.state::TEXT, 'inbox')
             ORDER BY count DESC
             """
         )

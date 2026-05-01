@@ -222,13 +222,13 @@ Note:
 
 ## Database Migrations
 
-43 migrations currently applied in `db/migrations/` (001-043). Fresh installs get all tables via `db/init.sql`.
+49 migrations currently applied in `db/migrations/` (001-049). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
 **Migration 018** (2026-04-11) for the Phase 1 Discovery & Pulse subsystem added:
 
-- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), `pulse_ratings` (user feedback 👍/👎/💾/open/dismiss — collected silently from Phase 1 for the Phase 2 classifier).
+- Three new tables: `pulse_decks` (one row per daily deck), `pulse_cards` (papers in each deck with score metadata and LLM reasoning), and `pulse_ratings` (user feedback 👍/👎/💾/open/dismiss — collected silently from Phase 1 for the Phase 2 classifier). **Phase A note (migration 049, 2026-04-29):** `pulse_ratings` is dropped and replaced by the broader `recommendation_feedback` table that consolidates Pulse + Inbox + Paper-Detail thumbs into a single signal store; see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) §3.3 + §7.
 - One helper table: `pdf_resolutions` (caches results of the PDF resolution chain to dedupe resolver calls).
 - One new optional column: `topics.description TEXT NULL` (free-text context for the Pulse LLM scoring prompt).
 - New rows in `paper_sources` registering `openalex` and `pubmed` source types. `pubmed` ships with `enabled=TRUE` to match the "works out of the box, no key required" principle; `openalex` ships `enabled=FALSE` until the user provides a key.
@@ -304,4 +304,6 @@ Without these flags the service starts normally and falls back to RRF-only ranki
 
 **Migration 042** (2026-04-27): `user_ownership_columns` — adds `user_id` FK columns to core tables (papers, pulse_decks, cards, projects) for multi-tenant scaffolding; writes thread `user_id` end-to-end from Sprint 6. Enforcement remains gated on the real auth resolver (see `libs/jarvis_common/jarvis_common/auth.py`).
 
-**Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. Bookmark UI and bookmark REST endpoints wired in Sprint 5.
+**Migration 043** (2026-04-27): `multiuser_unique_constraints` — adds unique constraints scoped by `user_id` to prevent cross-user collisions once enforcement is activated. The Sprint 5 `papers.is_bookmarked` column + `PATCH /api/papers/{id}/bookmark` endpoint that this migration originally constrained were both removed in Phase A migration 047 (replaced by `state` ENUM + orthogonal `papers.starred` BOOLEAN); see [docs/specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) §3.
+
+**Migrations 044-049** (2026-04-29 — Phase A lifecycle redesign): see the redesign spec and migration files. Headline changes: 047 collapses 5 lifecycle booleans + status enum into a single `state` ENUM + orthogonal `starred`; 048 adds `papers.discovery_origin`; 049 drops `pulse_ratings` in favor of `recommendation_feedback`.

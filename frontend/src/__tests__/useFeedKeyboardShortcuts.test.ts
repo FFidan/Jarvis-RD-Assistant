@@ -2,9 +2,27 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { fireEvent } from '@testing-library/react';
 import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
+import type { FeedKeyboardCallbacks } from '@/hooks/useFeedKeyboardShortcuts';
+import type { LifecycleState } from '@/types';
 
 function fireKey(key: string, extra: KeyboardEventInit = {}) {
   fireEvent.keyDown(window, { key, ...extra });
+}
+
+// Helper to build a minimal papers array with a selected index
+function makePapers(state: LifecycleState = 'inbox') {
+  return [{ id: 42, state }];
+}
+
+function renderShortcuts(
+  state: LifecycleState,
+  callbacks: FeedKeyboardCallbacks,
+  selectedIndex: number | null = 0,
+) {
+  const papers = makePapers(state);
+  return renderHook(() =>
+    useFeedKeyboardShortcuts('inbox', papers, selectedIndex, callbacks),
+  );
 }
 
 describe('useFeedKeyboardShortcuts', () => {
@@ -13,9 +31,13 @@ describe('useFeedKeyboardShortcuts', () => {
   let onSave: ReturnType<typeof vi.fn>;
   let onStar: ReturnType<typeof vi.fn>;
   let onSaveAndStar: ReturnType<typeof vi.fn>;
-  let onArchive: ReturnType<typeof vi.fn>;
-  let onDismiss: ReturnType<typeof vi.fn>;
-  let onMarkRead: ReturnType<typeof vi.fn>;
+  let onSetAside: ReturnType<typeof vi.fn>;
+  let onTrash: ReturnType<typeof vi.fn>;
+  let onRestore: ReturnType<typeof vi.fn>;
+  let onMarkDone: ReturnType<typeof vi.fn>;
+  let onOpenDetail: ReturnType<typeof vi.fn>;
+  let onShowCheatSheet: ReturnType<typeof vi.fn>;
+  let onClearSelection: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     onNext = vi.fn();
@@ -23,74 +45,200 @@ describe('useFeedKeyboardShortcuts', () => {
     onSave = vi.fn();
     onStar = vi.fn();
     onSaveAndStar = vi.fn();
-    onArchive = vi.fn();
-    onDismiss = vi.fn();
-    onMarkRead = vi.fn();
+    onSetAside = vi.fn();
+    onTrash = vi.fn();
+    onRestore = vi.fn();
+    onMarkDone = vi.fn();
+    onOpenDetail = vi.fn();
+    onShowCheatSheet = vi.fn();
+    onClearSelection = vi.fn();
   });
 
-  it('j calls onNext', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext, onPrev }),
-    );
+  // ── Navigation ────────────────────────────────────────────────────────────
+
+  it('j fires onNext', () => {
+    renderShortcuts('inbox', { onNext, onPrev });
     fireKey('j');
     expect(onNext).toHaveBeenCalledOnce();
   });
 
-  it('k calls onPrev', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext, onPrev }),
-    );
+  it('k fires onPrev', () => {
+    renderShortcuts('inbox', { onNext, onPrev });
     fireKey('k');
     expect(onPrev).toHaveBeenCalledOnce();
   });
 
-  it('s on inbox surface calls onSave (not onStar)', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onSave, onStar }),
-    );
+  it('? fires onShowCheatSheet', () => {
+    renderShortcuts('inbox', { onShowCheatSheet });
+    fireKey('?');
+    expect(onShowCheatSheet).toHaveBeenCalledOnce();
+  });
+
+  it('Escape fires onClearSelection', () => {
+    renderShortcuts('inbox', { onClearSelection });
+    fireKey('Escape');
+    expect(onClearSelection).toHaveBeenCalledOnce();
+  });
+
+  // ── Open detail ───────────────────────────────────────────────────────────
+
+  it('o fires onOpenDetail with paper id', () => {
+    renderShortcuts('inbox', { onOpenDetail });
+    fireKey('o');
+    expect(onOpenDetail).toHaveBeenCalledOnce();
+    expect(onOpenDetail).toHaveBeenCalledWith(42);
+  });
+
+  it('Enter fires onOpenDetail with paper id', () => {
+    renderShortcuts('inbox', { onOpenDetail });
+    fireKey('Enter');
+    expect(onOpenDetail).toHaveBeenCalledOnce();
+    expect(onOpenDetail).toHaveBeenCalledWith(42);
+  });
+
+  // ── s — state-aware ───────────────────────────────────────────────────────
+
+  it('s on inbox-state paper fires onSave with id', () => {
+    renderShortcuts('inbox', { onSave, onStar });
     fireKey('s');
     expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave).toHaveBeenCalledWith(42);
     expect(onStar).not.toHaveBeenCalled();
   });
 
-  it('s on library surface calls onStar (not onSave)', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('library', { onSave, onStar }),
-    );
+  it('s on reading-state paper fires onStar (not onSave)', () => {
+    renderShortcuts('reading', { onSave, onStar });
     fireKey('s');
     expect(onStar).toHaveBeenCalledOnce();
+    expect(onStar).toHaveBeenCalledWith(42);
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it('S (shift+s) calls onSaveAndStar', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onSave, onSaveAndStar }),
-    );
-    fireKey('s', { shiftKey: true });
+  it('s on to_read-state paper fires onStar', () => {
+    renderShortcuts('to_read', { onSave, onStar });
+    fireKey('s');
+    expect(onStar).toHaveBeenCalledOnce();
+    expect(onStar).toHaveBeenCalledWith(42);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('s on trash-state paper is a no-op', () => {
+    renderShortcuts('trash', { onSave, onStar });
+    fireKey('s');
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onStar).not.toHaveBeenCalled();
+  });
+
+  // ── Shift+s ───────────────────────────────────────────────────────────────
+
+  it('Shift+s on inbox fires onSaveAndStar with id', () => {
+    renderShortcuts('inbox', { onSave, onSaveAndStar });
+    fireKey('S', { shiftKey: true });
     expect(onSaveAndStar).toHaveBeenCalledOnce();
+    expect(onSaveAndStar).toHaveBeenCalledWith(42);
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it('e on library surface calls onArchive', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('library', { onArchive }),
-    );
-    fireKey('e');
-    expect(onArchive).toHaveBeenCalledOnce();
+  it('Shift+s on non-inbox surface is a no-op', () => {
+    renderShortcuts('reading', { onSaveAndStar });
+    fireKey('S', { shiftKey: true });
+    expect(onSaveAndStar).not.toHaveBeenCalled();
   });
 
-  it('e on inbox surface does NOT call onArchive', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onArchive }),
-    );
-    fireKey('e');
-    expect(onArchive).not.toHaveBeenCalled();
+  // ── t — trash ─────────────────────────────────────────────────────────────
+
+  it('t on non-trash paper fires onTrash with id', () => {
+    renderShortcuts('inbox', { onTrash });
+    fireKey('t');
+    expect(onTrash).toHaveBeenCalledOnce();
+    expect(onTrash).toHaveBeenCalledWith(42);
   });
+
+  it('t on trash-state paper is a no-op', () => {
+    renderShortcuts('trash', { onTrash });
+    fireKey('t');
+    expect(onTrash).not.toHaveBeenCalled();
+  });
+
+  // ── e — set aside ─────────────────────────────────────────────────────────
+
+  it('e on reading-state fires onSetAside with id', () => {
+    renderShortcuts('reading', { onSetAside });
+    fireKey('e');
+    expect(onSetAside).toHaveBeenCalledOnce();
+    expect(onSetAside).toHaveBeenCalledWith(42);
+  });
+
+  it('e on inbox-state is a no-op', () => {
+    renderShortcuts('inbox', { onSetAside });
+    fireKey('e');
+    expect(onSetAside).not.toHaveBeenCalled();
+  });
+
+  it('e on to_read-state is a no-op', () => {
+    renderShortcuts('to_read', { onSetAside });
+    fireKey('e');
+    expect(onSetAside).not.toHaveBeenCalled();
+  });
+
+  // ── r — restore ───────────────────────────────────────────────────────────
+
+  it('r on trash-state fires onRestore with id', () => {
+    renderShortcuts('trash', { onRestore });
+    fireKey('r');
+    expect(onRestore).toHaveBeenCalledOnce();
+    expect(onRestore).toHaveBeenCalledWith(42);
+  });
+
+  it('r on non-trash state is a no-op', () => {
+    renderShortcuts('inbox', { onRestore });
+    fireKey('r');
+    expect(onRestore).not.toHaveBeenCalled();
+  });
+
+  // ── d — done ──────────────────────────────────────────────────────────────
+
+  it('d on reading-state fires onMarkDone with id', () => {
+    renderShortcuts('reading', { onMarkDone });
+    fireKey('d');
+    expect(onMarkDone).toHaveBeenCalledOnce();
+    expect(onMarkDone).toHaveBeenCalledWith(42);
+  });
+
+  it('d on to_read-state fires onMarkDone with id', () => {
+    renderShortcuts('to_read', { onMarkDone });
+    fireKey('d');
+    expect(onMarkDone).toHaveBeenCalledOnce();
+    expect(onMarkDone).toHaveBeenCalledWith(42);
+  });
+
+  it('d on inbox-state is a no-op', () => {
+    renderShortcuts('inbox', { onMarkDone });
+    fireKey('d');
+    expect(onMarkDone).not.toHaveBeenCalled();
+  });
+
+  // ── No selected paper ─────────────────────────────────────────────────────
+
+  it('paper-specific shortcuts do nothing when selectedIndex is null', () => {
+    renderHook(() =>
+      useFeedKeyboardShortcuts('inbox', makePapers('inbox'), null, {
+        onSave, onStar, onTrash, onOpenDetail,
+      }),
+    );
+    fireKey('s');
+    fireKey('t');
+    fireKey('o');
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onStar).not.toHaveBeenCalled();
+    expect(onTrash).not.toHaveBeenCalled();
+    expect(onOpenDetail).not.toHaveBeenCalled();
+  });
+
+  // ── Ignored events ────────────────────────────────────────────────────────
 
   it('keyboard ignored when an input element is focused', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext }),
-    );
+    renderShortcuts('inbox', { onNext });
     const input = document.createElement('input');
     document.body.appendChild(input);
     input.focus();
@@ -100,28 +248,24 @@ describe('useFeedKeyboardShortcuts', () => {
   });
 
   it('modifier key metaKey + j is ignored', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext }),
-    );
+    renderShortcuts('inbox', { onNext });
     fireKey('j', { metaKey: true });
     expect(onNext).not.toHaveBeenCalled();
   });
 
   it('modifier key ctrlKey + j is ignored', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext }),
-    );
+    renderShortcuts('inbox', { onNext });
     fireKey('j', { ctrlKey: true });
     expect(onNext).not.toHaveBeenCalled();
   });
 
   it('modifier key altKey + j is ignored', () => {
-    renderHook(() =>
-      useFeedKeyboardShortcuts('inbox', { onNext }),
-    );
+    renderShortcuts('inbox', { onNext });
     fireKey('j', { altKey: true });
     expect(onNext).not.toHaveBeenCalled();
   });
+
+  // ── M17 — ref-stability ───────────────────────────────────────────────────
 
   describe('M17 — ref-stability: listener registered exactly once', () => {
     let addSpy: ReturnType<typeof vi.spyOn>;
@@ -134,44 +278,51 @@ describe('useFeedKeyboardShortcuts', () => {
       addSpy.mockRestore();
     });
 
-    it('addEventListener("keydown") is called exactly once even after re-renders with a new callbacks object', () => {
+    it('addEventListener("keydown") is called exactly once even after re-renders with new callbacks', () => {
+      const papers = makePapers('inbox');
       const { rerender } = renderHook(
-        ({ callbacks }: { callbacks: Record<string, () => void> }) =>
-          useFeedKeyboardShortcuts('inbox', callbacks),
+        ({ callbacks }: { callbacks: FeedKeyboardCallbacks }) =>
+          useFeedKeyboardShortcuts('inbox', papers, 0, callbacks),
         { initialProps: { callbacks: { onNext: vi.fn() } } },
       );
 
-      // Re-render with a brand-new callbacks object (different identity each time)
-      act(() => {
-        rerender({ callbacks: { onNext: vi.fn() } });
-      });
-      act(() => {
-        rerender({ callbacks: { onNext: vi.fn() } });
-      });
+      act(() => { rerender({ callbacks: { onNext: vi.fn() } }); });
+      act(() => { rerender({ callbacks: { onNext: vi.fn() } }); });
 
-      const keydownCalls = addSpy.mock.calls.filter(
-        ([event]) => event === 'keydown',
-      );
+      const keydownCalls = addSpy.mock.calls.filter(([event]) => event === 'keydown');
       expect(keydownCalls).toHaveLength(1);
     });
 
-    it('latest callbacks are still called after re-renders', () => {
+    it('latest callbacks are respected after re-renders', () => {
       const firstOnNext = vi.fn();
       const latestOnNext = vi.fn();
+      const papers = makePapers('inbox');
 
       const { rerender } = renderHook(
-        ({ callbacks }: { callbacks: Record<string, () => void> }) =>
-          useFeedKeyboardShortcuts('inbox', callbacks),
+        ({ callbacks }: { callbacks: FeedKeyboardCallbacks }) =>
+          useFeedKeyboardShortcuts('inbox', papers, 0, callbacks),
         { initialProps: { callbacks: { onNext: firstOnNext } } },
       );
 
-      act(() => {
-        rerender({ callbacks: { onNext: latestOnNext } });
-      });
+      act(() => { rerender({ callbacks: { onNext: latestOnNext } }); });
 
       fireKey('j');
       expect(latestOnNext).toHaveBeenCalledOnce();
       expect(firstOnNext).not.toHaveBeenCalled();
+    });
+
+    it('keyboard event after hook unmount does NOT fire any callback', () => {
+      const { unmount } = renderShortcuts('inbox', { onNext, onSave, onTrash });
+
+      unmount();
+
+      fireKey('j');
+      fireKey('s');
+      fireKey('t');
+
+      expect(onNext).not.toHaveBeenCalled();
+      expect(onSave).not.toHaveBeenCalled();
+      expect(onTrash).not.toHaveBeenCalled();
     });
   });
 });

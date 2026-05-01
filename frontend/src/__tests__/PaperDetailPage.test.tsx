@@ -40,7 +40,7 @@ vi.mock('@/lib/api', async () => {
     zoteroResync: vi.fn(),
     zoteroSyncAnnotations: vi.fn(),
     promoteZoteroNote: vi.fn(),
-    upsertUserState: vi.fn(),
+    upsertAnnotations: vi.fn(),
     createNote: vi.fn(),
     deleteNote: vi.fn(),
     downloadPdf: vi.fn(),
@@ -147,16 +147,13 @@ const MOCK_CHUNKS = [
 ];
 
 const MOCK_USER_STATE = {
-  status: 'reading' as const,
-  saved: true,
-  dismissed: false,
-  starred: false,
-  archived: false,
-  preference: 'none' as const,
+  state: 'reading' as const,
+  state_before_trash: null,
+  starred: true,
   rating: 4,
   user_notes: 'Great paper on attention.',
   flagged: false,
-  updated_at: null,
+  updated_at: '2026-04-30T00:00:00Z',
 };
 
 const MOCK_NOTES = [

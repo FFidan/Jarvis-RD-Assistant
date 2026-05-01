@@ -2,6 +2,15 @@
 
 Handles non-review callbacks triggered by inline keyboard buttons on
 paper listings, project listings, and task actions.
+
+Spec §5.3 callback name convention:
+    paper:<action>:<id>                              — lifecycle / curation
+    paper:feedback_(pos|neg):<id>:<source>           — per-paper feedback signal
+
+WS-AH2 H1 invariant: each execution path performs exactly ONE
+``query.answer()``.  Bare early answers on rejection paths are H1-compliant
+(single answer per path).  Never call ``query.answer()`` twice on a single
+execution path.
 """
 
 from __future__ import annotations
@@ -19,6 +28,44 @@ from telegram_bot.handlers.review_handler import review_start
 from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Dispatch tables (spec §5.3)
+# ---------------------------------------------------------------------------
+
+
+_PAPER_ACTION_ENDPOINTS: dict[str, tuple[str, str]] = {
+    "save": ("PUT", "save"),
+    "skip": ("PUT", "skip"),
+    "reading": ("PUT", "reading"),
+    "done": ("PUT", "done"),
+    "trash": ("PUT", "trash"),
+    "restore": ("PUT", "restore"),
+    "trash_reject": ("PUT", "trash_and_reject"),
+    "star": ("PUT", "star"),
+    "unstar": ("PUT", "unstar"),
+}
+
+_PAPER_ACTION_LABELS: dict[str, str] = {
+    "save": "💾 Saved",
+    "skip": "⏩ Skipped",
+    "reading": "📖 Marked Reading",
+    "done": "✓ Marked Done",
+    "trash": "🗑 Trashed",
+    "restore": "↩ Restored",
+    "trash_reject": "🗑+👎 Trashed & Rejected",
+    "star": "⭐ Starred",
+    "unstar": "☆ Unstarred",
+}
+
+_PAPER_ACTION_RE = re.compile(
+    r"^paper:(?P<action>save|skip|reading|done|trash|restore|trash_reject|star|unstar):(?P<id>\d+)$"
+)
+
+_PAPER_FEEDBACK_RE = re.compile(
+    r"^paper:feedback_(?P<sign>pos|neg):(?P<id>\d+):(?P<source>pulse_thumbs|feed_thumbs|paper_detail_thumbs|dismiss_combined)$"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -69,44 +116,60 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 @rate_limit(max_calls=10, window_seconds=60)
-async def paper_bookmark_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper_bookmark_{id}`` — bookmark (star) a paper via the backend API."""
+async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``paper:<action>:<id>`` — lifecycle / curation via backend API.
+
+    Spec §5.3 callback convention.  Dispatches via :data:`_PAPER_ACTION_ENDPOINTS`.
+    Preserves WS-AH2 H1 invariant (single ``query.answer()`` per success path).
+    """
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: every path answers exactly once
         return
 
-    if not query.data or not (match := re.search(r"paper_bookmark_(\d+)", query.data)):
+    if not query.data or not (m := _PAPER_ACTION_RE.match(query.data)):
+        await query.answer()
         return
-    paper_id = int(match.group(1))
+    action = m.group("action")
+    paper_id = int(m.group("id"))
+
+    method, suffix = _PAPER_ACTION_ENDPOINTS[action]
+    label = _PAPER_ACTION_LABELS[action]
 
     http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key
     try:
-        resp = await http.put(
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}/bookmark",
+        resp = await http.request(
+            method,
+            f"{config.paper_ingestion_url}/api/papers/{paper_id}/{suffix}",
             headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()
-        await query.message.reply_text(f"⭐ Paper <b>{paper_id}</b> bookmarked.", parse_mode="HTML")
+        await query.answer(text=label)
+        await query.message.reply_text(f"{label} <b>paper {paper_id}</b>.", parse_mode="HTML")
     except Exception:
-        logger.exception("Failed to bookmark paper id=%s", paper_id)
-        await query.message.reply_text("Failed to bookmark paper.", parse_mode="HTML")
+        logger.exception("Failed to %s paper id=%s", action, paper_id)
+        await query.answer(text=f"{action} failed — try again later")
 
 
 @rate_limit(max_calls=10, window_seconds=60)
-async def paper_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper:save:{id}`` — save (star) a paper via the backend API."""
+async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle ``paper:feedback_(pos|neg):<id>:<source>`` — record per-paper feedback.
+
+    POSTs to ``/api/papers/{id}/feedback`` (Wave 1cd endpoint).  Preserves
+    WS-AH2 H1 invariant (single ``query.answer()`` per success path).
+    """
     query = update.callback_query
     if query is None:
         return
@@ -117,71 +180,34 @@ async def paper_save_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: every path answers exactly once
         return
 
-    if not query.data or not (match := re.search(r"paper:save:(\d+)", query.data)):
+    if not query.data or not (m := _PAPER_FEEDBACK_RE.match(query.data)):
+        await query.answer()
         return
-    paper_id = int(match.group(1))
+    sign = m.group("sign")
+    paper_id = int(m.group("id"))
+    source = m.group("source")
+    signal = "positive" if sign == "pos" else "negative"
+    label = "👍 Recorded" if sign == "pos" else "👎 Recorded"
 
     http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key
     try:
-        resp = await http.put(
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}/save",
-            json={"star": False},
+        resp = await http.post(
+            f"{config.paper_ingestion_url}/api/papers/{paper_id}/feedback",
+            json={"signal": signal, "source": source},
             headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()
-        await query.answer(text="✅ Saved")
-        await query.message.reply_text(f"✅ Paper <b>{paper_id}</b> saved.", parse_mode="HTML")
+        await query.answer(text=label)
     except Exception:
-        logger.exception("Failed to save paper id=%s", paper_id)
-        await query.answer()
-        await query.message.reply_text("Failed to save paper.", parse_mode="HTML")
-
-
-@rate_limit(max_calls=10, window_seconds=60)
-async def paper_dismiss_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``paper:dismiss:{id}`` — dismiss (trash) a paper via the backend API."""
-    query = update.callback_query
-    if query is None:
-        return
-    if not isinstance(query.message, Message):
-        await query.answer()
-        return
-
-    config = get_config(context)
-    db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
-        return
-
-    if not query.data or not (match := re.search(r"paper:dismiss:(\d+)", query.data)):
-        return
-    paper_id = int(match.group(1))
-
-    http = get_http(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
-    try:
-        resp = await http.put(
-            f"{config.paper_ingestion_url}/api/papers/{paper_id}/dismiss",
-            json={"also_zotero": False},
-            headers=headers,
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-        await query.answer(text="🗑 Dismissed")
-        await query.message.reply_text(
-            f"🗑 Paper <b>{paper_id}</b> dismissed (in Trash).", parse_mode="HTML"
-        )
-    except Exception:
-        logger.exception("Failed to dismiss paper id=%s", paper_id)
-        await query.answer()
-        await query.message.reply_text("Failed to dismiss paper.", parse_mode="HTML")
+        logger.exception("Failed to record feedback for paper id=%s signal=%s", paper_id, signal)
+        await query.answer(text="Feedback failed — try again later")
 
 
 @rate_limit(max_calls=10, window_seconds=60)
@@ -295,72 +321,27 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
 
 
-_PULSE_RATING_LABEL = {
-    "up": "\U0001f44d Rated up",
-    "down": "\U0001f44e Rated down",
-    "save": "\U0001f4be Saved",
-}
-
-
-@rate_limit(max_calls=20, window_seconds=60)
-async def pulse_rating_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``pulse_{up,down,save}_{id}`` — record a Pulse card rating.
-
-    POSTs to ``/api/pulse/rate`` on paper_ingestion and answers the callback
-    query with a short confirmation (or an error on failure).
-    """
-    query = update.callback_query
-    if query is None:
-        return
-    config = get_config(context)
-    db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
-        await query.answer()
-        return
-
-    match = re.fullmatch(r"pulse_(up|down|save)_(\d+)", query.data or "")
-    if not match:
-        await query.answer(text="Invalid rating")
-        return
-    rating = match.group(1)
-    paper_id = int(match.group(2))
-
-    http = get_http(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
-    try:
-        resp = await http.post(
-            f"{config.paper_ingestion_url}/api/pulse/rate",
-            json={"paper_id": paper_id, "rating": rating},
-            headers=headers,
-            timeout=15.0,
-        )
-        resp.raise_for_status()
-    except Exception:
-        logger.exception("Failed to rate Pulse card id=%s rating=%s", paper_id, rating)
-        await query.answer(text="Rating failed — try again later")
-        return
-
-    await query.answer(text=_PULSE_RATING_LABEL.get(rating, "Rated"))
-
-
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
 
 
 def register_callback_handlers(app: Application) -> None:
-    """Register all callback query handlers on the given application."""
+    """Register paper / project / task callbacks (TG-003: review owned by ConversationHandler)."""
     app.add_handler(CallbackQueryHandler(paper_detail_callback, pattern=r"^paper_detail_\d+$"))
-    app.add_handler(CallbackQueryHandler(paper_bookmark_callback, pattern=r"^paper_bookmark_\d+$"))
-    app.add_handler(CallbackQueryHandler(paper_save_callback, pattern=r"^paper:save:\d+$"))
-    app.add_handler(CallbackQueryHandler(paper_dismiss_callback, pattern=r"^paper:dismiss:\d+$"))
+    app.add_handler(
+        CallbackQueryHandler(
+            paper_action_callback,
+            pattern=r"^paper:(save|skip|reading|done|trash|restore|trash_reject|star|unstar):\d+$",
+        )
+    )
+    app.add_handler(
+        CallbackQueryHandler(
+            paper_feedback_callback,
+            pattern=r"^paper:feedback_(pos|neg):\d+:(pulse_thumbs|feed_thumbs|paper_detail_thumbs|dismiss_combined)$",
+        )
+    )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
-    # NOTE: start_review is intentionally NOT registered here; it is an entry_point
-    # of the ConversationHandler in review_handler.py.  Registering it here too
-    # causes ghost callbacks (double dispatch).
-    app.add_handler(
-        CallbackQueryHandler(pulse_rating_callback, pattern=r"^pulse_(up|down|save)_\d+$")
-    )
+    # start_review_callback intentionally NOT registered here — review_handler.py
+    # owns the ConversationHandler (TG-003).

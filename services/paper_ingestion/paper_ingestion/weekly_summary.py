@@ -113,7 +113,7 @@ async def generate_weekly_summary(
                       WHERE pus.paper_id = p.id
                         AND (
                             COALESCE(pus.starred, FALSE)
-                            OR pus.status IN ('starred', 'reading', 'read')
+                            OR pus.state IN ('reading', 'done')
                         )
                         AND pus.user_id IS NOT DISTINCT FROM $2
                   )

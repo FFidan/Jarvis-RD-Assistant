@@ -1,10 +1,11 @@
 import {
-  Archive,
   ArchiveRestore,
+  BookOpen,
   CheckCircle,
-  Eye,
-  Loader2,
+  Library,
+  RotateCcw,
   Save,
+  SkipForward,
   Star,
   StarOff,
   Trash2,
@@ -13,89 +14,81 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { PriorityBadge } from '@/components/paper/PriorityBadge';
+import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 import { formatAuthors, formatDate } from '@/lib/utils';
-import { type FeedPaper, priorityLevel } from '@/types';
+import { type FeedPaper, type SurfaceView, priorityLevel } from '@/types';
 
-interface FeedPaperRowProps {
+export interface FeedPaperRowProps {
   paper: FeedPaper;
-  // Cross-paper RAG seed selection (separate from bulk selection)
+  surface?: SurfaceView;
+  // Bulk selection
+  isSelected?: boolean;
+  onToggleSelect?: (paperId: number) => void;
+  /** @deprecated use isSelected/onToggleSelect */
+  bulkSelected?: boolean;
+  /** @deprecated use isSelected/onToggleSelect */
+  onBulkToggle?: (paperId: number) => void;
+  // Cross-paper RAG seed selection
   seedChecked?: boolean;
   onSeedChange?: (paperId: number) => void;
-  // Existing action callbacks
-  onMarkRead?: (paperId: number) => void;
-  markReadPending?: boolean;
-  onArchive?: (paperId: number) => void;
-  archivePending?: boolean;
+  // Lifecycle callbacks
+  onSave?: (id: number) => void;
+  onSkip?: (id: number) => void;
+  onMarkReading?: (id: number) => void;
+  onMarkDone?: (id: number) => void;
+  /** Reading → to_read (uses /save endpoint which sets state='to_read' unconditionally). */
+  onSetAside?: (id: number) => void;
+  /** Done → reading */
+  onReopen?: (id: number) => void;
+  onTrash?: (id: number) => void;
+  onStar?: (id: number) => void;
+  onUnstar?: (id: number) => void;
+  onRestore?: (id: number) => void;
+  onHardDelete?: (id: number) => void;
   onView?: (paperId: number) => void;
   viewLabel?: string;
-  // New surface-aware action callbacks (all optional)
-  onSave?: (paperId: number) => void;
-  savePending?: boolean;
-  onSaveAndStar?: (paperId: number) => void;
-  saveAndStarPending?: boolean;
-  onDismiss?: (paperId: number) => void;
-  dismissPending?: boolean;
-  onRestore?: (paperId: number) => void;
-  restorePending?: boolean;
-  onHardDelete?: (paperId: number, title: string) => void;
-  hardDeletePending?: boolean;
-  onUnsave?: (paperId: number) => void;
-  onStar?: (paperId: number) => void;
-  starPending?: boolean;
-  onUnstar?: (paperId: number) => void;
-  onUnarchive?: (paperId: number) => void;
-  // Bulk selection
-  bulkSelected?: boolean;
-  onBulkToggle?: (paperId: number) => void;
 }
 
 export function FeedPaperRow({
   paper,
-  seedChecked,
-  onSeedChange,
-  onMarkRead,
-  markReadPending = false,
-  onArchive,
-  archivePending = false,
-  onView,
-  viewLabel = 'View',
-  onSave,
-  savePending = false,
-  onSaveAndStar,
-  saveAndStarPending = false,
-  onDismiss,
-  dismissPending = false,
-  onRestore,
-  restorePending = false,
-  onHardDelete,
-  hardDeletePending = false,
-  onUnsave: _onUnsave,
-  onStar,
-  starPending = false,
-  onUnstar,
-  onUnarchive,
+  surface: _surface,
+  isSelected,
+  onToggleSelect,
   bulkSelected,
   onBulkToggle,
+  seedChecked,
+  onSeedChange,
+  onSave,
+  onSkip,
+  onMarkReading,
+  onMarkDone,
+  onSetAside,
+  onReopen,
+  onTrash,
+  onStar,
+  onUnstar,
+  onRestore,
+  onHardDelete,
+  onView,
+  viewLabel = 'View',
 }: FeedPaperRowProps) {
-  const userState = paper.user_state;
-  const isSaved = userState?.saved ?? false;
-  const isDismissed = userState?.dismissed ?? false;
-  const isStarred = userState?.starred ?? paper.starred ?? false;
-  const isArchived = userState?.archived ?? paper.archived ?? false;
-  const status = userState?.status ?? 'new';
+  const state = paper.state ?? 'inbox';
+  const isStarred = paper.starred ?? false;
 
-  const isNew = status === 'new' && !isDismissed;
+  // Normalise bulk selection props (support both old and new API)
+  const effectiveSelected = isSelected ?? bulkSelected ?? false;
+  const effectiveToggle = onToggleSelect ?? onBulkToggle;
 
   return (
     <div className="rounded-lg border p-4">
       <div className="flex gap-3">
         {/* Bulk selection checkbox */}
-        {onBulkToggle && (
+        {effectiveToggle && (
           <div className="flex items-start pt-1">
             <input
               type="checkbox"
-              checked={!!bulkSelected}
-              onChange={() => onBulkToggle(paper.id)}
+              checked={effectiveSelected}
+              onChange={() => effectiveToggle(paper.id)}
               className="h-4 w-4 rounded border-gray-300"
               aria-label={`Select ${paper.title} for bulk action`}
             />
@@ -119,7 +112,7 @@ export function FeedPaperRow({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="text-lg font-semibold leading-tight">{paper.title}</h3>
-            {isNew && (
+            {state === 'inbox' && (
               <Badge variant="default" className="text-xs">NEW</Badge>
             )}
             {isStarred && (
@@ -145,15 +138,30 @@ export function FeedPaperRow({
 
         <div className="flex shrink-0 flex-col items-end gap-1">
           <Badge variant="outline">{paper.source_type.toUpperCase()}</Badge>
-          <Badge variant="secondary">{status.toUpperCase()}</Badge>
+          {/* Spec §5.5: Pulse-origin papers also appear in Inbox; this badge makes the
+              overlap legible without separating the data models. */}
+          {(paper.discovery_origin === 'pulse' || paper.discovery_origin === 'recommender') && (
+            <Badge
+              variant="secondary"
+              className="bg-violet-100 text-violet-900 dark:bg-violet-900/40 dark:text-violet-200"
+              title={
+                paper.discovery_origin === 'pulse'
+                  ? "Also in today's Pulse Deck"
+                  : 'Surfaced by the recommender'
+              }
+            >
+              ✦ {paper.discovery_origin === 'pulse' ? 'Pulse' : 'Recommended'}
+            </Badge>
+          )}
+          <Badge variant="secondary">{state.toUpperCase()}</Badge>
           {paper.confidence && (
             <Badge variant={paper.confidence === 'HIGH' ? 'default' : 'secondary'}>
               {paper.confidence}
             </Badge>
           )}
-          <PriorityBadge level={priorityLevel(paper.priority_score)} />
+          <PriorityBadge level={priorityLevel(paper.priority_score ?? null)} />
           <div className="flex gap-1">
-            {paper.pdf_downloaded && <Badge variant="outline" className="px-1.5 py-0 text-xs">PDF</Badge>}
+            {/* FeedPaper has no pdf_downloaded/has_chunks/has_summary at top-level — they come from LifecyclePaperResponse extensions */}
             {paper.has_chunks && <Badge variant="outline" className="px-1.5 py-0 text-xs">Chunked</Badge>}
             {paper.has_summary && <Badge variant="outline" className="px-1.5 py-0 text-xs">Summary</Badge>}
           </div>
@@ -165,183 +173,291 @@ export function FeedPaperRow({
           <span
             className="text-xs text-muted-foreground"
             title={
-              paper.discovered_at && paper.published_date
-                ? `Published: ${formatDate(paper.published_date)}`
+              paper.created_at
+                ? `Published: ${formatDate(paper.published_date ?? paper.created_at)}`
                 : undefined
             }
           >
-            {formatDate(paper.discovered_at || paper.published_date || paper.created_at)}
+            {formatDate(paper.created_at)}
           </span>
 
-          {/* Surface-aware action button bar — only renders buttons whose callback is provided */}
+          {/* State-switch action button bar */}
           <div className="mt-auto flex flex-wrap gap-1">
-            {/* Save (inbox) */}
-            {onSave && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onSave(paper.id)}
-                disabled={savePending || isSaved}
-                aria-label={`Save ${paper.title}`}
-              >
-                {savePending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Save className="mr-1 h-3 w-3" />
+            {state === 'inbox' && (
+              <>
+                {onSave && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onSave(paper.id)}
+                    aria-label={`Save ${paper.title}`}
+                  >
+                    <Save className="mr-1 h-3 w-3" />
+                    Save
+                  </Button>
                 )}
-                Save
-              </Button>
-            )}
-
-            {/* Save & Star (inbox) */}
-            {onSaveAndStar && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onSaveAndStar(paper.id)}
-                disabled={saveAndStarPending}
-                aria-label={`Save and star ${paper.title}`}
-              >
-                {saveAndStarPending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <Star className="mr-1 h-3 w-3" />
+                {onSkip && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onSkip(paper.id)}
+                    aria-label={`Skip ${paper.title}`}
+                  >
+                    <SkipForward className="mr-1 h-3 w-3" />
+                    Skip
+                  </Button>
                 )}
-                Save &amp; Star
-              </Button>
-            )}
-
-            {/* Star / Unstar (library, starred) */}
-            {onStar && !isStarred && (
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => onStar(paper.id)}
-                aria-label={`Star ${paper.title}`}
-                title="Star"
-                className="h-9 w-9"
-              >
-                <Star className="h-4 w-4" />
-              </Button>
-            )}
-            {onUnstar && isStarred && (
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => onUnstar(paper.id)}
-                aria-label={`Unstar ${paper.title}`}
-                title="Unstar"
-                className="h-9 w-9"
-              >
-                <StarOff className="h-4 w-4" />
-              </Button>
-            )}
-
-            {/* Mark Read */}
-            {onMarkRead && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onMarkRead(paper.id)}
-                disabled={markReadPending}
-                aria-label={`Mark ${paper.title} as read`}
-              >
-                {markReadPending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-1 h-3 w-3" />
+                {onTrash && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => onTrash(paper.id)}
+                    aria-label={`Trash ${paper.title}`}
+                    title="Move to Trash"
+                    className="h-9 w-9"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 )}
-                Mark Read
-              </Button>
+                {isStarred
+                  ? onUnstar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onUnstar(paper.id)}
+                      aria-label={`Unstar ${paper.title}`}
+                      title="Unstar"
+                      className="h-9 w-9"
+                    >
+                      <StarOff className="h-4 w-4" />
+                    </Button>
+                  )
+                  : onStar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onStar(paper.id)}
+                      aria-label={`Star ${paper.title}`}
+                      title="Star"
+                      className="h-9 w-9"
+                    >
+                      <Star className="h-4 w-4" />
+                    </Button>
+                  )
+                }
+              </>
             )}
 
-            {/* Archive (library) */}
-            {onArchive && (
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => onArchive(paper.id)}
-                disabled={archivePending}
-                aria-label={`Archive ${paper.title}`}
-                title="Archive"
-                className="h-9 w-9"
-              >
-                {archivePending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Archive className="h-4 w-4" />
+            {state === 'to_read' && (
+              <>
+                {onMarkReading && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onMarkReading(paper.id)}
+                    aria-label={`Mark ${paper.title} as reading`}
+                  >
+                    <BookOpen className="mr-1 h-3 w-3" />
+                    Mark Reading
+                  </Button>
                 )}
-              </Button>
-            )}
-
-            {/* Unarchive (archived surface) */}
-            {onUnarchive && (
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => onUnarchive(paper.id)}
-                aria-label={`Unarchive ${paper.title}`}
-                title="Unarchive"
-                className="h-9 w-9"
-              >
-                <ArchiveRestore className="h-4 w-4" />
-              </Button>
-            )}
-
-            {/* Dismiss */}
-            {onDismiss && (
-              <Button
-                variant="outline"
-                size="icon"
-                onClick={() => onDismiss(paper.id)}
-                disabled={dismissPending || isDismissed}
-                aria-label={`Dismiss ${paper.title}`}
-                title="Dismiss"
-                className="h-9 w-9"
-              >
-                {dismissPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <X className="h-4 w-4" />
+                {onMarkDone && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onMarkDone(paper.id)}
+                    aria-label={`Mark ${paper.title} as done`}
+                  >
+                    <CheckCircle className="mr-1 h-3 w-3" />
+                    Mark Done
+                  </Button>
                 )}
-              </Button>
+                {onTrash && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => onTrash(paper.id)}
+                    aria-label={`Trash ${paper.title}`}
+                    title="Move to Trash"
+                    className="h-9 w-9"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {isStarred
+                  ? onUnstar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onUnstar(paper.id)}
+                      aria-label={`Unstar ${paper.title}`}
+                      title="Unstar"
+                      className="h-9 w-9"
+                    >
+                      <StarOff className="h-4 w-4" />
+                    </Button>
+                  )
+                  : onStar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onStar(paper.id)}
+                      aria-label={`Star ${paper.title}`}
+                      title="Star"
+                      className="h-9 w-9"
+                    >
+                      <Star className="h-4 w-4" />
+                    </Button>
+                  )
+                }
+              </>
             )}
 
-            {/* Restore (trash) */}
-            {onRestore && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => onRestore(paper.id)}
-                disabled={restorePending}
-                aria-label={`Restore ${paper.title}`}
-              >
-                {restorePending ? (
-                  <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                ) : (
-                  <ArchiveRestore className="mr-1 h-3 w-3" />
+            {state === 'reading' && (
+              <>
+                {onSetAside && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onSetAside(paper.id)}
+                    aria-label={`Set aside ${paper.title}`}
+                  >
+                    <Library className="mr-1 h-3 w-3" />
+                    Set Aside
+                  </Button>
                 )}
-                Restore
-              </Button>
+                {onMarkDone && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onMarkDone(paper.id)}
+                    aria-label={`Mark ${paper.title} as done`}
+                  >
+                    <CheckCircle className="mr-1 h-3 w-3" />
+                    Mark Done
+                  </Button>
+                )}
+                {onTrash && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => onTrash(paper.id)}
+                    aria-label={`Trash ${paper.title}`}
+                    title="Move to Trash"
+                    className="h-9 w-9"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {isStarred
+                  ? onUnstar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onUnstar(paper.id)}
+                      aria-label={`Unstar ${paper.title}`}
+                      title="Unstar"
+                      className="h-9 w-9"
+                    >
+                      <StarOff className="h-4 w-4" />
+                    </Button>
+                  )
+                  : onStar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onStar(paper.id)}
+                      aria-label={`Star ${paper.title}`}
+                      title="Star"
+                      className="h-9 w-9"
+                    >
+                      <Star className="h-4 w-4" />
+                    </Button>
+                  )
+                }
+              </>
             )}
 
-            {/* Hard Delete (trash) */}
-            {onHardDelete && (
-              <Button
-                variant="destructive"
-                size="icon"
-                onClick={() => onHardDelete(paper.id, paper.title)}
-                disabled={hardDeletePending}
-                aria-label={`Permanently delete ${paper.title}`}
-                title="Permanently delete"
-                className="h-9 w-9"
-              >
-                {hardDeletePending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
+            {state === 'done' && (
+              <>
+                {onReopen && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onReopen(paper.id)}
+                    aria-label={`Re-open ${paper.title}`}
+                  >
+                    <RotateCcw className="mr-1 h-3 w-3" />
+                    Re-open
+                  </Button>
                 )}
-              </Button>
+                {onTrash && (
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => onTrash(paper.id)}
+                    aria-label={`Trash ${paper.title}`}
+                    title="Move to Trash"
+                    className="h-9 w-9"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                )}
+                {isStarred
+                  ? onUnstar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onUnstar(paper.id)}
+                      aria-label={`Unstar ${paper.title}`}
+                      title="Unstar"
+                      className="h-9 w-9"
+                    >
+                      <StarOff className="h-4 w-4" />
+                    </Button>
+                  )
+                  : onStar && (
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => onStar(paper.id)}
+                      aria-label={`Star ${paper.title}`}
+                      title="Star"
+                      className="h-9 w-9"
+                    >
+                      <Star className="h-4 w-4" />
+                    </Button>
+                  )
+                }
+              </>
+            )}
+
+            {state === 'trash' && (
+              <>
+                {onRestore && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onRestore(paper.id)}
+                    aria-label={`Restore ${paper.title}`}
+                  >
+                    <ArchiveRestore className="mr-1 h-3 w-3" />
+                    Restore
+                  </Button>
+                )}
+                {onHardDelete && (
+                  <Button
+                    variant="destructive"
+                    size="icon"
+                    onClick={() => onHardDelete(paper.id)}
+                    aria-label={`Permanently delete ${paper.title}`}
+                    title="Permanently delete"
+                    className="h-9 w-9"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                )}
+              </>
             )}
 
             {/* View */}
@@ -352,11 +468,21 @@ export function FeedPaperRow({
                 onClick={() => onView(paper.id)}
                 aria-label={`View ${paper.title} details`}
               >
-                <Eye className="mr-1 h-3 w-3" />
                 {viewLabel}
               </Button>
             )}
           </div>
+
+          {/* Feedback buttons — hidden for trash surface and user-initiated papers */}
+          {state !== 'trash' && (
+            <FeedbackButtons
+              paperId={paper.id}
+              discoveryOrigin={paper.discovery_origin}
+              source="feed_thumbs"
+              recentFeedback={paper.recent_feedback ?? null}
+              size="sm"
+            />
+          )}
         </div>
       </div>
     </div>

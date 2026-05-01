@@ -90,14 +90,14 @@ async def link_paper(
             try:
                 row = await conn.fetchrow(
                     """
-                    SELECT pus.status, p.zotero_item_key
+                    SELECT pus.starred, p.zotero_item_key
                     FROM papers p
                     LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
                     WHERE p.id = $1
                     """,
                     paper_id,
                 )
-                if row and (row["status"] == "starred" or row["zotero_item_key"]):
+                if row and (row["starred"] or row["zotero_item_key"]):
                     await conn.execute(
                         """
                         INSERT INTO jobs (kind, payload)

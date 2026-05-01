@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 from telegram_bot.formatters import (
     format_morning_briefing,
     format_paper_card,
+    format_pulse_card,
     format_review_stats,
 )
 from telegram_bot.handlers.commands._auth import auth_required
@@ -20,14 +21,37 @@ from telegram_bot.handlers.rate_limit import rate_limit
 logger = logging.getLogger(__name__)
 
 
-def _paper_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
-    """Build inline keyboard for a paper listing."""
+def _library_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
+    """/papers Library row buttons per spec §5.3."""
     return InlineKeyboardMarkup(
         [
             [
-                InlineKeyboardButton("Details", callback_data=f"paper_detail_{paper_id}"),
-                InlineKeyboardButton("Bookmark", callback_data=f"paper_bookmark_{paper_id}"),
+                InlineKeyboardButton("⭐ Star", callback_data=f"paper:star:{paper_id}"),
+                InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
+                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
             ]
+        ]
+    )
+
+
+def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
+    """/next single Pulse card buttons per spec §5.3."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
+                InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
+                InlineKeyboardButton("🗑+👎", callback_data=f"paper:trash_reject:{paper_id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    "👍", callback_data=f"paper:feedback_pos:{paper_id}:pulse_thumbs"
+                ),
+                InlineKeyboardButton(
+                    "👎", callback_data=f"paper:feedback_neg:{paper_id}:pulse_thumbs"
+                ),
+                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
+            ],
         ]
     )
 
@@ -35,23 +59,30 @@ def _paper_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/papers [query]`` — search paper_ingestion API or list 10 most recent papers."""
+    """Handle ``/papers [query]`` — search paper_ingestion API or list Library papers."""
     if update.message is None:
         return
     query = (" ".join(context.args) if context.args else "")[:500]
 
+    http = get_http(context)
+    config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
+
     if query:
         # Search via paper_ingestion API
-        http = get_http(context)
-        config = get_config(context)
         try:
             resp = await http.post(
                 f"{config.paper_ingestion_url}/api/search",
                 json={"query": query},
+                headers=headers,
                 timeout=30.0,
             )
             resp.raise_for_status()
             papers = resp.json()
+            if isinstance(papers, dict):
+                papers = papers.get("papers", [])
         except Exception:
             logger.exception("Paper search failed")
             await update.message.reply_text(
@@ -60,19 +91,30 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
             return
     else:
-        # List recent papers from DB
-        db = get_db(context)
-        rows = await db.fetch(
-            "SELECT p.id, p.title, p.authors, p.published_date, p.source_type, p.url, "
-            "ps.summary_brief "
-            "FROM papers p "
-            "LEFT JOIN paper_summaries ps ON p.id = ps.paper_id "
-            "ORDER BY p.created_at DESC LIMIT 10"
-        )
-        papers = [dict(r) for r in rows]
+        # List Library papers via feed API
+        try:
+            resp = await http.get(
+                f"{config.paper_ingestion_url}/api/papers/feed",
+                params={"view": "library", "limit": 10},
+                headers=headers,
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            papers = data.get("papers", []) if isinstance(data, dict) else []
+        except Exception:
+            logger.exception("Failed to fetch library feed")
+            await update.message.reply_text(
+                "Failed to load library. Please try again later.",
+                parse_mode="HTML",
+            )
+            return
 
     if not papers:
-        await update.message.reply_text("No papers found.", parse_mode="HTML")
+        await update.message.reply_text(
+            "📚 Your Library is empty. Save papers from /inbox or /next to start building it.",
+            parse_mode="HTML",
+        )
         return
 
     for paper in papers[:10]:
@@ -83,7 +125,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text(
             text,
             parse_mode="HTML",
-            reply_markup=_paper_keyboard(paper_id),
+            reply_markup=_library_keyboard(paper_id),
             disable_web_page_preview=True,
         )
 
@@ -163,44 +205,74 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``/next`` — recommend the next paper to read."""
+    """Handle ``/next`` — surface the top Pulse card as the next paper to read."""
     if update.message is None:
         return
-    db = get_db(context)
-    from telegram_bot.formatters import escape
+    http = get_http(context)
+    config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key
 
-    row = await db.fetchrow(
-        """
-        SELECT pr.paper_id, pr.score, p.title
-        FROM paper_recommendations pr
-        JOIN papers p ON pr.paper_id = p.id
-        WHERE pr.dismissed = FALSE
-        ORDER BY pr.score DESC LIMIT 1
-        """
-    )
-    if row:
-        await update.message.reply_text(
-            f"🧠 <b>Next Recommended Paper</b>\n\n"
-            f"{escape(row['title'])} (Score: {row['score']:.2f})\n\n"
-            f"Use /focus to start reading.",
-            parse_mode="HTML",
-            reply_markup=_paper_keyboard(row["paper_id"]),
+    try:
+        resp = await http.get(
+            f"{config.paper_ingestion_url}/api/pulse/today",
+            params={"limit": 1},
+            headers=headers,
+            timeout=30.0,
         )
-    else:
-        await update.message.reply_text("No pending recommendations found.", parse_mode="HTML")
+        resp.raise_for_status()
+        data = resp.json()
+        cards = data.get("cards", []) if isinstance(data, dict) else []
+    except Exception:
+        logger.exception("Failed to fetch pulse deck for /next")
+        await update.message.reply_text(
+            "Failed to load next recommendation. Please try again later.",
+            parse_mode="HTML",
+        )
+        return
 
+    if not cards:
+        await update.message.reply_text(
+            "🌙 No Pulse deck yet — try /pulse_now to generate one.",
+            parse_mode="HTML",
+        )
+        return
 
-def _inbox_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
-    """Build inline keyboard for an inbox paper card (Save / Dismiss / Read more)."""
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
-                InlineKeyboardButton("🗑 Dismiss", callback_data=f"paper:dismiss:{paper_id}"),
-                InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}"),
-            ]
-        ]
+    card = cards[0]
+    paper_id = card.get("paper_id") or card.get("id")
+    if not paper_id:
+        await update.message.reply_text("Pulse card has no paper_id.", parse_mode="HTML")
+        return
+
+    text = format_pulse_card(card)
+    await update.message.reply_text(
+        text,
+        parse_mode="HTML",
+        reply_markup=_pulse_card_keyboard(paper_id),
+        disable_web_page_preview=True,
     )
+
+
+def _inbox_keyboard(
+    paper_id: int | str, discovery_origin: str = "user_initiated"
+) -> InlineKeyboardMarkup:
+    """Inbox row buttons per spec §5.3 (origin-conditional feedback)."""
+    primary = [
+        InlineKeyboardButton("💾 Save", callback_data=f"paper:save:{paper_id}"),
+        InlineKeyboardButton("🗑 Trash", callback_data=f"paper:trash:{paper_id}"),
+    ]
+    if discovery_origin != "user_initiated":
+        primary.append(
+            InlineKeyboardButton("🗑+👎", callback_data=f"paper:trash_reject:{paper_id}"),
+        )
+    secondary = [InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}")]
+    if discovery_origin != "user_initiated":
+        secondary = [
+            InlineKeyboardButton("👍", callback_data=f"paper:feedback_pos:{paper_id}:pulse_thumbs"),
+            InlineKeyboardButton("👎", callback_data=f"paper:feedback_neg:{paper_id}:pulse_thumbs"),
+        ] + secondary
+    return InlineKeyboardMarkup([primary, secondary])
 
 
 @auth_required
@@ -249,6 +321,6 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(
             text,
             parse_mode="HTML",
-            reply_markup=_inbox_keyboard(paper_id),
+            reply_markup=_inbox_keyboard(paper_id, paper.get("discovery_origin", "user_initiated")),
             disable_web_page_preview=True,
         )

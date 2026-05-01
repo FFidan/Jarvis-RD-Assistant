@@ -139,6 +139,42 @@ def format_paper_card(paper: dict) -> str:
     )
 
 
+def format_pulse_card(card: dict) -> str:
+    """Format a Pulse deck card (PulseCardResponse shape) for /next display.
+
+    Parameters
+    ----------
+    card : dict
+        A single card from ``/api/pulse/today`` (``PulseCardResponse`` shape).
+        Expected keys: paper_id, paper_title, paper_authors, paper_url, score,
+        reasoning, rank.
+
+    Returns
+    -------
+    str
+        HTML-formatted Pulse card for Telegram.
+    """
+    title = escape(card.get("paper_title") or "Untitled")
+    authors = _format_authors(card.get("paper_authors") or [])
+    score = card.get("score")
+    score_str = f"{score:.2f}" if isinstance(score, float) else str(score or "–")
+    rank = card.get("rank")
+    rank_str = f"#{rank}" if rank is not None else ""
+    reasoning = card.get("reasoning") or ""
+    url = safe_url(card.get("paper_url") or "")
+
+    reasoning_part = f"\n\n💬 {escape(reasoning[:300])}" if reasoning else ""
+    link_part = f'\n🔗 <a href="{url}">Open paper</a>' if url else ""
+
+    return truncate(
+        f"⚡ <b>Pulse {rank_str}</b> · Score {score_str}\n"
+        f"📄 <b>{title}</b>\n"
+        f"👤 {authors}"
+        f"{reasoning_part}"
+        f"{link_part}"
+    )
+
+
 def format_paper_detail(paper: dict, summary: dict | None = None) -> str:
     """Format a detailed paper view with summary and findings.
 

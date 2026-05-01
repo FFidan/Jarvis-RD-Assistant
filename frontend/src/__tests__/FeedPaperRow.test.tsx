@@ -1,8 +1,21 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
+
+// FeedbackButtons uses useMutation — wrap with QueryClientProvider
+function renderRow(props: Parameters<typeof FeedPaperRow>[0]) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={client}>
+      <FeedPaperRow {...props} />
+    </QueryClientProvider>,
+  );
+}
 
 const paper: FeedPaper = {
   id: 7,
@@ -15,161 +28,148 @@ const paper: FeedPaper = {
   url: 'https://example.com/paper',
   pdf_url: null,
   pdf_local_path: null,
-  pdf_downloaded: true,
+  pdf_downloaded: false,
+  discovered_at: null,
   citation_count: 5,
   priority_score: 0.75,
   metadata: {},
-  discovered_at: '2026-01-02T00:00:00Z',
   created_at: '2026-01-02T00:00:00Z',
   summary_brief: 'Brief summary',
   tldr: null,
   confidence: 'HIGH',
-  user_status: 'new',
   rating: null,
   has_chunks: true,
   has_summary: false,
-};
-
-const paperWithUserState: FeedPaper = {
-  ...paper,
-  id: 8,
-  title: 'UserState Paper',
+  state: 'inbox',
+  state_before_trash: null,
+  starred: false,
+  discovery_origin: 'pulse',
   user_state: {
-    saved: true,
-    starred: true,
-    status: 'read',
-    dismissed: false,
-    archived: false,
-    preference: 'none',
+    state: 'inbox',
+    state_before_trash: null,
+    starred: false,
     rating: null,
     user_notes: null,
     flagged: false,
     updated_at: null,
   },
+  recent_feedback: null,
+};
+
+const toReadPaper: FeedPaper = {
+  ...paper,
+  id: 8,
+  title: 'To-Read Paper',
+  state: 'to_read',
+};
+
+const readingPaper: FeedPaper = {
+  ...paper,
+  id: 9,
+  title: 'Reading Paper',
+  state: 'reading',
+  starred: true,
+};
+
+const donePaper: FeedPaper = {
+  ...paper,
+  id: 10,
+  title: 'Done Paper',
+  state: 'done',
+};
+
+const trashPaper: FeedPaper = {
+  ...paper,
+  id: 11,
+  title: 'Trash Paper',
+  state: 'trash',
 };
 
 describe('FeedPaperRow', () => {
-  it('renders shared metadata and optional row actions', async () => {
-    const user = userEvent.setup();
-    const onSeedChange = vi.fn();
-    const onMarkRead = vi.fn();
-    const onArchive = vi.fn();
-    const onView = vi.fn();
-
-    render(
-      <FeedPaperRow
-        paper={paper}
-        seedChecked={false}
-        onSeedChange={onSeedChange}
-        onMarkRead={onMarkRead}
-        onArchive={onArchive}
-        onView={onView}
-      />,
-    );
-
+  it('renders shared metadata', () => {
+    renderRow({ paper });
     expect(screen.getByText('Shared Feed Row Paper')).toBeInTheDocument();
     expect(screen.getByText('Ada Lovelace, Grace Hopper')).toBeInTheDocument();
     expect(screen.getByText('ARXIV')).toBeInTheDocument();
+  });
 
+  it('renders seed checkbox when onSeedChange is provided and calls it on click', async () => {
+    const user = userEvent.setup();
+    const onSeedChange = vi.fn();
+    renderRow({ paper, seedChecked: false, onSeedChange });
     await user.click(screen.getByLabelText('Select Shared Feed Row Paper as seed'));
-    await user.click(screen.getByRole('button', { name: 'Mark Shared Feed Row Paper as read' }));
-    await user.click(screen.getByRole('button', { name: 'Archive Shared Feed Row Paper' }));
-    await user.click(screen.getByRole('button', { name: 'View Shared Feed Row Paper details' }));
-
     expect(onSeedChange).toHaveBeenCalledWith(7);
-    expect(onMarkRead).toHaveBeenCalledWith(7);
-    expect(onArchive).toHaveBeenCalledWith(7);
-    expect(onView).toHaveBeenCalledWith(7);
   });
 
-  it('disables the archive action while the archive mutation is pending', () => {
-    render(
-      <FeedPaperRow
-        paper={paper}
-        onArchive={vi.fn()}
-        archivePending
-      />,
-    );
-
-    expect(screen.getByRole('button', { name: 'Archive Shared Feed Row Paper' })).toBeDisabled();
+  it('state=inbox: renders Save and Skip buttons', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const onSkip = vi.fn();
+    renderRow({ paper, onSave, onSkip });
+    await user.click(screen.getByRole('button', { name: `Save ${paper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Skip ${paper.title}` }));
+    expect(onSave).toHaveBeenCalledWith(paper.id);
+    expect(onSkip).toHaveBeenCalledWith(paper.id);
   });
 
-  it('renders the recommendation badge with a star glyph (Sprint 7 B14)', () => {
-    const recommendedPaper: FeedPaper = {
-      ...paper,
-      recommendation_score: 0.92,
-      recommendation_reason: 'Matches your topic profile',
-    };
-    render(<FeedPaperRow paper={recommendedPaper} />);
-    expect(
-      screen.getByText(/★\s*Matches your topic profile/),
-    ).toBeInTheDocument();
-  });
-
-  it('exposes published date in a tooltip when discovered_at differs (Sprint 7 B15)', () => {
-    const dualDatePaper: FeedPaper = {
-      ...paper,
-      discovered_at: '2026-04-29T00:00:00Z',
-      published_date: '2025-12-01',
-    };
-    const { container } = render(<FeedPaperRow paper={dualDatePaper} />);
-    const dateSpan = container.querySelector('span[title]');
-    expect(dateSpan).not.toBeNull();
-    expect(dateSpan?.getAttribute('title')).toMatch(/Published:/);
-  });
-
-  it('renders NEW badge when user_status is unset (Sprint 7 B17)', () => {
-    const unsetPaper: FeedPaper = { ...paper, user_status: null };
-    render(<FeedPaperRow paper={unsetPaper} />);
-    // The component renders both a NEW Badge and a status badge (both show "NEW"),
-    // so we assert at least one is present.
+  it('state=inbox: renders NEW badge', () => {
+    renderRow({ paper });
     expect(screen.getAllByText('NEW').length).toBeGreaterThanOrEqual(1);
   });
 
-  // ── Sprint 8 B3.7 tests ────────────────────────────────────────────────────
-
-  it('reads user_state booleans: shows ★ when starred=true and status=read badge', () => {
-    render(<FeedPaperRow paper={paperWithUserState} />);
-    // ★ glyph is rendered inside a span when isStarred is true
-    expect(screen.getByTitle('Starred')).toBeInTheDocument();
-    // status badge should show READ (uppercased)
-    expect(screen.getByText('READ')).toBeInTheDocument();
-  });
-
-  it('surface-aware: shows Save button when onSave is provided and calls it on click', async () => {
+  it('state=to_read: renders Mark Reading and Mark Done buttons', async () => {
     const user = userEvent.setup();
-    const onSave = vi.fn();
-    render(<FeedPaperRow paper={paper} onSave={onSave} />);
-    const saveBtn = screen.getByRole('button', { name: `Save ${paper.title}` });
-    expect(saveBtn).toBeInTheDocument();
-    await user.click(saveBtn);
-    expect(onSave).toHaveBeenCalledWith(paper.id);
+    const onMarkReading = vi.fn();
+    const onMarkDone = vi.fn();
+    renderRow({ paper: toReadPaper, onMarkReading, onMarkDone });
+    await user.click(screen.getByRole('button', { name: `Mark ${toReadPaper.title} as reading` }));
+    await user.click(screen.getByRole('button', { name: `Mark ${toReadPaper.title} as done` }));
+    expect(onMarkReading).toHaveBeenCalledWith(toReadPaper.id);
+    expect(onMarkDone).toHaveBeenCalledWith(toReadPaper.id);
   });
 
-  it('surface-aware: shows Restore and HardDelete buttons when those callbacks are provided', () => {
+  it('state=reading: renders Set Aside and Mark Done buttons; shows ★ when starred=true', async () => {
+    const user = userEvent.setup();
+    const onSetAside = vi.fn();
+    const onMarkDone = vi.fn();
+    renderRow({ paper: readingPaper, onSetAside, onMarkDone });
+    expect(screen.getByTitle('Starred')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: `Set aside ${readingPaper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Mark ${readingPaper.title} as done` }));
+    expect(onSetAside).toHaveBeenCalledWith(readingPaper.id);
+    expect(onMarkDone).toHaveBeenCalledWith(readingPaper.id);
+  });
+
+  it('state=done: renders Re-open button', async () => {
+    const user = userEvent.setup();
+    const onReopen = vi.fn();
+    renderRow({ paper: donePaper, onReopen });
+    await user.click(screen.getByRole('button', { name: `Re-open ${donePaper.title}` }));
+    expect(onReopen).toHaveBeenCalledWith(donePaper.id);
+  });
+
+  it('state=trash: renders Restore and Permanently delete buttons', async () => {
+    const user = userEvent.setup();
     const onRestore = vi.fn();
     const onHardDelete = vi.fn();
-    render(
-      <FeedPaperRow
-        paper={paper}
-        onRestore={onRestore}
-        onHardDelete={onHardDelete}
-      />,
-    );
-    expect(
-      screen.getByRole('button', { name: `Restore ${paper.title}` }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: `Permanently delete ${paper.title}` }),
-    ).toBeInTheDocument();
+    renderRow({ paper: trashPaper, onRestore, onHardDelete });
+    await user.click(screen.getByRole('button', { name: `Restore ${trashPaper.title}` }));
+    await user.click(screen.getByRole('button', { name: `Permanently delete ${trashPaper.title}` }));
+    expect(onRestore).toHaveBeenCalledWith(trashPaper.id);
+    expect(onHardDelete).toHaveBeenCalledWith(trashPaper.id);
+  });
+
+  it('state=trash: no FeedbackButtons rendered', () => {
+    renderRow({ paper: trashPaper });
+    // FeedbackButtons renders thumbs-up/thumbs-down; should not be present for trash
+    expect(screen.queryByLabelText(/thumbs up/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/thumbs down/i)).not.toBeInTheDocument();
   });
 
   it('bulk checkbox toggles when onBulkToggle is provided and calls it on click', async () => {
     const user = userEvent.setup();
     const onBulkToggle = vi.fn();
-    render(
-      <FeedPaperRow paper={paper} onBulkToggle={onBulkToggle} bulkSelected={false} />,
-    );
+    renderRow({ paper, onBulkToggle, bulkSelected: false });
     const checkbox = screen.getByRole('checkbox', {
       name: `Select ${paper.title} for bulk action`,
     });
@@ -177,21 +177,28 @@ describe('FeedPaperRow', () => {
     expect(onBulkToggle).toHaveBeenCalledWith(paper.id);
   });
 
+  it('recommendation badge renders with star glyph', () => {
+    const recommendedPaper: FeedPaper = {
+      ...paper,
+      recommendation_score: 0.92,
+      recommendation_reason: 'Matches your topic profile',
+    };
+    renderRow({ paper: recommendedPaper });
+    expect(screen.getByText(/★\s*Matches your topic profile/)).toBeInTheDocument();
+  });
+
   it('omits action buttons whose callback is not passed', () => {
-    render(<FeedPaperRow paper={paper} onView={vi.fn()} />);
-    // Only View button should be present; Save/Star/Archive/Dismiss must be absent
-    expect(
-      screen.queryByRole('button', { name: `Save ${paper.title}` }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: `Archive ${paper.title}` }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: `Dismiss ${paper.title}` }),
-    ).not.toBeInTheDocument();
-    // View button IS present
-    expect(
-      screen.getByRole('button', { name: `View ${paper.title} details` }),
-    ).toBeInTheDocument();
+    renderRow({ paper, onView: vi.fn() });
+    expect(screen.queryByRole('button', { name: `Save ${paper.title}` })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Skip ${paper.title}` })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `View ${paper.title} details` })).toBeInTheDocument();
+  });
+
+  it('onToggleSelect (new API) works for bulk selection', async () => {
+    const user = userEvent.setup();
+    const onToggleSelect = vi.fn();
+    renderRow({ paper, onToggleSelect, isSelected: false });
+    await user.click(screen.getByRole('checkbox', { name: `Select ${paper.title} for bulk action` }));
+    expect(onToggleSelect).toHaveBeenCalledWith(paper.id);
   });
 });

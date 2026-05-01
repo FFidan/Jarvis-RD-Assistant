@@ -408,9 +408,13 @@ def test_submit_feedback_validates_signal_and_source():
 @pytest.mark.asyncio
 async def test_submit_feedback_maps_foreign_key_violation_to_404():
     """submit_feedback should convert a FK error on the recommendation_feedback
-    INSERT into a stable 404."""
+    INSERT into a stable 404.
+
+    After the DRY refactor, the error surfaces from conn.execute inside
+    _upsert_recommendation_feedback (not conn.fetchrow).
+    """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
+    conn.execute.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with pytest.raises(HTTPException, match="Paper 7 not found") as exc_info:
@@ -426,31 +430,35 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
 
 @pytest.mark.asyncio
 async def test_submit_feedback_writes_recommendation_feedback_with_correct_source():
-    """submit_feedback writes a recommendation_feedback row with ON CONFLICT
-    (paper_id, user_id, source) DO UPDATE — the spec'd upsert."""
-    pool, conn = _make_pool_and_conn()
-    now = datetime.now(UTC)
-    conn.fetchrow.return_value = FakeRecord(
-        paper_id=7,
-        signal="negative",
-        source="feed_thumbs",
-        created_at=now,
-    )
+    """submit_feedback delegates to _upsert_recommendation_feedback with the correct args.
+
+    After the DRY refactor the raw inline INSERT was replaced by a call to
+    the shared helper.  We patch the helper at the import path used by papers.py
+    and verify it is called with paper_id, signal, source, and reason.
+    """
+    pool, _ = _make_pool_and_conn()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    result = await papers.submit_feedback.__wrapped__(
-        request,
-        paper_id=7,
-        body=FeedbackRequest(signal="negative", source="feed_thumbs", reason="off-topic"),
-        db_pool=pool,
-    )
+    with patch(
+        "paper_ingestion.routers.papers._upsert_recommendation_feedback",
+        new_callable=AsyncMock,
+    ) as mock_helper:
+        result = await papers.submit_feedback.__wrapped__(
+            request,
+            paper_id=7,
+            body=FeedbackRequest(signal="negative", source="feed_thumbs", reason="off-topic"),
+            db_pool=pool,
+        )
 
-    sql_calls = [call.args[0] for call in conn.fetchrow.await_args_list]
-    assert any(
-        "INSERT INTO recommendation_feedback" in sql
-        and "ON CONFLICT (paper_id, user_id, source) DO UPDATE" in sql
-        for sql in sql_calls
-    ), f"Expected recommendation_feedback upsert; got SQL calls: {sql_calls}"
+    mock_helper.assert_awaited_once()
+    assert mock_helper.await_args is not None
+    _conn_arg, paper_id_arg, _uid_arg, signal_arg, source_arg, reason_arg = (
+        mock_helper.await_args.args
+    )
+    assert paper_id_arg == 7
+    assert signal_arg == "negative"
+    assert source_arg == "feed_thumbs"
+    assert reason_arg == "off-topic"
     assert result.signal == "negative"
     assert result.source == "feed_thumbs"
 
@@ -1171,3 +1179,363 @@ async def test_bulk_partial_failure_records_savepoint_isolation(monkeypatch):
     assert len(result["failed"]) == 1
     assert result["failed"][0]["paper_id"] == 2
     assert "error" in result["failed"][0]
+
+
+# ---------------------------------------------------------------------------
+# Idempotency + 404 tests — lifecycle state mutators (Task A.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_save_paper_idempotent_recall():
+    """Two consecutive PUT /save calls return the same response; second is no-op equivalent.
+
+    The endpoint is idempotent by design (INSERT ... ON CONFLICT DO UPDATE SET state =
+    'to_read') — calling it twice keeps state at 'to_read'.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)  # paper-exists check succeeds
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.save_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.save_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    # Both calls issued the same state = 'to_read' upsert.
+    assert all(
+        any("to_read" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
+        for _ in [result1, result2]
+    )
+
+
+@pytest.mark.asyncio
+async def test_save_paper_404_when_paper_missing():
+    """PUT /save/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None  # paper-exists check fails
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.save_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_skip_paper_idempotent_recall():
+    """Two consecutive PUT /skip calls both succeed; state stays 'done'."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.skip_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.skip_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    assert all(
+        any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
+        for _ in [result1, result2]
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_paper_404():
+    """PUT /skip/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.skip_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_reading_paper_idempotent_recall():
+    """Two consecutive PUT /reading calls both succeed; state stays 'reading'."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.reading_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.reading_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    assert any(
+        "reading" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_reading_paper_404():
+    """PUT /reading/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.reading_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_done_paper_idempotent_recall():
+    """Two consecutive PUT /done calls both succeed; state stays 'done'."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.done_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.done_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    assert any("done" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_done_paper_404():
+    """PUT /done/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.done_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_star_paper_idempotent_recall():
+    """Two consecutive PUT /star calls both succeed; starred stays TRUE; state not touched.
+
+    Orthogonality: the upsert in star_paper does NOT write a state column.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    conn.fetchval.return_value = 0  # project_papers COUNT — no zotero.push needed
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    # Both calls issued the star upsert and the DO UPDATE SET clause must not touch state.
+    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    upsert_sql = next((sql for sql in sql_calls if "INSERT INTO paper_user_state" in sql), None)
+    assert upsert_sql is not None
+    do_update_clause = upsert_sql.split("DO UPDATE SET", 1)[-1]
+    assert "state =" not in do_update_clause
+    # True must appear in the execute args.
+    assert any(True in call.args for call in conn.execute.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_star_paper_404():
+    """PUT /star/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+    conn.fetchval.return_value = 0
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.star_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_unstar_paper_idempotent_recall():
+    """Two consecutive PUT /unstar calls both succeed; starred stays FALSE."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(id=1)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.unstar_paper.__wrapped__(request, 1, db_pool=pool)
+    result2 = await papers.unstar_paper.__wrapped__(request, 1, db_pool=pool)
+
+    assert result1 == {"status": "ok", "paper_id": 1}
+    assert result2 == {"status": "ok", "paper_id": 1}
+    # Both calls should write starred = FALSE.
+    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    assert any("INSERT INTO paper_user_state" in sql and "starred" in sql for sql in sql_calls)
+    assert any(False in call.args for call in conn.execute.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_unstar_paper_404():
+    """PUT /unstar/{paper_id} with no matching row raises HTTPException 404."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.unstar_paper.__wrapped__(request, 99999, db_pool=pool)
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_annotate_paper_404_when_paper_missing():
+    """PUT /annotations/{paper_id} raises 404 when paper FK constraint fires.
+
+    In single-user mode the ownership check is skipped; the INSERT into
+    paper_user_state raises ForeignKeyViolationError which is mapped to 404.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.annotate_paper.__wrapped__(
+            request,
+            99999,
+            body=AnnotationsRequest(rating=3),
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_annotate_paper_unauthorized_user(monkeypatch):
+    """PUT /annotations with a caller who does not own the paper returns 403.
+
+    Mirrors the pattern in test_get_paper_detail_403_for_other_user: the paper
+    is owned by user 42, the caller is user 99 → assert_paper_ownership raises 403.
+    """
+    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    pool, conn = _make_pool_and_conn()
+    # assert_paper_ownership reads user_id from the papers table.
+    conn.fetchrow.return_value = FakeRecord(user_id=42)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.annotate_paper.__wrapped__(
+            request,
+            1,
+            body=AnnotationsRequest(rating=3),
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_idempotent_recall():
+    """Two consecutive bulk {action: 'save', paper_ids: [1, 2, 3]} succeed;
+    final state is 'to_read' for all papers (idempotent ON CONFLICT upsert).
+    """
+    pool, conn = _make_pool_and_conn()
+    body = BulkActionRequest(paper_ids=[1, 2, 3], action="save")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result1 = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+    result2 = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+
+    assert result1 == {"succeeded": [1, 2, 3], "failed": []}
+    assert result2 == {"succeeded": [1, 2, 3], "failed": []}
+    assert any(
+        "to_read" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
+    """Bulk {action: 'save', paper_ids: [1, 99999]} with paper 99999 missing.
+
+    Per-paper savepoints isolate the failure so paper 1 succeeds while
+    99999 is recorded in 'failed'.  The overall response is HTTP 200 with
+    the succeeded/failed partition — NOT a 207 (the bulk endpoint always
+    returns 200 in this implementation).
+    """
+    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    pool, conn = _make_pool_and_conn()
+
+    async def _fetchrow(sql: str, *args, **kwargs):
+        del kwargs
+        if "SELECT user_id FROM papers" in sql:
+            paper_id = args[0]
+            if paper_id == 99999:
+                return None  # paper not found → assert_paper_ownership raises 404
+            return FakeRecord(user_id=99)  # caller owns this paper
+        return None
+
+    conn.fetchrow.side_effect = _fetchrow
+
+    body = BulkActionRequest(paper_ids=[1, 99999], action="save")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+
+    assert result["succeeded"] == [1]
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["paper_id"] == 99999
+    assert "error" in result["failed"][0]
+
+
+# ---------------------------------------------------------------------------
+# recommendation_feedback endpoints — 404 / empty-list edge cases (Task A.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_recommendation_feedback_404_for_nonexistent_paper_filter():
+    """GET /api/recommendation_feedback?paper_id=99999 returns 200 with items=[] and total=0.
+
+    The endpoint does NOT raise 404 for a paper_id that has no feedback rows;
+    it returns an empty paginated list.
+    """
+    from paper_ingestion.routers import recommendation_feedback as rf_router
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = []
+    conn.fetchval.return_value = 0
+
+    with patch(
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await rf_router.list_recommendation_feedback.__wrapped__(
+            request=MagicMock(),
+            paper_id=99999,
+            limit=50,
+            offset=0,
+            db_pool=pool,
+        )
+
+    assert result.items == []
+    assert result.total == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic():
+    """DELETE /api/recommendation_feedback?topic_id=99999 returns {deleted: 0}.
+
+    When no rows match the topic_id + user_id predicate, asyncpg returns
+    'DELETE 0' and the response is DeleteFeedbackResponse(deleted=0, topic_id=99999).
+    """
+    from paper_ingestion.routers import recommendation_feedback as rf_router
+
+    pool, conn = _make_pool_and_conn()
+    conn.execute.return_value = "DELETE 0"
+
+    with patch(
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await rf_router.delete_recommendation_feedback_by_topic.__wrapped__(
+            request=MagicMock(),
+            topic_id=99999,
+            db_pool=pool,
+        )
+
+    assert result.deleted == 0
+    assert result.topic_id == 99999

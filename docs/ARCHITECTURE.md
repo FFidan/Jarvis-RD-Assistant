@@ -38,9 +38,8 @@ requests through nginx to `paper_ingestion` and `learning_engine`.
 - `routers/` - HTTP adapters. Keep business logic out of routers. SSE
   formatting uses the shared `routers/_sse.py` helpers (`sse_event()`,
   `SSE_DONE`); do not inline SSE formatting in router handlers.
-- `queries/` - reusable SQL fragments and predicates. `predicates.py` owns
-  canonical SQL predicates such as `IS_ARCHIVED_SQL` and `IS_NOT_ARCHIVED_SQL`;
-  use these instead of duplicating the archived-state logic.
+- `queries/` - reusable SQL fragments and predicates. predicates.py owns
+  canonical SQL predicates: VIEW_PREDICATES (10 named surfaces per spec §6), RECOMMENDER_EXCLUDE_SQL, and PULSE_CANDIDATE_EXCLUDE_SQL. Use these constants; never duplicate the SQL condition inline.
 - `models/` - Pydantic models, split by domain.
 - `ingestion/` - embedding, retrieval, reranking, recommendations, PDF
   processing ownership where applicable.
@@ -110,12 +109,7 @@ scope.
 
 Durable behavioral contracts for cross-cutting workflows live in `docs/specs/`:
 
-- [specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) —
-  authoritative spec for paper lifecycle states, transitions, action contracts,
-  feed information architecture, recommendation feedback loop (L1+L2+L3),
-  Zotero interplay, and Telegram parity. Supersedes the legacy
-  `paper-lifecycle-contract.md` and `feed-information-architecture.md`, which
-  are scheduled for deletion in Phase A implementation.
+- [specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) — authoritative spec for paper lifecycle states, transitions, action contracts, feed information architecture, recommendation feedback loop (L1+L2+L3), Zotero interplay, and Telegram parity. Replaces the legacy paper-lifecycle-contract.md and feed-information-architecture.md, which were deleted as part of the Phase A atomic cutover.
 
 When changing paper status logic, lifecycle transitions, feed filtering, or the
 recommender feedback loop, verify the implementation against this spec before

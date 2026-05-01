@@ -377,7 +377,17 @@ Existing callbacks (`paper_bookmark_<id>`, `pulse_up_<id>`, etc.) deprecated in 
 | Ask | (RAG chat surface) | n/a |
 | Trash | `state = 'trash'` | n/a |
 
-Pulse Deck stays at `/pulse` (unchanged). My Day shows Pulse Preview widget.
+Pulse Deck lives at the standalone `/pulse` page (NEW in Wave 7 — see §5.5 below). My Day shows the top-3 Pulse Preview widget that links into `/pulse` via "View all".
+
+> **Amendment 7 (2026-05-01) — Wave 7 contract restoration.** The earlier wording said "Pulse Deck stays at `/pulse` (unchanged)". Audit during Wave 6 confirmed via `git log --diff-filter=D` that a standalone `/pulse` page **never existed**: commit `69e8e5e` (2026-04-29) added a `/pulse → /my-day` redirect in the same change that removed the `?tab=pulse` Feed-tab. Wave 7 restores `/pulse` as a real page that wraps the existing `PulseDeck` widget — see [docs/plans/2026-05-01-wave-7-contract-restoration.md](../plans/2026-05-01-wave-7-contract-restoration.md) §B.2. The "(unchanged)" phrasing was a spec-authoring error; this amendment corrects it.
+
+### 5.5 Inbox / Pulse Deck overlap (intent)
+
+Pulse-origin papers also appear on the Inbox surface. **Inbox is the comprehensive firehose** of every paper the system has discovered (per the Inbox predicate `state = 'inbox'`); **Pulse Deck is the curated/ranked view** of the daily Pulse run drawn from the same underlying papers (different data shape: `pulse_decks` + `pulse_cards` carry per-card rank/score/reasoning). The two views overlap by design — a Pulse-origin paper appears in both surfaces simultaneously, with different ranking and different feedback affordances per §5.2.
+
+To make the overlap legible, Inbox rows whose `papers.discovery_origin IN ('pulse', 'recommender')` render a small `✦ Pulse` badge next to the source-type badge. Hover/title text reads "Also in today's Pulse Deck". This was added in Wave 7 (B.7).
+
+The hidden-behavior parenthetical in the §5.4 Inbox row (`origin filter is hidden behavior`) refers to potential future filtering of pulse-origin papers from Inbox — out of scope for Phase A; documented here to record the design intent.
 
 ---
 

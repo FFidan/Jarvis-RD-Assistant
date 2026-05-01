@@ -22,7 +22,7 @@ export function PaperCard({ paper, onClick }: PaperCardProps) {
       <CardHeader className="pb-2">
         <div className="flex items-start justify-between gap-2">
           <CardTitle className="line-clamp-2 text-base">{paper.title}</CardTitle>
-          <PriorityBadge level={priorityLevel(paper.priority_score)} />
+          <PriorityBadge level={priorityLevel(paper.priority_score ?? null)} />
         </div>
         <p className="text-sm text-muted-foreground">
           {formatAuthors(paper.authors)} &middot; {formatDate(paper.published_date)}
@@ -40,7 +40,7 @@ export function PaperCard({ paper, onClick }: PaperCardProps) {
         )}
         <div className="flex flex-wrap gap-1">
           <Badge variant="outline">{paper.source_type}</Badge>
-          {paper.citation_count > 0 && (
+          {(paper.citation_count ?? 0) > 0 && (
             <Badge variant="secondary">{paper.citation_count} citations</Badge>
           )}
           {isFeedPaper(paper) && paper.confidence && (

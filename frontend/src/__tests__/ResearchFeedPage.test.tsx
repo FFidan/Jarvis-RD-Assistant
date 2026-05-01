@@ -4,7 +4,7 @@ import { userEvent } from '@testing-library/user-event';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
-import { ApiError, archivePaper, useFeedCounts } from '@/lib/api';
+import { ApiError, useFeedCounts } from '@/lib/api';
 import { queryClient as appQueryClient } from '@/lib/query-client';
 import { useJobStore } from '@/stores/job-store';
 
@@ -156,8 +156,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       source_errors: {},
     }),
     batchSavePapers: vi.fn().mockResolvedValue([{ id: 1, title: 'Saved Paper' }]),
-    markPaperRead: vi.fn().mockResolvedValue({ status: 'ok' }),
-    archivePaper: vi.fn().mockResolvedValue({ status: 'archived', rating: null, user_notes: null, flagged: false }),
+    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 1 }),
     discoverPapers: vi.fn().mockResolvedValue([]),
     scanLocalPdfs: vi.fn().mockResolvedValue({ job_id: 'job-scan', status: 'queued' }),
     batchProcessPapers: vi.fn().mockResolvedValue({
@@ -184,7 +183,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       { id: 5, source_type: 'local', enabled: true, config: {}, priority: 5, display_order: 5, created_at: '2025-01-01T00:00:00Z' },
     ]),
     fetchFeedCounts: vi.fn().mockResolvedValue({
-      inbox: 0, library: 0, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 0,
+      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
     }),
     useFeedCounts: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
     fetchPulseHistory: vi.fn().mockResolvedValue([]),
@@ -291,7 +290,7 @@ describe('ResearchFeedPage', () => {
 
   it('defaults to Library tab active', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 5 },
+      data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
@@ -1830,35 +1829,24 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('clicking archive on a Library row calls archivePaper with the paper id (Sprint 7 B16)', async () => {
+  // Wave 2.3 lifecycle test: clicking Library tab shows the library surface content
+  it('clicking Library tab navigates to the library surface and shows section info', async () => {
     const user = userEvent.setup();
-    // Library is the default surface when inbox=0
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 2, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2 },
+      data: { inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
     renderPage();
 
-    // Wait for redirect to library surface, then wait for the row to render.
-    // Use regex so count badges like "Library 2" don't break the query
+    // Wait for redirect to library surface
     await waitFor(() => {
       expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
     });
+
+    // Library surface renders the section description and the FeedView content
+    expect(screen.getByText('Browse, search, and filter all papers in your library.')).toBeInTheDocument();
     await screen.findByText('Test Paper One');
-
-    const archiveButton = await screen.findByRole('button', {
-      name: 'Archive Test Paper One',
-    });
-    await user.click(archiveButton);
-
-    await waitFor(() => {
-      // React Query's `useMutation.mutate(value)` calls the mutationFn with
-      // `(value, mutationContext)` — assert by inspecting positional arg.
-      const mock = vi.mocked(archivePaper);
-      expect(mock).toHaveBeenCalled();
-      expect(mock.mock.calls[0][0]).toBe(1);
-    });
   });
 
   // ── Sprint 8 B3.7 — Surface chips ─────────────────────────────────────────
@@ -1878,7 +1866,7 @@ describe('ResearchFeedPage', () => {
     // When useFeedCounts returns counts data, the chip renders the CountsBadge child
     // (actual count text rendering depends on CountsBadge's internal surface lookup)
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 3, library: 5, starred: 1, archived: 0, reading: 2, trash: 0, all_active: 10 },
+      data: { inbox: 3, library: 5, reading_list: 0, reading: 2, done: 0, starred: 1, trash: 0, active: 10, kept: 10, all_non_trash: 10 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
@@ -1895,7 +1883,7 @@ describe('ResearchFeedPage', () => {
 
   it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 2, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 7 },
+      data: { inbox: 2, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 7, kept: 7, all_non_trash: 7 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
@@ -1909,7 +1897,7 @@ describe('ResearchFeedPage', () => {
 
   it('default landing redirects to ?surface=library when inbox = 0', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
-      data: { inbox: 0, library: 5, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 5 },
+      data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
@@ -1983,5 +1971,87 @@ describe('ResearchFeedPage', () => {
     // Unknown surface falls back to 'inbox' (line 92-95 of ResearchFeedPage.tsx)
     expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  // ── T3.1 Phase-A: VALID_SURFACES tighten — ?surface=starred is no longer a surface ──
+
+  it('?surface=starred falls back to Inbox (VALID_SURFACES tightened — starred is sub-filter only)', () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    render(
+      <QueryClientProvider client={appQueryClient}>
+        <MemoryRouter initialEntries={['/feed?surface=starred']}>
+          <Routes>
+            <Route path="/feed" element={<ResearchFeedPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    // 'starred' is no longer in VALID_SURFACES — falls back to 'inbox'
+    expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'false');
+  });
+
+  // ── T3.1 Phase-A: Library sub-chips (spec §5.4) ───────────────────────────
+
+  it('renders 5 Library sub-chips (All + Starred + Reading + Reading List + Done) when surface=library', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
+    await user.click(libraryTab);
+
+    // 5 sub-chips per spec §5.4
+    const subChipTablist = screen.getByRole('tablist', { name: 'Library filter' });
+    const subChips = subChipTablist.querySelectorAll('[role="tab"]');
+    expect(subChips).toHaveLength(5);
+
+    // Verify all chip labels are present
+    expect(screen.getByRole('tab', { name: 'All' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Starred/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Reading$/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Reading List/ })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Done/ })).toBeInTheDocument();
+
+    // 'All' sub-chip is selected by default (no filter)
+    expect(screen.getByRole('tab', { name: 'All' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  // ── T3.1 Phase-A: Amber banner inlined for trash surface ──────────────────
+
+  it('renders amber banner when surface=trash', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /^Trash/ }));
+
+    // Amber banner from TrashView.tsx — preserved verbatim
+    const banner = screen.getByRole('alert');
+    expect(banner).toBeInTheDocument();
+    expect(banner).toHaveTextContent(
+      'Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.',
+    );
+  });
+
+  // ── T3.1 Phase-A: H5 — surface change clears bulk selection ───────────────
+
+  it('H5: switching surface via URL clears bulk selection', async () => {
+    const { useBulkSelection } = await import('@/stores/bulk-selection-store');
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    // Switch to Library surface to establish a known selection context
+    await user.click(screen.getByRole('tab', { name: /^Library/ }));
+
+    // Programmatically set some selected IDs
+    useBulkSelection.setState({ selectedIds: new Set([1, 2, 3]) });
+    expect(useBulkSelection.getState().selectedIds.size).toBe(3);
+
+    // Switch to Trash — useEffect([surface]) should clear bulk selection
+    await user.click(screen.getByRole('tab', { name: /^Trash/ }));
+
+    expect(useBulkSelection.getState().selectedIds.size).toBe(0);
   });
 });

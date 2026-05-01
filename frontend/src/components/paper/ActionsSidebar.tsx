@@ -17,6 +17,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
+import type { RecentFeedback } from '@/types';
 
 const ACTION_TOOLTIPS: Record<string, string> = {
   analyze:
@@ -41,6 +43,12 @@ interface ActionsSidebarProps {
   hasSummary?: boolean;
   /** Briefly pulse the Process PDF button (triggered by ?action=process query param) */
   pulseProcessButton?: boolean;
+  /** discovery_origin used to gate the Recommendation Feedback section (spec §5.2). */
+  discoveryOrigin?: 'user_initiated' | 'pulse' | 'recommender' | 'citation_batch';
+  /** Last feedback signal (highlights the active thumb). */
+  recentFeedback?: RecentFeedback | null;
+  /** Lifecycle state — feedback section is hidden when state='trash'. */
+  state?: string;
 }
 
 type AnalyzeStep = null | 'downloading' | 'processing' | 'summarizing';
@@ -55,7 +63,16 @@ type StepStatus = 'pending' | 'active' | 'completed' | 'failed';
 
 const TERMINAL_STATUSES: Job['status'][] = ['succeeded', 'failed', 'cancelled'];
 
-export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = false, hasSummary = false, pulseProcessButton = false }: ActionsSidebarProps) {
+export function ActionsSidebar({
+  paperId,
+  pdfDownloaded = false,
+  hasChunks = false,
+  hasSummary = false,
+  pulseProcessButton = false,
+  discoveryOrigin = 'user_initiated',
+  recentFeedback = null,
+  state = 'inbox',
+}: ActionsSidebarProps) {
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const [deckId, setDeckId] = useState<string>('');
@@ -357,6 +374,29 @@ export function ActionsSidebar({ paperId, pdfDownloaded = false, hasChunks = fal
       )}
 
       <Separator />
+
+      {/* Recommendation Feedback section — spec §5.2 line 349. */}
+      {/* FeedbackButtons self-gates on discoveryOrigin === 'user_initiated'; this section
+          hides entirely when state='trash' (no double-prompt for trashed papers). */}
+      {state !== 'trash' && discoveryOrigin !== 'user_initiated' && (
+        <>
+          <div>
+            <h3 className="text-lg font-semibold">Recommendation Feedback</h3>
+            <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+              Tell the recommender whether this paper is on-target.
+            </p>
+            <FeedbackButtons
+              paperId={paperId}
+              discoveryOrigin={discoveryOrigin}
+              source="paper_detail_thumbs"
+              recentFeedback={recentFeedback}
+              size="md"
+              showReasonInput
+            />
+          </div>
+          <Separator />
+        </>
+      )}
 
       <h3 className="text-lg font-semibold">Generate Cards</h3>
 

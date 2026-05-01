@@ -2,7 +2,7 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
-## [Unreleased]
+## [1.3.0] - 2026-05-01
 
 ### Behavior
 - **Starred papers remain eligible for re-recommendation** (Sprint 7 B4). Pre-migration-044, `_filter_unread` excluded `status IN ('read','archived','starred')` from the unread candidate pool. Post-migration-044, `archived` is the explicit dismiss signal; starring is treated as a *positive* signal and no longer disqualifies a paper from future ranking. Read and archived papers continue to be filtered out.
@@ -15,12 +15,42 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - **Pulse Diagnostics** endpoint (`GET /api/pulse/debug`) + expandable Diagnostics section in Pulse settings tab.
 - Info-bubble tooltips on source cards, notification rows, and Paper Detail action buttons.
 
+#### Phase A — Paper Lifecycle Redesign
+- Lifecycle ENUM `paper_user_state.state` (inbox/to_read/reading/done/trash) + orthogonal `starred` BOOLEAN + `state_before_trash` for restore. Migration 047.
+- `papers.discovery_origin` ENUM (user_initiated/pulse/recommender/citation_batch) — stamped at insert, immutable. Migration 048.
+- `recommendation_feedback` table (replaces dropped `pulse_ratings`): per-paper feedback signals (positive/negative) with source attribution and topic_id for L3 dampening. Migration 049.
+- 10 lifecycle endpoints: PUT /api/papers/{id}/save|skip|reading|done|trash|restore|trash_and_reject|star|unstar|annotations + POST /api/papers/{id}/feedback.
+- GET /api/papers/feed/counts — 10 named view counts (inbox, library, reading_list, reading, done, starred, trash, active, kept, all_non_trash).
+- GET /api/recommendation_feedback (30/min) + DELETE /api/recommendation_feedback?topic_id={id} (5/min).
+- L1+L2+L3 backend learning loop: L1 negative_topics/authors → LLM prompt; L2 cosine penalty −λ·cos(candidate, μ⁻) (default λ=0.5); L3 60-day hard exclusion + topic dampening (≥5 negatives in 90d) + min-candidate (<20) safeguard.
+- Telegram /inbox command; paper:<action>:<id> callback convention; paper:feedback_(pos|neg):<id>:<source> feedback callbacks.
+- Frontend FeedbackButtons component (origin-conditional); RejectedTopicsPanel Settings UI; 5 surface chips + Library sub-chips; state-aware keyboard shortcuts.
+- Wave 4: `test_l1_negative_signals.py` (+5 L1 unit tests); `test_papers_router.py` (+18 lifecycle integration tests); `FeedbackButtons.test.tsx` (+3 tests); `ResearchFeedPage.bulk.test.tsx` (+1 H5 direct-setSearchParams test); `feedback-loop.spec.ts` (NEW E2E).
+- Wave 7 — contract restoration + gap closure (Wave 6 live smoke surfaced spec drift):
+  - **Standalone `/pulse` Pulse Deck page** (new `PulseDeckPage.tsx` wrapping the orphaned `PulseDeck` widget). The previous `/pulse → /my-day` redirect was a legacy artifact from the `?tab=pulse` removal in 2026-04-29. Spec §5.4 Amendment 7 corrects the original "(unchanged)" wording. "View all" link in PulsePreviewCard now resolves correctly.
+  - **Paper Detail sidebar feedback section** (FeedbackButtons + optional reason free-text) per spec §5.2 line 349. Buttons moved from PaperHeader to ActionsSidebar; reason textarea slides in after a thumb click and saves via UPSERT. Backend `recommendation_feedback.reason` column was wired since Wave 1cd; only the UI was missing.
+  - **Pulse Preview vs full Deck differentiation** per spec §5.2 lines 345-346: `PulseCard` accepts `hideTrashAndReject` prop; My Day Pulse Preview hides 🗑+👎 (top-3 widget shows 👍/👎/💾 only); full `/pulse` Deck shows all four.
+  - **Inbox/Pulse Deck overlap** (NEW spec §5.5): Inbox rows with `discovery_origin IN ('pulse','recommender')` render a `✦ Pulse` / `✦ Recommended` badge so the Inbox-firehose vs Pulse-curated overlap is legible.
+  - **Global keyboard shortcuts UI**: `KeyboardCheatSheet` moved from feed-scoped to globally mounted in AppShell, opened by a persistent `<Keyboard>` icon button in the TopBar (visible on every authenticated page). Backed by a tiny `useKeyboardShortcuts` Zustand store. The `?` keypress on the Research Feed now dispatches via the same store.
+  - **Settings tab URL sync** (`?tab=<value>`) — fixes deep-linking and shareability (Apr 29 audit B5 fix). B6 `/knowledge` redirect and B7 project row click could not be reproduced at HEAD; falsified.
+  - **docker-compose `LITELLM_API_KEY` propagation** — app services now authenticate to the litellm proxy. Pre-Phase-A regression that blocked end-to-end Pulse + L3 feedback verification.
+  - **Doc cutover catch-up**: PRD.md and REQUIREMENTS.md residual `bookmark`/`is_bookmarked` references replaced with the new state ENUM + starred vocabulary; META plan header refreshed; 3 resolved Apr-29 audit docs archived.
+  - **Analytics regression fix** (`pus.status` → `pus.state`/`pus.starred` in 4 files) — surfaced during Wave 6 walkthrough; migration 047 dropped the `status` column but four queries still referenced it.
+
 ### Changed
 - **My Day redesigned** as a triage dashboard: DayHeader with counters, Pulse preview card (3 papers + link to full deck), Pomodoro + Tasks, ActionItems, Learning summary. Full Pulse deck lives at `/feed?tab=pulse`.
 - **Settings** "Recommendations" tab replaced by dedicated "Pulse" tab consolidating enable/schedule/weights/generate/diagnostics. Automation tab no longer carries Pulse controls.
 - Sidebar "Feed" → "Research Feed".
 - `notifications.timezone` renders as "Timezone" instead of raw dotted key.
 - Source cards use uniform tall layout regardless of API-key requirement.
+
+#### Phase A — Paper Lifecycle Redesign
+- Lifecycle schema: 5 booleans (saved/dismissed/starred/archived) + status enum → single `state` ENUM + orthogonal `starred` BOOLEAN. Spec §11 atomic cutover — no backwards compatibility.
+- Paper-mutation API: /bookmark, /archive, /dismiss, /read, /unsave, /user-state replaced by 10 new lifecycle endpoints.
+- Frontend types: `FeedPaper.user_state` changed from boolean axes to `state` ENUM + `state_before_trash` + `starred`.
+- Telegram callbacks: pulse_up/down/save → paper:feedback_pos/neg + paper:save; paper_bookmark → paper:save; added paper:trash_reject.
+- predicates.py: IS_ARCHIVED_SQL family deleted; replaced by VIEW_PREDICATES (10 surfaces), RECOMMENDER_EXCLUDE_SQL, PULSE_CANDIDATE_EXCLUDE_SQL.
+- E2E spec `feed-lifecycle.spec.ts`: removed obsolete LIFECYCLE_WIRED env guard (callbacks were wired in Wave 2.2).
 
 ### Fixed
 - Pulse `llm_timeout` after 600s appeared as fatal error even after successful degraded runs. Now distinguishes `last_error` (fatal) vs `degraded_reason` (soft, deck produced with fallback scoring).
@@ -34,6 +64,15 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - `learning_engine/app/jobs.py` (in-memory job state; replaced by shared jobs table).
 - Legacy client-side multi-source fan-out in Discover tab (backend handles it).
 - `frontend/src/components/settings/RecommendationSection.tsx` (absorbed into PulseSection).
+
+#### Phase A — Paper Lifecycle Redesign
+- 5 paper-mutation endpoints: PUT /api/papers/{id}/bookmark, /archive, /dismiss, /read, /unsave.
+- PUT /api/papers/{id}/user-state (dashboard upsert). Replaced by /annotations + lifecycle endpoints.
+- `pulse_ratings` table (dropped in migration 049). Replaced by `recommendation_feedback`.
+- `paper_user_state` legacy columns: saved, dismissed, archived, status (text enum), preference.
+- IS_ARCHIVED_SQL predicate constants family.
+- 2 legacy spec docs: `docs/specs/paper-lifecycle-contract.md`, `docs/specs/feed-information-architecture.md`.
+- Dead test helper `make_pulse_rating_row` from conftest.py (Wave 4 cleanup).
 
 ## [1.2.8] - 2026-04-29
 

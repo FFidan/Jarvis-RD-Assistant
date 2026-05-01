@@ -1,5 +1,14 @@
 import '@testing-library/jest-dom';
 
+// jsdom does not implement ResizeObserver — stub for Radix UI components (Slider, etc.).
+if (typeof ResizeObserver === 'undefined') {
+  global.ResizeObserver = class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 // jsdom does not implement AbortSignal.any — polyfill for tests.
 if (typeof AbortSignal.any !== 'function') {
   AbortSignal.any = function any(signals: AbortSignal[]): AbortSignal {

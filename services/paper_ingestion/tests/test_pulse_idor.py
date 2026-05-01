@@ -168,9 +168,11 @@ def test_rate_card_deck_guard_filters_by_user_id():
 
     assert resp.status_code == 200, f"Unexpected status: {resp.status_code} — {resp.text}"
 
-    # conn.fetchval is the deck-membership guard call
+    # conn.fetchval is called multiple times: first for the deck-membership guard,
+    # then once more inside _upsert_recommendation_feedback for the topic_id lookup.
+    # Use await_args_list[0] to pin to the first (deck-guard) call.
     assert conn.fetchval.await_count >= 1, "conn.fetchval was never awaited"
-    call_args = conn.fetchval.await_args
+    call_args = conn.fetchval.await_args_list[0]
     assert call_args is not None
 
     sql: str = call_args.args[0]
@@ -216,7 +218,9 @@ def test_rate_card_deck_guard_with_real_user_id():
 
     assert resp.status_code == 200
 
-    call_args = conn.fetchval.await_args
+    # Use await_args_list[0] — the first fetchval is the deck-guard; subsequent
+    # ones are topic_id lookups inside _upsert_recommendation_feedback.
+    call_args = conn.fetchval.await_args_list[0]
     assert call_args is not None
     params = call_args.args[1:]
     assert len(params) == 2

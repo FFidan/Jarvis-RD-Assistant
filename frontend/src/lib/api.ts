@@ -170,7 +170,6 @@ import type {
   FeedResponse,
   DiscoveryResult,
   PaperDetail,
-  UserState,
   Note,
   CitationGraph,
   CitationRelation,
@@ -192,6 +191,8 @@ import type {
   UserStateResponse,
   FeedCountsResponse,
   BulkAction,
+  FeedbackListResponse,
+  DeleteFeedbackResponse,
 } from '@/types';
 
 // --- Dashboard ---
@@ -532,35 +533,18 @@ export const batchSavePapers = (papers: SearchPreviewResult[] | Partial<Paper>[]
     body: JSON.stringify(papers),
   });
 
-export const markPaperRead = (paperId: number) =>
-  apiFetch<{ status: string }>(`/api/papers/${paperId}/read`, { method: 'PUT' });
+// --- Paper lifecycle mutations (Phase A) ---
 
-export const bookmarkPaper = (paperId: number) =>
-  apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/bookmark`, { method: 'PUT' });
-
-export const archivePaper = (paperId: number) =>
-  apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/archive`, { method: 'PUT' });
-
-// --- Paper lifecycle mutations (WS8) ---
-
-export async function savePaper(paperId: number, opts?: { star?: boolean }): Promise<UserStateResponse> {
-  return apiFetch(`/api/papers/${paperId}/save`, { method: 'PUT', body: JSON.stringify({ star: opts?.star ?? false }) });
+export async function savePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch(`/api/papers/${paperId}/save`, { method: 'PUT' });
 }
 
-export async function unsavePaper(paperId: number): Promise<UserStateResponse> {
-  return apiFetch(`/api/papers/${paperId}/unsave`, { method: 'PUT' });
-}
-
-export async function dismissPaper(paperId: number, opts?: { also_zotero?: boolean }): Promise<UserStateResponse> {
-  return apiFetch(`/api/papers/${paperId}/dismiss`, { method: 'PUT', body: JSON.stringify({ also_zotero: opts?.also_zotero ?? false }) });
-}
-
-export async function restorePaper(paperId: number): Promise<UserStateResponse> {
+export async function restorePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
   return apiFetch(`/api/papers/${paperId}/restore`, { method: 'PUT' });
 }
 
-export async function hardDeletePaper(paperId: number, body: { confirm_title: string; also_zotero?: boolean }): Promise<{ deleted: number }> {
-  return apiFetch(`/api/papers/${paperId}`, { method: 'DELETE', body: JSON.stringify({ confirm_title: body.confirm_title, also_zotero: body.also_zotero ?? false }) });
+export async function hardDeletePaper(paperId: number): Promise<{ deleted: number }> {
+  return apiFetch(`/api/papers/${paperId}`, { method: 'DELETE' });
 }
 
 export async function bulkAction(body: { paper_ids: number[]; action: BulkAction }): Promise<{ succeeded: number[]; failed: { paper_id: number; error: string }[] }> {
@@ -569,6 +553,104 @@ export async function bulkAction(body: { paper_ids: number[]; action: BulkAction
 
 export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
   return apiFetch('/api/papers/feed/counts');
+}
+
+// --- Phase A lifecycle mutations (Wave 2.1, additive) ---
+// Return type for simple state transitions: { status: string; paper_id: number }
+
+/** Skip a paper from the Inbox (state → done). */
+export async function skipPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/skip`, { method: 'PUT' });
+}
+
+/** Mark a paper as currently being read (state → reading). */
+export async function markReading(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/reading`, { method: 'PUT' });
+}
+
+/** Mark a paper as done/finished reading (state → done). */
+export async function markDone(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/done`, { method: 'PUT' });
+}
+
+/** Move a paper to the Trash (state → trash, saves state_before_trash). */
+export async function trashPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/trash`, { method: 'PUT' });
+}
+
+/** Trash the paper AND record negative feedback in one atomic transaction (source='dismiss_combined'). */
+export async function trashAndRejectPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/trash_and_reject`, { method: 'PUT' });
+}
+
+/** Set starred = TRUE on a paper. Does not change reading state. */
+export async function starPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/star`, { method: 'PUT' });
+}
+
+/** Set starred = FALSE on a paper. Does not change reading state. */
+export async function unstarPaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch<{ status: string; paper_id: number }>(`/api/papers/${paperId}/unstar`, { method: 'PUT' });
+}
+
+/** Body for PUT /api/papers/{id}/annotations. */
+export interface AnnotationsBody {
+  rating?: number | null;
+  user_notes?: string | null;
+  flagged?: boolean;
+}
+
+/** Update per-paper annotations (rating 1-5, user_notes, flagged). Returns the full user state. */
+export async function upsertAnnotations(paperId: number, body: AnnotationsBody): Promise<UserStateResponse> {
+  return apiFetch<UserStateResponse>(`/api/papers/${paperId}/annotations`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+}
+
+/** Body for POST /api/papers/{id}/feedback. */
+export interface FeedbackBody {
+  signal: 'positive' | 'negative';
+  source: 'pulse_thumbs' | 'feed_thumbs' | 'paper_detail_thumbs' | 'dismiss_combined';
+  reason?: string | null;
+}
+
+/** Submit per-paper recommendation feedback (positive/negative). */
+export async function submitFeedback(
+  paperId: number,
+  body: FeedbackBody,
+): Promise<{ paper_id: number; signal: 'positive' | 'negative'; source: string; created_at: string }> {
+  return apiFetch<{ paper_id: number; signal: 'positive' | 'negative'; source: string; created_at: string }>(
+    `/api/papers/${paperId}/feedback`,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+}
+
+/** Query params for GET /api/recommendation_feedback. */
+export interface FetchRecommendationFeedbackParams {
+  paper_id?: number;
+  limit?: number;
+  offset?: number;
+}
+
+/** List recommendation_feedback rows for the current user. */
+export async function fetchRecommendationFeedback(
+  params: FetchRecommendationFeedbackParams = {},
+): Promise<FeedbackListResponse> {
+  const qs = new URLSearchParams();
+  if (params.paper_id !== undefined) qs.set('paper_id', String(params.paper_id));
+  if (params.limit !== undefined) qs.set('limit', String(params.limit));
+  if (params.offset !== undefined) qs.set('offset', String(params.offset));
+  const suffix = qs.toString() ? `?${qs}` : '';
+  return apiFetch<FeedbackListResponse>(`/api/recommendation_feedback${suffix}`);
+}
+
+/** Bulk-delete recommendation_feedback rows for the given topic. */
+export async function deleteRecommendationFeedback(topicId: number): Promise<DeleteFeedbackResponse> {
+  return apiFetch<DeleteFeedbackResponse>(
+    `/api/recommendation_feedback?topic_id=${topicId}`,
+    { method: 'DELETE' },
+  );
 }
 
 /** Surface-aware feed fetch for FeedView. Passes view= directly to the
@@ -580,6 +662,25 @@ export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
  * provided it overrides the surface so e.g. surface=library + filter=
  * starred maps to view=starred.
  */
+/**
+ * Backend view names per `queries/predicates.py::VIEW_PREDICATES` (10 values).
+ * NOT the same as frontend `SurfaceView` (5 UI surfaces). When a user selects
+ * `surface=library` + `filter=to_read`, the backend query needs `?view=reading_list`.
+ */
+type BackendView =
+  | 'inbox' | 'library' | 'reading_list' | 'reading' | 'done'
+  | 'starred' | 'trash' | 'active' | 'kept' | 'all_non_trash';
+
+const LIBRARY_FILTER_TO_BACKEND_VIEW: Record<
+  import('@/types').LibraryFilter,
+  BackendView
+> = {
+  starred: 'starred',
+  reading: 'reading',
+  to_read: 'reading_list',
+  done: 'done',
+};
+
 export async function fetchFeed(params: {
   view?: import('@/types').SurfaceView;
   filter?: string | null;
@@ -588,11 +689,13 @@ export async function fetchFeed(params: {
 }): Promise<FeedResponse> {
   const { view, filter, limit = 30, offset = 0 } = params;
 
-  let resolvedView: import('@/types').SurfaceView | undefined = view;
-  if (view === 'library' && filter) {
-    if (filter === 'starred' || filter === 'archived' || filter === 'reading') {
-      resolvedView = filter as import('@/types').SurfaceView;
-    }
+  // Map (surface=library, filter=X) → backend view name. Otherwise the surface
+  // value itself is already a valid backend view (inbox/library/trash overlap).
+  let resolvedView: BackendView | undefined;
+  if (view === 'library' && filter && filter in LIBRARY_FILTER_TO_BACKEND_VIEW) {
+    resolvedView = LIBRARY_FILTER_TO_BACKEND_VIEW[filter as import('@/types').LibraryFilter];
+  } else if (view === 'inbox' || view === 'library' || view === 'trash') {
+    resolvedView = view;
   }
 
   const searchParams = new URLSearchParams();
@@ -636,12 +739,6 @@ export const batchSummarizePapers = (limit?: number) =>
 // --- Paper Detail ---
 export const fetchPaperDetail = (paperId: number) =>
   apiFetch<PaperDetail>(`/api/papers/${paperId}`);
-
-export const upsertUserState = (paperId: number, data: Partial<UserState>) =>
-  apiFetch<UserState>(`/api/papers/${paperId}/user-state`, {
-    method: 'PUT',
-    body: JSON.stringify(data),
-  });
 
 export const downloadPdf = (paperId: number) =>
   apiFetch<Paper>(`/api/download-pdf/${paperId}`, { method: 'POST' });

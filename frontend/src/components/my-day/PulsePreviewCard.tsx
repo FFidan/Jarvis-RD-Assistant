@@ -199,7 +199,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
           </div>
         )}
 
-        {/* Top 3 preview cards */}
+        {/* Top 3 preview cards — Trash+Reject hidden per spec §5.2 (Preview shows 👍/👎/💾 only) */}
         {previewCards.map((card) => (
           <PulseCard
             key={card.card_id}
@@ -207,6 +207,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
             onRate={handleRate}
             onOpen={handleOpen}
             rated={ratedCards.has(card.paper_id)}
+            hideTrashAndReject
           />
         ))}
 
@@ -214,7 +215,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
         {deck && totalCount > 0 && (
           <div className="pt-1 text-right">
             <Link
-              to="/feed?tab=pulse"
+              to="/pulse"
               className="text-sm text-primary hover:underline"
             >
               View all {totalCount} →

@@ -30,7 +30,7 @@ vi.mock('@/lib/api', () => ({
   }),
 }));
 
-const { fetchPulseToday, ratePulseCard } = await import(
+const { fetchPulseToday } = await import(
   '@/lib/api'
 );
 
@@ -138,21 +138,6 @@ describe('PulseDeck', () => {
     // Header shows count
     expect(screen.getByText(/your pulse/i)).toBeInTheDocument();
     expect(screen.getByText(/2 papers/i)).toBeInTheDocument();
-  });
-
-  it('calls ratePulseCard when a card rating button clicked', async () => {
-    const user = userEvent.setup();
-    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
-    vi.mocked(ratePulseCard).mockResolvedValue(undefined);
-    renderDeck();
-    await screen.findByText('Paper One');
-    const thumbsUpButtons = screen.getAllByRole('button', {
-      name: /thumbs up/i,
-    });
-    await user.click(thumbsUpButtons[0]);
-    await waitFor(() => {
-      expect(ratePulseCard).toHaveBeenCalledWith(101, 'up');
-    });
   });
 
   it('shows error state when fetchPulseToday throws', async () => {

@@ -25,7 +25,7 @@ interface LibraryFiltersProps {
   onSortChange: (v: string) => void;
 }
 
-const STATUS_OPTIONS = ['new', 'reading', 'read', 'archived', 'starred'];
+const STATUS_OPTIONS = ['starred', 'reading', 'to_read', 'done'];
 const SOURCE_OPTIONS = ['arxiv', 'semantic_scholar', 'local', 'openalex', 'pubmed'] as const;
 
 /**

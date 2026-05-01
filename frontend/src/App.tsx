@@ -15,6 +15,7 @@ import { NotFoundPage } from '@/pages/NotFoundPage';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
+import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { SetupWizard } from '@/pages/SetupWizard';
 import { getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -99,8 +100,7 @@ export function App() {
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><ResearchFeedPage /></RouteErrorBoundary>} />
-                  <Route path="pulse" element={<Navigate to="/my-day" replace />} />
-                  <Route path="pulse/*" element={<Navigate to="/my-day" replace />} />
+                  <Route path="pulse" element={<RouteErrorBoundary><PulseDeckPage /></RouteErrorBoundary>} />
                   <Route path="paper/:paperId" element={<RouteErrorBoundary><PaperDetailPage /></RouteErrorBoundary>} />
                   <Route path="citations" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><CitationGraphPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="knowledge" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><KnowledgeGraphPage /></Suspense></RouteErrorBoundary>} />

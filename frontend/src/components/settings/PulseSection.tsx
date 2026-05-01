@@ -18,6 +18,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { Slider } from '@/components/ui/slider';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { TimeSelect } from '@/components/ui/time-select';
 import { formatDate } from '@/lib/utils';
@@ -25,6 +26,7 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useJobStore } from '@/stores/job-store';
 import type { ConfigEntry, PulseStats, PulseDebugInfo } from '@/types';
+import { RejectedTopicsPanel } from '@/components/settings/RejectedTopicsPanel';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -308,6 +310,7 @@ export function PulseSection() {
   const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 50);
   const likedWeight = Number(getConfigValue(configs, 'recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue(configs, 'recommendation.project_weight', 0.4));
+  const l2LambdaConfig = Number(getConfigValue(configs, 'pulse.l2_lambda', 0.5));
   const pulseWeights = useMemo(
     () => coerceWeights(getConfigValue(configs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -317,12 +320,14 @@ export function PulseSection() {
   const [localCron, setLocalCron] = useState(cron);
   const [localLikedWeight, setLocalLikedWeight] = useState(likedWeight);
   const [localProjectWeight, setLocalProjectWeight] = useState(projectWeight);
+  const [l2Lambda, setL2Lambda] = useState(l2LambdaConfig);
   const [localPulseWeights, setLocalPulseWeights] =
     useState<Record<PulseWeightKey, number>>(pulseWeights);
 
   useEffect(() => { setLocalCron(cron); }, [cron]);
   useEffect(() => { setLocalLikedWeight(likedWeight); }, [likedWeight]);
   useEffect(() => { setLocalProjectWeight(projectWeight); }, [projectWeight]);
+  useEffect(() => { setL2Lambda(l2LambdaConfig); }, [l2LambdaConfig]);
   useEffect(() => {
     setLocalPulseWeights(pulseWeights);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -591,6 +596,56 @@ export function PulseSection() {
               className="w-full accent-primary"
             />
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ── L2 negative-feedback penalty card ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">L2 negative-feedback penalty</CardTitle>
+          <CardDescription>
+            Strength of the cosine penalty applied to candidates similar to papers
+            you&apos;ve thumbed-down. 0 disables the penalty; 1 = equal weight to positive
+            examples; 2 = double weight. Default 0.5.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-4">
+            <Slider
+              min={0}
+              max={2}
+              step={0.05}
+              value={[l2Lambda]}
+              onValueChange={([v]) => setL2Lambda(v)}
+              onValueCommit={([v]) =>
+                setMut.mutate(
+                  { key: 'pulse.l2_lambda', value: v },
+                  {
+                    onError: (err) =>
+                      toast.error('Failed to update L2 lambda', {
+                        description: err instanceof Error ? err.message : 'Unknown error',
+                      }),
+                  },
+                )
+              }
+              className="flex-1"
+            />
+            <span className="font-mono text-sm w-12 text-right">{l2Lambda.toFixed(2)}</span>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Rejected topics card ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Topics you&apos;ve rejected</CardTitle>
+          <CardDescription>
+            Topics with the most 👎 feedback. Reset to allow recommendations from
+            these topics again.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <RejectedTopicsPanel />
         </CardContent>
       </Card>
 

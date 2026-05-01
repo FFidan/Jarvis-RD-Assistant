@@ -378,8 +378,18 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 | `GET` | `/health` | none | Service health; returns 200 OK or 503 on dependency failure |
 | `GET` | `/api/papers` | API key | Paper list with filtering and pagination |
 | `GET` | `/api/papers/{id}` | API key | Full paper detail including user state |
-| `PUT` | `/api/papers/{id}/user-state` | API key | Update paper read status |
-| `PUT` | `/api/papers/{id}/bookmark` | API key | Toggle bookmark (starred) state — flips between `starred` and prior status |
+| `PUT` | `/api/papers/{id}/save`        | API key (60/min) | Set lifecycle to `to_read` (no body) |
+| `PUT` | `/api/papers/{id}/skip`        | API key (60/min) | Set lifecycle to `done` (skipped from inbox) |
+| `PUT` | `/api/papers/{id}/trash`       | API key (60/min) | Set lifecycle to `trash`; records `state_before_trash` for restore |
+| `PUT` | `/api/papers/{id}/restore`     | API key (60/min) | Restore from trash to prior state |
+| `PUT` | `/api/papers/{id}/star` / `/unstar` | API key (60/min) | Toggle the orthogonal `starred` flag |
+| `PUT` | `/api/papers/{id}/annotations` | API key (60/min) | Update `rating` / `user_notes` / `flagged` |
+| `POST`| `/api/papers/{id}/feedback`    | API key (60/min) | Record recommendation feedback (signal: positive\|negative; source: pulse_thumbs\|feed_thumbs\|paper_detail_thumbs\|dismiss_combined) |
+| `POST`| `/api/papers/bulk`             | API key (10/min) | Bulk action over paper IDs (save/skip/reading/done/trash/restore/star/unstar/trash_reject) |
+| `DELETE`| `/api/papers/{id}`           | API key (10/min) | Hard delete (requires `state='trash'` precondition) |
+| `GET` | `/api/papers/feed/counts`      | API key          | Per-view paper counts (10 buckets: inbox, library, reading_list, reading, done, starred, trash, active, kept, all_non_trash) |
+| `GET` | `/api/recommendation_feedback` | API key (30/min) | List user's recommendation feedback rows |
+| `DELETE`| `/api/recommendation_feedback?topic_id={id}` | API key (5/min) | Reset all feedback for a topic |
 | `POST` | `/api/papers/process` | API key | Trigger PDF parse + embed pipeline |
 | `POST` | `/api/ask/stream` | API key | SSE-streamed RAG chat |
 | `GET` | `/api/pulse/today` | API key | Today's Pulse deck |

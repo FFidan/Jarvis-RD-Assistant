@@ -136,11 +136,13 @@ async def test_run_paper_digest_falls_back_to_simple_digest():
 
 @pytest.mark.asyncio
 async def test_simple_digest_query_includes_starred_boolean_or_clause():
-    # Migration 044 introduced the per-user `starred` boolean. Migration 046 migrated
-    # legacy status='starred' rows to starred=TRUE with status='read'. The digest must
-    # include papers UI-starred via the new bookmark toggle (which writes
-    # starred=TRUE while preserving the prior reading status) as well as papers
-    # with status='reading' or 'read'.
+    # Phase A migration (T3): paper_user_state now uses a state ENUM instead of
+    # legacy boolean columns (archived, dismissed) and status text.
+    # The digest must:
+    #   - exclude papers in state 'trash' or 'done' via a top-level NOT EXISTS guard
+    #   - include papers where starred=TRUE or state IN ('reading','done')
+    #   - include papers with a positive pulse_thumbs recommendation_feedback entry
+    #     (replaces the retired pulse_ratings table)
     db_pool = AsyncMock()
     db_pool.fetch.return_value = []
     bot = AsyncMock()
@@ -148,17 +150,20 @@ async def test_simple_digest_query_includes_starred_boolean_or_clause():
     await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=None)
 
     sql = db_pool.fetch.await_args.args[0]
-    # pus2 alias used in the positive-inclusion subquery (pus used by top-level NOT EXISTS guard)
-    assert "COALESCE(pus2.starred, FALSE)" in sql
-    assert "pus2.status IN ('reading', 'read')" in sql
-    # Verify archived/dismissed guard is now a top-level NOT EXISTS (NEW-M11)
+    # pus2 alias used in the positive-inclusion subquery; pus used by NOT EXISTS guard
+    assert "COALESCE(pus2.starred, FALSE) = TRUE" in sql
+    assert "pus2.state = 'reading'" in sql
+    # Top-level NOT EXISTS guard uses the new state ENUM (trash/done = excluded)
     assert "NOT EXISTS" in sql
-    assert "COALESCE(pus.archived, FALSE)" in sql
-    assert "COALESCE(pus.dismissed, FALSE)" in sql
-    # Verify 'starred' is no longer in the status check (migration 046 removed it)
-    assert (
-        "'starred'" not in sql or "pus2.starred" in sql
-    )  # 'starred' only in column name, not status value
+    assert "pus.state IN ('trash', 'done')" in sql
+    # recommendation_feedback replaces the retired pulse_ratings table
+    assert "FROM recommendation_feedback rf" in sql
+    assert "rf.signal = 'positive'" in sql
+    assert "rf.source = 'pulse_thumbs'" in sql
+    # Legacy columns/table must NOT appear
+    assert "COALESCE(pus.archived, FALSE)" not in sql
+    assert "COALESCE(pus.dismissed, FALSE)" not in sql
+    assert "FROM pulse_ratings" not in sql
 
 
 @pytest.mark.asyncio
@@ -210,7 +215,7 @@ async def test_simple_digest_db_user_id_42_does_not_see_user_99_archived():
 
     await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=42)
 
-    _sql, bound_param = db_pool.fetch.await_args.args
+    _, bound_param = db_pool.fetch.await_args.args
     # The query must be scoped to user 42 — user 99's archived row won't match
     assert bound_param == 42
 

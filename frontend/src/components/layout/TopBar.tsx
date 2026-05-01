@@ -1,8 +1,9 @@
 import { useLocation } from 'react-router-dom';
-import { Menu } from 'lucide-react';
+import { Menu, Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
 import { JobsIndicator } from '@/components/layout/JobsIndicator';
+import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
 
 const pageTitles: Record<string, string> = {
   '/': 'Home',
@@ -30,6 +31,7 @@ interface TopBarProps {
 export function TopBar({ onMenuClick }: TopBarProps) {
   const location = useLocation();
   const title = getPageTitle(location.pathname);
+  const openShortcuts = useKeyboardShortcuts((s) => s.open);
 
   return (
     <header className="flex h-14 items-center gap-4 border-b bg-card px-6">
@@ -40,6 +42,15 @@ export function TopBar({ onMenuClick }: TopBarProps) {
       )}
       <h1 className="text-lg font-semibold">{title}</h1>
       <div className="ml-auto flex items-center gap-2">
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={openShortcuts}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts (?)"
+        >
+          <Keyboard className="h-5 w-5" />
+        </Button>
         <JobsIndicator />
         <HeaderPomodoro />
       </div>

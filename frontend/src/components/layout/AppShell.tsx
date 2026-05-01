@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/toaster';
 import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
+import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 
 interface AppShellProps {
   children: ReactNode;
@@ -48,6 +49,7 @@ export function AppShell({ children }: AppShellProps) {
       </div>
 
       <Toaster position="bottom-right" />
+      <KeyboardCheatSheet />
     </div>
   );
 }

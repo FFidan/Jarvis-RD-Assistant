@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useSearchParams } from 'react-router-dom';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 
@@ -158,6 +158,67 @@ describe('ResearchFeedPage — bulk selection clears on URL-driven surface chang
     );
 
     // The useEffect([surface]) should have fired and cleared the store.
+    await waitFor(() => {
+      expect(useBulkSelection.getState().selectedIds.size).toBe(0);
+    });
+  });
+});
+
+// Helper: a sibling component inside the same Router that can call setSearchParams
+// directly — NOT via a ResearchFeedPage surface chip.
+function SurfaceSwitcher() {
+  const [, setSearchParams] = useSearchParams();
+  return (
+    <button
+      data-testid="direct-surface-switcher"
+      onClick={() => setSearchParams({ surface: 'trash' })}
+    >
+      Switch to trash
+    </button>
+  );
+}
+
+describe('ResearchFeedPage — bulk clears on direct setSearchParams (NEW-H5-DIRECT)', () => {
+  beforeEach(() => {
+    useBulkSelection.setState({ selectedIds: new Set() });
+  });
+
+  it('clears bulk selection when URL surface param changes via direct setSearchParams', async () => {
+    const user = userEvent.setup();
+
+    // Pre-seed bulk selection directly via store — bypasses any UI interaction
+    useBulkSelection.setState({ selectedIds: new Set([99]) });
+    expect(useBulkSelection.getState().selectedIds.size).toBe(1);
+
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter initialEntries={['/feed?surface=inbox']}>
+          <Routes>
+            <Route
+              path="/feed"
+              element={
+                <>
+                  <SurfaceSwitcher />
+                  <ResearchFeedPage />
+                </>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // Confirm the page has rendered (surface=inbox is the default content)
+    await waitFor(() => {
+      expect(screen.getByTestId('direct-surface-switcher')).toBeInTheDocument();
+    });
+
+    // Trigger the URL surface change directly via setSearchParams — NOT by
+    // clicking any chip inside ResearchFeedPage.
+    await user.click(screen.getByTestId('direct-surface-switcher'));
+
+    // The useEffect([surface]) in ResearchFeedPage must fire and clear the store.
+    // If that useEffect is removed, selectedIds.size stays 1 and this assertion fails.
     await waitFor(() => {
       expect(useBulkSelection.getState().selectedIds.size).toBe(0);
     });

@@ -328,7 +328,7 @@ test.describe('Paper Detail Page', () => {
     await deleteButton.click();
   });
 
-  test('sidebar shows action buttons and user state form', async ({ page }) => {
+  test('sidebar shows action buttons', async ({ page }) => {
     await page.goto('/paper/1');
     await page.waitForLoadState('networkidle');
 
@@ -353,11 +353,9 @@ test.describe('Paper Detail Page', () => {
     await expect(page.getByRole('button', { name: /Process PDF/ })).toBeVisible();
     await expect(page.getByRole('button', { name: /Generate Summary/ })).toBeVisible();
 
-    // User state form elements
-    await expect(page.getByLabel('Status')).toBeVisible();
-    await expect(page.getByLabel(/Rating/)).toBeVisible();
-    await expect(page.getByRole('textbox', { name: 'Notes' })).toBeVisible();
-    await expect(page.getByText('Flagged')).toBeVisible();
-    await expect(page.getByRole('button', { name: /Save Notes/ })).toBeVisible();
+    // Phase A removed the legacy Status/Rating/Notes/Flagged form. Lifecycle is now
+    // driven by the surface chips on /feed (covered by feed-lifecycle.spec.ts) and
+    // by the per-paper action buttons rendered above. Per-paper feedback uses the
+    // FeedbackButtons component (covered by feedback-loop.spec.ts).
   });
 });

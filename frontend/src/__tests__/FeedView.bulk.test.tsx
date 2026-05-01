@@ -18,45 +18,44 @@ vi.mock('@/lib/api', async (importOriginal) => {
     published_date: '2026-02-01',
     url: 'https://example.com/paper/42',
     pdf_url: null,
-    pdf_local_path: null,
-    pdf_downloaded: false,
     citation_count: 0,
     priority_score: 0.5,
     metadata: {},
-    discovered_at: '2026-02-02T00:00:00Z',
     created_at: '2026-02-02T00:00:00Z',
     summary_brief: null,
     tldr: null,
     confidence: null,
-    user_status: 'new',
     rating: null,
     has_chunks: false,
     has_summary: false,
+    state: 'to_read' as const,
+    state_before_trash: null,
+    starred: false,
+    discovery_origin: 'pulse' as const,
     user_state: {
-      saved: true,
+      state: 'to_read' as const,
+      state_before_trash: null,
       starred: false,
-      status: 'new' as const,
-      dismissed: false,
-      archived: false,
-      preference: 'none' as const,
       rating: null,
       user_notes: null,
       flagged: false,
       updated_at: null,
     },
+    recent_feedback: null,
   };
   return {
     ...actual,
     fetchFeed: vi.fn().mockResolvedValue({ papers: [paper], total: 1 }),
     bulkAction: vi.fn().mockResolvedValue({ succeeded: [42], failed: [] }),
     savePaper: vi.fn().mockResolvedValue({ ok: true }),
-    unsavePaper: vi.fn().mockResolvedValue({ ok: true }),
-    dismissPaper: vi.fn().mockResolvedValue({ ok: true }),
+    skipPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
+    markReading: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
+    markDone: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
+    trashPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
     restorePaper: vi.fn().mockResolvedValue({ ok: true }),
-    hardDeletePaper: vi.fn().mockResolvedValue({ ok: true }),
-    markPaperRead: vi.fn().mockResolvedValue({ ok: true }),
-    bookmarkPaper: vi.fn().mockResolvedValue({ ok: true }),
-    archivePaper: vi.fn().mockResolvedValue({ ok: true }),
+    hardDeletePaper: vi.fn().mockResolvedValue({ deleted: 1 }),
+    starPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
+    unstarPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
   };
 });
 
@@ -111,8 +110,7 @@ describe('FeedView — bulk selection wiring (NEW-H4)', () => {
     await waitFor(() => {
       expect(screen.getByText('1 selected')).toBeInTheDocument();
     });
-    // Library surface offers Star + Archive + Mark Read + Dismiss + Unsave actions
-    expect(screen.getByRole('button', { name: 'Star' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Archive' })).toBeInTheDocument();
+    // Library surface (Phase A) offers Mark Reading + Mark Done + Trash + Star/Unstar
+    expect(screen.getByRole('button', { name: 'Mark Reading' })).toBeInTheDocument();
   });
 });

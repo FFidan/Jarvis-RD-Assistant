@@ -58,10 +58,10 @@ async def test_migration_048_live_pg(live_pg_dsn: str) -> None:
                 await conn.execute(
                     """
                     INSERT INTO papers (external_id, source_type, title, authors, url, discovery_origin)
-                    VALUES ($1, 'arxiv', 'Live PG 048', ARRAY['Tester'],
-                            'https://example.test/' || $1, $2)
+                    VALUES ($1, 'arxiv', 'Live PG 048', ARRAY['Tester'], $2, $3)
                     """,
                     ext_id,
+                    f"https://example.test/{ext_id}",
                     origin,
                 )
 

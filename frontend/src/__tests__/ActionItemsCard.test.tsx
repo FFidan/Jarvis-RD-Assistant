@@ -32,11 +32,18 @@ const emptyFeed: FeedResponse = { papers: [], total: 0 };
 
 const makePaper = (id: number, title: string, pdf_downloaded = true) => ({
   id, external_id: `arxiv:00${id}`, source_type: 'arxiv' as const, title,
-  authors: [], abstract: null, published_date: null, url: '', pdf_url: null,
-  pdf_local_path: null, pdf_downloaded, citation_count: 0,
+  authors: [], abstract: null, published_date: null, url: null, pdf_url: null,
+  pdf_local_path: null, pdf_downloaded, citation_count: null,
   priority_score: null, metadata: {},
   discovered_at: null, created_at: '', summary_brief: null, tldr: null,
-  confidence: null, user_status: 'new' as const, rating: null,
+  confidence: null, rating: null,
+  // Phase A required fields
+  state: 'inbox' as const,
+  state_before_trash: null,
+  starred: false,
+  discovery_origin: 'user_initiated' as const,
+  user_state: null,
+  recent_feedback: null,
 });
 
 const paperFeed: FeedResponse = {

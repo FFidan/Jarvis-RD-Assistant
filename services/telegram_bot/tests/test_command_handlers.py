@@ -102,22 +102,33 @@ async def test_help_command_sends_help():
 
 
 @pytest.mark.asyncio
-async def test_papers_no_args_lists_recent():
-    """/papers with no query lists recent papers from DB."""
-    update, context, mock_db, _ = _make_update_and_context(args=[])
-    mock_db.fetch.return_value = [
-        {
-            "id": 1,
-            "title": "Paper A",
-            "authors": ["Author"],
-            "published_date": None,
-            "source_type": "arxiv",
-            "url": "http://example.com",
-            "summary_brief": None,
-            "tldr": None,
-        },
-    ]
+async def test_papers_no_args_lists_library_via_api():
+    """/papers with no query calls GET /api/papers/feed?view=library (Wave 3)."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "papers": [
+            {
+                "id": 1,
+                "title": "Paper A",
+                "authors": ["Author"],
+                "published_date": None,
+                "source_type": "arxiv",
+                "url": "http://example.com",
+                "summary_brief": None,
+                "tldr": None,
+                "discovery_origin": "user_initiated",
+            },
+        ],
+        "total": 1,
+    }
+    mock_http.get.return_value = mock_resp
     await papers_command(update, context)
+    mock_http.get.assert_awaited_once()
+    call = mock_http.get.await_args
+    assert "/api/papers/feed" in call.args[0]
+    assert call.kwargs.get("params", {}).get("view") == "library"
     update.message.reply_text.assert_awaited()
     text = update.message.reply_text.call_args_list[0][0][0]
     assert "Paper A" in text
@@ -160,14 +171,17 @@ async def test_papers_api_failure_sends_error():
 
 
 @pytest.mark.asyncio
-async def test_papers_empty_results():
-    """/papers with no results sends 'No papers found'."""
-    update, context, mock_db, _ = _make_update_and_context(args=[])
-    mock_db.fetch.return_value = []
+async def test_papers_empty_library_shows_empty_state():
+    """/papers shows the empty-Library message when feed?view=library returns []."""
+    update, context, _, mock_http = _make_update_and_context(args=[])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"papers": [], "total": 0}
+    mock_http.get.return_value = mock_resp
     await papers_command(update, context)
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
-    assert "No papers" in text
+    assert "Library is empty" in text
 
 
 # ---------------------------------------------------------------------------

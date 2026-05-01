@@ -1,20 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { upsertUserState } from '@/lib/api';
+import { upsertAnnotations } from '@/lib/api';
 import type { UserState } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-
-const STATUS_OPTIONS = ['new', 'reading', 'read'] as const;
 
 interface UserStateFormProps {
   paperId: number;
@@ -24,7 +15,6 @@ interface UserStateFormProps {
 export function UserStateForm({ paperId, userState }: UserStateFormProps) {
   const queryClient = useQueryClient();
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [status, setStatus] = useState(userState?.status ?? 'new');
   const [rating, setRating] = useState(userState?.rating ?? 3);
   const [notes, setNotes] = useState(userState?.user_notes ?? '');
   const [flagged, setFlagged] = useState(userState?.flagged ?? false);
@@ -32,7 +22,6 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
 
   // Sync form when userState changes (e.g. after a refetch)
   useEffect(() => {
-    setStatus(userState?.status ?? 'new');
     setRating(userState?.rating ?? 3);
     setNotes(userState?.user_notes ?? '');
     setFlagged(userState?.flagged ?? false);
@@ -50,8 +39,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
 
   const mutation = useMutation({
     mutationFn: () =>
-      upsertUserState(paperId, {
-        status,
+      upsertAnnotations(paperId, {
         rating,
         user_notes: notes || null,
         flagged,
@@ -70,22 +58,6 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
     <div className="space-y-4">
       <Separator />
       <h3 className="text-lg font-semibold">My Notes</h3>
-
-      <div className="space-y-1">
-        <Label htmlFor="user-status">Status</Label>
-        <Select value={status} onValueChange={(v) => setStatus(v as 'new' | 'reading' | 'read')}>
-          <SelectTrigger id="user-status">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {STATUS_OPTIONS.map((s) => (
-              <SelectItem key={s} value={s} className="capitalize">
-                {s}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
 
       <div className="space-y-1">
         <Label htmlFor="user-rating">Rating: {rating}</Label>
