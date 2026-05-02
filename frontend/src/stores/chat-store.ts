@@ -2,6 +2,72 @@ import { create } from 'zustand';
 import type { ChatMessage, Source } from '@/types';
 import type { ConfidenceLevel } from '@/lib/sse';
 
+// ---------------------------------------------------------------------------
+// Module-level abort stream registry. Controllers live in a plain Map
+// (imperative resource); a parallel Zustand store of chatIds backs the
+// reactive `useStreamRegistry` selector so React components can detect
+// in-flight streams across hook re-mounts (e.g., navigating away and back
+// during an Ask response).
+// ---------------------------------------------------------------------------
+const activeStreams = new Map<string, AbortController>();
+
+interface StreamRegistryState {
+  activeStreamingChats: Set<string>;
+  _mark: (chatId: string) => void;
+  _unmark: (chatId: string) => void;
+}
+
+export const useStreamRegistry = create<StreamRegistryState>()((set) => ({
+  activeStreamingChats: new Set<string>(),
+  _mark: (chatId) =>
+    set((state) => {
+      if (state.activeStreamingChats.has(chatId)) return state;
+      const next = new Set(state.activeStreamingChats);
+      next.add(chatId);
+      return { activeStreamingChats: next };
+    }),
+  _unmark: (chatId) =>
+    set((state) => {
+      if (!state.activeStreamingChats.has(chatId)) return state;
+      const next = new Set(state.activeStreamingChats);
+      next.delete(chatId);
+      return { activeStreamingChats: next };
+    }),
+}));
+
+export function registerStream(chatId: string, controller: AbortController): void {
+  // Abort any existing stream for this chat before registering the new one
+  activeStreams.get(chatId)?.abort();
+  activeStreams.set(chatId, controller);
+  useStreamRegistry.getState()._mark(chatId);
+}
+
+/**
+ * Remove a stream from the registry. If `controller` is supplied, only deletes
+ * when the registered entry matches — this prevents a slow finally-block from
+ * a now-superseded controller from nuking the replacement controller's entry.
+ */
+export function unregisterStream(chatId: string, controller?: AbortController): void {
+  if (controller && activeStreams.get(chatId) !== controller) {
+    return;
+  }
+  activeStreams.delete(chatId);
+  useStreamRegistry.getState()._unmark(chatId);
+}
+
+/** Abort the active stream for this chat, if any. Safe across remounts. */
+export function abortStream(chatId: string): void {
+  activeStreams.get(chatId)?.abort();
+}
+
+export function abortAllStreams(): void {
+  for (const controller of activeStreams.values()) {
+    controller.abort();
+  }
+  activeStreams.clear();
+  useStreamRegistry.setState({ activeStreamingChats: new Set<string>() });
+}
+
 export interface ConfidencePayload {
   confidence: ConfidenceLevel;
   verified_fraction: number;

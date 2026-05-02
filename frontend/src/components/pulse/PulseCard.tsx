@@ -75,18 +75,44 @@ export function PulseCard({
 
   const unsaveMut = useMutation({
     mutationFn: () => unsavePaper(card.paper_id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
-      toast.success('Paper moved back to Inbox');
+    onMutate: () => {
+      // Optimistically patch the card's user_state to 'inbox' so the button
+      // reflects the change immediately without waiting for the round-trip.
+      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(['pulse-today']);
+      if (prev) {
+        queryClient.setQueryData<import('@/types').PulseDeck>(['pulse-today'], {
+          ...prev,
+          cards: prev.cards.map((c) =>
+            c.card_id === card.card_id ? { ...c, user_state: 'inbox' } : c,
+          ),
+        });
+      }
+      return { prev };
     },
-    onError: (err) =>
+    onError: (err, _vars, context) => {
+      // Roll back the optimistic update on failure.
+      if (context?.prev !== undefined) {
+        queryClient.setQueryData(['pulse-today'], context.prev);
+      }
       toast.error('Failed to unsave paper', {
         description: err instanceof Error ? err.message : 'Unknown error',
-      }),
+      });
+    },
+    onSuccess: () => {
+      toast.success('Paper moved back to Inbox');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+    },
   });
 
-  // Save button is "active" (bookmark filled) when the paper is already saved (to_read)
-  const isSaved = rated && card.user_state === 'to_read';
+  // Save button is "active" (bookmark filled) when the paper is already saved (to_read).
+  // We rely solely on server-authoritative card.user_state (not the local `rated` flag)
+  // to avoid a race where `rated` flips true before the cache refetches, causing a
+  // second click to fire onRate('save') again instead of unsavePaper.
+  // TODO(parent): pass saveMut.isPending from PulseDeck/PulsePreviewCard as a prop
+  // so the button can also be disabled while the initial save round-trip is in flight.
+  const isSaved = card.user_state === 'to_read';
 
   const handleSaveClick = (e: React.MouseEvent) => {
     e.stopPropagation();

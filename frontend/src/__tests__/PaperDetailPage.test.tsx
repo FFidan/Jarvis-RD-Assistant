@@ -238,7 +238,7 @@ describe('PaperDetailPage', () => {
     expect(screen.getByRole('tab', { name: 'Evidence' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Chunks' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Cross-References' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Notes' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Annotations' })).toBeInTheDocument();
   });
 
   it('switches between tabs', async () => {
@@ -304,8 +304,8 @@ describe('PaperDetailPage', () => {
       expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
     });
 
-    // Switch to Notes tab
-    await user.click(screen.getByRole('tab', { name: 'Notes' }));
+    // Switch to Annotations tab
+    await user.click(screen.getByRole('tab', { name: 'Annotations' }));
     await waitFor(() => {
       expect(screen.getByText('Key insight about positional encoding.')).toBeInTheDocument();
     });
@@ -322,10 +322,10 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('My Notes')).toBeInTheDocument();
+      expect(screen.getByText('Quick Rating')).toBeInTheDocument();
     });
     expect(screen.getByText('Rating: 4')).toBeInTheDocument();
-    expect(screen.getByText('Save Notes')).toBeInTheDocument();
+    expect(screen.getByText('Save Rating')).toBeInTheDocument();
   });
 
   it('renders RAG chat section with scope toggle', async () => {

@@ -317,7 +317,8 @@ async def test_analyze_stream_process_failure(monkeypatch):
     # download started, download completed, process started, error, [DONE]
     assert len(events) == 5
     assert events[3]["type"] == "error"
-    assert events[3]["step"] == "processing"
+    # C1: processing errors now use stage/error_type/error_detail (not step/message)
+    assert events[3]["stage"] == "process_pdf"
     assert events[4] == "[DONE]"
 
 
@@ -390,6 +391,77 @@ async def test_analyze_stream_local_paper_skips_download(monkeypatch):
 
     # download_pdf must NOT have been called for a local paper
     deps["pdf_processor"].download_pdf.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Test _analyze_stream — C1: structured PDF error event
+# ---------------------------------------------------------------------------
+
+
+class _FakePdfReadError(Exception):
+    """Fake exception mimicking pypdf.errors.PdfReadError for test isolation."""
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_process_failure_structured_error(monkeypatch):
+    """C1: When run_process_pdf raises, the SSE error event has structured fields.
+
+    Asserts schema: {"type": "error", "stage": "process_pdf",
+                     "error_type": <class name>, "error_detail": <str(exc)[:200]>}
+    """
+    paper_row = {
+        "id": 7,
+        "source_type": "arxiv",
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/7.pdf",
+    }
+    mock_request, mock_pool, deps = _make_mock_request(paper_row)
+
+    error_msg = "Stream end was reached early"
+    mock_process = AsyncMock(side_effect=_FakePdfReadError(error_msg))
+    events, _ = await _collect_events(
+        monkeypatch, mock_request, 7, mock_pool, deps, mock_process=mock_process
+    )
+
+    # download started/skipped (pdf_local_path set → skipped), process started, error, [DONE]
+    error_events = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
+    assert len(error_events) == 1, f"Expected exactly 1 error event; got: {error_events}"
+
+    err = error_events[0]
+    assert err["type"] == "error"
+    assert err["stage"] == "process_pdf"
+    assert err["error_type"] == "_FakePdfReadError"
+    assert err["error_detail"] == error_msg
+    # Old "step" / "message" keys ALSO present so the existing FE step-tracker +
+    # per-stage Retry button (W1.6-F) keep working — backend emits both shapes.
+    assert err["step"] == "processing"
+    assert err["message"] == "PDF processing failed"
+    # Last event is [DONE]
+    assert events[-1] == "[DONE]"
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_process_failure_error_detail_truncated(monkeypatch):
+    """C1: error_detail is capped at 200 characters."""
+    paper_row = {
+        "id": 8,
+        "source_type": "arxiv",
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/8.pdf",
+    }
+    mock_request, mock_pool, deps = _make_mock_request(paper_row)
+
+    long_msg = "x" * 300
+    mock_process = AsyncMock(side_effect=RuntimeError(long_msg))
+    events, _ = await _collect_events(
+        monkeypatch, mock_request, 8, mock_pool, deps, mock_process=mock_process
+    )
+
+    error_events = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
+    assert len(error_events) == 1
+    assert len(error_events[0]["error_detail"]) == 200
 
 
 @pytest.mark.asyncio

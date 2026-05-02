@@ -141,7 +141,16 @@ async def _analyze_stream(
         chunk_count = result.get("chunk_count", 0)
     except Exception as exc:
         logger.error("Processing failed for paper %d: %s", paper_id, exc)
-        yield sse_event({"type": "error", "step": "processing", "message": "PDF processing failed"})
+        yield sse_event(
+            {
+                "type": "error",
+                "step": "processing",
+                "message": "PDF processing failed",
+                "stage": "process_pdf",
+                "error_type": type(exc).__name__,
+                "error_detail": str(exc)[:200],
+            }
+        )
         yield SSE_DONE
         return
 

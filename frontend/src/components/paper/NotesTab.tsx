@@ -110,6 +110,9 @@ export function NotesTab({ paperId }: NotesTabProps) {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-muted-foreground">
+        Page-anchored highlights and notes (separate from your Quick Rating in the sidebar).
+      </p>
       {/* Create note form */}
       <section className="space-y-3">
         <h3 className="text-lg font-semibold">Add a note</h3>

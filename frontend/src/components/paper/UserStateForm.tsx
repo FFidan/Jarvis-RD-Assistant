@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 interface UserStateFormProps {
   paperId: number;
@@ -57,7 +58,13 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
   return (
     <div className="space-y-4">
       <Separator />
-      <h3 className="text-lg font-semibold">My Notes</h3>
+      <h3 className="flex items-center gap-1 text-lg font-semibold">
+        Quick Rating
+        <InfoTooltip
+          content="Per-paper rating, flag, and a one-line note. Saves to your paper state. For longer page-anchored notes use the Annotations tab."
+          side="right"
+        />
+      </h3>
 
       <div className="space-y-1">
         <Label htmlFor="user-rating">Rating: {rating}</Label>
@@ -80,13 +87,13 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
       </div>
 
       <div className="space-y-1">
-        <Label htmlFor="user-notes">Notes</Label>
+        <Label htmlFor="user-notes">Comment (optional)</Label>
         <Textarea
           id="user-notes"
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
           placeholder="Your notes about this paper..."
-          rows={4}
+          rows={2}
         />
       </div>
 
@@ -105,7 +112,7 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
         onClick={() => mutation.mutate()}
         disabled={mutation.isPending}
       >
-        {mutation.isPending ? 'Saving...' : saved ? 'Saved!' : 'Save Notes'}
+        {mutation.isPending ? 'Saving...' : saved ? 'Saved!' : 'Save Rating'}
       </Button>
 
       {mutation.isError && (

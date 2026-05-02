@@ -179,8 +179,30 @@ async def run_pulse(
         stage2_out = []
     else:
         try:
+            _stage2_batch_size = 5
+            _stage2_total = len(stage1_out)
+            _stage2_results: list[ScoredCandidate] = []
+
+            async def _stage2_with_progress() -> list[ScoredCandidate]:
+                """Score candidates in batches, reporting per-batch progress via ctx."""
+                all_results: list[ScoredCandidate] = []
+                for _batch_start in range(0, _stage2_total, _stage2_batch_size):
+                    batch = stage1_out[_batch_start : _batch_start + _stage2_batch_size]
+                    batch_results = await stage2_llm_rerank(
+                        batch, profile, http_client, verifier=svc.verifier
+                    )
+                    all_results.extend(batch_results)
+                    _scored_so_far = len(all_results)
+                    if ctx:
+                        _pct = min(0.95, 0.85 + 0.10 * (_scored_so_far / _stage2_total))
+                        await ctx.update_progress(
+                            _pct,
+                            f"Stage 2 LLM scoring ({_scored_so_far}/{_stage2_total})",
+                        )
+                return all_results
+
             stage2_out = await asyncio.wait_for(
-                stage2_llm_rerank(stage1_out, profile, http_client, verifier=svc.verifier),
+                _stage2_with_progress(),
                 timeout=_STAGE2_TIMEOUT_SECONDS,
             )
             # Count actual LLM calls: candidates where llm_relevance was set

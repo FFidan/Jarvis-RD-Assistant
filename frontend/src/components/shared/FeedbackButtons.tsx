@@ -73,7 +73,10 @@ export function FeedbackButtons({
   const handleThumb = (signal: 'positive' | 'negative') => {
     const currentSignal = recentFeedback?.signal ?? lastSignal;
     if (signal === currentSignal) {
-      // Clicking the already-active button → untoggle (clear)
+      // Clicking the already-active button → untoggle (clear).
+      // Synchronously clear lastSignal to eliminate the one-frame race where
+      // the button still appears active until the invalidated query refetches.
+      setLastSignal(null);
       clearMutation.mutate();
       return;
     }
@@ -106,10 +109,14 @@ export function FeedbackButtons({
     );
   };
 
-  // After a successful untoggle, clearMutation sets lastSignal to null and
-  // invalidates the query — recentFeedback will flip to null on refetch.
-  const positiveActive = (recentFeedback?.signal === 'positive' || lastSignal === 'positive') && !clearMutation.isSuccess;
-  const negativeActive = (recentFeedback?.signal === 'negative' || lastSignal === 'negative') && !clearMutation.isSuccess;
+  // Active state is driven solely by recentFeedback (from the server) and the
+  // optimistic lastSignal. The old `&& !clearMutation.isSuccess` gate was
+  // sticky — React Query's isSuccess stays true permanently after the first
+  // successful clear, which caused subsequent thumb clicks to look locked.
+  // Dropping it is safe: setLastSignal(null) fires synchronously in handleThumb
+  // before clearMutation.mutate(), so the button de-activates on the same frame.
+  const positiveActive = recentFeedback?.signal === 'positive' || lastSignal === 'positive';
+  const negativeActive = recentFeedback?.signal === 'negative' || lastSignal === 'negative';
 
   const isPending = mutation.isPending || clearMutation.isPending;
   const iconSize = size === 'md' ? 18 : 14;

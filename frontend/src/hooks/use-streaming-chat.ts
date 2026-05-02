@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { streamSSE } from '@/lib/sse';
-import { useChatStore } from '@/stores/chat-store';
+import {
+  useChatStore,
+  useStreamRegistry,
+  registerStream,
+  unregisterStream,
+  abortStream,
+} from '@/stores/chat-store';
 import type { Source } from '@/types';
 
 interface UseStreamingChatOptions {
@@ -20,21 +26,25 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     removeLastMessageIfEmpty,
     clearChat,
   } = useChatStore();
-  const [phase, setPhase] = useState<'idle' | 'searching' | 'streaming'>('idle');
+  type Phase = 'idle' | 'searching' | 'streaming';
+  const [phase, setPhase] = useState<Phase>('idle');
   const [sources, setSources] = useState<Source[]>([]);
+  // D.3 — AbortController is now stored in the module-level activeStreams map
+  // (keyed by chatId) so streams survive component unmount during navigation.
+  // The ref here is only used by stopStreaming() to abort imperatively.
   const abortControllerRef = useRef<AbortController | null>(null);
 
   // Keep a ref to phase so sendMessage doesn't need phase in its deps array,
   // preventing unnecessary recreation on every phase change.
-  const phaseRef = useRef(phase);
+  const phaseRef = useRef<Phase>(phase);
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
 
-  // D.3 — abort SSE on unmount to prevent memory leaks / dangling streams
-  useEffect(() => () => abortControllerRef.current?.abort(), []);
-
-  const isStreaming = phase !== 'idle';
+  // Reactive: true whenever ANY hook instance has registered a stream for this
+  // chatId, even if this particular instance just remounted (navigation back).
+  const isExternallyStreaming = useStreamRegistry((s) => s.activeStreamingChats.has(chatId));
+  const isStreaming = phase !== 'idle' || isExternallyStreaming;
 
   const messages = chats[chatId] || [];
 
@@ -49,6 +59,8 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      // Register in module-level map so the stream survives navigation
+      registerStream(chatId, controller);
       setPhase('searching');
       setSources([]);
 
@@ -90,20 +102,29 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           appendToLastMessage(chatId, `\n\n**Error:** ${(err as Error).message}`);
         }
         // D.2 — if stopped before any token arrived, discard the empty placeholder
-        if (isAbort || phaseRef.current === 'searching') {
+        // (cast: TS narrows phaseRef.current to its initial 'idle' literal from useRef<Phase>(phase) inference)
+        if (isAbort || (phaseRef.current as Phase) === 'searching') {
           removeLastMessageIfEmpty(chatId);
         }
       } finally {
         setPhase('idle');
         abortControllerRef.current = null;
+        // Identity check: only clear the registry entry if we still own it.
+        // If a newer sendMessage call replaced our controller, leave the
+        // newer registration intact.
+        unregisterStream(chatId, controller);
       }
     },
     [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources, setLastMessageConfidence, removeLastMessageIfEmpty],
   );
 
   const stopStreaming = useCallback(() => {
+    // Local ref first (fast path for streams started by this hook instance).
     abortControllerRef.current?.abort();
-  }, []);
+    // Also abort by chatId so the Stop button works after navigation back —
+    // this hook instance may not have started the stream that's still flowing.
+    abortStream(chatId);
+  }, [chatId]);
 
   return {
     messages,

@@ -170,7 +170,7 @@ export function PaperDetailPage() {
               <TabsTrigger value="evidence">Evidence</TabsTrigger>
               <TabsTrigger value="chunks">Chunks</TabsTrigger>
               <TabsTrigger value="crossrefs">Cross-References</TabsTrigger>
-              <TabsTrigger value="notes">Notes</TabsTrigger>
+              <TabsTrigger value="notes">Annotations</TabsTrigger>
             </TabsList>
 
             <TabsContent value="summary" className="mt-4">

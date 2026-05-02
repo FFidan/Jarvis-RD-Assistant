@@ -1,18 +1,25 @@
 /**
  * Unit tests for use-streaming-chat — D.2 finally-branch empty placeholder removal
- * and D.3 unmount abort.
+ * and D.3 unmount does NOT abort (streams survive navigation); logout DOES abort.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
-import { useChatStore } from '@/stores/chat-store';
+import { useChatStore, abortAllStreams } from '@/stores/chat-store';
 
 // ---------------------------------------------------------------------------
 // Mock streamSSE before the hook module is imported
 // ---------------------------------------------------------------------------
-const mockStreamSSE = vi.fn<() => AsyncGenerator<never, void, unknown>>();
+type StreamEvent = { type: string; content?: string; sources?: unknown[] };
+type StreamSSEFn = (
+  url: string,
+  body: unknown,
+  signal: AbortSignal,
+) => AsyncGenerator<StreamEvent, void, unknown>;
+const mockStreamSSE = vi.fn<StreamSSEFn>();
 
 vi.mock('@/lib/sse', () => ({
-  streamSSE: (...args: unknown[]) => mockStreamSSE(...args),
+  streamSSE: (url: string, body: unknown, signal: AbortSignal) =>
+    mockStreamSSE(url, body, signal),
 }));
 
 // Stub useAuthStore so streamSSE mock doesn't need it (sse.ts imports it at top-level)
@@ -34,14 +41,14 @@ function resetStore() {
 }
 
 /** Returns an async generator that aborts when the given signal fires */
-async function* hangingStream(signal: AbortSignal): AsyncGenerator<never, void, unknown> {
+async function* hangingStream(signal: AbortSignal): AsyncGenerator<StreamEvent, void, unknown> {
   await new Promise<void>((_, reject) => {
     signal.addEventListener('abort', () => reject(new DOMException('AbortError', 'AbortError')));
   });
 }
 
 /** Returns an async generator that yields nothing and resolves immediately */
-async function* emptyStream(): AsyncGenerator<never, void, unknown> {
+async function* emptyStream(): AsyncGenerator<StreamEvent, void, unknown> {
   // no tokens — generator ends immediately (simulates instant done with no content)
 }
 
@@ -128,16 +135,16 @@ describe('use-streaming-chat — D.2 empty placeholder removal', () => {
 });
 
 // ---------------------------------------------------------------------------
-// D.3 — unmount aborts the SSE stream
+// D.3 — unmount does NOT abort; streams survive navigation
 // ---------------------------------------------------------------------------
 
-describe('use-streaming-chat — D.3 unmount cleanup', () => {
+describe('use-streaming-chat — D.3 unmount does not abort stream', () => {
   beforeEach(() => {
     resetStore();
     vi.clearAllMocks();
   });
 
-  it('aborts the AbortController when the hook unmounts mid-stream', async () => {
+  it('does NOT abort the AbortController when the hook unmounts mid-stream', async () => {
     let capturedSignal: AbortSignal | null = null;
     mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => {
       capturedSignal = signal;
@@ -156,9 +163,70 @@ describe('use-streaming-chat — D.3 unmount cleanup', () => {
     expect(capturedSignal).not.toBeNull();
     expect(capturedSignal!.aborted).toBe(false);
 
-    // Unmount — the cleanup useEffect should fire abort()
+    // Unmount (navigation away) — stream must continue; signal must stay unaborted
     unmount();
 
+    expect(capturedSignal!.aborted).toBe(false);
+  });
+
+  it('aborts all streams when abortAllStreams() is called (logout path)', async () => {
+    let capturedSignal: AbortSignal | null = null;
+    mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => {
+      capturedSignal = signal;
+      return hangingStream(signal);
+    });
+
+    const { result } = renderHook(() =>
+      useStreamingChat({ chatId: 'c4', scope: 'cross-paper' }),
+    );
+
+    act(() => {
+      void result.current.sendMessage('logout abort test');
+    });
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(true));
+    expect(capturedSignal).not.toBeNull();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    // Simulate logout aborting all streams
+    abortAllStreams();
+
+    expect(capturedSignal!.aborted).toBe(true);
+  });
+
+  it('isStreaming stays true on a fresh hook mount while the stream is still in flight (W1.6 review fix)', async () => {
+    let capturedSignal: AbortSignal | null = null;
+    mockStreamSSE.mockImplementation((_url, _body, signal: AbortSignal) => {
+      capturedSignal = signal;
+      return hangingStream(signal);
+    });
+
+    // Hook A: starts the stream then unmounts (simulates navigating away mid-stream).
+    const { result: resultA, unmount: unmountA } = renderHook(() =>
+      useStreamingChat({ chatId: 'c5', scope: 'cross-paper' }),
+    );
+    act(() => {
+      void resultA.current.sendMessage('navigation test');
+    });
+    await waitFor(() => expect(resultA.current.isStreaming).toBe(true));
+    unmountA();
+
+    // Stream is still alive in the module-level registry.
+    expect(capturedSignal!.aborted).toBe(false);
+
+    // Hook B: fresh mount on the same chatId (simulates navigating back).
+    const { result: resultB } = renderHook(() =>
+      useStreamingChat({ chatId: 'c5', scope: 'cross-paper' }),
+    );
+    // The new hook instance MUST reflect that a stream is active so the
+    // Stop button stays visible and the UI doesn't lie about being idle.
+    expect(resultB.current.isStreaming).toBe(true);
+
+    // Stop via the new hook — should still abort the in-flight stream
+    // even though hook B never registered the controller itself.
+    act(() => {
+      resultB.current.stopStreaming();
+    });
     expect(capturedSignal!.aborted).toBe(true);
   });
 });

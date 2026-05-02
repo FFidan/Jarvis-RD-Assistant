@@ -175,9 +175,12 @@ async def process_pdf(
         logger.exception("PDF processing failed", extra={"request_id": request_id})
         raise HTTPException(
             status_code=502,
-            detail=(
-                f"PDF processing failed (request_id={request_id}). Please retry or contact support."
-            ),
+            detail={
+                "detail": "PDF processing failed",
+                "error_type": type(exc).__name__,
+                "error_detail": str(exc)[:200],
+                "request_id": request_id,
+            },
         ) from exc
 
 

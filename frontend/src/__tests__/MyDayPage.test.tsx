@@ -133,8 +133,9 @@ describe('MyDayPage', () => {
   it('renders Pomodoro timer in idle state', async () => {
     renderWithProviders();
     expect(await screen.findByText('Pomodoro Timer')).toBeInTheDocument();
-    expect(screen.getByText('Ready')).toBeInTheDocument();
+    // Idle: slim layout — no phase label shown, just the time and Start button
     expect(screen.getByText('Start Focus')).toBeInTheDocument();
+    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
   });
 
   it('renders Action Items card', async () => {

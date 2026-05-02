@@ -114,81 +114,104 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
     'long-break': 'text-blue-500',
   }[phase];
 
+  const isIdle = phase === 'idle';
+
   return (
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-lg">Pomodoro Timer</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        {/* Phase + Timer */}
-        <div className="text-center space-y-2">
-          <p className={`text-sm font-medium ${phaseColor}`}>{phaseLabel}</p>
-          <p className="text-5xl font-mono font-bold tabular-nums tracking-tight">
-            {phase === 'idle' ? `${String(workMinutes).padStart(2, '0')}:00` : timeDisplay}
-          </p>
-
-          {/* Cycle dots */}
-          <div className="flex justify-center gap-1.5">
-            {Array.from({ length: targetCycles }).map((_, i) => (
-              <div
-                key={`cycle-dot-${i}`}
-                className={`w-2.5 h-2.5 rounded-full ${
-                  i < cyclesCompleted ? 'bg-primary' : 'bg-muted'
-                }`}
-              />
-            ))}
-            {phase !== 'idle' && (
-              <span className="text-xs text-muted-foreground ml-2">
-                Cycle {Math.min(cyclesCompleted + 1, targetCycles)}/{targetCycles}
-              </span>
-            )}
+        {/* Idle: slim layout — time + start button only */}
+        {isIdle ? (
+          <div className="flex items-center justify-between gap-4">
+            <p className="text-3xl font-mono font-bold tabular-nums tracking-tight text-muted-foreground">
+              {`${String(workMinutes).padStart(2, '0')}:00`}
+            </p>
+            <Button onClick={handleStartFocus}>Start Focus</Button>
           </div>
-        </div>
+        ) : (
+          <>
+            {/* Phase + Timer */}
+            <div className="text-center space-y-2">
+              <p className={`text-sm font-medium ${phaseColor}`}>{phaseLabel}</p>
+              <p className="text-5xl font-mono font-bold tabular-nums tracking-tight">
+                {timeDisplay}
+              </p>
 
-        {/* Attached item */}
-        {attachedItem && (
-          <p className="text-center text-sm text-muted-foreground truncate">
-            Working on: {attachedItem.title}
-          </p>
+              {/* Cycle dots */}
+              <div className="flex justify-center gap-1.5">
+                {Array.from({ length: targetCycles }).map((_, i) => (
+                  <div
+                    key={`cycle-dot-${i}`}
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      i < cyclesCompleted ? 'bg-primary' : 'bg-muted'
+                    }`}
+                  />
+                ))}
+                <span className="text-xs text-muted-foreground ml-2">
+                  Cycle {Math.min(cyclesCompleted + 1, targetCycles)}/{targetCycles}
+                </span>
+              </div>
+            </div>
+
+            {/* Attached item */}
+            {attachedItem && (
+              <p className="text-center text-sm text-muted-foreground truncate">
+                Working on: {attachedItem.title}
+              </p>
+            )}
+
+            {/* Action buttons */}
+            <div className="flex justify-center gap-2">
+              {phase === 'work' && !pausedAt && (
+                <>
+                  <Button variant="outline" onClick={pause}>Pause</Button>
+                  <Button variant="destructive" onClick={handleStopAndLog}>
+                    Stop &amp; Log
+                  </Button>
+                </>
+              )}
+              {phase === 'work' && pausedAt && (
+                <>
+                  <Button onClick={resume}>Resume</Button>
+                  <Button variant="destructive" onClick={handleStopAndLog}>
+                    Stop &amp; Log
+                  </Button>
+                </>
+              )}
+              {(phase === 'short-break' || phase === 'long-break') && (
+                <>
+                  <Button variant="outline" onClick={skipBreak}>Skip Break</Button>
+                  <Button variant="destructive" onClick={handleStopAndLog}>
+                    Stop &amp; Log
+                  </Button>
+                </>
+              )}
+            </div>
+
+            {/* Stats footer */}
+            <div className="flex justify-center gap-4 text-sm text-muted-foreground pt-2 border-t">
+              <span>Today: {formatFocusTime(todayFocusHours)} focused</span>
+              <span>|</span>
+              <span>Streak: {focusStreakDays} {focusStreakDays === 1 ? 'day' : 'days'}</span>
+            </div>
+          </>
         )}
 
-        {/* Action buttons (Bug #11 fix — Pause/Resume during work, Skip during break) */}
-        <div className="flex justify-center gap-2">
-          {phase === 'idle' && (
-            <Button onClick={handleStartFocus}>Start Focus</Button>
-          )}
-          {phase === 'work' && !pausedAt && (
-            <>
-              <Button variant="outline" onClick={pause}>Pause</Button>
-              <Button variant="destructive" onClick={handleStopAndLog}>
-                Stop &amp; Log
-              </Button>
-            </>
-          )}
-          {phase === 'work' && pausedAt && (
-            <>
-              <Button onClick={resume}>Resume</Button>
-              <Button variant="destructive" onClick={handleStopAndLog}>
-                Stop &amp; Log
-              </Button>
-            </>
-          )}
-          {(phase === 'short-break' || phase === 'long-break') && (
-            <>
-              <Button variant="outline" onClick={skipBreak}>Skip Break</Button>
-              <Button variant="destructive" onClick={handleStopAndLog}>
-                Stop &amp; Log
-              </Button>
-            </>
-          )}
-        </div>
-
-        {/* Stats footer (Bug #9 fix — better focus time formatting) */}
-        <div className="flex justify-center gap-4 text-sm text-muted-foreground pt-2 border-t">
-          <span>Today: {formatFocusTime(todayFocusHours)} focused</span>
-          <span>|</span>
-          <span>Streak: {focusStreakDays} {focusStreakDays === 1 ? 'day' : 'days'}</span>
-        </div>
+        {/* Idle stats — collapsible details */}
+        {isIdle && (
+          <details className="text-sm text-muted-foreground">
+            <summary className="cursor-pointer select-none text-xs hover:text-foreground">
+              Stats
+            </summary>
+            <div className="flex gap-4 pt-2 border-t mt-2">
+              <span>Today: {formatFocusTime(todayFocusHours)} focused</span>
+              <span>|</span>
+              <span>Streak: {focusStreakDays} {focusStreakDays === 1 ? 'day' : 'days'}</span>
+            </div>
+          </details>
+        )}
       </CardContent>
     </Card>
   );

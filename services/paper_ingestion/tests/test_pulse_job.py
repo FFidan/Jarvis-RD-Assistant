@@ -64,7 +64,8 @@ def patch_pipeline():
         "load_profile": AsyncMock(return_value=profile),
         "discover_candidates": AsyncMock(return_value=(candidates, {"_MockSrc": len(candidates)})),
         "stage1_embedding_filter": AsyncMock(return_value=stage1_out),
-        "stage2_llm_rerank": AsyncMock(return_value=stage2_out),
+        # C2: stage2_llm_rerank is now called per-batch; return the batch input unchanged.
+        "stage2_llm_rerank": AsyncMock(side_effect=lambda batch, *a, **kw: batch),
         "stage3_combine": AsyncMock(return_value=stage3_out),
         "assemble_deck": MagicMock(return_value=deck),
         "upsert_paper": AsyncMock(return_value={"id": 1, "is_insert": True}),
@@ -111,7 +112,8 @@ async def test_happy_path_end_to_end(patch_pipeline):
     mocks["load_profile"].assert_awaited_once()
     mocks["discover_candidates"].assert_awaited_once()
     mocks["stage1_embedding_filter"].assert_awaited_once()
-    mocks["stage2_llm_rerank"].assert_awaited_once()
+    # C2: stage2_llm_rerank is called once per batch of 5 candidates
+    assert mocks["stage2_llm_rerank"].await_count >= 1
     mocks["stage3_combine"].assert_awaited_once()
     mocks["assemble_deck"].assert_called_once()
     assert mocks["upsert_paper"].await_count == len(patch_pipeline["deck"])
@@ -456,6 +458,7 @@ async def test_optional_signals_requested_are_enriched_before_stage3(patch_pipel
         [sc.paper.external_id for sc in patch_pipeline["stage2"]],
     )
     classifier_scores.assert_awaited_once()
+    assert classifier_scores.await_args is not None
     assert classifier_scores.await_args.args[0] is pool
     classifier_input = classifier_scores.await_args.args[1]
     assert (
@@ -756,6 +759,75 @@ async def test_run_pulse_savepoint_isolates_per_card_failure(patch_pipeline, cap
     assert any("db constraint violation on card 0" in m for m in warning_messages), (
         f"Expected WARNING about failed card; got: {warning_messages}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C2 — per-batch progress granularity during Stage 2 LLM scoring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage2_progress_updates_are_granular(patch_pipeline):
+    """C2: With ctx, stage 2 LLM scoring emits ≥3 distinct progress messages.
+
+    Uses a mock stage2_llm_rerank that tracks calls (one per batch of 5)
+    and a ctx that records each update_progress call during stage 2.
+    Asserts:
+    - ≥3 distinct progress messages were emitted (one per batch of up to 5 cards)
+    - All stage-2 messages follow the "Stage 2 LLM scoring (N/M)" format
+    - Progress values are between 0.85 and 0.95 (inclusive)
+    """
+    from paper_ingestion.pulse.job import run_pulse
+
+    # Use 12 stage1 survivors → 3 batches of 5/5/2
+    stage1_survivors = [_scored(i) for i in range(12)]
+    patch_pipeline["mocks"]["stage1_embedding_filter"].return_value = stage1_survivors
+
+    # Use a proper AsyncMock for stage2 that returns the batch (pass-through)
+    async def passthrough_stage2(batch, *a, **kw):
+        return list(batch)
+
+    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = passthrough_stage2
+
+    # Record all update_progress calls
+    progress_calls: list[tuple[float, str | None]] = []
+
+    async def record_progress(pct, msg=None):
+        progress_calls.append((pct, msg))
+
+    ctx = MagicMock()
+    ctx.update_progress = AsyncMock(side_effect=record_progress)
+    ctx.is_cancelled = AsyncMock(return_value=False)
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC), ctx=ctx)
+
+    # Filter to stage-2-specific progress messages
+    stage2_msgs = [
+        (pct, msg)
+        for pct, msg in progress_calls
+        if msg and "Stage 2 LLM scoring" in msg and "/" in msg
+    ]
+
+    assert len(stage2_msgs) >= 3, (
+        f"Expected ≥3 stage-2 progress updates; got {len(stage2_msgs)}: {stage2_msgs}"
+    )
+
+    # All stage-2 progress values must be in [0.85, 0.95]
+    for pct, msg in stage2_msgs:
+        assert 0.85 <= pct <= 0.95, (
+            f"Stage-2 progress {pct} out of [0.85, 0.95] range (msg={msg!r})"
+        )
+
+    # Messages follow "Stage 2 LLM scoring (N/12)" format
+    for _pct, msg in stage2_msgs:
+        assert msg is not None and "/12" in msg, (
+            f"Expected '/12' in stage-2 progress message; got: {msg!r}"
+        )
+
+    # Pipeline still completes normally
+    assert stats["last_error"] is None
+    assert stats.get("stage2_scored") == 12
 
 
 @pytest.mark.asyncio

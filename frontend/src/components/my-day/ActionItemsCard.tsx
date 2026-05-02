@@ -1,13 +1,15 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, AlertTriangle, CheckCircle2, InboxIcon } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, InboxIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useJobStore } from '@/stores/job-store';
 import { fetchFeedPapers } from '@/lib/api';
 import type { FeedPaper } from '@/types';
+
+const COLLAPSE_THRESHOLD = 5;
 
 export function ActionItemsCard() {
   const queryClient = useQueryClient();
@@ -37,6 +39,18 @@ export function ActionItemsCard() {
   );
 
   const unprocessed: FeedPaper[] = savedFeed?.papers ?? [];
+
+  // Accordion: start open; auto-collapse once data loads and list is long (>5).
+  // After the user manually toggles, don't auto-reset on re-fetches.
+  const [isOpen, setIsOpen] = useState(true);
+  const [userToggled, setUserToggled] = useState(false);
+
+  useEffect(() => {
+    if (!userToggled && savedFeed !== undefined) {
+      const total = (savedFeed.papers?.length ?? 0);
+      setIsOpen(total <= COLLAPSE_THRESHOLD);
+    }
+  }, [savedFeed, userToggled]);
 
   const handleProcessAll = useCallback(async () => {
     await Promise.all(
@@ -89,6 +103,8 @@ export function ActionItemsCard() {
   }
 
   const isEmpty = !isLoading && !isError && unprocessed.length === 0 && failedJobs.length === 0;
+  const totalItems = unprocessed.length + failedJobs.length;
+  const showToggle = totalItems > COLLAPSE_THRESHOLD;
 
   return (
     <Card>
@@ -97,12 +113,40 @@ export function ActionItemsCard() {
           <CardTitle className="flex items-center gap-2 text-lg">
             <InboxIcon className="h-5 w-5" />
             Action Items
+            {totalItems > 0 && (
+              <span className="text-sm font-normal text-muted-foreground">
+                ({totalItems})
+              </span>
+            )}
           </CardTitle>
-          {processable.length > 0 && (
-            <Button size="sm" variant="outline" onClick={handleProcessAll}>
-              Process all ({processable.length})
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {processable.length > 0 && (
+              <Button size="sm" variant="outline" onClick={handleProcessAll}>
+                Process all ({processable.length})
+              </Button>
+            )}
+            {showToggle && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 px-2 text-xs text-muted-foreground"
+                onClick={() => { setUserToggled(true); setIsOpen((v) => !v); }}
+                aria-expanded={isOpen}
+              >
+                {isOpen ? (
+                  <>
+                    <ChevronUp className="h-3.5 w-3.5 mr-1" />
+                    Collapse
+                  </>
+                ) : (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5 mr-1" />
+                    Expand to triage
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
         <p className="text-xs text-muted-foreground mt-1">
           Papers discovered by your sources that haven&apos;t been indexed for AI search yet
@@ -114,6 +158,24 @@ export function ActionItemsCard() {
           <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
             <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
             <span>You&apos;re all caught up</span>
+          </div>
+        ) : !isOpen && showToggle ? (
+          /* Collapsed summary row */
+          <div className="flex items-center justify-between gap-2 py-2 text-sm text-muted-foreground">
+            <span>
+              {unprocessed.length} paper{unprocessed.length !== 1 ? 's' : ''} need
+              {unprocessed.length === 1 ? 's' : ''} processing
+              {failedJobs.length > 0 && `, ${failedJobs.length} failed`}
+            </span>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-xs"
+              onClick={() => { setUserToggled(true); setIsOpen(true); }}
+            >
+              <ChevronDown className="h-3.5 w-3.5 mr-1" />
+              Expand to triage
+            </Button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -161,8 +223,6 @@ export function ActionItemsCard() {
                 </Link>
               </div>
             ))}
-
-            {unprocessed.length === 0 && failedJobs.length > 0 && null}
           </div>
         )}
       </CardContent>

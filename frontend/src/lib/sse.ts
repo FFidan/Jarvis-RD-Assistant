@@ -59,6 +59,10 @@ export interface AnalyzeErrorEvent {
   type: 'error';
   step: string;
   message: string;
+  /** Structured error class name from the backend (e.g. "PdfTooLargeError"). Optional — absent until W1.6-I backend ships. */
+  error_type?: string | null;
+  /** Human-readable detail string from the backend. Optional — absent until W1.6-I backend ships. */
+  error_detail?: string | null;
 }
 
 export type AnalyzeEvent = AnalyzeStepEvent | AnalyzeCompleteEvent | AnalyzeErrorEvent;

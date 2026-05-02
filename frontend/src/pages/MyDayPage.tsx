@@ -28,10 +28,13 @@ export function MyDayPage() {
       {/* Triage header with counter strip */}
       <DayHeader pulseCardRef={pulseCardRef} focusRef={focusRef} />
 
-      {/* Pulse preview */}
+      {/* Pulse preview — top action surface */}
       <PulsePreviewCard containerRef={pulseCardRef} />
 
-      {/* Focus + Tasks row */}
+      {/* Action items triage — second action surface, above fold */}
+      <ActionItemsCard />
+
+      {/* Focus + Tasks row — work-mode tools */}
       <section ref={focusRef} className="grid gap-6 md:grid-cols-2">
         <PomodoroTimer
           todayFocusHours={data?.today_focus_hours ?? 0}
@@ -55,8 +58,7 @@ export function MyDayPage() {
         </Card>
       </section>
 
-      {/* Action items triage */}
-      <ActionItemsCard />
+      {/* Missing foundational papers — only when there are gaps */}
       <MissingFoundationalCard />
 
       {/* Learning + Project pulse row */}

@@ -182,7 +182,7 @@ export function FeedPaperRow({
           <TooltipProvider delayDuration={150}>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Badge variant="secondary" className={STATE_BADGE_CLASSES[state] ?? ''}>
+                <Badge variant="outline" className={STATE_BADGE_CLASSES[state] ?? ''}>
                   {state.toUpperCase()}
                 </Badge>
               </TooltipTrigger>
@@ -232,15 +232,22 @@ export function FeedPaperRow({
               {state === 'inbox' && (
                 <>
                   {onSave && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onSave(paper.id)}
-                      aria-label={`Save ${paper.title}`}
-                    >
-                      <Save className="mr-1 h-3 w-3" />
-                      Save
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onSave(paper.id)}
+                          aria-label={`Save ${paper.title}`}
+                        >
+                          <Save className="mr-1 h-3 w-3" />
+                          Save
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Save to Reading List
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onSkip && (
                     /* B.5 — Skip tooltip clarifying destination state */
@@ -323,26 +330,40 @@ export function FeedPaperRow({
               {state === 'to_read' && (
                 <>
                   {onMarkReading && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onMarkReading(paper.id)}
-                      aria-label={`Mark ${paper.title} as reading`}
-                    >
-                      <BookOpen className="mr-1 h-3 w-3" />
-                      Mark Reading
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onMarkReading(paper.id)}
+                          aria-label={`Mark ${paper.title} as reading`}
+                        >
+                          <BookOpen className="mr-1 h-3 w-3" />
+                          Mark Reading
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Move to Reading — actively reading
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onMarkDone && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onMarkDone(paper.id)}
-                      aria-label={`Mark ${paper.title} as done`}
-                    >
-                      <CheckCircle className="mr-1 h-3 w-3" />
-                      Mark Done
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onMarkDone(paper.id)}
+                          aria-label={`Mark ${paper.title} as done`}
+                        >
+                          <CheckCircle className="mr-1 h-3 w-3" />
+                          Mark Done
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Mark as finished — moves to Done
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onTrash && (
                     <Tooltip>
@@ -405,26 +426,40 @@ export function FeedPaperRow({
               {state === 'reading' && (
                 <>
                   {onSetAside && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onSetAside(paper.id)}
-                      aria-label={`Set aside ${paper.title}`}
-                    >
-                      <Library className="mr-1 h-3 w-3" />
-                      Set Aside
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onSetAside(paper.id)}
+                          aria-label={`Set aside ${paper.title}`}
+                        >
+                          <Library className="mr-1 h-3 w-3" />
+                          Set Aside
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Push back to Reading List (Reading → To Read)
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onMarkDone && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onMarkDone(paper.id)}
-                      aria-label={`Mark ${paper.title} as done`}
-                    >
-                      <CheckCircle className="mr-1 h-3 w-3" />
-                      Mark Done
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onMarkDone(paper.id)}
+                          aria-label={`Mark ${paper.title} as done`}
+                        >
+                          <CheckCircle className="mr-1 h-3 w-3" />
+                          Mark Done
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Mark as finished — moves to Done
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onTrash && (
                     <Tooltip>
@@ -487,15 +522,22 @@ export function FeedPaperRow({
               {state === 'done' && (
                 <>
                   {onReopen && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onReopen(paper.id)}
-                      aria-label={`Re-open ${paper.title}`}
-                    >
-                      <RotateCcw className="mr-1 h-3 w-3" />
-                      Re-open
-                    </Button>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => onReopen(paper.id)}
+                          aria-label={`Re-open ${paper.title}`}
+                        >
+                          <RotateCcw className="mr-1 h-3 w-3" />
+                          Re-open
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        Re-open — moves Done → Reading
+                      </TooltipContent>
+                    </Tooltip>
                   )}
                   {onTrash && (
                     <Tooltip>

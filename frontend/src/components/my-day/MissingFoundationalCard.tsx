@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { BookOpen, Loader2, Plus } from 'lucide-react';
+import { Loader2, Plus } from 'lucide-react';
 import {
   fetchAndProcessFoundationalPaper,
   fetchMissingFoundationalPapers,
@@ -7,7 +7,6 @@ import {
 import { useJobStore } from '@/stores/job-store';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { EmptyState } from '@/components/EmptyState';
 import type { MissingFoundationalPaper } from '@/types';
 
 export function MissingFoundationalCard() {
@@ -37,6 +36,9 @@ export function MissingFoundationalCard() {
   const pendingPaperId =
     addMut.isPending && typeof addMut.variables === 'number' ? addMut.variables : null;
 
+  // Only render when there are gaps (or on error); hide completely when list is empty
+  if (!isLoading && !isError && data.length === 0) return null;
+
   return (
     <Card>
       <CardHeader className="pb-3">
@@ -47,12 +49,6 @@ export function MissingFoundationalCard() {
           <p className="text-sm text-muted-foreground">Loading citation gaps...</p>
         ) : isError ? (
           <p className="text-sm text-destructive">Failed to load citation gaps.</p>
-        ) : data.length === 0 ? (
-          <EmptyState
-            icon={BookOpen}
-            title="No citation gaps"
-            description="Fetch citation graphs to surface missing foundational papers."
-          />
         ) : (
           data.map((paper: MissingFoundationalPaper) => (
             <div key={paper.paper_id} className="space-y-2 border-b pb-3 last:border-b-0 last:pb-0">

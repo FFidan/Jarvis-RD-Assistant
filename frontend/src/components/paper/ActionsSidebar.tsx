@@ -82,6 +82,9 @@ export function ActionsSidebar({
   const [stepStatuses, setStepStatuses] = useState<Record<string, StepStatus>>({});
   const [chunkCount, setChunkCount] = useState<number | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  /** The stage that last failed during a streamAnalyze run — used for per-stage Retry. */
+  const [failedStage, setFailedStage] = useState<'downloading' | 'processing' | 'summarizing' | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [genJob, setGenJob] = useState<Job | null>(null);
@@ -106,6 +109,7 @@ export function ActionsSidebar({
     setIsAnalyzing(true);
     setActionResult(null);
     setChunkCount(null);
+    setFailedStage(null);
     setStepStatuses({
       downloading: 'pending',
       processing: 'pending',
@@ -133,13 +137,22 @@ export function ActionsSidebar({
           queryClient.invalidateQueries({ queryKey: ['paper-detail', paperId] });
         } else if (event.type === 'error') {
           const failedStep = event.step || 'analysis';
+          const stage = (event.step as 'downloading' | 'processing' | 'summarizing') || null;
+          setFailedStage(stage);
           setStepStatuses((prev) => ({
             ...prev,
             ...(event.step ? { [event.step]: 'failed' as StepStatus } : {}),
           }));
+          // Surface structured error (error_type + error_detail) when the backend provides them.
+          const structuredMsg =
+            event.error_type && event.error_detail
+              ? `${event.error_type}: ${event.error_detail}`
+              : event.error_type
+              ? event.error_type
+              : `Failed during ${failedStep}: ${event.message}`;
           setActionResult({
             type: 'error',
-            message: `Failed during ${failedStep}: ${event.message}`,
+            message: structuredMsg,
           });
         }
       }
@@ -315,60 +328,98 @@ export function ActionsSidebar({
           })}
       </div>
 
-      <details className="mt-2">
-        <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none">
-          Manual steps ▾
-        </summary>
-        <div className="mt-2 flex flex-col gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
-            onClick={() => { setActionResult(null); downloadMut.mutate(); }}
-            disabled={anyPending}
-          >
-            <Download className="mr-2 h-4 w-4" />
-            {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
-            <InfoTooltip content={ACTION_TOOLTIPS['download']} side="left" className="ml-auto" />
-          </Button>
+      <div className="mt-2">
+        <button
+          type="button"
+          className="cursor-pointer text-xs text-muted-foreground hover:text-foreground select-none"
+          onClick={() => setShowAdvanced((v) => !v)}
+          aria-expanded={showAdvanced}
+        >
+          Show advanced {showAdvanced ? '▴' : '▾'}
+        </button>
+        {showAdvanced && (
+          <div className="mt-2 flex flex-col gap-1">
+            {/* Download PDF — hidden once PDF is already downloaded */}
+            {!pdfDownloaded && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => { setActionResult(null); downloadMut.mutate(); }}
+                disabled={anyPending}
+              >
+                <Download className="mr-2 h-4 w-4" />
+                {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
+                <InfoTooltip content={ACTION_TOOLTIPS['download']} side="left" className="ml-auto" />
+              </Button>
+            )}
 
-          <Button
-            id="paper-action-process"
-            variant="outline"
-            size="sm"
-            className={`w-full justify-start${pulseProcessButton ? ' animate-pulse' : ''}`}
-            onClick={() => { setActionResult(null); processMut.mutate(); }}
-            disabled={anyPending || !pdfDownloaded}
-          >
-            <Cog className="mr-2 h-4 w-4" />
-            {processMut.isPending ? 'Processing...' : 'Process PDF'}
-            <InfoTooltip content={ACTION_TOOLTIPS['process']} side="left" className="ml-auto" />
-          </Button>
+            {/* Process PDF — hidden once paper has chunks */}
+            {pdfDownloaded && !hasChunks && (
+              <Button
+                id="paper-action-process"
+                variant="outline"
+                size="sm"
+                className={`w-full justify-start${pulseProcessButton ? ' animate-pulse' : ''}`}
+                onClick={() => { setActionResult(null); processMut.mutate(); }}
+                disabled={anyPending}
+              >
+                <Cog className="mr-2 h-4 w-4" />
+                {processMut.isPending ? 'Processing...' : 'Process PDF'}
+                <InfoTooltip content={ACTION_TOOLTIPS['process']} side="left" className="ml-auto" />
+              </Button>
+            )}
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start"
-            onClick={() => { setActionResult(null); summarizeMut.mutate(); }}
-            disabled={anyPending || !hasChunks}
-          >
-            <FileText className="mr-2 h-4 w-4" />
-            {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
-            <InfoTooltip content={ACTION_TOOLTIPS['summarize']} side="left" className="ml-auto" />
-          </Button>
-        </div>
-      </details>
+            {/* Generate Summary — hidden once summary exists */}
+            {hasChunks && !hasSummary && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="w-full justify-start"
+                onClick={() => { setActionResult(null); summarizeMut.mutate(); }}
+                disabled={anyPending}
+              >
+                <FileText className="mr-2 h-4 w-4" />
+                {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
+                <InfoTooltip content={ACTION_TOOLTIPS['summarize']} side="left" className="ml-auto" />
+              </Button>
+            )}
+
+            {/* If all three stages are done, indicate nothing more to do */}
+            {pdfDownloaded && hasChunks && hasSummary && (
+              <p className="text-xs text-muted-foreground py-1">All pipeline stages complete.</p>
+            )}
+          </div>
+        )}
+      </div>
 
       {actionResult && (
-        <div className={`text-sm ${actionResult.type === 'error' ? 'text-destructive' : 'text-green-600'}`}>
-          <p>{actionResult.message}</p>
+        <div className={`text-sm rounded-md border p-2 ${actionResult.type === 'error' ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-green-500/30 bg-green-500/10 text-green-700'}`}>
+          <p className="font-medium">{actionResult.message}</p>
           {actionResult.action_link && (
             <Link
               to={actionResult.action_link.href}
-              className="underline hover:opacity-80"
+              className="underline hover:opacity-80 text-xs mt-1 block"
             >
               {actionResult.action_link.label}
             </Link>
+          )}
+          {/* Per-stage Retry button — only shown for SSE pipeline errors */}
+          {actionResult.type === 'error' && failedStage && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-2 h-7 px-2 text-xs"
+              disabled={anyPending}
+              onClick={() => {
+                setActionResult(null);
+                if (failedStage === 'downloading') downloadMut.mutate();
+                else if (failedStage === 'processing') processMut.mutate();
+                else if (failedStage === 'summarizing') summarizeMut.mutate();
+              }}
+            >
+              Retry {failedStage === 'downloading' ? 'download' : failedStage === 'processing' ? 'processing' : 'summarize'}
+            </Button>
           )}
         </div>
       )}

@@ -79,10 +79,44 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('button', { name: /Analyze Paper/ })).toBeInTheDocument();
   });
 
-  it('renders individual action buttons: "Download PDF", "Process PDF", "Generate Summary"', () => {
-    renderSidebar();
+  it('renders manual action buttons conditionally based on stage props (W1.6-F)', async () => {
+    const user = userEvent.setup();
+
+    // Default props (pdfDownloaded=false): only "Download PDF" visible behind "Show advanced"
+    const { unmount } = renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
     expect(screen.getByRole('button', { name: /Download PDF/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Process PDF/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate Summary/ })).not.toBeInTheDocument();
+    unmount();
+
+    // pdfDownloaded=true, hasChunks=false: only "Process PDF" visible
+    const queryClient2 = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { unmount: u2 } = render(
+      <QueryClientProvider client={queryClient2}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
+    expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Process PDF/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Generate Summary/ })).not.toBeInTheDocument();
+    u2();
+
+    // hasChunks=true, hasSummary=false: only "Generate Summary" visible
+    const queryClient3 = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient3}>
+        <MemoryRouter>
+          <ActionsSidebar paperId={42} pdfDownloaded={true} hasChunks={true} hasSummary={false} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
+    expect(screen.queryByRole('button', { name: /Download PDF/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Process PDF/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Generate Summary/ })).toBeInTheDocument();
   });
 
@@ -136,6 +170,40 @@ describe('ActionsSidebar', () => {
     });
   });
 
+  it('structured process error shows error_type:error_detail and Retry button (W1.6-F + W1.6-I)', async () => {
+    const user = userEvent.setup();
+
+    mockStreamEvents = [
+      { type: 'step', step: 'downloading', status: 'started' },
+      { type: 'step', step: 'downloading', status: 'completed' },
+      { type: 'step', step: 'processing', status: 'started' },
+      // Backend W1.6-I emits BOTH old (step+message) AND new (stage+error_type+error_detail)
+      // shapes so the existing step-tracker keeps working AND the new structured banner +
+      // per-stage Retry can render.
+      {
+        type: 'error',
+        step: 'processing',
+        message: 'PDF processing failed',
+        error_type: 'PdfReadError',
+        error_detail: 'Stream end was reached early',
+      } as never,
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+
+    // Banner shows the structured "error_type: error_detail" string, not the generic
+    // "Failed during processing: …" fallback.
+    await waitFor(() => {
+      expect(
+        screen.getByText(/PdfReadError: Stream end was reached early/),
+      ).toBeInTheDocument();
+    });
+
+    // Per-stage Retry button is offered for the failed stage (processing).
+    expect(screen.getByRole('button', { name: /Retry processing/i })).toBeInTheDocument();
+  });
+
   it('download failure via SSE error event shows error message', async () => {
     const user = userEvent.setup();
 
@@ -165,7 +233,7 @@ describe('ActionsSidebar', () => {
     });
   });
 
-  it('all buttons disabled while analyze is running', async () => {
+  it('visible manual button is disabled while analyze is running (W1.6-F)', async () => {
     const user = userEvent.setup();
 
     // Use a gate to keep the stream open
@@ -176,21 +244,15 @@ describe('ActionsSidebar', () => {
     ];
 
     renderSidebar();
+    // Expand the collapsible BEFORE clicking Analyze (manual buttons are hidden by default)
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
     await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
 
-    // Release the gate but events will still be yielded, and then the stream
-    // completes. We need to check while the stream is still open.
-    // Actually, with the gate, events won't yield until gate resolves.
-    // The click triggers runAnalyze which awaits the gate. So buttons should
-    // be disabled immediately after the async function starts.
     await waitFor(() => {
-      // The analyze is running (isAnalyzing = true) even before events arrive
+      // Default props (pdfDownloaded=false) → only Download PDF is rendered
       expect(screen.getByRole('button', { name: /Download PDF/ })).toBeDisabled();
-      expect(screen.getByRole('button', { name: /Process PDF/ })).toBeDisabled();
-      expect(screen.getByRole('button', { name: /Generate Summary/ })).toBeDisabled();
     });
 
-    // Cleanup: resolve the gate so the test doesn't hang
     resolveGate();
   });
 
@@ -244,17 +306,22 @@ describe('ActionsSidebar', () => {
     expect(generateBtn).toBeDisabled();
   });
 
-  it('renders tooltip info icons for all 5 action buttons', async () => {
-    renderSidebar();
+  it('renders tooltip info icons for visible action buttons (W1.6-F)', async () => {
+    const user = userEvent.setup();
 
-    // Wait for decks to load (generate-cards section renders after)
+    // Render with all stages incomplete-but-progressed enough that manual
+    // buttons could appear when expanded. With default props only Download is
+    // visible; we expand to surface its InfoTooltip too.
+    renderSidebar();
     await screen.findByText('Target Deck');
+    await user.click(screen.getByRole('button', { name: /Show advanced/ }));
 
     // Each InfoTooltip renders an aria-label="More info" button
     const tooltipButtons = screen.getAllByRole('button', { name: /More info/i });
 
-    // 5 tooltips: analyze, download, process, summarize, generate-cards
-    // Plus the "Max cards" InfoTooltip already in the file = 6 total
-    expect(tooltipButtons.length).toBeGreaterThanOrEqual(5);
+    // Always-visible: analyze + generate-cards + Max cards = 3.
+    // After "Show advanced": adds the visible manual-step tooltip(s).
+    // With default props (pdfDownloaded=false), only "Download PDF" manual button is shown → +1 = 4.
+    expect(tooltipButtons.length).toBeGreaterThanOrEqual(4);
   });
 });

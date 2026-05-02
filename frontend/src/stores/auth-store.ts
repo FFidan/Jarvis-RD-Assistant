@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { UI_STORE_KEY } from '@/stores/ui-store';
+import { abortAllStreams } from '@/stores/chat-store';
 
 /**
  * Real API-key-based authentication.
@@ -47,6 +48,8 @@ export const useAuthStore = create<AuthState>()(
       },
 
       logout() {
+        // Abort any in-flight SSE streams before clearing session state.
+        abortAllStreams();
         // Clear the UI store's persisted localStorage entry so a fresh login
         // doesn't inherit stale UI state from a previous session.
         localStorage.removeItem(UI_STORE_KEY);
