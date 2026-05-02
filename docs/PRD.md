@@ -1,17 +1,19 @@
 # JARVIS RD Assistant - Product Requirements Document (PRD)
 
 **Version:** 1.4
-**Date:** 2026-04-28
+**Date:** 2026-05-02
 **Status:** Active
 
-> Implementation status note (2026-04-10):
-> This PRD has been updated to reflect features shipped through v1.2 and to
-> embed the approved architectural design for the Discovery & Pulse subsystem
-> (Phase 1 planned). Section 3.1 has been rewritten to reflect two distinct
-> sub-features (Pulse = discovery, Weekly Summary = reflection). Section 3.4
-> tracks features delivered beyond the original MVP scope. Section 8 records
-> the Phase 1/2/3 roadmap for the discovery layer. For current technical
-> requirements, see `docs/REQUIREMENTS.md`.
+> Implementation status note (2026-05-02):
+> This PRD reflects features shipped through v1.4.3 (Round 15 Wave 1.7) plus
+> the W1.8 post-deploy fixes (commit 48ce145). The Discovery & Pulse subsystem
+> (Phase 1) shipped in v1.3.0 on 2026-05-01; Pulse is live in production.
+> The Paper Lifecycle Redesign (single-state ENUM + orthogonal Star) shipped
+> as Phase A of the Modernization Marathon (commit ee1de7f, 2026-05-01).
+> Section 3.1 reflects the two distinct sub-features (Pulse = discovery,
+> Weekly Summary = reflection). Section 3.4 tracks features delivered beyond
+> the original MVP scope. Section 8 records the Phase 1/2/3 roadmap for the
+> discovery layer. For current technical requirements, see `docs/REQUIREMENTS.md`.
 
 ---
 

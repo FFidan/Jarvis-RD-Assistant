@@ -70,6 +70,8 @@ htmlcov/
 # Raw pdfs and images
 *.pdf
 *.png
+# Exception: handoff/ design package screenshots are the acceptance bar for the My Day redesign
+!handoff/screenshots/*.png
 
 # AI agent / tool scaffolding
 .claude/

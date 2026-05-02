@@ -1,0 +1,378 @@
+# 02 — Pulse Pipeline Contract
+**Status:** LIVING
+**Date:** 2026-05-02
+**Reviewers must update this contract in the same patch as any change to:**
+- The 8 numbered steps in [pulse/job.py:run_pulse](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L68)
+- `_DEFAULT_WEIGHTS` in [pulse/profile.py:19-30](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30)
+- `_LLM_CONCURRENCY` / `_STAGE2_TIMEOUT_SECONDS` / per-call timeouts
+- The `signals` dict shape on `ScoredCandidate`
+- The `stats` dict keys produced by `run_pulse` (drives the Settings → Pulse Diagnostics panel)
+
+---
+
+## 0. What this contract covers (and what it does NOT)
+
+**In scope.** The overnight Pulse pipeline that produces a daily card deck —
+8 stages from cron-trigger to deck persist. Stage I/O contracts, signal
+definitions, weight schema, timeout/concurrency policy, fallback semantics,
+and the diagnostics surface the Settings UI reads.
+
+**Out of scope.**
+- Source plugin implementations (arXiv / OpenAlex / S2 / PubMed / Local) —
+  each plugin owns its own contract for query shape, rate limits, and
+  metadata translation.
+- Pulse card UI (frontend rendering of `pulse_cards` rows).
+- Telegram-side digest delivery — separate code path that reads the same
+  `pulse_decks` / `pulse_cards` tables.
+- The recommender (`refresh_recommendations`) — a sibling system; documented
+  briefly in [01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior) under the `recommendation.*` keys.
+
+---
+
+## 1. Pipeline shape
+
+`run_pulse` is the single entry point. Eight numbered stages, each individually
+wrapped in `try/except` so any one stage can degrade without crashing the run.
+
+| # | Stage | File:line | Output | Failure handling |
+|---|---|---|---|---|
+| 1 | Profile load | [job.py:114-129](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L114-L129) | `UserProfile` | **Fatal.** Sets `last_error`; returns immediately with `duration_s` populated. |
+| 2 | Discovery (source fan-out) | [job.py:137-151](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151) | `list[PaperCreate]` + per-source counts | Degraded. Empty candidate list; pipeline continues. |
+| 3 | Stage 1 — embedding filter | [job.py:158-170](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L158-L170); [scoring.py:94-217](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L94-L217) | top-`stage2_top_k` `ScoredCandidate`s | Degraded. Empty `stage1_out`; Stage 2 short-circuits. |
+| 4 | Stage 2 — LLM rerank | [job.py:177-224](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L177-L224); [scoring.py:225-334](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L225-L334) | `ScoredCandidate`s with LLM signals filled | **Degraded.** On `TimeoutError` (600s cap) OR any exception, `_fallback_stage2` clears LLM signals. `degraded_reason` set. |
+| 5 | Optional citation + classifier signals | [job.py:231-294](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294) | `signals` dict augmented with `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier` | Degraded. Failures preserve LLM signals; `degraded_reason` set if no prior reason. |
+| 6 | Stage 3 — weighted combine | [job.py:301-307](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L301-L307); [scoring.py:342-380](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380) | `ScoredCandidate`s with `final_score` | Degraded. Fall back to `stage2_out`; sets `last_error`. |
+| 7 | Assemble deck | [job.py:314-320](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L314-L320); [deck.py:18-40](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L18-L40) | top-`deck_size` cards | Degraded. Empty deck; sets `last_error`. |
+| 8 | Persist deck | [job.py:327-367](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L327-L367); [deck.py:43-220](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L43-L220) | `pulse_decks` row + N `pulse_cards` rows | Degraded. Outer txn failure → `card_count=0`; per-card savepoint isolates upsert failures so one bad card doesn't poison the deck. L3 60-day negative-feedback exclusion is applied UNLESS it would leave fewer than 20 candidates (then bypassed). |
+
+A scheduled run is invoked via APScheduler under job id `pulse_overnight`
+([scheduler.py](../../services/paper_ingestion/paper_ingestion/scheduler.py)); on-demand via the jobs subsystem under handler `"pulse.generate"` ([job.py:384-417](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L384-L417)).
+
+---
+
+## 2. Stage I/O contracts
+
+### 2.1 `ScoredCandidate` (the cross-stage envelope)
+
+Defined at [scoring.py:42-53](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L42-L53). Mutated cumulatively by stages 3 → 4 → 5 → 6.
+
+| Field | Set by | Type |
+|---|---|---|
+| `paper` | Stage 1 | `PaperCreate` (carrier from sources) |
+| `signals` | Stages 1, 4, 5 | `dict[str, float]` |
+| `llm_relevance`, `llm_novelty`, `reasoning` | Stage 4 | `int 1-10`, `int 1-10`, `str` (or `None` on fallback) |
+| `final_score` | Stage 6 | `float` (preliminary in Stage 1, overwritten in Stage 6) |
+| `reasoning_verified`, `reasoning_confidence` | Stage 4 | `bool | None`, `RagConfidence | None` |
+
+Stages MUST NOT mutate `ScoredCandidate` in place across stages — they
+return new instances. The `signals` dict is intentionally string-keyed so
+new signals can be added without schema migration.
+
+### 2.2 `UserProfile` (the per-user context)
+
+Defined at [profile.py:34-52](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L34-L52). Loaded once per run by `load_profile` ([profile.py:55-377](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L55)).
+
+| Field | Source |
+|---|---|
+| `topics` | `topics` table |
+| `tracked_author_names`, `tracked_author_s2_ids` | `tracked_authors WHERE enabled = TRUE` |
+| `library_centroid` | mean embedding of abstracts where `paper_user_state.starred OR state ∈ ('to_read','reading','done')` |
+| `weights`, `deck_size`, `stage2_top_k` | `user_config` (`pulse.weights`, `pulse.deck_size`, `pulse.stage2_top_k`) |
+| `recent_positive_titles`, `recent_negative_titles` | `recommendation_feedback` 90-day window |
+| `negative_centroid` | mean embedding of papers with negative `recommendation_feedback` |
+| `negative_topics`, `negative_authors`, `dampened_topics` | L3 dampening signals |
+| `liked_paper_ids` | starred papers |
+
+The HTTP call to embed library abstracts is intentionally outside any DB
+connection scope (PI-006) — the connection is acquired twice in `load_profile`,
+embedding round-trips happen between acquisitions.
+
+---
+
+## 3. Signal catalog
+
+Every entry in `_DEFAULT_WEIGHTS` MUST have a populating stage, OR be
+explicitly marked **CONDITIONAL** with the gate documented below. `stage3_combine`
+([scoring.py:342-380](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L342-L380)) treats missing signals as 0.0 — invariant 4.3.
+
+### 3.1 Always-populated signals (LIVE)
+
+| Signal | Default weight | Populated by | Range |
+|---|---|---|---|
+| `embedding` | 0.20 | Stage 1 [scoring.py:168-174, 195](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L168-L174) — cosine(candidate, library_centroid) − l2_lambda·cosine(candidate, negative_centroid) | typically [-1, 1]; clamped per use |
+| `topic` | 0.20 | Stage 1 [scoring.py:177-179](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L177-L179) — max cosine over topic embeddings | [0, 1] |
+| `recency` | 0.05 | Stage 1 [scoring.py:182](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L182) — `exp(-age_days/30)` clamped to [0, 1] | [0, 1] |
+| `author_bonus` | 0.15 | Stage 1 [scoring.py:184-192](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L184-L192) — 1.0 iff candidate authors intersect tracked_authors (by name OR S2 id) | {0.0, 1.0} |
+| `llm_relevance` | 0.30 | Stage 4 [scoring.py:296](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L296) — LLM-scored 1–10, normalized to [0, 1] | [0.1, 1.0] (None on Stage 4 fallback) |
+| `llm_novelty` | 0.10 | Stage 4 [scoring.py:297](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L297) — same | same |
+| `l2_penalty` | (informational; not a weight) | Stage 1 [scoring.py:199](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L199) — `l2_lambda * cosine(candidate, negative_centroid)` | [0, l2_lambda] |
+
+`l2_penalty` is stored in `signals` for diagnostics but is NOT consumed by
+`stage3_combine` — its effect is already baked into `embedding` per the
+subtraction at scoring.py:174. The Settings UI exposes the `l2_lambda`
+multiplier separately; see [01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior) row `pulse.l2_lambda`.
+
+### 3.2 Conditional signals (LIVE-CONDITIONAL)
+
+These four signals default to weight 0.0 in `_DEFAULT_WEIGHTS` and `_PULSE_REQUIRED_WEIGHT_KEYS`
+([routers/settings.py:133-135](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L133-L135) makes them OPTIONAL on PUT). They are **populated only when the user assigns a non-zero weight** AND the gating dependency is available.
+
+| Signal | Computed by | Activation gate | Dependency | Failure mode |
+|---|---|---|---|---|
+| `citation_pagerank` | [citation_signals.py:compute_citation_signals](../../services/paper_ingestion/paper_ingestion/pulse/citation_signals.py#L11-L107) | `any(profile.weights[name] > 0 for name in ("citation_pagerank", "citation_count", "citation_adamic_adar"))` ([job.py:233-236](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L233-L236)) | `networkx` Python package + populated `paper_citations` table | If `networkx` missing → empty signals dict → all three citation signals stay 0.0; if no edges in the graph → PageRank = 0.0 for all; degrades silently |
+| `citation_count` | Same | Same | `papers.citation_count` column populated by S2 ingestion | Normalized as `min(1.0, count / max_count_in_batch)` |
+| `citation_adamic_adar` | Same | Same | `paper_citations` edges + at least one liked paper in `recommendation_feedback` | Returns 0.0 if no liked papers or no edges |
+| `classifier` | [training.py:classifier_scores](../../services/paper_ingestion/paper_ingestion/pulse/training.py) | `profile.weights["classifier"] > 0` ([job.py:258](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L258)) | `scikit-learn` + ≥30 rows in `recommendation_feedback` with both positive and negative labels | If sklearn missing → `available=False`, all candidates score 0.0; if not enough ratings → same; trained model persisted via `pulse.train_classifier` job after each Pulse run ([job.py:373](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L373)) |
+
+**Important contract:** these signals are NOT ghost UI. The Settings sliders
+defaulting to 0.0 (per [SettingsPage Pulse tab](../../frontend/src/components/settings/PulseSection.tsx)) is intentional. The user opts in by raising
+the weight; the pipeline respects the opt-in but degrades gracefully when
+the optional dependency is missing.
+
+The Pulse diagnostics surface (Settings → Pulse → Diagnostics panel; backed
+by `pulse_decks.stats`) MUST report:
+- `classifier.available` (bool) — sklearn installed
+- `classifier.degradation_reason` (str | null) — why classifier scored zero
+([job.py:266-294](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L266-L294))
+
+### 3.3 The signal-catalog completeness invariant
+
+Every key in `_DEFAULT_WEIGHTS` is present in §3.1 or §3.2 above. Adding a
+new weight key MUST add the corresponding row to one of those tables AND to
+`_PULSE_WEIGHT_KEYS` in routers/settings.py. The validator and contract are
+the two halves of the same allow-list.
+
+---
+
+## 4. Weight schema
+
+`user_config['pulse.weights']` is a JSONB object whose keys are a subset of
+`_PULSE_WEIGHT_KEYS` ([routers/settings.py:119-132](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L119-L132)). Validation:
+
+- Required keys: `embedding`, `topic`, `llm_relevance`, `llm_novelty`,
+  `author_bonus`, `recency` (the always-populated set, §3.1)
+- Optional keys: `citation_pagerank`, `citation_count`,
+  `citation_adamic_adar`, `classifier` (the conditional set, §3.2)
+- Each value: `float ∈ [0.0, 1.0]` (per `_validate_pulse_weights`)
+- Sum is **NOT** required to equal 1.0 — the UI offers a "Normalize to 1.0"
+  button ([PulseSection.tsx:738-746](../../frontend/src/components/settings/PulseSection.tsx#L738-L746)) but the contract permits any combination
+
+Load path ([profile.py:178-186](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L178-L186)):
+
+1. Read JSONB; if absent, fall back to `_DEFAULT_WEIGHTS`
+2. Merge user values over defaults (so missing optional keys default to 0.0)
+3. Clamp every value to `[0, 1]`; log a warning if any was out of range
+
+`pulse.l2_lambda` is **separately stored** ([profile.py:191-193](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L191-L193)) at the same level as the weights but with range `[0, 2]`. After load it is *also* injected into `weights["l2_lambda"]` for downstream convenience — but it is NEVER multiplied by a signal in `stage3_combine`; it's a Stage-1 multiplier (see §3.1 footnote).
+
+---
+
+## 5. Timeout, concurrency, and budget policy
+
+| Knob | Value | Source | Purpose |
+|---|---|---|---|
+| Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:16](../../libs/jarvis_common/jarvis_common/llm_client.py#L16) | Single chat completion request (or single retry) cannot exceed this |
+| Stage-2 concurrency | 5 | `_LLM_CONCURRENCY` at [scoring.py:30](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L30) | Semaphore-bounded parallel scorers |
+| Stage-2 batch size | 5 | `_stage2_batch_size` at [job.py:182](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L182) | How many candidates to score before reporting `ctx.update_progress` |
+| Stage-2 wall-clock cap | 600 s | `_STAGE2_TIMEOUT_SECONDS` at [job.py:48](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L48); applied at [job.py:204-207](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L204-L207) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
+
+### 5.1 Worst-case math
+
+With `pulse.stage2_top_k = 50` (default), `_LLM_CONCURRENCY = 5`, and
+per-call timeout 120 s, the theoretical worst-case Stage-2 wall-clock is
+
+```
+  ceil(50 / 5) waves × 120 s/wave = 1200 s
+```
+
+which **exceeds the 600 s cap by 2×**. In practice candidates take less
+than 120 s each (Ollama Mistral-Nemo on the project's GPU averages 20–40 s),
+so typical Stage-2 runs land near 200–400 s. But a single slow candidate
+or brief Ollama stall can blow the budget — observed in the 2026-05-02
+"Last Pulse run: Failed" diagnostic shown in the Settings UI screenshot.
+
+**Implication for B.1 (Instructor):** Instructor's `max_retries=2` adds up
+to 3× round-trips per call on validation failure. That is **orthogonal to**
+this timeout. If validation failures are <5% of calls (typical with a JSON-mode
+local model), the latency cost is small. If they are higher, the 600 s cap
+becomes a tighter constraint, not a looser one.
+
+---
+
+## 6. Failure modes
+
+| Failure | Stage | Effect | UI surface |
+|---|---|---|---|
+| Profile load throws | 1 | **Fatal.** `last_error` set; pipeline returns immediately. Pulse run does NOT produce a deck. | Settings → Pulse "Last run: Failed" badge |
+| Discovery throws | 2 | Empty candidate list. `last_error` set; pipeline continues; Stage 1 will get nothing → empty Stage 2 → empty deck. | Last-run badge "Failed" iff this set `last_error`; otherwise just zero candidates |
+| Embedder throws | 3 | All Stage 1 candidates get zero signals (`embedding=0`, `topic=0`, etc.) but all candidates are RETURNED. They will rank purely on weights of zeros (i.e., their `final_score` will be ~0). | Diagnostics shows `stage1_survivors` ≠ 0 with all-zero scores |
+| Stage 2 LLM `TimeoutError` (600 s) | 4 | `_fallback_stage2` clones every Stage 1 survivor with `llm_relevance=None`, `llm_novelty=None`, `reasoning=None`. `degraded_reason = "LLM scoring timed out at 600s; deck used embedding-only fallback."` Deck is still produced from Stage 1 scores only. | Last-run badge: "Failed" (because `last_error` is sometimes also set on tail exceptions). Diagnostics shows `degraded_reason`. |
+| Stage 2 LLM other exception | 4 | Same as TimeoutError but `degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"` | Same |
+| Citation/classifier exception | 5 | `degraded_reason` set if not already; LLM signals preserved; affected signals stay 0.0 | Diagnostics: `classifier.available` may be False |
+| Stage 3 throws | 6 | Falls back to `stage2_out` order; `last_error` set | Last-run badge "Failed" |
+| Assemble throws | 7 | Empty deck; `last_error` set | Last-run badge "Failed" |
+| Per-card upsert throws | 8 | Savepoint rollback isolates the bad card; `last_error` set; remaining cards still persist; if ALL fail, 0-card deck is persisted with `last_error` set | Last-run badge "Failed" with a 0-card deck |
+| Outer-transaction failure (DB unreachable) | 8 | `last_error = f"persist: {exc}"`; `card_count=0`; whole pipeline result returned but no deck row exists | Last-run badge "Failed"; Diagnostics may be missing entirely |
+
+### 6.1 Degraded vs fatal — the difference that matters
+
+The frontend `Last Pulse run: Failed` badge fires on **`stats.last_error`**
+([frontend/src/components/settings/PulseSection.tsx](../../frontend/src/components/settings/PulseSection.tsx)
+inspected via the Explore agent inventory; the contract author MUST re-Read
+that file before further claims about UI behavior). The backend has TWO
+distinct fields:
+
+- **`last_error`** — terminal failure. Pipeline did not complete normally.
+  Typically set when Stage 1, 3, 6, 7, or 8 throws.
+- **`degraded_reason`** — Pulse completed and produced a deck, but with
+  reduced fidelity (LLM signals missing). Set in Stage 4 (timeout),
+  Stage 5 (citation/classifier failure).
+
+The 2026-05-02 "Failed" deck in the Settings screenshot was technically
+**degraded, not fatal** — a deck of 8 cards was produced from Stage 1
+scores. The "Failed" badge is currently triggered by either field being
+present (the UI does not distinguish). This is a known UX rough edge; the
+contract documents the underlying truth.
+
+---
+
+## 7. Diagnostics shape
+
+`run_pulse` returns a `stats: dict[str, Any]`. It is persisted into
+`pulse_decks.stats` JSONB ([deck.py:73-89](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L73-L89)) and read by the Settings → Pulse Diagnostics panel.
+
+| Key | Type | Meaning | Set by |
+|---|---|---|---|
+| `candidate_count` | int | Raw fan-out from `discover_candidates` | Stage 2 |
+| `stage1_survivors` | int | Output of `stage1_embedding_filter` | Stage 3 |
+| `stage2_scored` | int | Output of `stage2_llm_rerank` (or `_fallback_stage2`) | Stage 4 |
+| `llm_calls` | int | Number of candidates that received non-None `llm_relevance` | Stage 4 ([job.py:209](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L209)) |
+| `duration_s` | float | Wall-clock seconds for the full pipeline | Stage 7 (before persist) |
+| `last_error` | str \| null | Terminal failure description | Various |
+| `degraded_reason` | str \| null | Non-terminal degradation | Stage 4 / Stage 5 |
+| `deck_date` | str (ISO date) | Date of the deck just produced | Stage 7 |
+| `card_count` | int | `pulse_cards` rows actually persisted | Stage 8 |
+| `source_counts` | `dict[str, int]` | Per-source candidate count | Stage 2 |
+| `classifier` | dict | Classifier metadata (`available`, `degradation_reason`, `sample_count`) | Stage 5 |
+| `classifier_training_enqueued` | bool | Whether the post-run training job was enqueued | End of pipeline |
+
+The `stats` dict is the **only** structured surface for Pulse
+observability today. After [04-observability.md](04-observability.md) ships,
+Langfuse traces become a parallel surface for per-call latency and per-stage timing.
+
+---
+
+## 8. Deck persist semantics
+
+Documented separately because the persist step has its own correctness
+invariants beyond mere row insertion.
+
+- **Deck identity** is `(deck_date, user_id)` — composite UNIQUE constraint with `NULLS NOT DISTINCT`
+  semantics (added by migration 043). One deck per user per day.
+- **Idempotent replace.** A second `persist_deck` for the same `(date, user_id)`
+  pair updates the existing row's `card_count`, `generated_at`, `stats`,
+  `degraded_reason`, then DELETEs and re-inserts cards.
+- **L3 60-day exclusion** ([deck.py:104-129](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L104-L129)). Before inserting cards, the persist code counts how many candidates would survive the "no negative feedback in last 60 days for this user" filter. If fewer than 20 survive, the L3 filter is BYPASSED for this run (logged) — never produce a stub deck. Spec §7.3.1.
+- **Per-card savepoint.** [job.py:332-345](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L332-L345) wraps each card upsert in a SAVEPOINT so a single failing card doesn't poison the whole transaction.
+
+---
+
+## 9. Invariants
+
+The implementation MUST satisfy these. Testable.
+
+1. **Signal coverage.** Every key in `_DEFAULT_WEIGHTS` MUST be either:
+   (a) populated by some always-running stage (§3.1), OR
+   (b) explicitly gated as conditional with a documented activation gate (§3.2).
+   No silent omissions.
+2. **Stage-2 never raises.** `stage2_llm_rerank` MUST handle every per-candidate
+   exception and return a `ScoredCandidate` for every input — failures degrade,
+   they do not propagate.
+3. **Missing signals = 0.0.** `stage3_combine` MUST treat any signal name in
+   `weights` but missing from a candidate's `signals` as 0.0 ([scoring.py:362](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L362) `signals.get(k, 0.0)`).
+4. **Weights clamped.** `pulse.weights` values MUST be clamped to `[0, 1]` before any signal multiplication ([profile.py:182-186](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L182-L186)).
+5. **Run is non-crashing.** `run_pulse` MUST never raise an unhandled
+   exception. Every `try/except` may set `last_error` and continue;
+   unrecoverable failures (Stage 1) MUST return early with `stats` populated.
+6. **Per-card isolation.** Stage 8 MUST use SAVEPOINTs for per-card upserts
+   so a single bad card does not roll back the deck.
+7. **L3 minimum-candidate guarantee.** The 60-day negative-feedback filter
+   MUST be bypassed if it would leave fewer than `_min_l3_candidates = 20`
+   candidates ([deck.py:122-128](../../services/paper_ingestion/paper_ingestion/pulse/deck.py#L122-L128)).
+8. **Diagnostics completeness.** Every key listed in §7 MUST be present in
+   the `stats` dict at run-end (with `null` rather than absent for keys with
+   no value). The Settings UI assumes shape stability.
+
+---
+
+## 10. Cleanup decisions deferred
+
+Documenting; not prescribing.
+
+| Item | Candidate dispositions |
+|---|---|
+| 600 s Stage-2 cap (observed to fire 2026-05-02) | (a) Reduce `pulse.stage2_top_k` default 50→30; (b) Increase `_LLM_CONCURRENCY` 5→8 (uses more Ollama RAM); (c) Switch the "smart" alias to a faster local model; (d) Add per-call timeout reduction 120→60 s so individual hangs don't dominate; (e) Move LLM rerank to a faster cloud provider conditional on user's `llm.smart_model` choice; (f) Accept the cap as is — degraded runs are recoverable |
+| `last_error` vs `degraded_reason` UI conflation | Adjust the frontend "Failed" badge to distinguish "Degraded" from "Failed" |
+| The 4 conditional signals UX | (a) Hide them in the UI until a data threshold is met (e.g., S2 citation data populated); (b) Show them with a tooltip "0.0 default — requires citation data / classifier ratings"; (c) Keep as-is |
+| `classifier` activation threshold | Documented at 30 in `MIN_RATINGS` ([training.py:21](../../services/paper_ingestion/paper_ingestion/pulse/training.py#L21)). Could surface to Settings UI; today users have no way to know how close they are to threshold |
+| Stage 2 progress reporting bug history (W1.6 `Generating...` badge) | Kept resolved; document via cross-link to `docs/plans/2026-05-02-round-15-w1.6-postmerge-bug-audit.md` |
+
+These dispositions are the implementation plan's call. The contract's job
+is to surface the choices.
+
+---
+
+## 11. Cross-contract references
+
+- **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — `pulse.*` and `recommendation.*` user_config keys; runtime read sites.
+- **[03-llm.md §2 / §4](03-llm.md)** — Stage-2 LLM rerank is one of the 6 LLM call sites; per-site contract there governs the `PulseScoringOutput` Pydantic shape, retry policy, and timeout.
+- **[04-observability.md §2](04-observability.md)** — `run_pulse` is the canonical "one trace per Pulse run" boundary.
+- **[docs/specs/2026-05-02-instructor-langfuse-integration.md §4.1](../specs/2026-05-02-instructor-langfuse-integration.md)** — implementation spec for the Stage-2 canary refactor; transitions code to `call_llm_structured(response_model=PulseScoringOutput)`.
+- **[docs/specs/2026-04-29-paper-lifecycle-redesign.md §7](../specs/2026-04-29-paper-lifecycle-redesign.md)** — recommendation_feedback writes that feed L1/L2/L3 dampening; this contract reads the resulting state but does not own its writes.
+
+---
+
+## 12. Verified Identifiers
+
+Every cited identifier was Read in the session producing this contract.
+
+| Citation | File:line | One-line behavior |
+|---|---|---|
+| `run_pulse` orchestrator | services/paper_ingestion/paper_ingestion/pulse/job.py:68-381 | 8-stage pipeline with degraded/fatal handling |
+| `_STAGE2_TIMEOUT_SECONDS = 600` | services/paper_ingestion/paper_ingestion/pulse/job.py:48 | Stage-2 wall-clock cap |
+| `_fallback_stage2` | services/paper_ingestion/paper_ingestion/pulse/job.py:51-65 | Clears LLM signals, preserves Stage 1 final_score |
+| `asyncio.wait_for(_stage2_with_progress(), timeout=600)` | services/paper_ingestion/paper_ingestion/pulse/job.py:204-207 | Timeout enforcement |
+| Stage-2 batch + progress reporting | services/paper_ingestion/paper_ingestion/pulse/job.py:182-202 | Per-batch ctx.update_progress |
+| Citation signals gate | services/paper_ingestion/paper_ingestion/pulse/job.py:233-241 | `wants_citation` triggers compute_citation_signals |
+| Classifier gate | services/paper_ingestion/paper_ingestion/pulse/job.py:258-270 | `wants_classifier` triggers classifier_scores |
+| Per-card SAVEPOINT loop | services/paper_ingestion/paper_ingestion/pulse/job.py:331-345 | Isolates failing card upserts |
+| `pulse.train_classifier` post-run enqueue | services/paper_ingestion/paper_ingestion/pulse/job.py:373 | Self-improving classifier loop |
+| `_pulse_generate_job` job_handler | services/paper_ingestion/paper_ingestion/pulse/job.py:384-417 | On-demand entry point via jobs subsystem |
+| `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:42-53 | Cross-stage envelope |
+| `_LLM_CONCURRENCY = 5` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:30 | Stage-2 semaphore |
+| `_LLM_MODEL = "smart"` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:31 | Stage-2 model alias |
+| `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:32-33 | Stage-2 LLM options |
+| `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:94-217 | Stage 1: embed + cosine + recency + author bonus + L2 |
+| `stage2_llm_rerank` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:225-334 | Stage 2 with bounded concurrency |
+| `_score_one` LLM call | services/paper_ingestion/paper_ingestion/pulse/scoring.py:259-301 | Per-candidate LLM call inside semaphore |
+| `stage3_combine` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:342-380 | Weighted-sum final_score; missing signals → 0.0 |
+| `_DEFAULT_WEIGHTS` | services/paper_ingestion/paper_ingestion/pulse/profile.py:19-30 | 10 weight keys; 4 default to 0.0 |
+| `UserProfile` BaseModel | services/paper_ingestion/paper_ingestion/pulse/profile.py:34-52 | Per-user context envelope |
+| `load_profile` | services/paper_ingestion/paper_ingestion/pulse/profile.py:55-377 | Two-phase DB+HTTP centroid load |
+| Weights load + clamp | services/paper_ingestion/paper_ingestion/pulse/profile.py:178-186 | Merge with defaults; clamp to [0,1] |
+| `pulse.l2_lambda` load | services/paper_ingestion/paper_ingestion/pulse/profile.py:191-193 | Read with default 0.5; injected into weights dict |
+| `_RATING_HISTORY_LIMIT = 10` | services/paper_ingestion/paper_ingestion/pulse/profile.py:31 | Recent positive/negative title cap |
+| `compute_citation_signals` | services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:11-107 | networkx-backed PageRank + count + Adamic-Adar |
+| Citation signals graceful degrade on missing networkx | services/paper_ingestion/paper_ingestion/pulse/citation_signals.py:22-25 | `ImportError` → `{}` |
+| `FEATURE_NAMES` (classifier) | services/paper_ingestion/paper_ingestion/pulse/training.py:10-20 | 9-element feature vector |
+| `MIN_RATINGS = 30` | services/paper_ingestion/paper_ingestion/pulse/training.py:21 | Activation threshold for classifier |
+| Classifier sklearn-missing degrade | services/paper_ingestion/paper_ingestion/pulse/training.py:31-39 | Returns `available=False` with reason |
+| `assemble_deck` | services/paper_ingestion/paper_ingestion/pulse/deck.py:18-40 | Top-N by final_score |
+| `_persist_deck_inner` upsert + L3 filter | services/paper_ingestion/paper_ingestion/pulse/deck.py:43-220 | Composite `(deck_date, user_id)` UPSERT; L3 60-day exclusion with min-20 fallback |
+| `_min_l3_candidates = 20` | services/paper_ingestion/paper_ingestion/pulse/deck.py:122 | Minimum-candidate guard for L3 filter |
+| `LLM_TIMEOUT_DEFAULT = 120.0` | libs/jarvis_common/jarvis_common/llm_client.py:16 | Per-call timeout default |
+| `build_scoring_prompt` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:36-136 | Two-message chat list; system + user |
+| `PULSE_SCORING_SYSTEM_PROMPT` | services/paper_ingestion/paper_ingestion/pulse/prompts.py:18-33 | Strict-JSON instruction |
+| `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:133-135 | 6 always-required weights |
+| `_validate_pulse_weights` | services/paper_ingestion/paper_ingestion/routers/settings.py:153-164 | Required + optional + range check |
+| `pulse_overnight` scheduler job id | services/paper_ingestion/paper_ingestion/scheduler.py (registration site) | Cron-triggered Pulse run |

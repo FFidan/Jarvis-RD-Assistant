@@ -21,6 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     updateTask: vi.fn(),
     fetchMissingFoundationalPapers: vi.fn(),
     fetchAndProcessFoundationalPaper: vi.fn(),
+    ratePulseCard: vi.fn(),
   };
 });
 
@@ -31,6 +32,7 @@ vi.mock('@/stores/job-store', () => ({
       jobs: {},
       activeAborts: {},
       hasRunning: () => false,
+      isRunning: () => false,
       startJob: vi.fn(),
       trackExternalJob: vi.fn(),
     }),
@@ -97,94 +99,90 @@ describe('MyDayPage', () => {
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
   });
 
-  it('renders greeting and date', async () => {
+  it('renders DateMasthead with research log header', async () => {
     renderWithProviders();
-    // DayHeader renders greeting text (Good morning/afternoon/evening)
-    const greeting = await screen.findByText(/Good (morning|afternoon|evening)/);
-    expect(greeting).toBeInTheDocument();
+    // DateMasthead renders "RESEARCH LOG · ENTRY…" monospace header
+    expect(await screen.findByText(/RESEARCH LOG/)).toBeInTheDocument();
   });
 
-  it('renders counter strip with Pulse papers label', async () => {
+  it('renders DateMasthead counter labels', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Pulse papers')).toBeInTheDocument();
+    // DateMasthead renders lowercase counter labels: pulse, due, tasks, new
+    expect(await screen.findByText('pulse')).toBeInTheDocument();
+    expect(screen.getByText('due')).toBeInTheDocument();
+    expect(screen.getByText('tasks')).toBeInTheDocument();
+    expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('renders counter strip with Cards due label', async () => {
+  it('renders Yesterday section marker', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Cards due')).toBeInTheDocument();
+    expect(await screen.findByText(/§ Yesterday/i)).toBeInTheDocument();
   });
 
-  it('renders counter strip with Tasks today label', async () => {
+  it('renders Now section with hero tabs', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Tasks today')).toBeInTheDocument();
+    expect(await screen.findByText(/§ Now/i)).toBeInTheDocument();
+    expect(screen.getByText('Pulse #1')).toBeInTheDocument();
+    expect(screen.getByText('Continue task')).toBeInTheDocument();
   });
 
-  it('renders tasks from my-day data', async () => {
+  it("renders Today's intent section marker", async () => {
+    renderWithProviders();
+    expect(await screen.findByText(/§ Today's intent/i)).toBeInTheDocument();
+  });
+
+  it('renders tasks from my-day data in IntentSection', async () => {
     renderWithProviders();
     expect(await screen.findByText('Fix embedding pipeline')).toBeInTheDocument();
     expect(screen.getByText('Buy groceries')).toBeInTheDocument();
   });
 
-  it("renders Today's Pulse section", async () => {
+  it('renders Projects section with project name', async () => {
     renderWithProviders();
-    expect(await screen.findByText("Today's Pulse")).toBeInTheDocument();
+    expect(await screen.findByText(/§ Projects/i)).toBeInTheDocument();
+    // Wait for async data to hydrate the project list
+    expect(await screen.findAllByText('JARVIS')).not.toHaveLength(0);
   });
 
-  it('renders Pomodoro timer in idle state', async () => {
+  it('renders Learning & focus section marker', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Pomodoro Timer')).toBeInTheDocument();
-    // Idle: slim layout — no phase label shown, just the time and Start button
-    expect(screen.getByText('Start Focus')).toBeInTheDocument();
-    expect(screen.queryByText('Ready')).not.toBeInTheDocument();
+    expect(await screen.findByText(/§ Learning/i)).toBeInTheDocument();
   });
 
-  it('renders Action Items card', async () => {
+  it('renders Learning cards sub-section', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Action Items')).toBeInTheDocument();
+    expect(await screen.findByText('Learning cards')).toBeInTheDocument();
   });
 
-  it('shows "all caught up" when no unprocessed papers or failed jobs', async () => {
+  it('shows Review now button when due_now > 0', async () => {
     renderWithProviders();
-    expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
-  });
-
-  it('renders Learning card from LearningCardsSummary', async () => {
-    renderWithProviders();
-    expect(await screen.findByText('Learning')).toBeInTheDocument();
-  });
-
-  it('shows Review Now button when due_now > 0', async () => {
-    renderWithProviders();
-    expect(await screen.findByText('Review Now')).toBeInTheDocument();
+    expect(await screen.findByText('Review now →')).toBeInTheDocument();
   });
 
   it('shows streak days from retention stats', async () => {
     renderWithProviders();
-    expect(await screen.findByText('7 day streak')).toBeInTheDocument();
+    // LearningFocusSection renders "7d streak" (compact format)
+    expect(await screen.findByText(/7d streak/)).toBeInTheDocument();
   });
 
-  it('shows project pulse', async () => {
+  it('renders End of day section marker', async () => {
     renderWithProviders();
-    expect(await screen.findByText('Project Progress')).toBeInTheDocument();
-    expect(screen.getAllByText('JARVIS').length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText(/§ End of day/i)).toBeInTheDocument();
   });
 
-  it('shows Pause button when timer is in work phase', async () => {
-    const { usePomodoroStore } = await import('@/stores/pomodoro-store');
-    usePomodoroStore.setState({
-      phase: 'work',
-      startedAt: Date.now(),
-      pausedAt: null,
-      totalPausedMs: 0,
-      phaseDurationMs: 25 * 60 * 1000,
-      secondsRemaining: 1500,
-      cyclesCompleted: 0,
-    });
-
+  it('does not render Triage section when no action items or foundational gaps', async () => {
     renderWithProviders();
-    await screen.findByText('Pomodoro Timer');
-    expect(screen.getByText('Pause')).toBeInTheDocument();
+    // Wait for data to load, then assert Triage is absent (it returns null when empty)
+    await screen.findByText(/RESEARCH LOG/);
+    expect(screen.queryByText(/§ Triage/i)).not.toBeInTheDocument();
+  });
 
-    usePomodoroStore.getState().reset();
+  it('renders no-pulse-yet message in HeroNow when deck is null', async () => {
+    renderWithProviders();
+    // When pulseDeck resolves to null, HeroPulse (inside HeroNow §Now) shows
+    // a "No Pulse for today yet" message instead of pulse card content.
+    expect(
+      await screen.findByText(/No Pulse for today yet/i),
+    ).toBeInTheDocument();
   });
 });

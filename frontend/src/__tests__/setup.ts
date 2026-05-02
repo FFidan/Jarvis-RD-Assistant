@@ -9,6 +9,20 @@ if (typeof ResizeObserver === 'undefined') {
   };
 }
 
+// jsdom does not implement window.matchMedia — stub for useThemeEffect, etc.
+if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
+  window.matchMedia = (query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  });
+}
+
 // jsdom does not implement AbortSignal.any — polyfill for tests.
 if (typeof AbortSignal.any !== 'function') {
   AbortSignal.any = function any(signals: AbortSignal[]): AbortSignal {

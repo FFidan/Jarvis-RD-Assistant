@@ -4,6 +4,7 @@ import { TopBar } from '@/components/layout/TopBar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/toaster';
 import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
+import { useThemeEffect } from '@/hooks/use-theme-effect';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 
@@ -14,6 +15,7 @@ interface AppShellProps {
 export function AppShell({ children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   usePomodoroTick();
+  useThemeEffect();
 
   // Re-subscribe to any jobs that were running before the page was refreshed
   const hydrate = useJobStore((s) => s.hydrate);

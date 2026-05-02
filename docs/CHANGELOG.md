@@ -2,6 +2,26 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.4.4] - 2026-05-02 — Round 15 Wave 1.8 (post-deploy bug fixes + inbox source filter)
+
+W1.7 deployment surfaced 4 issues. Bundled with one feature gap into W1.8: 4 file-disjoint tasks (W1.8-A backend; B+C+D frontend), all merged at 48ce145 on `audit/round-15-w1.8-postdeploy-fixes`.
+
+### Fixed
+- **W1.8-A `save_paper` allows `reading` state**: `services/paper_ingestion/paper_ingestion/routers/papers.py` precondition tuple was `("inbox","done","to_read")`, blocking the Library "Set Aside" affordance (reading → to_read) with HTTP 409. Added `"reading"` to the allowed-states tuple. New parametrize case in `tests/test_papers_lifecycle.py`.
+- **W1.8-A `load_today` excludes trashed papers from deck**: `services/paper_ingestion/paper_ingestion/pulse/deck.py` SQL had only `WHERE pc.deck_id = $1` — trashed papers came back in the deck response on every reload. Added `AND COALESCE(pus.state, 'inbox') != 'trash'` (the LEFT JOIN `paper_user_state` alias `pus` was already in place). New `tests/test_pulse_deck.py::test_load_today_sql_excludes_trash_in_where_clause`.
+- **W1.8-B BulkToolbar Select All label visibility**: the "N selected" span was wrapped in `{selectedIds.size > 0 && (...)}`, so the checkbox had no visible label with zero selections. Always render the `aria-live="polite"` span; show `"Select all"` when empty, switch to `"N selected"` once non-empty.
+- **W1.8-C PulseCard Trash & Reject optimistic remove**: `trashAndRejectMut` had no `onMutate` — card stayed visible until the background refetch resolved. Added a cache snapshot + `cards.filter()` patch, moved `invalidateQueries(['pulse-today'])` to `onSettled`. New `PulseCard.test.tsx::trashAndReject removes card from pulse-today cache optimistically`.
+
+### Added
+- **W1.8-D Inbox source-type filter chips**: backend `GET /api/papers/feed` already accepted `source_types` (CSV) — only the UI was missing. Added `InboxSourceFilter` type, extended `fetchFeed` with `sourceTypes` param (forwards `source_types=` to backend), threaded `sourceTypes` through `FeedView` props (cache-key-inclusive), rendered 5 source chips on Inbox surface (All sources / arXiv / Semantic Scholar / OpenAlex / PubMed) with URL param `?source=` powering filter state. Library surface unaffected. 3 new tests in `ResearchFeedPage.test.tsx`.
+
+### Notes
+- Source plan: `docs/plans/2026-05-02-round-15-w1.8-postdeploy-fixes.md`.
+- Branch: `audit/round-15-w1.8-postdeploy-fixes` (merged + deleted).
+- No DB migrations. No env-var changes. No spec amendments.
+- Quality gates: ruff clean, pyright 0/0/0, frontend lint clean, frontend tsc clean, frontend production build clean, 1345 backend tests + 556 frontend tests pass.
+- Out of scope (deferred to Phase B): Marathon B.1 Instructor / B.2 Langfuse / B.3 mxbai-rerank-base-v2 / B.4 Taskiq.
+
 ## [1.4.3] - 2026-05-02 — Round 15 Wave 1.7 (W1.6 post-merge bug fixes + Trash UX completion)
 
 Live testing of W1.6 surfaced 10 distinct issues; a 5-agent audit (`docs/plans/2026-05-02-round-15-w1.6-postmerge-bug-audit.md`) traced most to two backend root causes plus 5 independent frontend/operational gaps. Bundled into 6 file-disjoint sub-batches over two waves.

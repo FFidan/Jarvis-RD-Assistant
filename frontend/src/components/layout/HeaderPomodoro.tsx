@@ -32,6 +32,7 @@ export function HeaderPomodoro() {
   const pausedAt = usePomodoroStore((s) => s.pausedAt);
   const pause = usePomodoroStore((s) => s.pause);
   const resume = usePomodoroStore((s) => s.resume);
+  const attachedItem = usePomodoroStore((s) => s.attachedItem);
   const navigate = useNavigate();
 
   if (phase === 'idle') return null;
@@ -66,6 +67,11 @@ export function HeaderPomodoro() {
             >
               {formatMMSS(secondsRemaining)}
             </button>
+            {attachedItem?.title && (
+              <span className="text-[10px] text-meta dark:text-zinc-400 max-w-[120px] truncate">
+                {attachedItem.title}
+              </span>
+            )}
             <Button
               variant="ghost"
               size="icon"

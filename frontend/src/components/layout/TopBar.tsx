@@ -3,6 +3,7 @@ import { Menu, Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
 import { JobsIndicator } from '@/components/layout/JobsIndicator';
+import { ThemeToggle } from './ThemeToggle';
 import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
 
 const pageTitles: Record<string, string> = {
@@ -51,6 +52,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         >
           <Keyboard className="h-5 w-5" />
         </Button>
+        <ThemeToggle />
         <JobsIndicator />
         <HeaderPomodoro />
       </div>
