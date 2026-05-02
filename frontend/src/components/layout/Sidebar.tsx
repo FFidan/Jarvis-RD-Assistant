@@ -3,7 +3,9 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Home,
   Sun,
+  Sparkles,
   Newspaper,
+  MessageCircleQuestion,
   BarChart3,
   FolderKanban,
   GraduationCap,
@@ -26,7 +28,9 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
   { path: '/my-day', label: 'My Day', icon: Sun },
+  { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
   { path: '/feed', label: 'Research Feed', icon: Newspaper },
+  { path: '/ask', label: 'Ask', icon: MessageCircleQuestion },
   { path: '/analytics', label: 'Analytics', icon: BarChart3 },
   { path: '/projects', label: 'Projects', icon: FolderKanban },
   { path: '/cards', label: 'Learning Cards', icon: GraduationCap },

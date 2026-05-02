@@ -1590,3 +1590,172 @@ async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic
 
     assert result.deleted == 0
     assert result.topic_id == 99999
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/papers/{paper_id}/feedback  (UX-E.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_feedback_returns_204_for_existing_row():
+    """DELETE /api/papers/{id}/feedback?source=pulse_thumbs deletes the matching row.
+
+    Returns 204 No Content regardless of row count.  We verify the DELETE SQL
+    is called with the correct paper_id, user_id, and source.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.execute.return_value = "DELETE 1"
+
+    with patch(
+        "paper_ingestion.routers.papers.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await papers.delete_paper_feedback.__wrapped__(
+            request=MagicMock(),
+            paper_id=42,
+            source="pulse_thumbs",
+            db_pool=pool,
+        )
+
+    # 204 handler returns None
+    assert result is None
+    # Verify the DELETE SQL was called with the right args
+    conn.execute.assert_awaited_once()
+    call_args = conn.execute.await_args
+    sql = call_args.args[0]
+    assert "DELETE FROM recommendation_feedback" in sql
+    assert "paper_id = $1" in sql
+    assert "user_id IS NOT DISTINCT FROM $2" in sql
+    assert "source = $3" in sql
+    positional = list(call_args.args[1:])
+    assert positional[0] == 42
+    assert positional[1] is None  # user_id = None (DEV mode)
+    assert positional[2] == "pulse_thumbs"
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_feedback_returns_204_for_nonexistent_row():
+    """DELETE /api/papers/{id}/feedback is idempotent — returns 204 even when no row exists."""
+    pool, conn = _make_pool_and_conn()
+    conn.execute.return_value = "DELETE 0"  # no row matched
+
+    with patch(
+        "paper_ingestion.routers.papers.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        result = await papers.delete_paper_feedback.__wrapped__(
+            request=MagicMock(),
+            paper_id=99,
+            source="dismiss_combined",
+            db_pool=pool,
+        )
+
+    assert result is None
+    conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_feedback_user_scoped_null_user_id():
+    """DELETE uses IS NOT DISTINCT FROM to correctly match NULL user_id rows.
+
+    When current_user_id_or_none() returns None (DEV / single-user mode),
+    the SQL predicate ``user_id IS NOT DISTINCT FROM NULL`` must be used so
+    that rows stored with NULL user_id are matched and deleted.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.execute.return_value = "DELETE 1"
+
+    with patch(
+        "paper_ingestion.routers.papers.current_user_id_or_none",
+        new=AsyncMock(return_value=None),
+    ):
+        await papers.delete_paper_feedback.__wrapped__(
+            request=MagicMock(),
+            paper_id=7,
+            source="feed_thumbs",
+            db_pool=pool,
+        )
+
+    call_args = conn.execute.await_args
+    positional = list(call_args.args[1:])
+    # user_id must be None so IS NOT DISTINCT FROM matches NULL-owner rows
+    assert positional[1] is None
+
+
+@pytest.mark.asyncio
+async def test_delete_paper_feedback_different_user_id_not_deleted(monkeypatch):
+    """DELETE is scoped to the caller's user_id — a different user's row is untouched.
+
+    This test verifies that the SQL parameters carry the caller's user_id.
+    A row owned by user 42 is NOT deleted when the caller is user 99.
+    (The DB enforces scoping; we verify we pass the correct user_id arg.)
+    """
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_or_none",
+        _async_user_99,
+    )
+    pool, conn = _make_pool_and_conn()
+    conn.execute.return_value = "DELETE 0"  # user 99 has no row for paper 42
+
+    await papers.delete_paper_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=42,
+        source="pulse_thumbs",
+        db_pool=pool,
+    )
+
+    call_args = conn.execute.await_args
+    positional = list(call_args.args[1:])
+    # The SQL must be parameterised with user_id=99, not 42
+    assert positional[1] == 99
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/unsave  (UX-E.2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unsave_paper_from_to_read_returns_200():
+    """PUT /api/papers/{id}/unsave transitions to_read → inbox and returns 200.
+
+    conn.fetchval returns 'to_read' so _assert_paper_in_state passes; the
+    subsequent _upsert_state_and_starred must write state='inbox'.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(user_id=None)  # ownership check
+    conn.fetchval.return_value = "to_read"  # _assert_paper_in_state
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    result = await papers.unsave_paper.__wrapped__(request, 42, db_pool=pool)
+
+    assert result == {"status": "ok", "paper_id": 42}
+    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    assert any("INSERT INTO paper_user_state" in sql and "state" in sql for sql in sql_calls), (
+        f"Expected an INSERT writing state; got: {sql_calls}"
+    )
+    assert any(
+        "inbox" in [str(arg) for arg in call.args] for call in conn.execute.await_args_list
+    ), f"Expected 'inbox' in execute args; got: {conn.execute.await_args_list!r}"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_state", ["inbox", "reading", "done", "trash"])
+async def test_unsave_paper_from_wrong_state_returns_409(bad_state: str):
+    """PUT /api/papers/{id}/unsave raises 409 when paper is not in to_read.
+
+    Each non-to_read state must yield HTTP 409 with a detail string that
+    contains both 'to_read' (the required state) and the current state.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(user_id=None)  # ownership check
+    conn.fetchval.return_value = bad_state  # _assert_paper_in_state
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.unsave_paper.__wrapped__(request, 42, db_pool=pool)
+
+    assert exc_info.value.status_code == 409
+    assert "to_read" in exc_info.value.detail
+    assert bad_state in exc_info.value.detail

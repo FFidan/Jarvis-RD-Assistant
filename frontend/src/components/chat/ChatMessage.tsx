@@ -7,9 +7,11 @@ import { AlertTriangle, Loader2 } from 'lucide-react';
 interface ChatMessageProps {
   message: ChatMessageType;
   isLoading?: boolean;
+  /** When isLoading is true, phase drives the spinner caption */
+  phase?: 'idle' | 'searching' | 'streaming';
 }
 
-export function ChatMessage({ message, isLoading }: ChatMessageProps) {
+export function ChatMessage({ message, isLoading, phase }: ChatMessageProps) {
   const isUser = message.role === 'user';
 
   return (
@@ -55,7 +57,9 @@ export function ChatMessage({ message, isLoading }: ChatMessageProps) {
         ) : isLoading ? (
           <div className="flex items-center gap-2 text-muted-foreground">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm">Generating response...</span>
+            <span className="text-sm">
+              {phase === 'searching' ? 'Searching paper chunks…' : 'Generating response…'}
+            </span>
           </div>
         ) : null}
       </div>

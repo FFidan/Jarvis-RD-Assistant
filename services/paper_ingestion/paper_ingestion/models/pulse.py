@@ -22,6 +22,7 @@ class PulseCardResponse(BaseModel):
     signals: dict[str, float]
     reasoning_verified: bool | None = None
     reasoning_confidence: str | None = None
+    user_state: str | None = None
 
 
 class PulseDeckResponse(BaseModel):

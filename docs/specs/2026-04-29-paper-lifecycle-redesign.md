@@ -845,3 +845,11 @@ This redesign is intentionally **library-friendly** — Phase B sprints layer on
 | `sentence-transformers` `mine_hard_negatives()` | Useful only if we fine-tune embeddings per-user — explicitly OOS in §10. |
 
 **Verdict:** Phase A relies entirely on libraries already in the codebase. Phase B brings in 4 new dependencies, each with its own dedicated spec. Phase C is a model swap (no new library, just a new HF model). Phase D is open-ended.
+
+---
+
+## Appendix: RAG / Ask Behaviour
+
+**Single-turn semantics.** Each Ask question is sent independently — prior assistant turns are NOT included in the prompt. Cross-paper Ask issues `POST /api/ask/stream` with `{question, decompose: true}` only (`use-streaming-chat.ts:57-59`). Multi-turn follow-up is on the post-Phase-A roadmap; until then, restate context in each question (e.g. "Continuing from the previous answer: …").
+
+**Verification.** After the LLM finishes streaming, the backend (`rag/verification.py:verify_answer_sentences`) splits the answer into sentences and matches each against the retrieved source chunks (exact + fuzzy via `QuoteVerifier`). It assigns `HIGH` (100% sentence pass-rate), `MEDIUM` (≥50%), `LOW` (>0%), or `UNVERIFIED` (0). The verdict is sent as a separate SSE `confidence` event after `done` (`streaming.py:369-376`); the frontend renders it as a `ConfidenceBadge` plus an amber warning banner on `MEDIUM`/`LOW`/`UNVERIFIED` answers (`ChatMessage.tsx:29-53`). Unverified sentences are highlighted inline in the answer markdown.

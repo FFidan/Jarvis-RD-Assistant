@@ -5,7 +5,18 @@ import { SourcesAccordion } from '@/components/chat/SourcesAccordion';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Loader2, Send, Square, Trash2 } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
+import { Send, Square, Trash2 } from 'lucide-react';
 
 interface StreamingChatProps {
   chatId: string;
@@ -38,6 +49,39 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
     <div className="flex h-full flex-col">
       {/* Messages */}
       <ScrollArea className="flex-1 p-4" ref={scrollRef}>
+        {/* D.4 — Clear chat button at top-right of message area */}
+        <div className="flex justify-end mb-2">
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={messages.length === 0}
+                aria-label="Clear chat"
+                className="gap-1.5 text-muted-foreground"
+              >
+                <Trash2 className="h-4 w-4" />
+                Clear chat
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>Clear all messages?</AlertDialogTitle>
+                <AlertDialogDescription>
+                  This will delete the entire chat history. This cannot be undone.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                <AlertDialogAction onClick={clearChat} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                  Confirm
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        </div>
+
         <div className="space-y-4">
           {messages.length === 0 && (
             <p className="text-center text-sm text-muted-foreground">
@@ -46,21 +90,18 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
           )}
           {messages.map((msg, i) => (
             <div key={`${msg.role}:${msg.content.slice(0, 8)}:${i}`}>
+              {/* D.1 — pass phase so in-bubble spinner reflects search vs stream */}
               <ChatMessage
                 message={msg}
                 isLoading={isStreaming && i === messages.length - 1 && msg.role === 'assistant'}
+                phase={phase}
               />
               {msg.role === 'assistant' && msg.sources && msg.sources.length > 0 && (
                 <SourcesAccordion sources={msg.sources} />
               )}
             </div>
           ))}
-          {phase === 'searching' && (
-            <div className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Searching paper chunks and thinking...</span>
-            </div>
-          )}
+          {/* D.1 — bottom banner removed; phase is shown in-bubble instead */}
           {isStreaming && sources.length > 0 && (
             <SourcesAccordion sources={sources} />
           )}
@@ -92,9 +133,6 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
                 <Send className="h-4 w-4" />
               </Button>
             )}
-            <Button type="button" variant="ghost" size="icon" onClick={clearChat} aria-label="Clear chat">
-              <Trash2 className="h-4 w-4" />
-            </Button>
           </div>
         </form>
       </div>

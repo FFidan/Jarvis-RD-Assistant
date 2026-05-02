@@ -373,6 +373,35 @@ async def submit_feedback(
 
 
 # ---------------------------------------------------------------------------
+# DELETE /api/papers/{paper_id}/feedback  — clear a feedback signal (W1.5 UX-E.1)
+# ---------------------------------------------------------------------------
+
+
+@router.delete("/{paper_id}/feedback", status_code=204)
+@limiter.limit("60/minute")
+async def delete_paper_feedback(
+    request: Request,
+    paper_id: int,
+    source: Annotated[str, Query()],
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
+    """Delete a recommendation_feedback row for this paper+user+source triple.
+
+    Idempotent — returns 204 regardless of whether a row was deleted.
+    ``source`` must be supplied as a query parameter (e.g. ``?source=pulse_thumbs``).
+    """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM recommendation_feedback"
+            " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2 AND source = $3",
+            paper_id,
+            user_id,
+            source,
+        )
+
+
+# ---------------------------------------------------------------------------
 # GET /api/papers/feed/counts  — 10 named views per spec §6
 # ---------------------------------------------------------------------------
 
@@ -526,6 +555,30 @@ async def save_paper(
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
+    return {"status": "ok", "paper_id": paper_id}
+
+
+# ---------------------------------------------------------------------------
+# PUT /api/papers/{paper_id}/unsave  — revert to_read → inbox (W1.5 UX-E.2)
+# ---------------------------------------------------------------------------
+
+
+@router.put("/{paper_id}/unsave", response_model=MarkReadResponse)
+@limiter.limit("30/minute")
+async def unsave_paper(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, object]:
+    """Revert a saved paper from the Reading List back to the Inbox (``state := 'inbox'``).
+
+    Requires the paper to be in ``to_read`` state; raises 409 otherwise.
+    """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+        await _assert_paper_in_state(conn, paper_id, user_id, state="to_read")
+        await _upsert_state_and_starred(conn, paper_id, user_id, state="inbox")
     return {"status": "ok", "paper_id": paper_id}
 
 

@@ -26,6 +26,7 @@ import { FeedView } from '@/components/feed/FeedView';
 import { CountsBadge } from '@/components/feed/CountsBadge';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { BookOpen, Star, BookOpen as BookOpenIcon, Library as LibraryIcon, CheckCircle } from 'lucide-react';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 
 // ─── surface definitions ────────────────────────────────────────────────────
 
@@ -55,15 +56,29 @@ const VALID_FILTERS: ReadonlySet<LibraryFilter> = new Set<LibraryFilter>([
 ]);
 
 // Library sub-chip definitions (spec §5.4 — 5 items: All + 4 filters)
+// B.4: tooltip explains lifecycle context for Reading List / Reading chips.
 const LIBRARY_SUB_CHIPS: Array<{
   value: LibraryFilter | undefined;
   label: string;
   icon: React.ReactNode;
+  tooltip?: string;
 }> = [
   { value: undefined, label: 'All', icon: null },
   { value: 'starred', label: 'Starred', icon: <Star size={14} /> },
-  { value: 'reading', label: 'Reading', icon: <BookOpenIcon size={14} /> },
-  { value: 'to_read', label: 'Reading List', icon: <LibraryIcon size={14} /> },
+  {
+    value: 'reading',
+    label: 'Reading',
+    icon: <BookOpenIcon size={14} />,
+    tooltip:
+      "Papers you're actively reading. Mark Done when finished, or Set Aside to push back to Reading List.",
+  },
+  {
+    value: 'to_read',
+    label: 'Reading List',
+    icon: <LibraryIcon size={14} />,
+    tooltip:
+      "Papers you've saved to read later. Move to Reading when you start, or Done when finished.",
+  },
   { value: 'done', label: 'Done', icon: <CheckCircle size={14} /> },
 ];
 
@@ -291,22 +306,25 @@ export function ResearchFeedPage() {
       {/* ── Library sub-chips (spec §5.4 — 5 items: All + 4 filters) ────── */}
       {surface === 'library' && (
         <div className="flex flex-wrap gap-2" role="tablist" aria-label="Library filter">
-          {LIBRARY_SUB_CHIPS.map(({ value, label, icon }) => (
-            <button
-              key={value ?? '__all__'}
-              role="tab"
-              aria-selected={filter === (value ?? null)}
-              onClick={() => setLibraryFilter(value)}
-              className={cn(
-                'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
-                filter === (value ?? null)
-                  ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
-                  : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
-              )}
-            >
-              {icon}
-              {label}
-            </button>
+          {LIBRARY_SUB_CHIPS.map(({ value, label, icon, tooltip }) => (
+            <div key={value ?? '__all__'} className="flex items-center gap-0.5">
+              <button
+                role="tab"
+                aria-selected={filter === (value ?? null)}
+                onClick={() => setLibraryFilter(value)}
+                className={cn(
+                  'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  filter === (value ?? null)
+                    ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                    : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                )}
+              >
+                {icon}
+                {label}
+              </button>
+              {/* B.4 — InfoTooltip next to chips that need lifecycle explanation */}
+              {tooltip && <InfoTooltip content={tooltip} side="bottom" />}
+            </div>
           ))}
         </div>
       )}

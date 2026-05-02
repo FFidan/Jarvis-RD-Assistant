@@ -835,6 +835,8 @@ export interface PulseCardItem {
   reasoning_verified: boolean | null;
   reasoning_confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNVERIFIED' | null;
   signals: Record<string, number>;
+  /** Current lifecycle state of the paper — used by Save button to enable unsave (to_read → inbox). */
+  user_state?: LifecycleState | null;
 }
 
 export interface PulseDeck {

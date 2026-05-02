@@ -17,6 +17,7 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
     appendToLastMessage,
     setLastMessageSources,
     setLastMessageConfidence,
+    removeLastMessageIfEmpty,
     clearChat,
   } = useChatStore();
   const [phase, setPhase] = useState<'idle' | 'searching' | 'streaming'>('idle');
@@ -29,6 +30,9 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
   useEffect(() => {
     phaseRef.current = phase;
   }, [phase]);
+
+  // D.3 — abort SSE on unmount to prevent memory leaks / dangling streams
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
 
   const isStreaming = phase !== 'idle';
 
@@ -81,15 +85,20 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           }
         }
       } catch (err) {
-        if ((err as Error).name !== 'AbortError') {
+        const isAbort = (err as Error).name === 'AbortError';
+        if (!isAbort) {
           appendToLastMessage(chatId, `\n\n**Error:** ${(err as Error).message}`);
+        }
+        // D.2 — if stopped before any token arrived, discard the empty placeholder
+        if (isAbort || phaseRef.current === 'searching') {
+          removeLastMessageIfEmpty(chatId);
         }
       } finally {
         setPhase('idle');
         abortControllerRef.current = null;
       }
     },
-    [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources, setLastMessageConfidence],
+    [chatId, scope, paperId, addMessage, appendToLastMessage, setLastMessageSources, setLastMessageConfidence, removeLastMessageIfEmpty],
   );
 
   const stopStreaming = useCallback(() => {

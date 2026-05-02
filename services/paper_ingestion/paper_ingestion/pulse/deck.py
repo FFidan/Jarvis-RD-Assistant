@@ -293,6 +293,7 @@ def _build_deck_response(
             signals=r.get("signals") or {},
             reasoning_verified=r.get("reasoning_verified"),
             reasoning_confidence=r.get("reasoning_confidence"),
+            user_state=r.get("user_state"),
         )
         for r in card_rows
     ]
@@ -316,13 +317,19 @@ def _build_deck_response(
     )
 
 
-async def load_today(db_pool: Any) -> "PulseDeckResponse | None":
-    """Fetch today's pulse deck joined with paper metadata.
+async def load_today(
+    db_pool: Any,
+    user_id: int | None = None,
+) -> "PulseDeckResponse | None":
+    """Fetch today's pulse deck joined with paper metadata + per-user lifecycle state.
 
     Returns
     -------
     PulseDeckResponse | None
-        Today's deck or None if no deck has been generated yet.
+        Today's deck or None if no deck has been generated yet. Each card's
+        ``user_state`` reflects the current ``paper_user_state`` row for the
+        caller (NULL ⇒ inbox-default; consumers gate the Save↔Unsave toggle on
+        ``user_state == 'to_read'``).
     """
     async with db_pool.acquire() as conn:
         deck_row = await conn.fetchrow(
@@ -351,13 +358,18 @@ async def load_today(db_pool: Any) -> "PulseDeckResponse | None":
                 pc.reasoning,
                 pc.signals,
                 pc.reasoning_verified,
-                pc.reasoning_confidence
+                pc.reasoning_confidence,
+                pus.state AS user_state
             FROM pulse_cards pc
             JOIN papers p ON p.id = pc.paper_id
+            LEFT JOIN paper_user_state pus
+                   ON pus.paper_id = p.id
+                  AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],
+            user_id,
         )
 
     return _build_deck_response(deck_row, card_rows)
@@ -366,6 +378,7 @@ async def load_today(db_pool: Any) -> "PulseDeckResponse | None":
 async def load_history(
     db_pool: Any,
     days: int = 30,
+    user_id: int | None = None,
 ) -> list["PulseDeckResponse"]:
     """Fetch pulse decks from the last `days` days, newest first.
 
@@ -415,13 +428,18 @@ async def load_history(
                 pc.reasoning,
                 pc.signals,
                 pc.reasoning_verified,
-                pc.reasoning_confidence
+                pc.reasoning_confidence,
+                pus.state AS user_state
             FROM pulse_cards pc
             JOIN papers p ON p.id = pc.paper_id
+            LEFT JOIN paper_user_state pus
+                   ON pus.paper_id = p.id
+                  AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = ANY($1::int[])
             ORDER BY pc.deck_id, pc.rank ASC
             """,
             deck_ids,
+            user_id,
         )
 
     # Group cards by deck_id in Python

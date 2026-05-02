@@ -94,7 +94,8 @@ async def get_today(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseDeckResponse:
     """Fetch today's Pulse deck (404 if not generated yet)."""
-    deck = await load_today(db_pool)
+    user_id = await current_user_id_or_none(request)
+    deck = await load_today(db_pool, user_id=user_id)
     if deck is None:
         raise HTTPException(status_code=404, detail="No Pulse deck for today")
     return deck
@@ -113,7 +114,8 @@ async def get_history(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PulseDeckResponse]:
     """Return Pulse decks from the last *days* days, newest first."""
-    return await load_history(db_pool, days=days)
+    user_id = await current_user_id_or_none(request)
+    return await load_history(db_pool, days=days, user_id=user_id)
 
 
 # ---------------------------------------------------------------------------

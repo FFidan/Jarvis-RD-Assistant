@@ -6,13 +6,14 @@ import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
 
 vi.mock('@/lib/api', () => ({
   submitFeedback: vi.fn(),
+  clearFeedback: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn() },
 }));
 
-import { submitFeedback } from '@/lib/api';
+import { submitFeedback, clearFeedback } from '@/lib/api';
 import { toast } from 'sonner';
 
 const wrap = (ui: React.ReactNode) => {
@@ -81,5 +82,61 @@ describe('FeedbackButtons', () => {
     fireEvent.click(screen.getByLabelText("Don't recommend like this"));
     await new Promise((r) => setTimeout(r, 0));
     expect(submitFeedback).toHaveBeenCalledWith(7, { signal: 'negative', source: 'feed_thumbs' });
+  });
+
+  describe('B.1 — untoggle (click active thumb again → clearFeedback)', () => {
+    it('clicking active 👍 (recentFeedback=positive) calls clearFeedback and NOT submitFeedback', async () => {
+      (clearFeedback as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      wrap(
+        <FeedbackButtons
+          paperId={99}
+          discoveryOrigin="pulse"
+          source="pulse_thumbs"
+          recentFeedback={{ signal: 'positive' }}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText('Recommend more like this'));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(clearFeedback).toHaveBeenCalledWith(99, 'pulse_thumbs');
+      expect(submitFeedback).not.toHaveBeenCalled();
+    });
+
+    it('clicking active 👎 (recentFeedback=negative) calls clearFeedback and NOT submitFeedback', async () => {
+      (clearFeedback as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+      wrap(
+        <FeedbackButtons
+          paperId={88}
+          discoveryOrigin="recommender"
+          source="feed_thumbs"
+          recentFeedback={{ signal: 'negative' }}
+        />,
+      );
+      fireEvent.click(screen.getByLabelText("Don't recommend like this"));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(clearFeedback).toHaveBeenCalledWith(88, 'feed_thumbs');
+      expect(submitFeedback).not.toHaveBeenCalled();
+    });
+
+    it('switching 👍→👎 calls submitFeedback (UPSERT) not clearFeedback', async () => {
+      (submitFeedback as ReturnType<typeof vi.fn>).mockResolvedValue({
+        paper_id: 77,
+        signal: 'negative',
+        source: 'feed_thumbs',
+        created_at: '2026-05-01T00:00:00Z',
+      });
+      wrap(
+        <FeedbackButtons
+          paperId={77}
+          discoveryOrigin="pulse"
+          source="feed_thumbs"
+          recentFeedback={{ signal: 'positive' }}
+        />,
+      );
+      // Clicking the opposite (👎 while 👍 is active) → submitFeedback
+      fireEvent.click(screen.getByLabelText("Don't recommend like this"));
+      await new Promise((r) => setTimeout(r, 0));
+      expect(submitFeedback).toHaveBeenCalledWith(77, { signal: 'negative', source: 'feed_thumbs' });
+      expect(clearFeedback).not.toHaveBeenCalled();
+    });
   });
 });

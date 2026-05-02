@@ -626,6 +626,25 @@ export async function submitFeedback(
   );
 }
 
+/**
+ * Clear per-paper feedback (untoggle 👍/👎).
+ * Hits DELETE /api/papers/:id/feedback?source=<source>.
+ * Returns 204 on success.
+ */
+export async function clearFeedback(paperId: number, source: string): Promise<void> {
+  await apiFetchRaw(`/api/papers/${paperId}/feedback?source=${encodeURIComponent(source)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
+ * Unsave a paper — reverts state from `to_read` back to `inbox`.
+ * Hits PUT /api/papers/:id/unsave.
+ */
+export async function unsavePaper(paperId: number): Promise<{ status: string; paper_id: number }> {
+  return apiFetch(`/api/papers/${paperId}/unsave`, { method: 'PUT' });
+}
+
 /** Query params for GET /api/recommendation_feedback. */
 export interface FetchRecommendationFeedbackParams {
   paper_id?: number;

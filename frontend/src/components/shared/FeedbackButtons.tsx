@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { ThumbsUp, ThumbsDown } from 'lucide-react';
 import { toast } from 'sonner';
-import { submitFeedback } from '@/lib/api';
+import { submitFeedback, clearFeedback } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -42,6 +42,7 @@ export function FeedbackButtons({
   // Spec §5.2 origin gate — hidden for user-initiated papers
   if (discoveryOrigin === 'user_initiated') return null;
 
+  const queryClient = useQueryClient();
   const [reason, setReason] = useState('');
   const [reasonOpen, setReasonOpen] = useState(false);
   const [lastSignal, setLastSignal] = useState<'positive' | 'negative' | null>(null);
@@ -56,7 +57,26 @@ export function FeedbackButtons({
       }),
   });
 
+  const clearMutation = useMutation({
+    mutationFn: () => clearFeedback(paperId, source),
+    onSuccess: () => {
+      setLastSignal(null);
+      void queryClient.invalidateQueries({ queryKey: ['recent-feedback', paperId] });
+      onSuccess?.();
+    },
+    onError: (err) =>
+      toast.error('Failed to clear feedback', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      }),
+  });
+
   const handleThumb = (signal: 'positive' | 'negative') => {
+    const currentSignal = recentFeedback?.signal ?? lastSignal;
+    if (signal === currentSignal) {
+      // Clicking the already-active button → untoggle (clear)
+      clearMutation.mutate();
+      return;
+    }
     setLastSignal(signal);
     // Defer reason-textarea reveal until the first POST succeeds — avoids a
     // race where the user clicks "Save reason" while the initial thumb call
@@ -86,9 +106,12 @@ export function FeedbackButtons({
     );
   };
 
-  const positiveActive = recentFeedback?.signal === 'positive' || lastSignal === 'positive';
-  const negativeActive = recentFeedback?.signal === 'negative' || lastSignal === 'negative';
+  // After a successful untoggle, clearMutation sets lastSignal to null and
+  // invalidates the query — recentFeedback will flip to null on refetch.
+  const positiveActive = (recentFeedback?.signal === 'positive' || lastSignal === 'positive') && !clearMutation.isSuccess;
+  const negativeActive = (recentFeedback?.signal === 'negative' || lastSignal === 'negative') && !clearMutation.isSuccess;
 
+  const isPending = mutation.isPending || clearMutation.isPending;
   const iconSize = size === 'md' ? 18 : 14;
 
   return (
@@ -98,7 +121,7 @@ export function FeedbackButtons({
           type="button"
           variant={positiveActive ? 'default' : 'ghost'}
           size="sm"
-          disabled={mutation.isPending}
+          disabled={isPending}
           onClick={() => handleThumb('positive')}
           aria-label="Recommend more like this"
           title="More like this"
@@ -109,7 +132,7 @@ export function FeedbackButtons({
           type="button"
           variant={negativeActive ? 'default' : 'ghost'}
           size="sm"
-          disabled={mutation.isPending}
+          disabled={isPending}
           onClick={() => handleThumb('negative')}
           aria-label="Don't recommend like this"
           title="Less like this"

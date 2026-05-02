@@ -14,7 +14,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { trashAndRejectPaper } from '@/lib/api';
+import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
 
 export interface PulseCardProps {
@@ -72,6 +72,30 @@ export function PulseCard({
         description: err instanceof Error ? err.message : 'Unknown error',
       }),
   });
+
+  const unsaveMut = useMutation({
+    mutationFn: () => unsavePaper(card.paper_id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+      toast.success('Paper moved back to Inbox');
+    },
+    onError: (err) =>
+      toast.error('Failed to unsave paper', {
+        description: err instanceof Error ? err.message : 'Unknown error',
+      }),
+  });
+
+  // Save button is "active" (bookmark filled) when the paper is already saved (to_read)
+  const isSaved = rated && card.user_state === 'to_read';
+
+  const handleSaveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isSaved) {
+      unsaveMut.mutate();
+    } else {
+      onRate(card.paper_id, 'save');
+    }
+  };
 
   return (
     <div
@@ -166,14 +190,11 @@ export function PulseCard({
               size="sm"
             />
             <Button
-              variant="outline"
+              variant={isSaved ? 'default' : 'outline'}
               size="sm"
-              aria-label="Save"
-              disabled={rated}
-              onClick={(e) => {
-                e.stopPropagation();
-                onRate(card.paper_id, 'save');
-              }}
+              aria-label={isSaved ? 'Unsave' : 'Save'}
+              disabled={unsaveMut.isPending}
+              onClick={handleSaveClick}
             >
               <Bookmark className="h-3.5 w-3.5" />
             </Button>

@@ -14,6 +14,7 @@ interface ChatState {
   appendToLastMessage: (chatId: string, token: string) => void;
   setLastMessageSources: (chatId: string, sources: Source[]) => void;
   setLastMessageConfidence: (chatId: string, payload: ConfidencePayload) => void;
+  removeLastMessageIfEmpty: (chatId: string) => void;
   clearChat: (chatId: string) => void;
 }
 
@@ -58,6 +59,21 @@ export const useChatStore = create<ChatState>()((set) => ({
             ...messages.slice(0, -1),
             { ...last, sources },
           ],
+        },
+      };
+    });
+  },
+
+  removeLastMessageIfEmpty(chatId: string) {
+    set((state) => {
+      const messages = state.chats[chatId];
+      if (!messages || messages.length === 0) return state;
+      const last = messages[messages.length - 1];
+      if (last.content !== '') return state;
+      return {
+        chats: {
+          ...state.chats,
+          [chatId]: messages.slice(0, -1),
         },
       };
     });

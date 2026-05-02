@@ -6,6 +6,12 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { PulseCard } from '@/components/pulse/PulseCard';
 import { useJobStore } from '@/stores/job-store';
 import { ApiError, fetchPulseToday, ratePulseCard } from '@/lib/api';
@@ -32,11 +38,18 @@ function nextAutoRun(): string {
 interface GenerateButtonProps {
   deck: PulseDeck | null;
   isGenerating: boolean;
+  isFetching: boolean;
   onGenerate: () => void;
   onRefetch: () => void;
 }
 
-function GenerateButton({ deck, isGenerating, onGenerate, onRefetch }: GenerateButtonProps) {
+function GenerateButton({
+  deck,
+  isGenerating,
+  isFetching,
+  onGenerate,
+  onRefetch,
+}: GenerateButtonProps) {
   if (isGenerating) {
     return (
       <Button size="sm" disabled>
@@ -61,9 +74,26 @@ function GenerateButton({ deck, isGenerating, onGenerate, onRefetch }: GenerateB
         <span className="text-xs text-muted-foreground">
           Pulse up to date · next auto-run at {nextAutoRun()}
         </span>
-        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={onRefetch} title="Force refresh">
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
+        {/* B.6 — Radix Tooltip + spin-on-isFetching for the refresh icon button */}
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 w-7 p-0"
+                onClick={onRefetch}
+                aria-label="Re-fetch the latest deck"
+                disabled={isFetching}
+              >
+                <RefreshCw className={`h-3.5 w-3.5${isFetching ? ' animate-spin' : ''}`} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-xs">
+              Re-fetch the latest deck
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
       </div>
     );
   }
@@ -90,6 +120,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
     isError,
     error,
     refetch,
+    isFetching,
   } = useQuery<PulseDeck | null>({
     queryKey: ['pulse-today'],
     queryFn: fetchPulseToday,
@@ -171,8 +202,12 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
           <GenerateButton
             deck={deck ?? null}
             isGenerating={isGenerating}
+            isFetching={isFetching}
             onGenerate={handleGenerate}
-            onRefetch={() => refetch()}
+            onRefetch={async () => {
+              await refetch();
+              toast.success('Pulse refreshed', { duration: 1500 });
+            }}
           />
         </div>
       </CardHeader>

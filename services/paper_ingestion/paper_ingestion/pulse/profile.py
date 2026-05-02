@@ -193,15 +193,19 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         weights["l2_lambda"] = l2_lambda
 
         # 5. Recent positive ratings (recommendation_feedback, 90-day window).
+        # GROUP BY + MAX(created_at) gives "N most recent distinct papers";
+        # SELECT DISTINCT + ORDER BY rf.created_at is invalid (Postgres
+        # rejects: ORDER BY columns must appear in SELECT list under DISTINCT).
         positive_rows = await conn.fetch(
             """
-            SELECT DISTINCT p.id, p.title
+            SELECT p.id, p.title
               FROM recommendation_feedback rf
               JOIN papers p ON p.id = rf.paper_id
              WHERE rf.signal = 'positive'
                AND rf.created_at > NOW() - INTERVAL '90 days'
                AND rf.user_id IS NOT DISTINCT FROM $1
-             ORDER BY rf.created_at DESC
+             GROUP BY p.id, p.title
+             ORDER BY MAX(rf.created_at) DESC
              LIMIT $2
             """,
             user_id,
@@ -211,13 +215,14 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         # 6. Recent negative ratings — titles only.
         negative_rows = await conn.fetch(
             """
-            SELECT DISTINCT p.title
+            SELECT p.title
               FROM recommendation_feedback rf
               JOIN papers p ON p.id = rf.paper_id
              WHERE rf.signal = 'negative'
                AND rf.created_at > NOW() - INTERVAL '90 days'
                AND rf.user_id IS NOT DISTINCT FROM $1
-             ORDER BY rf.created_at DESC
+             GROUP BY p.title
+             ORDER BY MAX(rf.created_at) DESC
              LIMIT $2
             """,
             user_id,

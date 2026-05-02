@@ -1,6 +1,6 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
 import {
   fetchFeed,
@@ -22,6 +22,8 @@ import { useFeedKeyboardShortcuts } from '@/hooks/useFeedKeyboardShortcuts';
 import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
 import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
+import { PaginationControls, PAGE_SIZE_OPTIONS } from './PaginationControls';
+import type { PageSize } from './PaginationControls';
 import { Inbox, Library, Star, BookOpen, Trash2 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -68,9 +70,43 @@ function getEmptyState(surface: SurfaceView) {
   return EMPTY_STATE[surface] ?? EMPTY_STATE.library;
 }
 
+const DEFAULT_LIMIT: PageSize = 30;
+
 export function FeedView({ surface, filter }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // Pagination state — persisted in URL search params for deep-link support
+  const rawLimit = Number(searchParams.get('limit'));
+  const limit: PageSize = (PAGE_SIZE_OPTIONS as readonly number[]).includes(rawLimit)
+    ? (rawLimit as PageSize)
+    : DEFAULT_LIMIT;
+  const offset = Math.max(0, Number(searchParams.get('offset')) || 0);
+
+  const setPagination = useCallback(
+    (newOffset: number, newLimit: PageSize) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('limit', String(newLimit));
+          next.set('offset', String(newOffset));
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
+  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}`);
+  useEffect(() => {
+    const key = `${surface}|${filter ?? ''}`;
+    if (lastSurfaceFilterRef.current !== key) {
+      lastSurfaceFilterRef.current = key;
+      if (offset !== 0) setPagination(0, limit);
+    }
+  }, [surface, filter, offset, limit, setPagination]);
 
   // Keyboard-navigation focused row index (j/k)
   const [focusedIdx, setFocusedIdx] = useState<number>(0);
@@ -82,9 +118,9 @@ export function FeedView({ surface, filter }: FeedViewProps) {
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['papers-feed', surface, filter],
+    queryKey: ['papers-feed', surface, filter, limit, offset],
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, limit, offset }),
   });
 
   // Cast to FeedPaper[] — backend (Wave 1ab) already returns the Phase-A shape
@@ -238,11 +274,12 @@ export function FeedView({ surface, filter }: FeedViewProps) {
           />
         ) : (
           <>
-            <p className="text-sm text-muted-foreground">
-              {data?.total != null
-                ? `Showing ${papers.length} of ${data.total} papers`
-                : `${papers.length} papers`}
-            </p>
+            <PaginationControls
+              offset={offset}
+              limit={limit}
+              total={data?.total ?? papers.length}
+              onChange={setPagination}
+            />
 
             {papers.map((paper) => (
               <FeedPaperRow

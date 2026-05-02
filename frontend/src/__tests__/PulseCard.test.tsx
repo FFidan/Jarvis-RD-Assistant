@@ -19,6 +19,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     }),
     trashAndRejectPaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
     submitFeedback: vi.fn().mockResolvedValue({}),
+    unsavePaper: vi.fn().mockResolvedValue({ status: 'ok', paper_id: 42 }),
   };
 });
 
@@ -153,6 +154,59 @@ describe('PulseCard', () => {
     renderCard();
     expect(screen.queryByRole('button', { name: /^thumbs up$/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^thumbs down$/i })).not.toBeInTheDocument();
+  });
+
+  describe('B.1 — Save button unsave flow', () => {
+    function renderWithRated(rated: boolean, cardOverrides: Partial<PulseCardItem> = {}) {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const onRate = vi.fn();
+      const card = { ...sampleCard, ...cardOverrides };
+      return {
+        onRate,
+        ...render(
+          <QueryClientProvider client={queryClient}>
+            <PulseCard card={card} onRate={onRate} rated={rated} />
+          </QueryClientProvider>,
+        ),
+      };
+    }
+
+    it('shows Save button when not rated', () => {
+      renderWithRated(false);
+      expect(screen.getByRole('button', { name: /^save$/i })).toBeInTheDocument();
+    });
+
+    it('shows Unsave button when rated=true and user_state=to_read', () => {
+      renderWithRated(true, { user_state: 'to_read' });
+      expect(screen.getByRole('button', { name: /^unsave$/i })).toBeInTheDocument();
+    });
+
+    it('calls unsavePaper when Unsave clicked (rated=true, user_state=to_read)', async () => {
+      const user = userEvent.setup();
+      renderWithRated(true, { user_state: 'to_read' });
+      await user.click(screen.getByRole('button', { name: /^unsave$/i }));
+      await waitFor(() => {
+        expect(vi.mocked(api.unsavePaper)).toHaveBeenCalledWith(42);
+      });
+    });
+
+    it('calls onRate(save) when Save clicked and not yet saved', async () => {
+      const user = userEvent.setup();
+      const { onRate } = renderWithRated(false);
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+      expect(onRate).toHaveBeenCalledWith(42, 'save');
+    });
+
+    it('does NOT call unsavePaper when rated=true but user_state is not to_read', async () => {
+      const user = userEvent.setup();
+      // rated=true but no user_state — isSaved is false, so onRate fires instead
+      const { onRate } = renderWithRated(true, { user_state: undefined });
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+      expect(onRate).toHaveBeenCalledWith(42, 'save');
+      expect(vi.mocked(api.unsavePaper)).not.toHaveBeenCalled();
+    });
   });
 
   describe('reasoning verification badge', () => {
