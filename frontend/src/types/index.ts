@@ -861,6 +861,7 @@ export interface PulseStats {
   avg_duration_s: number | null;
   last_run_at: string | null;
   last_error: string | null;
+  degraded_reason: string | null;
 }
 
 export interface WhyExplanation {

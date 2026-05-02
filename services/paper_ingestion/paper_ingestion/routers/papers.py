@@ -685,21 +685,36 @@ async def star_paper(
 ):
     """Set ``starred = TRUE``. Does not change reading state.
 
-    Side effect: enqueues a ``zotero.push`` job iff the paper is currently
-    linked to at least one project (``project_papers`` row). The enqueue
-    runs OUTSIDE the connection block so ``jobs_lib.enqueue`` (which
-    acquires its own pool connection) cannot deadlock against the
+    Side effect: enqueues a ``zotero.push`` job iff all three conditions hold:
+    1. The paper was not already starred (off→on transition).
+    2. The paper is linked to at least one project (``project_papers`` row).
+    3. ``zotero.auto_push_on_star`` is ``true`` in ``user_config``.
+
+    The transition guard ensures double-/star calls (client retry, double-tap)
+    do not double-enqueue.
+
+    The enqueue runs OUTSIDE the connection block so ``jobs_lib.enqueue``
+    (which acquires its own pool connection) cannot deadlock against the
     connection we hold here. Failures to enqueue are logged but do not
     fail the star mutation itself (best-effort).
     """
     _ = request  # required by @limiter.limit; not used in body
     user_id = await current_user_id_or_none(request)
+    was_unstarred = False
     project_link_count = 0
+    auto_push_on_star = False
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
+        prev_starred_row = await conn.fetchval(
+            "SELECT starred FROM paper_user_state "
+            "WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            paper_id,
+            user_id,
+        )
+        was_unstarred = not bool(prev_starred_row)
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
         project_link_count = (
             await conn.fetchval(
@@ -708,8 +723,12 @@ async def star_paper(
             )
             or 0
         )
+        _cfg_value = await conn.fetchval(
+            "SELECT value FROM user_config WHERE key = 'zotero.auto_push_on_star'",
+        )
+        auto_push_on_star = _cfg_value is True
     # Outside conn block: enqueue without holding the pool slot
-    if project_link_count > 0:
+    if was_unstarred and project_link_count > 0 and auto_push_on_star:
         try:
             await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
         except Exception:

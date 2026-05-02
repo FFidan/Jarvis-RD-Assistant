@@ -74,35 +74,36 @@ behavior somewhere.
 | `zotero.api_key` | (none) | `_validate_nonempty_str` | [zotero_service.py:38, 87](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L38) (encrypted; decrypted on read) | Encrypted: stored in `encrypted_value` BYTEA, plaintext NULL'd |
 | `zotero.user_id` | (none) | `_validate_nonempty_str` | [zotero_service.py:88](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L88) | |
 | `zotero.library_type` | `"user"` (implicit on push) | `_validate_library_type` (`"user"` / `"group"`) | [zotero_service.py:89](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L89) | |
-| `zotero.poll_enabled` | `False` | `_validate_bool` | [scheduler.py:98](../../services/paper_ingestion/paper_ingestion/scheduler.py#L98) | Gates the `zotero_library_sync` cron job |
+| `zotero.poll_enabled` | `False` | `_validate_bool` | [scheduler.py:97](../../services/paper_ingestion/paper_ingestion/scheduler.py#L97) | Sole gate on `zotero_library_sync` cron job (post-2026-05-02 cleanup) |
 | `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](../../services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, [settings.py:419-431](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L419-L431) reschedules `zotero_library_sync` job |
+| `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](../../services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Wired 2026-05-02. Default-off; idempotent on already-starred state. |
+| `fsrs.desired_retention` | `0.9` ([init.sql:49](../../db/init.sql#L49)) | `_validate_desired_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](../../services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Promoted PARTIAL→LIVE 2026-05-02; live-edit reactive |
+| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](../../db/init.sql#L50)) | `_validate_learning_steps` (`list[int]`, length 2, both positive) | Per-review fetch in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=[timedelta(minutes=m) for m in steps])` | Wired GHOST→LIVE 2026-05-02; default `[1, 10]` matches the py-fsrs library default |
 
 ### 2.2 PARTIAL keys (consulted only at startup, only on a non-core endpoint, or pushed elsewhere on write)
 
 | Key | Default | How / where consumed | Why it is PARTIAL |
 |---|---|---|---|
-| `llm.smart_model` | `"smart"` (init.sql seed) | On write: [settings.py:357-367](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L357-L367) calls `update_litellm_model` ([litellm_config.py:110-249](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L110-L249)) which rewrites `litellm_config/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. |
+| `llm.smart_model` | `"smart"` (init.sql seed) | On write: [settings.py:357-367](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L357-L367) calls `update_litellm_model` ([litellm_config.py:110-249](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L110-L249)) which rewrites `litellm_config/config.yaml` (or POSTs `/config/update` for cloud) | Runtime authority is LiteLLM's config file, not `user_config`. The `user_config` row exists for the UI's read-back display. If the YAML mount is `:ro` (SEC-002) the write raises `RuntimeError` and 400 propagates. **Status quo accepted 2026-05-02** — see §9. |
 | `llm.fast_model` | `"fast"` | Same as above | Same |
 | `llm.embed_model` | `"embed"` | Same as above | Same |
-| `llm.anthropic.api_key` | (none) | Encrypted. Read by [litellm_config.py:get_provider_api_key](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([settings.py:607-665](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L607-L665)) | Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant |
+| `llm.anthropic.api_key` | (none) | Encrypted. Read by [litellm_config.py:get_provider_api_key](../../services/paper_ingestion/paper_ingestion/services/litellm_config.py#L52-L83) when a cloud model alias is selected; also read by `POST /api/providers/anthropic/test` ([settings.py:607-665](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L607-L665)) | Only consumed if the model alias is set to `anthropic/...` AND a cloud-provider POST is in flight; otherwise dormant. **Status quo accepted 2026-05-02** — conditional secrets are by design. |
 | `llm.openai.api_key` | (none) | Same pattern | Same |
 | `llm.google.api_key` | (none) | Same pattern | Same |
-| `fsrs.desired_retention` | `0.9` ([init.sql:49](../../db/init.sql#L49)) | Read **once** at startup at [learning_engine/main.py:70-85](../../services/learning_engine/learning_engine/main.py#L70-L85); cached on `app.state._fsrs_desired_retention`. **Live updates do not propagate until the service restarts.** | Stale until restart |
-| `zotero.enabled` | `False` (default in scheduler.py:97) | Read at [scheduler.py:97](../../services/paper_ingestion/paper_ingestion/scheduler.py#L97) — gates `zotero_library_sync` job registration | **Anomaly:** read by code, but **not in `_ALLOWED_CONFIG_KEYS`** — cannot be set through `PUT /api/config/{key}`. Effectively unreachable from the UI; defaults to False forever unless seeded by a manual SQL insert. Flag for cleanup. |
 
-### 2.3 GHOST keys (allowed by API; no consumer reads them anywhere in services/ or libs/)
+### 2.3 GHOST keys (allowed by API; no consumer reads them)
 
-| Key | Default seed | Validator | Status verdict |
-|---|---|---|---|
-| `paper.max_daily` | 20 ([init.sql:51](../../db/init.sql#L51)) | (none) | GHOST. No code reads this key. Seed exists; no daily-fetch cap is enforced. |
-| `paper.auto_generate_cards` | `true` ([init.sql:52](../../db/init.sql#L52)) | (none) | GHOST. No code reads this key. FSRS card generation in `learning_engine` is unconditional today. |
-| `fsrs.learning_steps` | `[1, 10]` ([init.sql:50](../../db/init.sql#L50)) | (none) | GHOST. No code reads this key. FSRS uses hard-coded steps. |
-| `ui.page_size` | (no seed) | (none) | GHOST. No code reads this key. Frontend uses local React state for pagination. |
-| `ingestion.max_papers_per_run` | (no seed) | (none) | GHOST. No code reads this key. Ingesters use hard-coded batch sizes. |
-| `ingestion.chunk_size` | (no seed) | (none) | GHOST. No code reads this key. Chunking logic uses hard-coded ~1024-token windows. |
-| `zotero.auto_push_on_star` | (no seed) | `_validate_bool` | GHOST. The starring code path (`paper_user_state.starred`) does not consult this key. |
+**Empty as of 2026-05-02.** All seven historical GHOST entries were resolved in
+the [Settings cleanup sprint](../plans/2026-05-02-contracts-settings-and-ux.md):
+five were deleted from `_ALLOWED_CONFIG_KEYS` and the seed (see §9.1) and two
+(`fsrs.learning_steps`, `zotero.auto_push_on_star`) were promoted to LIVE in
+§2.1.
 
-**Verification protocol used:** for each key above, ran `rg "<key>" services/ libs/ scripts/`. The only matches were in `routers/settings.py` (allowed-keys frozenset + validator). No consumer found.
+**Verification protocol for newly added LIVE entries:** before the GHOST→LIVE
+promotion, ran `rg "<key>" services/ libs/ scripts/` to confirm no stale
+duplicate consumer. After promotion, ran a focused unit test that
+live-edits the value and asserts the new behavior shows up without service
+restart.
 
 ---
 
@@ -170,8 +171,15 @@ Defined in `_CONFIG_VALIDATORS` ([settings.py:230-254](../../services/paper_inge
 | `_validate_nonempty_str` | `llm.{smart,fast,embed}_model`, `zotero.api_key`, `zotero.user_id`, `llm.{anthropic,openai,google}.api_key` | Non-empty trimmed string |
 | `_validate_library_type` | `zotero.library_type` | `"user"` or `"group"` |
 | `_validate_zotero_cron` | `zotero.poll_cron` | Must parse via `CronTrigger.from_crontab` (no sub-hourly limit, unlike Pulse) |
+| `_validate_desired_retention` | `fsrs.desired_retention` | Number in open range `(0, 1)`; rejects bool, 0, 1, and out-of-range floats |
+| `_validate_learning_steps` | `fsrs.learning_steps` | `list[int]`, length 2, both strictly positive (minutes). Default `[1, 10]` matches py-fsrs library default |
 
-Keys without validators (per `_CONFIG_VALIDATORS`): `ui.page_size`, `ingestion.max_papers_per_run`, `ingestion.chunk_size`, `paper.max_daily`, `paper.auto_generate_cards`, `fsrs.learning_steps`, `fsrs.desired_retention`, `recommendation.{liked_weight,project_weight,enabled}`, `user.timezone`. (The unvalidated set is largely the GHOST set — coincidence, not contract; the contract should bind the validator on any key promoted from GHOST to LIVE.)
+Keys without validators (per `_CONFIG_VALIDATORS`):
+`recommendation.{liked_weight,project_weight,enabled}`, `user.timezone`. (The
+historical unvalidated GHOST set was retired in the 2026-05-02 cleanup;
+remaining unvalidated keys are recommendation weights and the timezone
+string. Any future GHOST→LIVE promotion MUST add a validator at the same
+time — that's the contract.)
 
 ---
 
@@ -244,42 +252,47 @@ The implementation MUST satisfy these. Testable.
 | `llm.smart_model` | PARTIAL (LiteLLM YAML is the runtime authority) |
 | `llm.fast_model` | PARTIAL (same) |
 | `llm.embed_model` | PARTIAL (same) |
-| `llm.anthropic.api_key` | PARTIAL (used only when model alias is `anthropic/*` or for `/test` endpoint) |
-| `llm.openai.api_key` | PARTIAL |
-| `llm.google.api_key` | PARTIAL |
-| `fsrs.desired_retention` | PARTIAL (read at startup only; not refreshed live) |
-| `zotero.enabled` | ANOMALY (read by scheduler.py but NOT in `_ALLOWED_CONFIG_KEYS` — unreachable from API) |
-| `paper.max_daily` | GHOST |
-| `paper.auto_generate_cards` | GHOST |
-| `fsrs.learning_steps` | GHOST |
-| `ui.page_size` | GHOST |
-| `ingestion.max_papers_per_run` | GHOST |
-| `ingestion.chunk_size` | GHOST |
-| `zotero.auto_push_on_star` | GHOST |
+| `zotero.auto_push_on_star` | LIVE (wired 2026-05-02) |
+| `fsrs.desired_retention` | LIVE (per-review DB read; promoted from PARTIAL 2026-05-02) |
+| `fsrs.learning_steps` | LIVE (wired into py-fsrs Scheduler 2026-05-02) |
+| `llm.anthropic.api_key` | PARTIAL (used only when model alias is `anthropic/*` or for `/test` endpoint; status quo accepted) |
+| `llm.openai.api_key` | PARTIAL (status quo accepted) |
+| `llm.google.api_key` | PARTIAL (status quo accepted) |
+| `paper.max_daily` | DELETED 2026-05-02 (no consumer; superseded by `pulse.stage2_top_k` + `pulse.deck_size`) |
+| `paper.auto_generate_cards` | DELETED 2026-05-02 (no consumer; FSRS card generation is unconditional) |
+| `ui.page_size` | DELETED 2026-05-02 (UI-local React state) |
+| `ingestion.max_papers_per_run` | DELETED 2026-05-02 (subsumed by per-source plugin defaults) |
+| `ingestion.chunk_size` | DELETED 2026-05-02 (chunker is non-trivial; not user-tunable) |
+| `zotero.enabled` | DELETED 2026-05-02 (orphan read in `scheduler.py:97` removed; `zotero.poll_enabled` is the legitimate gate) |
 
 ---
 
-## 9. Cleanup decisions deferred
+## 9. Cleanup decisions
 
-This contract documents status; the **implementation plan** picks dispositions.
-For each non-LIVE entry above, the candidate dispositions are:
+### 9.1 Resolved 2026-05-02 (Settings cleanup sprint)
 
-| Item | Candidate dispositions |
+Plan: [docs/plans/2026-05-02-contracts-settings-and-ux.md](../plans/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
+
+| Item | Disposition | Implementation |
+|---|---|---|
+| `paper.max_daily` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS` and `db/init.sql` seed. No consumer existed. Stale rows in pre-existing DBs are harmless orphans. |
+| `paper.auto_generate_cards` | DELETE-IT (flipped from WIRE) | Pre-merge grounded grep confirmed no consumer in `services/`. Removed from `_ALLOWED_CONFIG_KEYS` and `db/init.sql` seed. |
+| `fsrs.learning_steps` | WIRE-IT | Added `_validate_learning_steps` validator. Read per-review in `_build_fsrs_manager_from_db`; passed to py-fsrs `Scheduler(learning_steps=...)`. Default `[1, 10]` matches the py-fsrs library default. |
+| `ui.page_size` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Frontend pagination is local React state (already correct). |
+| `ingestion.max_papers_per_run` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Subsumed by per-source plugin defaults. |
+| `ingestion.chunk_size` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Chunker is non-trivial; not user-tunable. |
+| `zotero.auto_push_on_star` | WIRE-IT | Star handler in `routers/papers.py` now reads the key on `starred=False→True` transition AND project-link present, enqueues existing `zotero.push` job. Default-off; idempotent. |
+| `fsrs.desired_retention` (PARTIAL → LIVE) | Promote | Dropped `app.state._fsrs_desired_retention` startup cache in `learning_engine/main.py`. Per-review DB read in `_build_fsrs_manager_from_db`. Live-edit reactive. |
+| `zotero.enabled` (ANOMALY) | DELETE consumer | Deleted orphan read at `scheduler.py:97`. Polling now gated solely on `zotero.poll_enabled`. The wildcard `LIKE 'zotero.%'` consumer in `zotero_service.py:86` is unaffected. |
+
+**No new migrations.** GHOST removal achieved by allow-list pruning + seed UPSERT removal in `db/init.sql` (idempotent). Stale rows in existing DBs become orphan reads on no remaining call site → harmless.
+
+### 9.2 Remaining accepted PARTIAL (status quo, doc-only)
+
+| Item | Why accepted |
 |---|---|
-| `paper.max_daily` | (a) WIRE-IT (enforce in `pulse/discovery.py` per-source caps); (b) DELETE-IT |
-| `paper.auto_generate_cards` | (a) WIRE-IT (gate auto-card generation in `learning_engine`); (b) DELETE-IT |
-| `fsrs.learning_steps` | (a) WIRE-IT (FSRS scheduler reads steps from this row); (b) DELETE-IT |
-| `ui.page_size` | (a) WIRE-IT (frontend reads as default page-size); (b) DELETE-IT (truly UI-local state) |
-| `ingestion.max_papers_per_run` | (a) WIRE-IT in source plugins; (b) DELETE-IT |
-| `ingestion.chunk_size` | (a) WIRE-IT in chunker; (b) DELETE-IT |
-| `zotero.auto_push_on_star` | (a) WIRE-IT in star handler (push to Zotero on `starred=TRUE` transition); (b) DELETE-IT |
-| `fsrs.desired_retention` PARTIAL → LIVE | Re-read on every FSRS review or via a live config watcher. Defers a pyright/refactor cost. |
-| `zotero.enabled` ANOMALY | (a) Add to `_ALLOWED_CONFIG_KEYS` so the UI can write it; (b) Replace consumer with `zotero.poll_enabled` (the existing API-writeable equivalent) and remove `zotero.enabled` from scheduler.py |
-| `llm.{anthropic,openai,google}.api_key` PARTIAL | Document in 03-llm.md that these are conditional secrets — no contract violation |
-| `llm.{smart,fast,embed}_model` PARTIAL | Status quo is acceptable; the LiteLLM YAML is a deliberate split. Documented in 03-llm.md. |
-
-This table does **not** prescribe which option is chosen — that's the
-implementation plan's call. The contract's job is to make the choice visible.
+| `llm.{smart,fast,embed}_model` PARTIAL | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §2](03-llm.md). |
+| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). |
 
 ---
 
@@ -299,7 +312,7 @@ Future agents who edit this file MUST re-Read before re-citing.
 
 | Citation | File:line | One-line behavior |
 |---|---|---|
-| `_ALLOWED_CONFIG_KEYS` frozenset | services/paper_ingestion/paper_ingestion/routers/settings.py:49-90 | Allow-list of writeable user_config keys (29 keys, including 7 GHOST and 7 PARTIAL) |
+| `_ALLOWED_CONFIG_KEYS` frozenset | services/paper_ingestion/paper_ingestion/routers/settings.py:49-90 | Allow-list of writeable user_config keys (24 keys post-2026-05-02 cleanup; 0 GHOST, 6 PARTIAL all in §9.2) |
 | `_SECRET_KEYS` / `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:92-108 | Keys that get masked on GET; subset gets ciphertext on PUT |
 | `_CONFIG_VALIDATORS` | services/paper_ingestion/paper_ingestion/routers/settings.py:230-254 | Per-key validator dispatch; missing entry = no validation |
 | `_PULSE_WEIGHT_KEYS` / `_PULSE_REQUIRED_WEIGHT_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:119-135 | The 10 allowed weight keys; 6 are required |
@@ -316,11 +329,14 @@ Future agents who edit this file MUST re-Read before re-citing.
 | Zotero push consumer reads | services/paper_ingestion/paper_ingestion/integrations/zotero_service.py:82-94 | Consumes `enabled`, `api_key`, `user_id`, `library_type` from the dict |
 | `pulse.weights` load + clamp | services/paper_ingestion/paper_ingestion/pulse/profile.py:166-194 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1] |
 | `_read_weights` (recommendation.*) | services/paper_ingestion/paper_ingestion/ingestion/recommender.py:126-143 | Reads liked/project weights + enabled flag |
-| `_get_zotero_poll_config` (zotero.enabled + poll_enabled + poll_cron) | services/paper_ingestion/paper_ingestion/scheduler.py:86-112 | Reads three keys; gates Zotero job registration; `zotero.enabled` is the orphan |
-| `app.state._fsrs_desired_retention` startup cache | services/learning_engine/learning_engine/main.py:70-85 | Reads `fsrs.desired_retention` once; never refreshed |
+| `_get_zotero_poll_config` (poll_enabled + poll_cron) | services/paper_ingestion/paper_ingestion/scheduler.py:77-113 | Reads two keys; gates Zotero job registration on `poll_enabled` (post-2026-05-02 cleanup; orphan `zotero.enabled` removed) |
+| `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs fresh `FSRSManager` inside the review transaction. Replaces the dropped startup cache. |
+| `FSRSManager.__init__` | services/learning_engine/learning_engine/fsrs_manager.py | Accepts `desired_retention: float` and `learning_steps: list[timedelta] \| None`; passes both to py-fsrs `Scheduler(...)` |
+| Star handler auto-push gating | services/paper_ingestion/paper_ingestion/routers/papers.py (`star_paper`) | Reads `zotero.auto_push_on_star`; on `starred=True` transition + project link + key truthy, enqueues `zotero.push` job |
+| `_validate_desired_retention` / `_validate_learning_steps` | services/paper_ingestion/paper_ingestion/routers/settings.py | Range `(0,1)` for retention; `list[int]` length-2 positive for learning_steps |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/system.py:144-149 | Reads `setup.completed`; gates wizard |
 | Telegram owner_chat_id resolution | services/telegram_bot/telegram_bot/owner.py:48-51, helpers.py:65, system_commands.py:73 + 95-110 | Resolver, fallback, pairing-write paths |
 | `user_config` table schema | db/init.sql:33-42 | `key UNIQUE`, `value JSONB`, `encrypted_value BYTEA` (added M033), updated_at |
-| `user_config` seeds | db/init.sql:43-53 | 8 seeded keys including 4 GHOST defaults |
+| `user_config` seeds | db/init.sql:43-53 | 6 seeded keys post-2026-05-02 cleanup (paper.max_daily and paper.auto_generate_cards seeds removed) |
 | `paper_sources` table + seeds | db/init.sql:71-88 | 3 sources seeded; arxiv enabled; semantic_scholar + local disabled |
 | `topics` table | db/init.sql:90-97 | name, query_terms, category, enabled |

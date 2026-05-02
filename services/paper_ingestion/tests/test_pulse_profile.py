@@ -58,7 +58,7 @@ def _make_config_rows(extra: dict | None = None) -> list[FakeRecord]:
             "recency": 0.05,
         },
         "pulse.deck_size": 10,
-        "pulse.stage2_top_k": 50,
+        "pulse.stage2_top_k": 40,
     }
     cfg = {**defaults, **(extra or {})}
     return [FakeRecord({"key": k, "value": v}) for k, v in cfg.items()]
@@ -157,7 +157,7 @@ async def test_load_profile_happy_path():
     assert len(profile.library_centroid) == 768
     # Config
     assert profile.deck_size == 10
-    assert profile.stage2_top_k == 50
+    assert profile.stage2_top_k == 40
     assert "embedding" in profile.weights
     # Rating history (top 10)
     assert len(profile.recent_positive_titles) == 10

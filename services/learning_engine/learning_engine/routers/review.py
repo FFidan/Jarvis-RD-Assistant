@@ -1,6 +1,7 @@
 """Review and stats endpoints."""
 
-from datetime import datetime
+import logging
+from datetime import datetime, timedelta
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -8,9 +9,44 @@ from jarvis_common import ErrorResponse
 from jarvis_common.streak import compute_streak
 
 from learning_engine.converters import row_to_card_response
-from learning_engine.deps import get_db_pool, get_fsrs_manager, limiter
+from learning_engine.deps import get_db_pool, limiter
 from learning_engine.fsrs_manager import FSRSManager
 from learning_engine.models import CardResponse, RetentionStats, ReviewRequest, ReviewResponse
+
+logger = logging.getLogger(__name__)
+
+
+async def _build_fsrs_manager_from_db(conn: asyncpg.pool.PoolConnectionProxy) -> FSRSManager:
+    """Read live fsrs.desired_retention and fsrs.learning_steps from user_config.
+
+    Both keys are read per-review so that live edits take effect immediately
+    without a service restart.
+    """
+    desired_retention = 0.9
+    learning_steps: list[timedelta] | None = None
+
+    rows = await conn.fetch(
+        "SELECT key, value FROM user_config WHERE key IN ($1, $2)",
+        "fsrs.desired_retention",
+        "fsrs.learning_steps",
+    )
+    for row in rows:
+        try:
+            if row["key"] == "fsrs.desired_retention":
+                desired_retention = float(row["value"])
+            elif row["key"] == "fsrs.learning_steps":
+                import json
+
+                steps_raw = (
+                    json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                )
+                if isinstance(steps_raw, list) and len(steps_raw) == 2:
+                    learning_steps = [timedelta(minutes=int(s)) for s in steps_raw]
+        except Exception:
+            logger.warning("Could not parse fsrs config key %s, using default", row["key"])
+
+    return FSRSManager(desired_retention=desired_retention, learning_steps=learning_steps)
+
 
 router = APIRouter(
     prefix="/api",
@@ -46,15 +82,19 @@ async def submit_review(
     card_id: int,
     body: ReviewRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-    fsrs_manager: FSRSManager = Depends(get_fsrs_manager),
 ) -> ReviewResponse:
-    """Submit a review for a card. Atomic: updates FSRS state and logs review."""
+    """Submit a review for a card. Atomic: updates FSRS state and logs review.
+
+    Builds a fresh FSRSManager per request so that live edits to
+    fsrs.desired_retention and fsrs.learning_steps take effect immediately.
+    """
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
             if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
 
+            fsrs_manager = await _build_fsrs_manager_from_db(conn)
             new_state, log_dict, next_due = fsrs_manager.schedule_review(
                 row["fsrs_state"], body.rating.value
             )

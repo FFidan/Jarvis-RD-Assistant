@@ -76,22 +76,6 @@ const CONFIG_METADATA: Record<
     description: 'High-capability model for summarization, extraction, and RAG',
     group: 'LLM Models',
   },
-  'paper.max_daily': {
-    group: 'Paper Workflow',
-    label: 'Max papers fetched per day',
-    description: 'How many new papers to import in a single discovery run.',
-    type: 'number',
-    min: 5,
-    max: 500,
-    step: 5,
-  },
-  'paper.auto_generate_cards': {
-    group: 'Paper Workflow',
-    label: 'Auto-generate flashcards after summarization',
-    description:
-      'Automatically generate spaced-repetition flashcards when a paper is summarized.',
-    type: 'boolean',
-  },
 };
 // Note: 'user.timezone' is intentionally excluded from CONFIG_METADATA here;
 // it is owned exclusively by AutomationSection (searchable combobox).
@@ -104,7 +88,7 @@ function formatConfigValue(value: unknown): string {
 /** Preferred order for groups (unlisted groups sort alphabetically after these).
  *  Keys without metadata fall into 'Other' which is intentionally omitted here
  *  so they disappear rather than exposing raw JSON to the UI. */
-const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Paper Workflow', 'Preferences'];
+const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Preferences'];
 
 // ---------------------------------------------------------------------------
 // IngestionSection

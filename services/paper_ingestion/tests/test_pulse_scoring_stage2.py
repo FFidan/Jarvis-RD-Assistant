@@ -212,8 +212,8 @@ async def test_stage2_concurrency_limit():
 
     assert len(result) == num_candidates
     assert call_count[0] == num_candidates
-    # Max concurrency should be ≤5
-    assert max_in_flight[0] <= 5
+    # Max concurrency should be ≤8
+    assert max_in_flight[0] <= 8
 
 
 @pytest.mark.asyncio

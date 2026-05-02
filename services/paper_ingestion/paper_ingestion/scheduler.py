@@ -83,7 +83,7 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT key, value FROM user_config WHERE key IN"
-                " ('zotero.enabled', 'zotero.poll_enabled', 'zotero.poll_cron')"
+                " ('zotero.poll_enabled', 'zotero.poll_cron')"
             )
     except Exception:
         logger.exception("zotero: failed to read zotero config")
@@ -93,10 +93,9 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
     for row in rows:
         cfg[row["key"]] = row["value"]
 
-    # Integration must be enabled AND poll specifically enabled.
-    enabled = bool(cfg.get("zotero.enabled", False))
+    # Poll is gated solely on zotero.poll_enabled.
     poll_enabled = bool(cfg.get("zotero.poll_enabled", False))
-    if not (enabled and poll_enabled):
+    if not poll_enabled:
         return False, _DEFAULT_ZOTERO_CRON
 
     # Validate cron expression.

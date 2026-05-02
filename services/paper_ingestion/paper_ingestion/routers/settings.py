@@ -51,11 +51,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "llm.smart_model",
         "llm.fast_model",
         "llm.embed_model",
-        "ui.page_size",
-        "ingestion.max_papers_per_run",
-        "ingestion.chunk_size",
-        "paper.max_daily",
-        "paper.auto_generate_cards",
         # FSRS
         "fsrs.desired_retention",
         "fsrs.learning_steps",
@@ -218,6 +213,26 @@ async def _reload_telegram_nudges() -> None:
             )
 
 
+def _validate_fsrs_retention(v: Any) -> None:
+    """Validate fsrs.desired_retention — float in (0, 1) exclusive."""
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        raise ValueError("fsrs.desired_retention must be a number")
+    fv = float(v)
+    if not (0.0 < fv < 1.0):
+        raise ValueError("fsrs.desired_retention must be between 0.0 and 1.0 (exclusive)")
+
+
+def _validate_fsrs_learning_steps(v: Any) -> None:
+    """Validate fsrs.learning_steps — list of exactly 2 positive integers (minutes)."""
+    if not isinstance(v, list):
+        raise ValueError("fsrs.learning_steps must be a list")
+    if len(v) != 2:
+        raise ValueError("fsrs.learning_steps must have exactly 2 elements")
+    for i, step in enumerate(v):
+        if isinstance(step, bool) or not isinstance(step, int) or step <= 0:
+            raise ValueError(f"fsrs.learning_steps[{i}] must be a positive integer (minutes)")
+
+
 def _validate_zotero_cron(v: Any) -> None:
     if not isinstance(v, str):
         raise ValueError("zotero.poll_cron must be a string")
@@ -228,6 +243,9 @@ def _validate_zotero_cron(v: Any) -> None:
 
 
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
+    # FSRS
+    "fsrs.desired_retention": _validate_fsrs_retention,
+    "fsrs.learning_steps": _validate_fsrs_learning_steps,
     "pulse.cron": _validate_cron,
     "pulse.weights": _validate_pulse_weights,
     "pulse.deck_size": _validate_positive_int,

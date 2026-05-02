@@ -20,6 +20,12 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { TimeSelect } from '@/components/ui/time-select';
 import { formatDate } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
@@ -107,6 +113,21 @@ const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
     'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph.',
   classifier:
     'Probability from the optional per-user classifier trained from Pulse ratings. Requires enough positive and negative feedback.',
+};
+
+/**
+ * Activation-gate tooltips for the 4 conditional signals. Shown on the slider
+ * wrapper so users understand what is needed before the signal fires.
+ */
+const CONDITIONAL_SIGNAL_GATE_TOOLTIPS: Partial<Record<PulseWeightKey, string>> = {
+  classifier:
+    'Requires scikit-learn installed on the backend and at least 30 Pulse ratings to train the personal classifier.',
+  citation_pagerank:
+    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
+  citation_count:
+    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
+  citation_adamic_adar:
+    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
 };
 
 // ---------------------------------------------------------------------------
@@ -307,7 +328,7 @@ export function PulseSection() {
   const enabled = getConfigValue<boolean>(configs, 'pulse.enabled', false);
   const cron = getConfigValue<string>(configs, 'pulse.cron', '0 4 * * *');
   const deckSize = getConfigValue<number>(configs, 'pulse.deck_size', 10);
-  const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 50);
+  const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 40);
   const likedWeight = Number(getConfigValue(configs, 'recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue(configs, 'recommendation.project_weight', 0.4));
   const l2LambdaConfig = Number(getConfigValue(configs, 'pulse.l2_lambda', 0.5));
@@ -388,10 +409,38 @@ export function PulseSection() {
   if (stats) {
     if (stats.last_error) {
       statusBadge = <Badge variant="destructive">Failed</Badge>;
-    } else if (stats.decks_generated > 0) {
-      statusBadge = <Badge variant="default" className="bg-green-600">OK</Badge>;
+    } else if (stats.degraded_reason) {
+      statusBadge = (
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="text-amber-600 border-amber-400 cursor-default">
+                Degraded
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs text-xs">
+              {stats.degraded_reason}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
     } else {
-      statusBadge = <Badge variant="outline">No decks yet</Badge>;
+      statusBadge = (
+        <TooltipProvider delayDuration={150}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="text-green-600 border-green-400 cursor-default">
+                OK
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs text-xs">
+              {stats.last_run_at
+                ? `Last run: ${formatDate(stats.last_run_at)}`
+                : 'No runs yet'}
+            </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      );
     }
   }
 
@@ -502,30 +551,47 @@ export function PulseSection() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {/* 6 weight sliders */}
-          {PULSE_WEIGHT_KEYS.map((key) => (
-            <div key={key} className="space-y-1">
-              <Label className="flex items-center justify-between text-xs">
-                <span className="flex items-center gap-1">
-                  {PULSE_WEIGHT_LABELS[key]}
-                  <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
-                </span>
-                <span className="font-mono text-muted-foreground">
-                  {localPulseWeights[key].toFixed(2)}
-                </span>
-              </Label>
-              <input
-                type="range"
-                aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
-                min={0}
-                max={1}
-                step={0.05}
-                value={localPulseWeights[key]}
-                onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
-                className="w-full accent-primary"
-              />
-            </div>
-          ))}
+          {/* Weight sliders — conditional signals include an extra gate tooltip */}
+          {PULSE_WEIGHT_KEYS.map((key) => {
+            const gateTooltip = CONDITIONAL_SIGNAL_GATE_TOOLTIPS[key];
+            const sliderDiv = (
+              <div key={key} className="space-y-1">
+                <Label className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1">
+                    {PULSE_WEIGHT_LABELS[key]}
+                    <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
+                  </span>
+                  <span className="font-mono text-muted-foreground">
+                    {localPulseWeights[key].toFixed(2)}
+                  </span>
+                </Label>
+                <input
+                  type="range"
+                  aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={localPulseWeights[key]}
+                  onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
+                  className="w-full accent-primary"
+                />
+              </div>
+            );
+            if (!gateTooltip) return sliderDiv;
+            return (
+              <TooltipProvider key={key} delayDuration={150}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    {/* div wrapper required — input cannot be a TooltipTrigger directly */}
+                    <div data-testid={`gate-tooltip-trigger-${key}`}>{sliderDiv}</div>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="max-w-xs text-xs">
+                    {gateTooltip}
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            );
+          })}
           <div className="flex items-center">
             <p
               className={`text-xs ${

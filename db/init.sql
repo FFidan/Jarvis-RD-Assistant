@@ -47,9 +47,7 @@ INSERT INTO user_config (key, value) VALUES
     ('llm.embed_model', '"embed"'),
     ('user.timezone', '"UTC"'),
     ('fsrs.desired_retention', '0.9'),
-    ('fsrs.learning_steps', '[1, 10]'),
-    ('paper.max_daily', '20'),
-    ('paper.auto_generate_cards', 'true')
+    ('fsrs.learning_steps', '[1, 10]')
 ON CONFLICT (key) DO NOTHING;
 
 CREATE TABLE llm_usage_log (

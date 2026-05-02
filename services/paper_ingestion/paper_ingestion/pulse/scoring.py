@@ -27,7 +27,7 @@ from paper_ingestion.rag.verification import RagConfidence
 
 logger = logging.getLogger(__name__)
 
-_LLM_CONCURRENCY = 5
+_LLM_CONCURRENCY = 8
 _LLM_MODEL = "smart"  # mistral-nemo: non-thinking model, reliable JSON output
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0

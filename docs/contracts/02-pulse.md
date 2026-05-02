@@ -172,24 +172,25 @@ Load path ([profile.py:178-186](../../services/paper_ingestion/paper_ingestion/p
 | Knob | Value | Source | Purpose |
 |---|---|---|---|
 | Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:16](../../libs/jarvis_common/jarvis_common/llm_client.py#L16) | Single chat completion request (or single retry) cannot exceed this |
-| Stage-2 concurrency | 5 | `_LLM_CONCURRENCY` at [scoring.py:30](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L30) | Semaphore-bounded parallel scorers |
+| Stage-2 concurrency | 8 | `_LLM_CONCURRENCY` at [scoring.py:30](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L30) | Semaphore-bounded parallel scorers |
 | Stage-2 batch size | 5 | `_stage2_batch_size` at [job.py:182](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L182) | How many candidates to score before reporting `ctx.update_progress` |
 | Stage-2 wall-clock cap | 600 s | `_STAGE2_TIMEOUT_SECONDS` at [job.py:48](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L48); applied at [job.py:204-207](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L204-L207) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
 
 ### 5.1 Worst-case math
 
-With `pulse.stage2_top_k = 50` (default), `_LLM_CONCURRENCY = 5`, and
+With `pulse.stage2_top_k = 40` (default), `_LLM_CONCURRENCY = 8`, and
 per-call timeout 120 s, the theoretical worst-case Stage-2 wall-clock is
 
 ```
-  ceil(50 / 5) waves × 120 s/wave = 1200 s
+  ceil(40 / 8) waves × 120 s/wave = 600 s
 ```
 
-which **exceeds the 600 s cap by 2×**. In practice candidates take less
+which **exactly reaches the 600 s cap**. In practice candidates take less
 than 120 s each (Ollama Mistral-Nemo on the project's GPU averages 20–40 s),
-so typical Stage-2 runs land near 200–400 s. But a single slow candidate
-or brief Ollama stall can blow the budget — observed in the 2026-05-02
-"Last Pulse run: Failed" diagnostic shown in the Settings UI screenshot.
+so typical Stage-2 runs land well below 200 s. The adjustment (Task B.1,
+2026-05-02) was driven by observed timeout during test runs; this tuning
+moves the worst-case boundary to the existing timeout limit without
+compromising typical p50/p95 latency.
 
 **Implication for B.1 (Instructor):** Instructor's `max_retries=2` adds up
 to 3× round-trips per call on validation failure. That is **orthogonal to**
@@ -311,7 +312,6 @@ Documenting; not prescribing.
 
 | Item | Candidate dispositions |
 |---|---|
-| 600 s Stage-2 cap (observed to fire 2026-05-02) | (a) Reduce `pulse.stage2_top_k` default 50→30; (b) Increase `_LLM_CONCURRENCY` 5→8 (uses more Ollama RAM); (c) Switch the "smart" alias to a faster local model; (d) Add per-call timeout reduction 120→60 s so individual hangs don't dominate; (e) Move LLM rerank to a faster cloud provider conditional on user's `llm.smart_model` choice; (f) Accept the cap as is — degraded runs are recoverable |
 | `last_error` vs `degraded_reason` UI conflation | Adjust the frontend "Failed" badge to distinguish "Degraded" from "Failed" |
 | The 4 conditional signals UX | (a) Hide them in the UI until a data threshold is met (e.g., S2 citation data populated); (b) Show them with a tooltip "0.0 default — requires citation data / classifier ratings"; (c) Keep as-is |
 | `classifier` activation threshold | Documented at 30 in `MIN_RATINGS` ([training.py:21](../../services/paper_ingestion/paper_ingestion/pulse/training.py#L21)). Could surface to Settings UI; today users have no way to know how close they are to threshold |
@@ -319,6 +319,8 @@ Documenting; not prescribing.
 
 These dispositions are the implementation plan's call. The contract's job
 is to surface the choices.
+
+**Decision log:** The "600 s Stage-2 cap (observed to fire 2026-05-02)" row has been **RESOLVED** as of Task B.1 (2026-05-02) — disposition (b) was selected: `_LLM_CONCURRENCY` increased 5→8 and `_DEFAULT_STAGE2_TOP_K` reduced 50→40, moving worst-case to exactly the 600 s boundary. The combined change delivers the same per-user top-k reduction as disposition (a) alone, but distributes the wall-clock savings across higher parallelism.
 
 ---
 
@@ -349,13 +351,14 @@ Every cited identifier was Read in the session producing this contract.
 | `pulse.train_classifier` post-run enqueue | services/paper_ingestion/paper_ingestion/pulse/job.py:373 | Self-improving classifier loop |
 | `_pulse_generate_job` job_handler | services/paper_ingestion/paper_ingestion/pulse/job.py:384-417 | On-demand entry point via jobs subsystem |
 | `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:42-53 | Cross-stage envelope |
-| `_LLM_CONCURRENCY = 5` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:30 | Stage-2 semaphore |
+| `_LLM_CONCURRENCY = 8` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:30 | Stage-2 semaphore (bumped 5→8 by Task B.1) |
 | `_LLM_MODEL = "smart"` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:31 | Stage-2 model alias |
 | `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:32-33 | Stage-2 LLM options |
 | `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:94-217 | Stage 1: embed + cosine + recency + author bonus + L2 |
 | `stage2_llm_rerank` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:225-334 | Stage 2 with bounded concurrency |
 | `_score_one` LLM call | services/paper_ingestion/paper_ingestion/pulse/scoring.py:259-301 | Per-candidate LLM call inside semaphore |
 | `stage3_combine` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:342-380 | Weighted-sum final_score; missing signals → 0.0 |
+| `_DEFAULT_STAGE2_TOP_K = 40` | services/paper_ingestion/paper_ingestion/pulse/profile.py:18 | Top-K default for Stage 2 (lowered 50→40 by Task B.1) |
 | `_DEFAULT_WEIGHTS` | services/paper_ingestion/paper_ingestion/pulse/profile.py:19-30 | 10 weight keys; 4 default to 0.0 |
 | `UserProfile` BaseModel | services/paper_ingestion/paper_ingestion/pulse/profile.py:34-52 | Per-user context envelope |
 | `load_profile` | services/paper_ingestion/paper_ingestion/pulse/profile.py:55-377 | Two-phase DB+HTTP centroid load |

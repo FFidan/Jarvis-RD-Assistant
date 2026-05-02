@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 # Sensible defaults mirroring migration 018 seed values
 _DEFAULT_DECK_SIZE = 10
-_DEFAULT_STAGE2_TOP_K = 50
+_DEFAULT_STAGE2_TOP_K = 40
 _DEFAULT_WEIGHTS: dict[str, float] = {
     "embedding": 0.2,
     "topic": 0.2,

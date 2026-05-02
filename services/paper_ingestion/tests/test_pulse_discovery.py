@@ -310,7 +310,7 @@ def test_per_source_cap_divides_across_sources():
     """per_source_cap should spread stage2_top_k * 2 across sources, not multiply."""
     import math
 
-    stage2_top_k = 50
+    stage2_top_k = 40
     sources = ["arxiv", "s2", "openalex", "pubmed"]
     per_source_cap = max(
         10,
@@ -319,7 +319,7 @@ def test_per_source_cap_divides_across_sources():
             math.ceil(stage2_top_k * 2 / max(1, len(sources))),
         ),
     )
-    assert per_source_cap == 25  # 100 / 4 = 25
+    assert per_source_cap == 20  # 80 / 4 = 20
     assert per_source_cap * len(sources) <= stage2_top_k * 2 + len(sources)  # ~total budget
 
 
@@ -345,7 +345,7 @@ def test_per_source_cap_single_source():
     """With 1 source, cap is bounded by stage2_top_k (no blowup)."""
     import math
 
-    stage2_top_k = 50
+    stage2_top_k = 40
     sources = ["arxiv"]
     per_source_cap = max(
         10,
@@ -354,8 +354,8 @@ def test_per_source_cap_single_source():
             math.ceil(stage2_top_k * 2 / max(1, len(sources))),
         ),
     )
-    # 100 / 1 = 100, but capped at stage2_top_k=50
-    assert per_source_cap == 50
+    # 80 / 1 = 80, but capped at stage2_top_k=40
+    assert per_source_cap == 40
 
 
 @pytest.mark.asyncio

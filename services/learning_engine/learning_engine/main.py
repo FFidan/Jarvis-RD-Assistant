@@ -59,30 +59,18 @@ async def _warn_multitenant_stub(app: FastAPI) -> None:
 
 
 async def _init_fsrs_and_generators(app: FastAPI) -> None:
-    """Load FSRS retention from user_config + construct CardGenerator + AnkiExporter."""
+    """Construct CardGenerator + AnkiExporter. FSRSManager is built per-review from DB."""
     from jarvis_common.llm_client import get_litellm_config
 
-    desired_retention = 0.9
-    try:
-        async with app.state.db_pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = $1",
-                "fsrs.desired_retention",
-            )
-            if row:
-                desired_retention = float(row["value"])
-    except Exception:
-        logger.error("Could not load fsrs.desired_retention, using default 0.9", exc_info=True)
-
     litellm_config = get_litellm_config()
-    app.state.fsrs_manager = FSRSManager(desired_retention=desired_retention)
+    # Default FSRSManager used by card-creation paths (not reviews — reviews get per-request
+    # manager with live DB values for desired_retention and learning_steps).
+    app.state.fsrs_manager = FSRSManager()
     app.state.card_generator = CardGenerator(
         http_client=app.state.http_client,
         litellm_config=litellm_config,
     )
     app.state.anki_exporter = AnkiExporter()
-    # Stash the value for the post-init log line.
-    app.state._fsrs_desired_retention = desired_retention
 
 
 async def _register_le_job_handlers(app: FastAPI) -> None:
@@ -93,9 +81,8 @@ async def _register_le_job_handlers(app: FastAPI) -> None:
 
 
 async def _log_le_started(app: FastAPI) -> None:
-    """Echo the original ``Service started (retention=0.90)`` log line."""
-    retention = getattr(app.state, "_fsrs_desired_retention", 0.9)
-    logger.info("Learning Engine init complete (retention=%.2f)", retention)
+    """Log service startup confirmation."""
+    logger.info("Learning Engine init complete")
 
 
 _LEARNING_ENGINE_JOB_KINDS: set[str] = {

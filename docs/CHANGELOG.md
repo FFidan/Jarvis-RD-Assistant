@@ -2,6 +2,35 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.5.0] - 2026-05-02 — Contracts Wave 1 (settings cleanup + Pulse tuning + UX polish)
+
+Phase-A continuation per [docs/plans/2026-05-02-contracts-settings-and-ux.md](plans/2026-05-02-contracts-settings-and-ux.md). 6 commits on `feat/contract-impl-wave-1` (`75ffd80..50941c1`) + 2 carryover follow-up commits (`0b732b6` star transition guard, `18457d4` slider fallback). All 4 evergreen contracts at [docs/contracts/](contracts/) refreshed with the now-resolved dispositions for the GHOST/PARTIAL/ANOMALY tail.
+
+### Removed (BREAKING — config-API)
+- 5 GHOST `user_config` keys removed from `_ALLOWED_CONFIG_KEYS` in `services/paper_ingestion/paper_ingestion/routers/settings.py`: `paper.max_daily`, `paper.auto_generate_cards`, `ui.page_size`, `ingestion.max_papers_per_run`, `ingestion.chunk_size`. `PUT /api/config/<key>` for any of these now returns HTTP 400 "Unknown config key". Seed UPSERTs removed from `db/init.sql`. Settings UI no longer renders the corresponding controls.
+
+### Added
+- `fsrs.learning_steps` is now a real py-fsrs parameter (per-review DB read; default `[1m, 10m]` matches the library default).
+- `zotero.auto_push_on_star` toggle wired to the star handler. With the toggle ON, project-linked papers auto-enqueue a `zotero.push` job on the off→on star transition. Idempotent — repeated `/star` calls do not double-enqueue (transition guard at `0b732b6`).
+- PulseSection badge now distinguishes `last_error` (red Failed) from `degraded_reason` (amber Degraded with reason tooltip) from healthy (green OK).
+- Tooltips on the 4 conditional weight sliders (`classifier`, `citation_pagerank`, `citation_count`, `citation_adamic_adar`) explain the activation gate.
+
+### Changed
+- `fsrs.desired_retention` promoted PARTIAL→LIVE: dropped startup cache in `services/learning_engine/learning_engine/main.py`; read per-review.
+- Pulse latency tuning: `_LLM_CONCURRENCY = 5 → 8` (`services/paper_ingestion/paper_ingestion/pulse/scoring.py`); `_DEFAULT_STAGE2_TOP_K = 50 → 40` (`services/paper_ingestion/paper_ingestion/pulse/profile.py`). Worst-case 40×120/8 = 600 s — fits inside the existing `_STAGE2_TIMEOUT_SECONDS` cap. Frontend slider fallback synced (`18457d4`).
+- Doc rollup: `docs/contracts/01-settings.md` reflects all of the above (commit `50941c1`).
+
+### Fixed
+- `zotero.enabled` ANOMALY: deleted orphan read in `services/paper_ingestion/paper_ingestion/scheduler.py`. The legitimate `LIKE 'zotero.%'` wildcard consumer at `services/paper_ingestion/paper_ingestion/services/zotero_service.py` is unaffected.
+- `star_paper` off→on transition guard (`0b732b6`): reads `paper_user_state.starred` before upsert; double-/star calls (client retry, double-tap) no longer double-enqueue Zotero pushes.
+
+### Notes
+- No DB migrations. Stale `user_config` rows for the 5 removed keys are harmless orphans on existing DBs (no remaining reader).
+- Source plan: `docs/plans/2026-05-02-contracts-settings-and-ux.md` (now flagged SHIPPED).
+- Branch: `feat/contract-impl-wave-1` — to be merged into master in a later consolidation alongside the parallel UI redesign branch.
+- Out of scope (deferred to Phase B): Marathon B.1 Instructor / B.2 Langfuse / B.3 mxbai-rerank-base-v2 / B.4 Taskiq.
+- Quality gates at branch tip: ruff clean, frontend lint clean, 6/6 zotero-push tests + 20/20 papers-lifecycle tests + 563/563 frontend tests pass.
+
 ## [1.4.4] - 2026-05-02 — Round 15 Wave 1.8 (post-deploy bug fixes + inbox source filter)
 
 W1.7 deployment surfaced 4 issues. Bundled with one feature gap into W1.8: 4 file-disjoint tasks (W1.8-A backend; B+C+D frontend), all merged at 48ce145 on `audit/round-15-w1.8-postdeploy-fixes`.

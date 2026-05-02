@@ -898,4 +898,181 @@ async def test_test_provider_error_response_does_not_leak_upstream_body():
         )
     finally:
         app.dependency_overrides.clear()
-        app.state.limiter.enabled = False
+
+
+# ---------------------------------------------------------------------------
+# Tests: A.1 Ghost key deletion — deleted keys return 400
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ghost_key_paper_max_daily_returns_400(_app):
+    """PUT /api/config/paper.max_daily returns 400 (key removed from allow-list)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/paper.max_daily",
+            json={"key": "paper.max_daily", "value": 10},
+        )
+
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_ghost_key_paper_auto_generate_cards_returns_400(_app):
+    """PUT /api/config/paper.auto_generate_cards returns 400 (key removed from allow-list)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/paper.auto_generate_cards",
+            json={"key": "paper.auto_generate_cards", "value": True},
+        )
+
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_ghost_key_ui_page_size_returns_400(_app):
+    """PUT /api/config/ui.page_size returns 400 (key removed from allow-list)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/ui.page_size",
+            json={"key": "ui.page_size", "value": 20},
+        )
+
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_ghost_key_ingestion_max_papers_returns_400(_app):
+    """PUT /api/config/ingestion.max_papers_per_run returns 400 (key removed from allow-list)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/ingestion.max_papers_per_run",
+            json={"key": "ingestion.max_papers_per_run", "value": 50},
+        )
+
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_ghost_key_ingestion_chunk_size_returns_400(_app):
+    """PUT /api/config/ingestion.chunk_size returns 400 (key removed from allow-list)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/ingestion.chunk_size",
+            json={"key": "ingestion.chunk_size", "value": 512},
+        )
+
+    assert resp.status_code == 400
+    assert "Unknown config key" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Tests: A.2 FSRS validators
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fsrs_desired_retention_valid_accepted(_app):
+    """PUT /api/config/fsrs.desired_retention accepts a valid value in (0, 1)."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/fsrs.desired_retention",
+            json={"key": "fsrs.desired_retention", "value": 0.85},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "fsrs.desired_retention"
+    assert body["value"] == 0.85
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", [0.0, 1.0, -0.1, 1.5, "high", True])
+async def test_fsrs_desired_retention_invalid_rejected(_app, bad_value):
+    """PUT /api/config/fsrs.desired_retention rejects out-of-range or wrong-type values."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/fsrs.desired_retention",
+            json={"key": "fsrs.desired_retention", "value": bad_value},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_fsrs_learning_steps_valid_accepted(_app):
+    """PUT /api/config/fsrs.learning_steps accepts a valid [int, int] list."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/fsrs.learning_steps",
+            json={"key": "fsrs.learning_steps", "value": [5, 20]},
+        )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["key"] == "fsrs.learning_steps"
+    assert body["value"] == [5, 20]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        [1],  # only 1 element
+        [1, 2, 3],  # 3 elements
+        [0, 10],  # zero is not positive
+        [-1, 10],  # negative
+        [1.5, 10],  # float, not int
+        "1,10",  # string
+        {"a": 1},  # dict
+    ],
+)
+async def test_fsrs_learning_steps_invalid_rejected(_app, bad_value):
+    """PUT /api/config/fsrs.learning_steps rejects malformed values."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/fsrs.learning_steps",
+            json={"key": "fsrs.learning_steps", "value": bad_value},
+        )
+
+    assert resp.status_code == 400
