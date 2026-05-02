@@ -34,6 +34,7 @@ from paper_ingestion.models import (
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
 from paper_ingestion.routers._paper_helpers import (
+    _assert_paper_in_states,
     _trash_paper,
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
@@ -531,6 +532,18 @@ async def _apply_bulk_action(
         await _upsert_recommendation_feedback(conn, paper_id, user_id, "positive", "feed_thumbs")
     elif action == "feedback_negative":
         await _upsert_recommendation_feedback(conn, paper_id, user_id, "negative", "feed_thumbs")
+    elif action == "hard_delete":
+        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
+        # Caller (bulk_action_papers) already wraps each paper in a per-paper
+        # SAVEPOINT (async with conn.transaction()), so no inner txn is needed.
+        await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
+        try:
+            await delete_paper_vectors(paper_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
+            logger.exception(
+                "Qdrant cleanup failed for paper %d in bulk hard_delete; vectors are now orphans",
+                paper_id,
+            )
     else:
         raise ValueError(f"Unknown bulk action: {action}")
 
@@ -554,6 +567,9 @@ async def save_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
+        await _assert_paper_in_states(
+            conn, paper_id, user_id, allowed=("inbox", "done", "to_read", "reading")
+        )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="to_read")
     return {"status": "ok", "paper_id": paper_id}
 
@@ -601,6 +617,7 @@ async def skip_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("inbox",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     return {"status": "ok", "paper_id": paper_id}
 
@@ -624,6 +641,9 @@ async def reading_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
+        await _assert_paper_in_states(
+            conn, paper_id, user_id, allowed=("to_read", "reading", "done")
+        )
         await _upsert_state_and_starred(conn, paper_id, user_id, state="reading")
     return {"status": "ok", "paper_id": paper_id}
 

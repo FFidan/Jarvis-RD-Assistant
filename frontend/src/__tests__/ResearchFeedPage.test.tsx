@@ -2054,4 +2054,54 @@ describe('ResearchFeedPage', () => {
 
     expect(useBulkSelection.getState().selectedIds.size).toBe(0);
   });
+
+  // ── W1.8-D: Inbox source-type filter chips ─────────────────────────────────
+
+  it('W1.8-D: Inbox surface shows 5 source-type filter chips', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /^Inbox/ }));
+
+    const sourceTablist = await screen.findByRole('tablist', { name: 'Filter by source' });
+    const chips = sourceTablist.querySelectorAll('[role="tab"]');
+    expect(chips).toHaveLength(5);
+    expect(screen.getByRole('tab', { name: 'All sources' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'arXiv' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Semantic Scholar' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'OpenAlex' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'PubMed' })).toBeInTheDocument();
+  });
+
+  it('W1.8-D: Library surface does NOT show source-type filter chips', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /^Library/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+    });
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'All sources' })).not.toBeInTheDocument();
+  });
+
+  it('W1.8-D: clicking arXiv chip calls fetchFeed with sourceTypes="arxiv"', async () => {
+    const { fetchFeed } = await import('@/lib/api');
+    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /^Inbox/ }));
+    await screen.findByRole('tablist', { name: 'Filter by source' });
+
+    await user.click(screen.getByRole('tab', { name: 'arXiv' }));
+
+    await waitFor(() => {
+      const calls = vi.mocked(fetchFeed).mock.calls;
+      expect(calls.some((call) => call[0]?.sourceTypes === 'arxiv')).toBe(true);
+    });
+  });
 });

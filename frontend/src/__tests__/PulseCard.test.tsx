@@ -209,6 +209,81 @@ describe('PulseCard', () => {
     });
   });
 
+  describe('cache invalidation correctness', () => {
+    it('trashAndReject invalidates pulse-today (not the dead pulse-deck key)', async () => {
+      const user = userEvent.setup();
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      const onRate = vi.fn();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PulseCard card={sampleCard} onRate={onRate} />
+        </QueryClientProvider>,
+      );
+      await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+      await waitFor(() => {
+        expect(vi.mocked(api.trashAndRejectPaper)).toHaveBeenCalledWith(42);
+      });
+      // Must invalidate pulse-today (the live key used by the useQuery)
+      const calledKeys = invalidateSpy.mock.calls.map((call) => call[0]);
+      expect(calledKeys).toContainEqual({ queryKey: ['pulse-today'] });
+      // Must NOT invalidate the dead key pulse-deck
+      expect(calledKeys).not.toContainEqual({ queryKey: ['pulse-deck'] });
+    });
+
+    it('unsave invalidates pulse-today', async () => {
+      const user = userEvent.setup();
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+      const onRate = vi.fn();
+      const savedCard = { ...sampleCard, user_state: 'to_read' as const };
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PulseCard card={savedCard} onRate={onRate} />
+        </QueryClientProvider>,
+      );
+      await user.click(screen.getByRole('button', { name: /^unsave$/i }));
+      await waitFor(() => {
+        expect(vi.mocked(api.unsavePaper)).toHaveBeenCalledWith(42);
+      });
+      const calledKeys = invalidateSpy.mock.calls.map((call) => call[0]);
+      expect(calledKeys).toContainEqual({ queryKey: ['pulse-today'] });
+    });
+
+    it('trashAndReject removes card from pulse-today cache optimistically', async () => {
+      const user = userEvent.setup();
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      // Pre-seed the cache with a 2-card deck; sampleCard has card_id=1
+      queryClient.setQueryData(['pulse-today'], {
+        deck_id: 10,
+        deck_date: '2026-05-02',
+        card_count: 2,
+        generated_at: new Date().toISOString(),
+        stats: {},
+        cards: [
+          { ...sampleCard, card_id: 1, paper_id: 42, rank: 1 },
+          { ...sampleCard, card_id: 2, paper_id: 99, rank: 2, paper_title: 'Other Paper' },
+        ],
+      });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PulseCard card={sampleCard} onRate={vi.fn()} />
+        </QueryClientProvider>,
+      );
+      await user.click(screen.getByRole('button', { name: /trash and reject/i }));
+      // onMutate fires synchronously — cache is patched before the mutation resolves
+      const cached = queryClient.getQueryData<{ cards: { card_id: number }[] }>(['pulse-today']);
+      expect(cached?.cards).toHaveLength(1);
+      expect(cached?.cards.every((c) => c.card_id !== 1)).toBe(true);
+    });
+  });
+
   describe('reasoning verification badge', () => {
     it('renders green check icon when reasoning_verified is true', () => {
       renderCard({}, { reasoning_verified: true, reasoning_confidence: 'HIGH' });

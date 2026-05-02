@@ -366,6 +366,7 @@ async def load_today(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
+              AND COALESCE(pus.state, 'inbox') != 'trash'
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],

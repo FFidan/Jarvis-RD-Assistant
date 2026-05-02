@@ -132,6 +132,23 @@ describe('ActionItemsCard', () => {
     expect(await screen.findByText("You're all caught up")).toBeInTheDocument();
   });
 
+  it('collapsed ActionItemsCard renders exactly one "Expand to triage" control', async () => {
+    // Need >5 papers so showToggle = true
+    const sixPaperFeed: FeedResponse = {
+      papers: [1, 2, 3, 4, 5, 6].map((id) => makePaper(id, `Paper ${id}`)),
+      total: 6,
+    };
+    vi.mocked(api.fetchFeedPapers).mockResolvedValue(sixPaperFeed);
+    renderWithProviders();
+
+    // Wait for data — card auto-collapses when total > 5
+    await screen.findByText('Paper 1');
+
+    // Only the header button should be present; the CardContent duplicate is gone
+    const expandButtons = screen.queryAllByRole('button', { name: /expand to triage/i });
+    expect(expandButtons).toHaveLength(1);
+  });
+
   it('Process All fires all jobs in parallel (not sequentially)', async () => {
     // startJob never resolves — so if it were sequential the second call would
     // never happen until the first settled; with Promise.all all 3 are called

@@ -72,6 +72,8 @@ def row_to_feed_paper(row: asyncpg.Record) -> FeedPaper:
         summary_brief=row.get("summary_brief"),
         tldr=row.get("tldr"),
         confidence=row.get("confidence"),
+        state=row.get("state", "inbox") or "inbox",
+        state_before_trash=row.get("state_before_trash"),
         starred=row.get("starred", False) or False,
         rating=row.get("rating"),
         has_chunks=row.get("has_chunks", False),

@@ -61,16 +61,32 @@ export function PulseCard({
 
   const trashAndRejectMut = useMutation({
     mutationFn: () => trashAndRejectPaper(card.paper_id),
+    onMutate: () => {
+      const prev = queryClient.getQueryData<import('@/types').PulseDeck>(['pulse-today']);
+      if (prev) {
+        queryClient.setQueryData<import('@/types').PulseDeck>(['pulse-today'], {
+          ...prev,
+          cards: prev.cards.filter((c) => c.card_id !== card.card_id),
+        });
+      }
+      return { prev };
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pulse-deck'] });
       queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
       queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
       toast.success('Trashed and excluded similar topics');
     },
-    onError: (err) =>
+    onError: (err, _vars, context) => {
+      if (context?.prev !== undefined) {
+        queryClient.setQueryData(['pulse-today'], context.prev);
+      }
       toast.error('Failed to trash & reject', {
         description: err instanceof Error ? err.message : 'Unknown error',
-      }),
+      });
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
+    },
   });
 
   const unsaveMut = useMutation({

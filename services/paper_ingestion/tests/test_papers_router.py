@@ -624,6 +624,7 @@ async def test_get_paper_detail_403_for_other_user(monkeypatch):
 async def test_save_paper_sets_state_to_read():
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)  # paper-exists check
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.save_paper.__wrapped__(request, 42, db_pool=pool)
@@ -643,6 +644,7 @@ async def test_save_paper_sets_state_to_read():
 async def test_skip_paper_sets_state_done():
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.skip_paper.__wrapped__(request, 42, db_pool=pool)
@@ -655,6 +657,7 @@ async def test_skip_paper_sets_state_done():
 async def test_reading_paper_sets_state_reading():
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
+    conn.fetchval.return_value = "to_read"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.reading_paper.__wrapped__(request, 42, db_pool=pool)
@@ -721,8 +724,9 @@ async def test_unstar_paper_sets_starred_false():
 
 @pytest.mark.asyncio
 async def test_trash_paper_sets_state_trash_and_records_state_before_trash():
-    """The atomic UPDATE branch sets state_before_trash := paper_user_state.state
-    while writing state := 'trash' in a single statement — no read-then-write race."""
+    """The atomic UPDATE branch sets state_before_trash via a CASE expression
+    (preserves prior value on re-trash, otherwise records current state) while
+    writing state := 'trash' in a single statement — no read-then-write race."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
@@ -736,7 +740,14 @@ async def test_trash_paper_sets_state_trash_and_records_state_before_trash():
         None,
     )
     assert trash_sql is not None, f"Expected atomic trash SQL; got {sql_calls}"
-    assert "state_before_trash = paper_user_state.state" in trash_sql
+    # W1.7-B: re-trash guard via CASE expression — preserves prior
+    # state_before_trash when already in 'trash'; otherwise records current state.
+    assert "CASE" in trash_sql
+    assert (
+        "WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash"
+        in trash_sql
+    )
+    assert "ELSE paper_user_state.state" in trash_sql
     assert "state = 'trash'" in trash_sql
 
 
@@ -1147,10 +1158,11 @@ async def test_bulk_trash_action_sets_state_before_trash_atomically():
 
     assert result == {"succeeded": [1, 2], "failed": []}
     sql_calls = [call.args[0] for call in conn.execute.await_args_list]
+    # W1.7-B: re-trash CASE expression preserves prior state_before_trash
+    # when already in 'trash'; otherwise records current state.
     assert any(
-        "state_before_trash = paper_user_state.state" in sql and "state = 'trash'" in sql
-        for sql in sql_calls
-    ), f"Expected atomic trash SQL; got {sql_calls}"
+        "ELSE paper_user_state.state" in sql and "state = 'trash'" in sql for sql in sql_calls
+    ), f"Expected atomic trash SQL with CASE expression; got {sql_calls}"
 
 
 @pytest.mark.asyncio
@@ -1246,6 +1258,7 @@ async def test_save_paper_idempotent_recall():
     """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=1)  # paper-exists check succeeds
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result1 = await papers.save_paper.__wrapped__(request, 1, db_pool=pool)
@@ -1275,9 +1288,15 @@ async def test_save_paper_404_when_paper_missing():
 
 @pytest.mark.asyncio
 async def test_skip_paper_idempotent_recall():
-    """Two consecutive PUT /skip calls both succeed; state stays 'done'."""
+    """Two consecutive PUT /skip calls both succeed; state stays 'done'.
+
+    Note: W1.7-B added an inbox-only precondition; in production a real second
+    skip would 409. This test mocks fetchval to "inbox" so both calls pass the
+    precondition, exercising the SQL upsert idempotency at the layer it owns.
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=1)
+    conn.fetchval.return_value = "inbox"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result1 = await papers.skip_paper.__wrapped__(request, 1, db_pool=pool)
@@ -1309,6 +1328,7 @@ async def test_reading_paper_idempotent_recall():
     """Two consecutive PUT /reading calls both succeed; state stays 'reading'."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=1)
+    conn.fetchval.return_value = "to_read"  # _assert_paper_in_states precondition (W1.7-B)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result1 = await papers.reading_paper.__wrapped__(request, 1, db_pool=pool)

@@ -451,3 +451,33 @@ async def test_persist_deck_empty_cards_writes_zero_count_row():
     assert len(update_calls) == 1
     _, actual_count, _ = update_calls[0].args
     assert actual_count == 0, f"Expected card_count=0 for empty deck, got {actual_count}"
+
+
+# ---------------------------------------------------------------------------
+# load_today — W1.8-A: trashed cards excluded from deck SQL
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_load_today_sql_excludes_trash_in_where_clause():
+    """The card fetch SQL in load_today must contain the trash-exclusion predicate.
+
+    W1.8-A Change A2: ``AND COALESCE(pus.state, 'inbox') != 'trash'`` must be
+    present in the WHERE clause so the DB never returns trashed cards in the
+    pulse deck response.
+    """
+    pool, conn = _make_pool_and_conn()
+    deck_row = make_pulse_deck_row(deck_date="2026-05-02", card_count=0)
+    conn.fetchrow.return_value = deck_row
+    conn.fetch.return_value = []
+
+    await load_today(pool)
+
+    assert conn.fetch.call_count == 1, "Expected exactly one conn.fetch call for card rows"
+    card_sql: str = conn.fetch.call_args.args[0]
+    assert "COALESCE(pus.state" in card_sql, (
+        f"Card SQL must contain COALESCE(pus.state ...) predicate.\nSQL: {card_sql!r}"
+    )
+    assert "'trash'" in card_sql, (
+        f"Card SQL must contain the 'trash' exclusion value.\nSQL: {card_sql!r}"
+    )

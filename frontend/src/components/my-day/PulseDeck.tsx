@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
@@ -38,15 +38,35 @@ export function PulseDeck() {
 
   const startJob = useJobStore((s) => s.startJob);
   const isGenerating = useJobStore((s) => s.hasRunning('pulse.generate'));
+  const queryClient = useQueryClient();
 
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
       ratePulseCard(paperId, rating),
+    onMutate: async ({ paperId, rating }) => {
+      if (rating !== 'save') return undefined;
+      const prev = queryClient.getQueryData<PulseDeckType>(['pulse-today']);
+      if (prev) {
+        queryClient.setQueryData<PulseDeckType>(['pulse-today'], {
+          ...prev,
+          cards: prev.cards.map((c) =>
+            c.paper_id === paperId ? { ...c, user_state: 'to_read' } : c,
+          ),
+        });
+      }
+      return { prev };
+    },
     onSuccess: (_data, { paperId }) => {
       setRatedCards((prev) => new Set(prev).add(paperId));
     },
-    onError: (err: Error) => {
+    onError: (err: Error, _vars, context) => {
+      if (context?.prev !== undefined) {
+        queryClient.setQueryData(['pulse-today'], context.prev);
+      }
       toast.error(`Failed to rate card: ${err.message ?? 'unknown error'}`);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ['pulse-today'] });
     },
   });
 

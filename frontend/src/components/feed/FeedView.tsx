@@ -35,6 +35,8 @@ interface FeedViewProps {
   surface: SurfaceView;
   /** Library sub-chip filter. 'pulse-this-week' is passed through to the backend as-is. */
   filter?: 'starred' | 'reading' | 'to_read' | 'done' | 'pulse-this-week' | null;
+  /** Inbox source-type chip filter — null/undefined means all sources. */
+  sourceTypes?: string | null;
 }
 
 // Per-surface empty state copy
@@ -72,7 +74,7 @@ function getEmptyState(surface: SurfaceView) {
 
 const DEFAULT_LIMIT: PageSize = 30;
 
-export function FeedView({ surface, filter }: FeedViewProps) {
+export function FeedView({ surface, filter, sourceTypes }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -118,9 +120,9 @@ export function FeedView({ surface, filter }: FeedViewProps) {
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['papers-feed', surface, filter, limit, offset],
+    queryKey: ['papers-feed', surface, filter, limit, offset, sourceTypes ?? null],
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, limit, offset }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, limit, offset, sourceTypes }),
   });
 
   // Cast to FeedPaper[] — backend (Wave 1ab) already returns the Phase-A shape
@@ -263,7 +265,7 @@ export function FeedView({ surface, filter }: FeedViewProps) {
 
   return (
     <>
-      <BulkToolbar surface={surface} />
+      <BulkToolbar surface={surface} papersOnPage={papers.map((p) => p.id)} />
 
       <div className="space-y-4 pt-4">
         {papers.length === 0 ? (

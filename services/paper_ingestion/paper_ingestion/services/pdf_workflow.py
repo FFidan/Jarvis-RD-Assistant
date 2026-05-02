@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
+import torch
 from qdrant_client.models import PointIdsList
 
 from paper_ingestion.ingestion.embedder import COLLECTION_NAME, EMBEDDING_MODEL_NAME
@@ -164,9 +165,27 @@ async def run_process_pdf(
 
     # --- Phase 2: Extract text, chunk, embed (no lock, no connection held) ---
     try:
-        full_text, chunks, point_ids = await pdf_processor.process(pdf_path, paper_id)
-    except (httpx.HTTPStatusError, RuntimeError) as e:
+        _full_text, chunks, point_ids = await pdf_processor.process(pdf_path, paper_id)
+    except torch.OutOfMemoryError as e:
+        logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, e)
+        raise RuntimeError(
+            "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
+            " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
+        ) from e
+    except RuntimeError as e:
+        msg = str(e)
+        if "CUDA out of memory" in msg or "CUDA error" in msg:
+            logger.error("PDF text-extraction CUDA error for paper %d: %s", paper_id, e)
+            raise RuntimeError(
+                "PDF text-extraction GPU error. Lower OLLAMA_MAX_LOADED_MODELS or"
+                " set TORCH_DEVICE=cpu."
+            ) from e
         logger.error("Process PDF embedding failure for paper %d: %s", paper_id, e)
+        raise RuntimeError(
+            "Embedding service error. Check that an LLM/embedding provider is configured."
+        ) from e
+    except httpx.HTTPStatusError as e:
+        logger.error("Process PDF embedding HTTP failure for paper %d: %s", paper_id, e)
         raise RuntimeError(
             "Embedding service error. Check that an LLM/embedding provider is configured."
         ) from e

@@ -6,6 +6,7 @@ source of truth and avoid cross-router circular imports.
 """
 
 import asyncpg
+from fastapi import HTTPException
 
 
 async def _upsert_state_and_starred(
@@ -56,16 +57,48 @@ async def _trash_paper(
     per spec §2.3). For an existing row, the UPDATE preserves the prior
     state into ``state_before_trash`` so :func:`_restore_paper` can return
     the paper to where it came from.
+
+    **Idempotent on re-trash**: when the row is already in ``'trash'``, the
+    CASE expression keeps the existing ``state_before_trash`` value unchanged,
+    avoiding a CHECK-constraint violation (``state_before_trash`` cannot be
+    ``'trash'`` per the schema).
     """
     await conn.execute(
         """INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)
            VALUES ($1, $2, 'trash', 'inbox')
            ON CONFLICT (paper_id, user_id) DO UPDATE
-             SET state_before_trash = paper_user_state.state,
+             SET state_before_trash = CASE
+                     WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash
+                     ELSE paper_user_state.state
+                 END,
                  state = 'trash'""",
         paper_id,
         user_id,
     )
+
+
+async def _assert_paper_in_states(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    paper_id: int,
+    user_id: int | None,
+    *,
+    allowed: tuple[str, ...],
+) -> None:
+    """Raise 409 if the current state is not in ``allowed``. Treats missing rows as 'inbox'."""
+    current = (
+        await conn.fetchval(
+            """SELECT COALESCE(state, 'inbox') FROM paper_user_state
+           WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
+            paper_id,
+            user_id,
+        )
+        or "inbox"
+    )
+    if current not in allowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Paper must be in one of {sorted(allowed)}; currently '{current}'",
+        )
 
 
 async def _upsert_recommendation_feedback(

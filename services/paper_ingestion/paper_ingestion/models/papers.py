@@ -594,6 +594,7 @@ class BulkActionRequest(BaseModel):
         "unstar",
         "feedback_positive",
         "feedback_negative",
+        "hard_delete",  # bulk permanent delete (only valid on state='trash')
     ]
 
 

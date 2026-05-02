@@ -24,10 +24,13 @@ function makeQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 }
 
-function renderToolbar(surface: Parameters<typeof BulkToolbar>[0]['surface']) {
+function renderToolbar(
+  surface: Parameters<typeof BulkToolbar>[0]['surface'],
+  papersOnPage: number[] = [1, 2, 3],
+) {
   return render(
     <QueryClientProvider client={makeQueryClient()}>
-      <BulkToolbar surface={surface} />
+      <BulkToolbar surface={surface} papersOnPage={papersOnPage} />
     </QueryClientProvider>,
   );
 }
@@ -38,9 +41,14 @@ describe('BulkToolbar', () => {
     useBulkSelection.setState({ selectedIds: new Set() });
   });
 
-  it('does not render when selectedIds is empty', () => {
-    const { container } = renderToolbar('inbox');
+  it('does not render when papersOnPage is empty', () => {
+    const { container } = renderToolbar('inbox', []);
     expect(container.firstChild).toBeNull();
+  });
+
+  it('renders Select All checkbox even when selectedIds is empty', () => {
+    renderToolbar('inbox', [1, 2]);
+    expect(screen.getByRole('checkbox', { name: /Select all/i })).toBeInTheDocument();
   });
 
   it('renders sticky bar with count when selection exists', () => {
@@ -54,7 +62,7 @@ describe('BulkToolbar', () => {
   it('surface=inbox includes new lifecycle actions (save, skip, trash, feedback)', () => {
     useBulkSelection.setState({ selectedIds: new Set([1, 2]) });
     renderToolbar('inbox');
-    expect(screen.getByRole('button', { name: /Save to Library/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Save to Reading List/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Skip/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Move to Trash/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^Star$/i })).toBeInTheDocument();
@@ -104,7 +112,7 @@ describe('BulkToolbar', () => {
     const { bulkAction } = await import('@/lib/api');
     useBulkSelection.setState({ selectedIds: new Set([3, 7]) });
     renderToolbar('inbox');
-    await userEvent.click(screen.getByRole('button', { name: /Save to Library/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Save to Reading List/i }));
     expect(bulkAction).toHaveBeenCalledWith({
       paper_ids: expect.arrayContaining([3, 7]),
       action: 'save',
@@ -141,11 +149,60 @@ describe('BulkToolbar', () => {
     vi.mocked(bulkAction).mockRejectedValueOnce(new Error('Network timeout'));
     useBulkSelection.setState({ selectedIds: new Set([1]) });
     renderToolbar('inbox');
-    await userEvent.click(screen.getByRole('button', { name: /Save to Library/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Save to Reading List/i }));
     // Allow microtasks to flush
     await new Promise((r) => setTimeout(r, 0));
     expect(toast.error).toHaveBeenCalledWith('Bulk action failed', {
       description: 'Network timeout',
     });
+  });
+
+  // --- W1.7-E+F new tests ---
+
+  it('surface=trash renders Delete forever button when papers selected', () => {
+    useBulkSelection.setState({ selectedIds: new Set([1, 2]) });
+    renderToolbar('trash', [1, 2]);
+    expect(screen.getByRole('button', { name: /Delete forever/i })).toBeInTheDocument();
+  });
+
+  it('save label reads "Save to Reading List" not "Save to Library"', () => {
+    useBulkSelection.setState({ selectedIds: new Set([1]) });
+    renderToolbar('inbox');
+    expect(screen.getByRole('button', { name: /Save to Reading List/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save to Library/i })).not.toBeInTheDocument();
+  });
+
+  it('Select All checkbox calls selectMany with all papersOnPage IDs', async () => {
+    renderToolbar('inbox', [1, 2, 3]);
+    const checkbox = screen.getByRole('checkbox', { name: /Select all/i });
+    await userEvent.click(checkbox);
+    const { selectedIds } = useBulkSelection.getState();
+    expect(selectedIds.has(1)).toBe(true);
+    expect(selectedIds.has(2)).toBe(true);
+    expect(selectedIds.has(3)).toBe(true);
+  });
+
+  it('Select All checkbox clears selection when all are already selected', async () => {
+    useBulkSelection.setState({ selectedIds: new Set([1, 2, 3]) });
+    renderToolbar('inbox', [1, 2, 3]);
+    const checkbox = screen.getByRole('checkbox', { name: /Select all/i });
+    await userEvent.click(checkbox);
+    const { selectedIds } = useBulkSelection.getState();
+    expect(selectedIds.size).toBe(0);
+  });
+
+  it('Delete forever on trash surface opens confirmation modal', async () => {
+    useBulkSelection.setState({ selectedIds: new Set([1, 2]) });
+    renderToolbar('trash', [1, 2]);
+    await userEvent.click(screen.getByRole('button', { name: /Delete forever/i }));
+    // Modal should appear with the bulk title
+    expect(screen.getByText(/Permanently delete 2 papers\?/i)).toBeInTheDocument();
+  });
+
+  it('Select All label is visible with text "Select all" when nothing is selected', () => {
+    useBulkSelection.setState({ selectedIds: new Set() });
+    renderToolbar('inbox', [1, 2]);
+    expect(screen.getByText('Select all')).toBeVisible();
+    expect(screen.queryByText(/\d+ selected/i)).not.toBeInTheDocument();
   });
 });

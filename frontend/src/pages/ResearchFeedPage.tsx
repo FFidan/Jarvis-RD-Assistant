@@ -14,7 +14,7 @@ import type {
   SearchPreviewSourceError,
   SourceConfig,
 } from '@/types';
-import type { SurfaceView, LibraryFilter, FeedCountsResponse } from '@/types';
+import type { SurfaceView, LibraryFilter, FeedCountsResponse, InboxSourceFilter } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { StreamingChat } from '@/components/chat/StreamingChat';
@@ -100,6 +100,17 @@ const LIBRARY_SUB_CHIPS: Array<{
     icon: <CheckCircle size={14} />,
     tooltip: "Papers you've finished reading. Re-open to move back to Reading.",
   },
+];
+
+const INBOX_SOURCE_CHIPS: Array<{
+  value: InboxSourceFilter | undefined;
+  label: string;
+}> = [
+  { value: undefined, label: 'All sources' },
+  { value: 'arxiv', label: 'arXiv' },
+  { value: 'semantic_scholar', label: 'Semantic Scholar' },
+  { value: 'openalex', label: 'OpenAlex' },
+  { value: 'pubmed', label: 'PubMed' },
 ];
 
 // ─── helper ─────────────────────────────────────────────────────────────────
@@ -286,6 +297,17 @@ export function ResearchFeedPage() {
     });
   }
 
+  const inboxSource = (searchParams.get('source') ?? undefined) as InboxSourceFilter | undefined;
+
+  function setInboxSource(s: InboxSourceFilter | undefined) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (s === undefined) next.delete('source');
+      else next.set('source', s);
+      return next;
+    });
+  }
+
   const feedCounts = counts;
 
   // ─── render ───────────────────────────────────────────────────────────────
@@ -361,13 +383,35 @@ export function ResearchFeedPage() {
         </TooltipProvider>
       )}
 
+      {/* ── Inbox source-type sub-chips ─────────────────────────────────── */}
+      {surface === 'inbox' && (
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by source">
+          {INBOX_SOURCE_CHIPS.map(({ value, label }) => (
+            <button
+              key={value ?? 'all'}
+              role="tab"
+              aria-selected={(inboxSource ?? undefined) === value}
+              onClick={() => setInboxSource(value)}
+              className={cn(
+                'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors',
+                (inboxSource ?? undefined) === value
+                  ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
+                  : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* ── Surface content ───────────────────────────────────────────────── */}
 
       {/* Inbox */}
       {surface === 'inbox' && (
         <div>
           <SectionInfo>Unread papers from your configured sources — mark as read, view, or filter.</SectionInfo>
-          <FeedView surface="inbox" filter={filter} />
+          <FeedView surface="inbox" filter={filter} sourceTypes={inboxSource ?? null} />
         </div>
       )}
 

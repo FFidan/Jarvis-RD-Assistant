@@ -121,7 +121,8 @@ export function ActionItemsCard() {
           </CardTitle>
           <div className="flex items-center gap-2">
             {processable.length > 0 && (
-              <Button size="sm" variant="outline" onClick={handleProcessAll}>
+              <Button size="sm" variant="outline" onClick={handleProcessAll}
+                title="Process the papers whose PDF is already downloaded">
                 Process all ({processable.length})
               </Button>
             )}
@@ -160,23 +161,12 @@ export function ActionItemsCard() {
             <span>You&apos;re all caught up</span>
           </div>
         ) : !isOpen && showToggle ? (
-          /* Collapsed summary row */
-          <div className="flex items-center justify-between gap-2 py-2 text-sm text-muted-foreground">
-            <span>
-              {unprocessed.length} paper{unprocessed.length !== 1 ? 's' : ''} need
-              {unprocessed.length === 1 ? 's' : ''} processing
-              {failedJobs.length > 0 && `, ${failedJobs.length} failed`}
-            </span>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-xs"
-              onClick={() => { setUserToggled(true); setIsOpen(true); }}
-            >
-              <ChevronDown className="h-3.5 w-3.5 mr-1" />
-              Expand to triage
-            </Button>
-          </div>
+          /* Collapsed: count summary only — header carries the toggle. */
+          <p className="py-2 text-sm text-muted-foreground">
+            {unprocessed.length} paper{unprocessed.length !== 1 ? 's' : ''} need
+            {unprocessed.length === 1 ? 's' : ''} processing
+            {failedJobs.length > 0 && `, ${failedJobs.length} failed`}
+          </p>
         ) : (
           <div className="space-y-2">
             {/* Failed jobs */}

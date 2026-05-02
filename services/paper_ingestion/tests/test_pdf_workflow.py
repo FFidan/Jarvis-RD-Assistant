@@ -6,7 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
+import torch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 from paper_ingestion.services.pdf_workflow import advisory_lock, run_process_pdf
@@ -169,3 +171,76 @@ async def test_run_process_pdf_stores_chunks_and_returns_processed():
     assert inserted_rows[0][0] == 12
     assert inserted_rows[0][6] == "vec-a"
     assert inserted_rows[1][6] == "vec-b"
+
+
+# ---------------------------------------------------------------------------
+# W1.7-G: torch OOM / CUDA error differentiation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pdf_workflow_relabels_torch_oom_as_distinct_error():
+    """torch.OutOfMemoryError is re-raised with a GPU-specific actionable message."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    pool = _make_pool(conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(side_effect=torch.OutOfMemoryError("simulated OOM"))
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError, match="GPU out-of-memory"):
+        await run_process_pdf(
+            paper_id=42,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pdf_workflow_relabels_cuda_runtime_error():
+    """RuntimeError with 'CUDA out of memory' is re-raised with a GPU-specific message."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    pool = _make_pool(conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=RuntimeError("CUDA out of memory: tried to allocate 2 GiB")
+    )
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError, match="GPU error"):
+        await run_process_pdf(
+            paper_id=43,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )
+
+
+@pytest.mark.asyncio
+async def test_pdf_workflow_preserves_embedding_error_for_httpx_failures():
+    """httpx.HTTPStatusError is wrapped as 'Embedding service error'."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    pool = _make_pool(conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "503",
+            request=httpx.Request("POST", "http://litellm/embed"),
+            response=httpx.Response(503),
+        )
+    )
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError, match="Embedding service error"):
+        await run_process_pdf(
+            paper_id=44,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )

@@ -195,6 +195,67 @@ async def test_bulk_action_savepoint_isolation():
 
 
 # ---------------------------------------------------------------------------
+# Bulk hard_delete
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bulk_hard_delete_succeeds_on_trash_papers():
+    """POST /bulk with action='hard_delete' on 3 trashed papers returns all 3 in succeeded."""
+    pool, conn = _make_pool_and_conn()
+    # _assert_paper_in_state calls fetchval; return "trash" so precondition passes for all
+    conn.fetchval.return_value = "trash"
+
+    with patch(
+        "paper_ingestion.routers.papers.delete_paper_vectors",
+        new_callable=AsyncMock,
+    ) as mock_delete:
+        result = await papers.bulk_action_papers.__wrapped__(
+            _mock_request(),
+            body=BulkActionRequest(paper_ids=[10, 20, 30], action="hard_delete"),
+            db_pool=pool,
+        )
+
+    assert set(result["succeeded"]) == {10, 20, 30}
+    assert result["failed"] == []
+    # Qdrant cleanup must have been called once per paper
+    assert mock_delete.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_bulk_hard_delete_rejects_non_trash_papers():
+    """POST /bulk with action='hard_delete' on mixed states: only trash papers succeed."""
+    pool, conn = _make_pool_and_conn()
+
+    # paper 10 and 20 are in trash; paper 30 is in inbox (fetchval returns "inbox")
+    trash_ids = {10, 20}
+    inbox_id = 30
+
+    async def _fetchval_side_effect(_query, paper_id, _user_id):
+        if paper_id in trash_ids:
+            return "trash"
+        return "inbox"  # triggers _assert_paper_in_state to raise HTTPException
+
+    conn.fetchval.side_effect = _fetchval_side_effect
+
+    with patch(
+        "paper_ingestion.routers.papers.delete_paper_vectors",
+        new_callable=AsyncMock,
+    ):
+        result = await papers.bulk_action_papers.__wrapped__(
+            _mock_request(),
+            body=BulkActionRequest(paper_ids=[10, 20, inbox_id], action="hard_delete"),
+            db_pool=pool,
+        )
+
+    assert set(result["succeeded"]) == {10, 20}
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["paper_id"] == inbox_id
+    # Error message must reference the expected state
+    assert "trash" in result["failed"][0]["error"]
+
+
+# ---------------------------------------------------------------------------
 # Feed counts
 # ---------------------------------------------------------------------------
 
@@ -330,3 +391,146 @@ async def test_hard_delete_qdrant_failure_logs_orphan():
 
     # Endpoint still returns success (best-effort Qdrant cleanup)
     assert result == {"deleted": 52}
+
+
+# ---------------------------------------------------------------------------
+# W1.7-B: re-trash guard + state preconditions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_trash_paper_idempotent_when_already_trashed():
+    """PUT /{id}/trash on an already-trashed paper returns 200 (idempotent).
+
+    The CASE expression in the ON CONFLICT clause must preserve state_before_trash
+    rather than writing 'trash', which would violate the CHECK constraint.
+    Because _trash_paper only calls conn.execute (no SELECT), the test
+    just verifies that no exception is raised and the correct SQL is issued.
+    """
+    pool, conn = _make_pool_and_conn()
+    # assert_paper_ownership + paper existence check both use fetchrow
+    conn.fetchrow.return_value = {"id": 99}
+
+    result = await papers.trash_paper.__wrapped__(
+        _mock_request(),
+        paper_id=99,
+        db_pool=pool,
+    )
+
+    assert result == {"status": "ok", "paper_id": 99}
+    # Verify the CASE expression is present in the SQL that was executed
+    all_sql = [call.args[0] for call in conn.execute.await_args_list]
+    trash_sql = [s for s in all_sql if "state_before_trash" in s]
+    assert trash_sql, "Expected an INSERT … ON CONFLICT … state_before_trash SQL"
+    assert any("CASE" in s for s in trash_sql), (
+        "ON CONFLICT clause must use CASE to preserve existing state_before_trash"
+    )
+
+
+@pytest.mark.asyncio
+async def test_trash_and_reject_succeeds_on_already_trashed_paper():
+    """PUT /{id}/trash_and_reject on an already-trashed paper returns 200.
+
+    This is the primary bug from the screenshot: a stale Pulse cache fires
+    trash_and_reject on a paper that is already in 'trash', which hits the
+    CHECK constraint on state_before_trash.  After the fix, the CASE expression
+    in _trash_paper keeps state_before_trash intact, and the route returns 200.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 77}
+    # _upsert_recommendation_feedback calls fetchval to look up topic_id
+    conn.fetchval.return_value = None  # no topic association — that's fine
+
+    result = await papers.trash_and_reject_paper.__wrapped__(
+        _mock_request(),
+        paper_id=77,
+        db_pool=pool,
+    )
+
+    assert result == {"status": "ok", "paper_id": 77}
+    # Both _trash_paper and _upsert_recommendation_feedback must have been called
+    all_sql = [call.args[0] for call in conn.execute.await_args_list]
+    assert any("state_before_trash" in s for s in all_sql), (
+        "_trash_paper must execute its INSERT … ON CONFLICT"
+    )
+    assert any("recommendation_feedback" in s for s in all_sql), (
+        "_upsert_recommendation_feedback must insert into recommendation_feedback"
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_paper_rejects_when_not_in_inbox():
+    """PUT /{id}/skip returns 409 when paper is in 'to_read' state.
+
+    skip is only valid from 'inbox'; a stale-cache write from any other state
+    must surface a 409 so the frontend can refetch and re-render.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 55}
+    # _assert_paper_in_states fetches current state via fetchval
+    conn.fetchval.return_value = "to_read"
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.skip_paper.__wrapped__(
+            _mock_request(),
+            paper_id=55,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "inbox" in exc_info.value.detail
+    assert "to_read" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "initial_state,fetchval_return",
+    [
+        ("inbox", None),  # missing row → COALESCE → 'inbox'
+        ("done", "done"),
+        ("to_read", "to_read"),
+        ("reading", "reading"),  # W1.8-A: Set Aside (reading → to_read) must be allowed
+    ],
+)
+async def test_save_paper_succeeds_from_inbox_done_to_read(initial_state, fetchval_return):
+    """PUT /{id}/save returns 200 from inbox, done, and to_read states.
+
+    'to_read' must stay allowed because the Pulse Save→Unsave→Save round-trip
+    calls save from 'to_read' on a second Save action.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 33}
+    conn.fetchval.return_value = fetchval_return  # drives _assert_paper_in_states
+
+    result = await papers.save_paper.__wrapped__(
+        _mock_request(),
+        paper_id=33,
+        db_pool=pool,
+    )
+
+    assert result == {"status": "ok", "paper_id": 33}, (
+        f"save_paper must return 200 from '{initial_state}'"
+    )
+
+
+@pytest.mark.asyncio
+async def test_reading_paper_rejects_from_inbox():
+    """PUT /{id}/reading returns 409 when paper is in 'inbox' state.
+
+    A paper must be saved to the reading list (to_read) before it can be
+    marked as currently being read.  Stale-cache writes from inbox must 409.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {"id": 44}
+    # _assert_paper_in_states: paper is in 'inbox' (COALESCE of None)
+    conn.fetchval.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.reading_paper.__wrapped__(
+            _mock_request(),
+            paper_id=44,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "to_read" in exc_info.value.detail or "reading" in exc_info.value.detail

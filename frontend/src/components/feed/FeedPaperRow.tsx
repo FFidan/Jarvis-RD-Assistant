@@ -615,16 +615,16 @@ export function FeedPaperRow({
                       <TooltipTrigger asChild>
                         <Button
                           variant="destructive"
-                          size="icon"
+                          size="sm"
                           onClick={() => onHardDelete(paper.id)}
                           aria-label={`Permanently delete ${paper.title}`}
-                          className="h-9 w-9"
                         >
-                          <X className="h-4 w-4" />
+                          <X className="mr-1 h-3 w-3" />
+                          Delete forever
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent side="top" className="text-xs">
-                        Permanently delete
+                        Permanently delete this paper (cannot be undone)
                       </TooltipContent>
                     </Tooltip>
                   )}

@@ -741,12 +741,16 @@ export type BulkAction =
   | 'save' | 'skip' | 'trash'
   | 'mark_reading' | 'mark_done' | 'restore'
   | 'star' | 'unstar'
-  | 'feedback_positive' | 'feedback_negative';
+  | 'feedback_positive' | 'feedback_negative'
+  | 'hard_delete';
 
 // --- Phase A Surface / Filter Views ---
 
 /** Library sub-chip filter per spec §5.4. */
 export type LibraryFilter = 'starred' | 'reading' | 'to_read' | 'done';
+
+/** Inbox source-type sub-chip filter — null means "all sources". */
+export type InboxSourceFilter = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed';
 
 /** Top-level feed surface per spec §5.4 (5 surfaces). */
 export type SurfaceView = 'inbox' | 'library' | 'search' | 'ask' | 'trash';
