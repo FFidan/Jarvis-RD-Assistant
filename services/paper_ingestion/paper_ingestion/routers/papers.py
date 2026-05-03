@@ -6,7 +6,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, assert_paper_ownership, escape_like
+from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
 from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 
@@ -28,6 +28,7 @@ from paper_ingestion.models import (
     PaperCreate,
     PaperDetailResponse,
     PaperResponse,
+    ProcessBatchRequest,
     RecentFeedback,
     SourceType,
     UserStateResponse,
@@ -968,3 +969,31 @@ async def bulk_action_papers(
                     failed.append({"paper_id": paper_id, "error": str(exc)})
 
     return {"succeeded": succeeded, "failed": failed}
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/process_batch
+# ---------------------------------------------------------------------------
+
+
+@router.post("/process_batch", response_model=JobCreateResponse)
+@limiter.limit("10/minute")
+async def process_batch(
+    request: Request,
+    body: ProcessBatchRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+):
+    """Enqueue a ``papers.batch_process`` job for the given paper IDs.
+
+    Accepts 1–50 explicit paper IDs and immediately queues the job without
+    any pre-flight filtering.  The caller can poll progress via
+    ``GET /api/jobs/{job_id}``.
+
+    Returns ``{"job_id": "<uuid>", "status": "queued"}``.
+    """
+    job_id = await jobs_lib.enqueue(
+        db_pool,
+        "papers.batch_process",
+        payload={"paper_ids": body.paper_ids},
+    )
+    return {"job_id": job_id, "status": "queued"}

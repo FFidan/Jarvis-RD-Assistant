@@ -755,6 +755,12 @@ export const batchProcessPapers = (limit?: number) =>
     body: JSON.stringify({ limit: limit || 10 }),
   });
 
+export const processPapersBatch = (paperIds: number[]) =>
+  apiFetch<{ job_id: string; status: string }>('/api/papers/process_batch', {
+    method: 'POST',
+    body: JSON.stringify({ paper_ids: paperIds }),
+  });
+
 export const batchSummarizePapers = (limit?: number) =>
   apiFetch<{ total_unsummarized: number; job_id: string | null }>(
     `/api/papers/batch-summarize?limit=${limit || 10}`,

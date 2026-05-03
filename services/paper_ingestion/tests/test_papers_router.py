@@ -1779,3 +1779,53 @@ async def test_unsave_paper_from_wrong_state_returns_409(bad_state: str):
     assert exc_info.value.status_code == 409
     assert "to_read" in exc_info.value.detail
     assert bad_state in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# POST /api/papers/process_batch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_process_batch_happy_path_returns_job_id():
+    """Happy path: valid paper_ids list enqueues job and returns job UUID."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    pool = _make_pool_and_conn()[0]
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+    fake_job_id = "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
+
+    with patch(
+        "paper_ingestion.routers.papers.jobs_lib.enqueue",
+        new=AsyncMock(return_value=fake_job_id),
+    ) as mock_enqueue:
+        from paper_ingestion.models import ProcessBatchRequest
+
+        body = ProcessBatchRequest(paper_ids=[1, 2, 3])
+        result = await papers.process_batch.__wrapped__(request, body, db_pool=pool)
+
+    assert result == {"job_id": fake_job_id, "status": "queued"}
+    mock_enqueue.assert_awaited_once()
+    call_kwargs = mock_enqueue.await_args.kwargs
+    assert call_kwargs.get("payload") == {"paper_ids": [1, 2, 3]}
+
+
+@pytest.mark.asyncio
+async def test_process_batch_empty_list_raises_422():
+    """An empty paper_ids list should fail Pydantic validation (min_length=1)."""
+    import pydantic
+    from paper_ingestion.models import ProcessBatchRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ProcessBatchRequest(paper_ids=[])
+
+
+@pytest.mark.asyncio
+async def test_process_batch_over_50_raises_422():
+    """More than 50 paper IDs should fail Pydantic validation (max_length=50)."""
+    import pydantic
+    from paper_ingestion.models import ProcessBatchRequest
+
+    with pytest.raises(pydantic.ValidationError):
+        ProcessBatchRequest(paper_ids=list(range(51)))

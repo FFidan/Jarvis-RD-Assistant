@@ -619,3 +619,9 @@ class AnnotationsRequest(BaseModel):
     rating: int | None = Field(default=None, ge=1, le=5)
     user_notes: str | None = None
     flagged: bool | None = None
+
+
+class ProcessBatchRequest(BaseModel):
+    """Body for POST /api/papers/process_batch."""
+
+    paper_ids: list[int] = Field(..., min_length=1, max_length=50)

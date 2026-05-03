@@ -2,6 +2,13 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.7.0-dev]
+
+### Added
+- **B.4 Step 1:** procrastinate broker dependency + migration 052 (schema apply).
+  No behavioral change — worker is not yet wired up. Foundation for the
+  procrastinate cutover spec'd at `docs/specs/2026-05-03-b4-job-broker.md`.
+
 ## [1.6.0] — 2026-05-03
 
 ### Added (B.1 + B.2 — Instructor + Langfuse)
@@ -13,6 +20,11 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ### Removed (BREAKING — internal API)
 - `call_llm` and `call_llm_json_value` deleted from `jarvis_common.llm_client` and `jarvis_common.__init__`. Replace all callers with `call_llm_structured` (structured) or `request_chat_completion_content` (raw string).
+
+## [1.6.1] — 2026-05-03
+
+### Added (B.3 — mxbai-rerank in production)
+- **B.3** mxbai-rerank-base-v2 default reranker verified in production since 2026-05-02. No retrieval-quality regressions observed in manual smoke testing (Pulse run + cross-paper RAG). Formal BEIR benchmark evaluation deferred to Phase C re-embedding sprint.
 
 ## [1.5.1] — 2026-05-02
 

@@ -12,6 +12,7 @@ import { PairTelegram } from '@/components/setup/PairTelegram';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import { AppearanceSection } from '@/components/settings/AppearanceSection';
+import { LangfuseLinkCard } from '@/components/settings/LangfuseLinkCard';
 
 const VALID_TABS = new Set([
   'topics',
@@ -94,7 +95,10 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="providers">
-          <ProvidersSection />
+          <div className="space-y-6">
+            <ProvidersSection />
+            <LangfuseLinkCard />
+          </div>
         </TabsContent>
 
         <TabsContent value="appearance">
