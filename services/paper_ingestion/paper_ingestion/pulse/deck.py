@@ -337,9 +337,7 @@ async def load_today(
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
             WHERE deck_date = CURRENT_DATE
-              AND user_id IS NOT DISTINCT FROM $1
-            """,
-            user_id,
+            """
         )
         if deck_row is None:
             return None
@@ -404,11 +402,9 @@ async def load_history(
             FROM pulse_decks
             WHERE deck_date < CURRENT_DATE
               AND deck_date >= CURRENT_DATE - $1 * INTERVAL '1 day'
-              AND user_id IS NOT DISTINCT FROM $2
             ORDER BY deck_date DESC
             """,
             days,
-            user_id,
         )
 
         if not deck_rows:

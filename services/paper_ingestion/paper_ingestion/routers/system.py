@@ -184,10 +184,7 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
 
     try:
         async with request.app.state.db_pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT key, value FROM user_config "
-                "WHERE key IN ('llm.smart_model', 'llm.fast_model', 'llm.embed_model')"
-            )
+            rows = await conn.fetch("SELECT key, value FROM user_config WHERE key LIKE 'llm.%'")
         for r in rows:
             short_key = r["key"].replace("llm.", "")
             val = r["value"]
