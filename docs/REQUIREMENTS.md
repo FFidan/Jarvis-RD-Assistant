@@ -175,13 +175,7 @@ Contains cross-cutting utilities shared by paper_ingestion, learning_engine, and
 - `db_helpers.py` -- `dynamic_update()`, `delete_or_404()`, `fmt_safe()`,
   `init_pg_connection()`, `validated_model()`
 - `ratelimit.py` -- `create_limiter()` with trusted-network X-Forwarded-For handling
-- `jobs.py` -- Unified Async Job System: `@job_handler` registry, `create_job()`,
-  `update_job_status()`, `fetch_job()`, and per-service worker loop. Both
-  `paper_ingestion` and `learning_engine` run their own worker loop instance, polling
-  the shared `jobs` table and dispatching to registered handlers by `kind`. All
-  long-running operations (pulse.generate, paper.process, paper.analyze, card.generate,
-  card.generate_batch) are dispatched through this system instead of blocking HTTP
-  handlers or using in-memory state.
+- `jobs.py` -- thin REST/SSE bridge over procrastinate: `get_unified()` lookup helper, `list_jobs()` UNION query, `stream_job_events()` SSE bridge. Job kinds register as procrastinate tasks in `libs/jarvis_common/jarvis_common/task_registry.py`; `KIND_TO_TASK` dict maps kind strings to task objects.
 
 Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 
@@ -246,6 +240,8 @@ Migration 018 does not modify any existing column on any existing table — it i
 - New table: `jobs` — stores all async background jobs with columns `id`, `kind`, `status` (`pending | running | done | failed | cancelled`), `payload` (JSONB input), `result` (JSONB output), `error` (TEXT), `created_at`, `updated_at`, `started_at`, `finished_at`. Indexed on `(status, created_at)` for efficient worker polling.
 - New column: `paper_sources.display_order INTEGER NOT NULL DEFAULT 0` — enables drag-to-reorder of paper sources in Settings → Sources.
 - New column: `pulse_decks.degraded_reason TEXT NULL` — distinguishes soft degraded runs (deck produced with fallback scoring) from fatal errors tracked in `last_error`.
+
+**Migrations 052–053** (B.4 cutover — 2026-05-03): Migration 052 applies the procrastinate schema and brings procrastinate online as the durable task broker. Migration 053 drops the legacy `jobs` table (`DROP TABLE jobs CASCADE`), removes the `notify_jobs_update` trigger function, and deletes the `@job_handler` decorator / `worker_loop` / `_HANDLERS` registry / `enqueue()` call site. All 19 job kinds are now procrastinate tasks. The REST API contract is unchanged for backward compatibility.
 
 ## Phase 1 Discovery & Pulse dependencies (shipped)
 

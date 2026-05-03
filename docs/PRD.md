@@ -250,7 +250,7 @@ These features were promoted from v2 or added during development:
 
 These features shipped in the Phase 1 Discovery & Pulse sprint and subsequent audit remediation cycles:
 
-- **Unified Async Job System** (migration 023): `jobs` table in PostgreSQL, `jarvis_common/jobs.py` module with `@job_handler` registry and per-service worker loops, REST endpoints (`POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` SSE, `POST /api/jobs/{id}/cancel`), frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toast notifications. Migrated kinds in Phase 1: `pulse.generate`, `paper.process`, `paper.analyze`, `card.generate`, `card.generate_batch`. Phase 2 items (Summarize, Extraction, Batch Process, Scan Local, Citations, Weekly Digest) remain on the roadmap.
+- **Unified Async Job System** (migrations 023+052+053): durable task broker is procrastinate (B.4 cutover, 2026-05-03). All 19 job kinds register as procrastinate tasks via `KIND_TO_TASK` in `libs/jarvis_common/jarvis_common/task_registry.py`; routing dispatches via `task.defer_async(job_id=<jarvis_uuid>, user_id=<int>, **payload)`. The REST API contract is preserved: `POST /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream` (SSE), `POST /api/jobs/{id}/cancel`. `get_unified()` in `jobs.py` is the single lookup helper. Frontend Zustand `job-store` + TopNav `JobsIndicator` + Sonner toasts are unchanged.
 - **My Day redesigned as triage dashboard**: `DayHeader` with counters (focus time, tasks, cards due), Pulse preview card (3 top papers + link to full deck at Research Feed → Today's Pulse), Pomodoro + Tasks block, ActionItems (overdue + due-today tasks with Focus buttons), Learning summary, Project summary. Replaces the previous full PulseDeck widget on the My Day page.
 - **Global Pomodoro header widget**: compact timer display in the TopBar, visible on every page when a session is active, hidden when idle. Clicking it navigates back to My Day.
 - **Source drag-to-reorder**: `paper_sources.display_order` column + `PATCH /api/sources/reorder` endpoint + `@dnd-kit/sortable` grip handle UI in Settings → Sources.
@@ -298,7 +298,7 @@ Multi-tenancy is **scaffolded, not enforced**. Current state as of Sprint 6:
 JARVIS integrates with Zotero as the citation management layer.
 
 **Phase 1 — JARVIS → Zotero push:**
-- Auto-push on star: when a paper is starred AND linked to a project, enqueue a Zotero push job
+- Auto-push on star: when a paper is starred AND linked to a project, defer a Zotero push task
 - Manual push via "Send to Zotero" actions on Paper Detail and saved Research Feed search results
 - C1 strict scope: only push papers linked to a project (no "Unsorted" fallback)
 - Attach PDF when available
@@ -550,7 +550,7 @@ A proactive overnight paper discovery subsystem that complements the existing li
 management features. The architectural design is embedded in §3.1.1; this section
 captures the roadmap phasing, acceptance criteria, and attribution.
 
-**Unified Async Job System (SHIPPED 2026-04-17):** migration 023 adds the `jobs` table and `jarvis_common/jobs.py` with the `@job_handler` registry and per-service worker loops. `pulse.generate`, `paper.process`, `paper.analyze`, `card.generate`, and `card.generate_batch` are migrated in Phase 1. Phase 2 items: Summarize, Extraction, Batch Process, Scan Local, Citations, Weekly Digest. See §3.4 "Shipped Beyond MVP" for the full Jobs architecture.
+**Unified Async Job System (B.4 cutover SHIPPED 2026-05-03):** migration 023 established the REST/SSE contract. Migrations 052–053 introduced procrastinate as the durable broker and dropped the legacy `jobs` table. All 19 kinds run on procrastinate; `@job_handler` decorator, `worker_loop`, `_HANDLERS` registry, and per-service in-process workers are removed. See §3.4 for the current architecture.
 
 #### 8.5.1 Phase 1 (target)
 

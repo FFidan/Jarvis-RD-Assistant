@@ -89,12 +89,12 @@ LLM-generated scientific content must remain evidence-backed:
 
 ## Jobs
 
-- Shared job primitives live in `libs/jarvis_common/jarvis_common/jobs.py`.
-- Services register handlers explicitly at startup or through documented import
-  side effects. Verify every worker kind has a registered handler before relying
-  on it.
-- Tests that register handlers must isolate `_HANDLERS` with the service
-  fixture that snapshots and restores the registry.
+- Shared job primitives and procrastinate routing live in
+  `libs/jarvis_common/jarvis_common/jobs.py` and `jobs_router.py`.
+- Job ownership is defined in `JOB_HANDLER_OWNER` mapping — verifies every job kind is
+  assigned to the correct service queue (paper_ingestion, learning_engine, or telegram_bot).
+- Procrastinate task handlers are registered via `@app.task(queue=...)` decorators
+  in each service. Tests can mock or defer tasks as needed.
 - Job handlers should parse payloads into typed models before use.
 
 ## Testing

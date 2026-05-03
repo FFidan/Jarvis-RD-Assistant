@@ -84,7 +84,7 @@ Long-running work is tracked in the shared `jobs` table and exposed through:
 - `GET /api/jobs/{id}/stream`
 - `POST /api/jobs/{id}/cancel`
 
-Service-specific endpoints may enqueue jobs, but their response contracts should
+Service-specific endpoints may defer procrastinate tasks, but their response contracts should
 stay consistent with the shared job model.
 
 ## Authentication And Ownership
