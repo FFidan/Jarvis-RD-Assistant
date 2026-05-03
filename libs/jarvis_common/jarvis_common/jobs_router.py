@@ -169,6 +169,10 @@ def build_jobs_router(
         user_id: int | None = Depends(current_user_id),
     ) -> JobCreateResponse:
         """Enqueue a new background job and return its ID."""
+        import uuid as _uuid
+
+        from jarvis_common.task_registry import KIND_TO_TASK
+
         kinds_now = _public_kinds_now()
         if body.kind not in kinds_now:
             # Discriminated mode already filtered shape errors with 422 at
@@ -193,6 +197,27 @@ def build_jobs_router(
                     # PoolConnectionProxy delegates fetchrow → real Connection at
                     # runtime; the helper signature is asyncpg.Connection.
                     await assert_paper_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
+
+        # B.4 Step 3: dispatch via procrastinate task registry when the kind
+        # is registered.  Fall back to legacy enqueue for noop.test and any
+        # future kinds not yet in the registry (e.g. during a gradual rollout).
+        task = KIND_TO_TASK.get(body.kind)
+        if task is not None:
+            payload = dict(body.payload or {})
+            if "job_id" in payload or "user_id" in payload:
+                raise HTTPException(
+                    status_code=400,
+                    detail="payload may not contain reserved keys 'job_id' or 'user_id'",
+                )
+            jarvis_job_id = str(_uuid.uuid4())
+            await task.defer_async(
+                job_id=jarvis_job_id,
+                user_id=user_id,
+                **payload,
+            )
+            return JobCreateResponse(job_id=jarvis_job_id, status="queued")
+
+        # Legacy path (noop.test and any kind not yet registered in task_registry).
         job_id = await jobs_lib.enqueue(
             db_pool,
             body.kind,
@@ -213,7 +238,7 @@ def build_jobs_router(
         user_id: int | None = Depends(current_user_id),
     ) -> dict[str, Any]:
         """Return the full job row for the given job_id."""
-        row = await jobs_lib.get(db_pool, job_id)
+        row = await jobs_lib.get_unified(db_pool, job_id)
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
         return serialise_row(row)
@@ -257,8 +282,13 @@ def build_jobs_router(
         Closes automatically on terminal status (succeeded/failed/cancelled).
         Returns 404 (not 403) on ownership mismatch to avoid leaking job
         existence to unauthorized callers.
+
+        Bug 2 fix: previously called ``jobs_lib.get`` which only queries the
+        legacy ``jobs`` table; procrastinate-only jobs therefore returned 404.
+        ``get_unified`` falls through to the procrastinate table when the
+        legacy lookup misses.
         """
-        initial = await jobs_lib.get(db_pool, job_id)
+        initial = await jobs_lib.get_unified(db_pool, job_id)
         if initial is None or not _owner_matches(initial.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
@@ -283,9 +313,18 @@ def build_jobs_router(
         user_id: int | None = Depends(current_user_id),
     ) -> dict[str, Any]:
         """Request cancellation of a running or queued job."""
-        row = await jobs_lib.get(db_pool, job_id)
+        row = await jobs_lib.get_unified(db_pool, job_id)
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
+
+        if row.get("source") == "procrastinate":
+            from jarvis_common.task_registry import app as procrastinate_app
+
+            prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
+            if prow:
+                await procrastinate_app.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
+            return {"ok": True}
+
         await jobs_lib.request_cancel(db_pool, job_id)
         return {"ok": True}
 

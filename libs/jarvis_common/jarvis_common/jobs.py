@@ -221,22 +221,36 @@ def procrastinate_status_to_jarvis(procrastinate_status: str) -> str:
 
 
 def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
-    """Adapt a ``procrastinate_jobs`` row into the legacy ``jobs``-row shape.
+    """Adapt a ``procrastinate_jobs`` row into the full legacy ``jobs``-row shape.
 
-    The legacy shape is what ``job_sse_payload`` expects: a dict with
-    ``status`` (legacy enum), ``progress``, ``progress_message``, optional
-    ``result`` / ``error`` / ``payload`` keys. procrastinate's row has
-    ``status`` (procrastinate enum), ``args`` (kwargs JSONB), and no native
-    progress columns — the bridge surfaces ``args`` as ``payload`` so the
-    terminal-event payload dump stays consistent.
+    Returns a dict matching the legacy Job interface (12+ keys) with an
+    additional ``source`` discriminator set to ``"procrastinate"``.  The
+    ``cancel_requested`` flag is synthesised from the procrastinate status so
+    callers don't need to special-case it.
+
+    The extra keys (``id``, ``kind``, ``user_id``, ``created_at``, etc.) are
+    required by ``get_unified`` so that route handlers can call
+    ``_owner_matches``, ``serialise_row``, and the cancel branch without
+    additional per-field checks.
     """
+    args: dict[str, Any] = prow.get("args") or {}
+    status = procrastinate_status_to_jarvis(prow["status"])
+    cancel_requested = prow["status"] in {"cancelled", "aborting", "aborted"}
     return {
-        "status": procrastinate_status_to_jarvis(prow["status"]),
-        "progress": prow.get("progress"),
-        "progress_message": prow.get("progress_message"),
-        "result": prow.get("result"),
-        "error": prow.get("error"),
-        "payload": prow.get("args"),
+        "id": args.get("job_id"),
+        "kind": prow["task_name"],
+        "user_id": args.get("user_id"),
+        "status": status,
+        "progress": 0,
+        "progress_message": None,
+        "payload": {k: v for k, v in args.items() if k not in {"job_id", "user_id"}},
+        "result": None,
+        "error": None,
+        "created_at": prow.get("created_at"),
+        "started_at": prow.get("started_at"),
+        "finished_at": prow.get("finished_at"),
+        "cancel_requested": cancel_requested,
+        "source": "procrastinate",
     }
 
 
@@ -250,16 +264,23 @@ async def get_procrastinate_job_for_jarvis_id(
       * the ``procrastinate_jobs`` table does not exist (migration 052 not
         applied — graceful degradation so legacy-only DBs still work).
 
-    Mirrors :func:`get` for the legacy table.
+    Mirrors :func:`get` for the legacy table.  The SELECT now includes
+    ``attempts`` and timestamp subqueries so that the returned row can be
+    adapted to the full Job-interface shape via
+    :func:`procrastinate_row_to_jarvis_row`.
     """
     try:
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, queue_name, task_name, status, args
-                FROM procrastinate_jobs
-                WHERE args->>'job_id' = $1
-                ORDER BY id DESC
+                SELECT
+                  pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
+                  (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
+                  (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
+                  (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
+                FROM procrastinate_jobs pj
+                WHERE pj.args->>'job_id' = $1
+                ORDER BY pj.id DESC
                 LIMIT 1
                 """,
                 str(jarvis_job_id),
@@ -272,6 +293,29 @@ async def get_procrastinate_job_for_jarvis_id(
     if row is None:
         return None
     return dict(row)
+
+
+async def get_unified(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
+    """Unified lookup: legacy jobs table first, then procrastinate fallback.
+
+    Returns a row dict in the legacy Job interface shape with an additional
+    ``source`` discriminator field (``"legacy"`` or ``"procrastinate"``) so
+    routes can branch on cancel paths.
+
+    This is the Bug 2 fix: previously ``stream_job``, ``get_job``, and
+    ``cancel_job`` all called :func:`get` directly, which only queries the
+    legacy table.  Pre-migrated jobs written exclusively by procrastinate
+    tasks have no legacy row and therefore 404d.  :func:`get_unified` falls
+    through to the procrastinate table when the legacy lookup misses.
+    """
+    legacy = await get(pool, job_id)
+    if legacy is not None:
+        legacy["source"] = "legacy"
+        return legacy
+    prow = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+    if prow is None:
+        return None
+    return procrastinate_row_to_jarvis_row(prow)
 
 
 async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: float) -> bool:
@@ -591,33 +635,85 @@ async def list_jobs(
 ) -> list[dict[str, Any]]:
     """Return jobs filtered by status and/or kind, newest first.
 
+    Performs a UNION ALL of the legacy ``jobs`` table and the
+    ``procrastinate_jobs`` table so that pre-migrated jobs written exclusively
+    via procrastinate tasks appear alongside legacy rows.  A ``source``
+    discriminator column (``"legacy"`` or ``"procrastinate"``) is added to
+    every row.
+
+    The procrastinate arm is wrapped in a graceful ``UndefinedTableError``
+    catch so this function continues to work on legacy-only databases where
+    migration 052 has not been applied.
+
     When ``user_id`` is provided only jobs owned by that user (or jobs with a
     NULL user_id, i.e. system jobs) are returned.  Passing ``user_id=None``
     returns all jobs (single-tenant / no-ownership mode).
     """
-    conditions: list[str] = []
-    params: list[Any] = []
-    idx = 1
+    # Fixed-position parameters (matches the $1/$2/$3/$4 placeholders in the query).
+    # NULL params cause the corresponding WHERE clause to be skipped via IS NULL guard.
+    params: list[Any] = [
+        status,  # $1 — status filter or NULL
+        kind,  # $2 — kind filter or NULL
+        user_id,  # $3 — user_id filter or NULL (text)
+        limit,  # $4 — LIMIT
+    ]
 
-    if user_id is not None:
-        conditions.append(f"(user_id IS NULL OR user_id = ${idx})")
-        params.append(user_id)
-        idx += 1
-    if status is not None:
-        conditions.append(f"status = ${idx}")
-        params.append(status)
-        idx += 1
-    if kind is not None:
-        conditions.append(f"kind = ${idx}")
-        params.append(kind)
-        idx += 1
+    # Try the UNION ALL query first (procrastinate table present).
+    union_query = """
+        SELECT * FROM (
+          SELECT id::text AS id, kind, user_id, status, payload, result, error,
+                 progress, progress_message, created_at, started_at, finished_at,
+                 'legacy' AS source
+          FROM jobs
+          UNION ALL
+          SELECT pj.args->>'job_id' AS id,
+                 pj.task_name AS kind,
+                 pj.args->>'user_id' AS user_id,
+                 CASE pj.status
+                   WHEN 'todo'       THEN 'queued'
+                   WHEN 'doing'      THEN 'running'
+                   WHEN 'succeeded'  THEN 'succeeded'
+                   WHEN 'failed'     THEN 'failed'
+                   WHEN 'cancelled'  THEN 'cancelled'
+                   WHEN 'aborting'   THEN 'cancelled'
+                   WHEN 'aborted'    THEN 'cancelled'
+                   ELSE 'running' END AS status,
+                 pj.args - 'job_id' - 'user_id' AS payload,
+                 NULL::jsonb AS result,
+                 NULL::jsonb AS error,
+                 0::float AS progress,
+                 NULL::text AS progress_message,
+                 (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
+                 (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
+                 (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
+                 'procrastinate' AS source
+          FROM procrastinate_jobs pj
+          WHERE pj.args ? 'job_id'
+        ) j
+        WHERE ($1::text IS NULL OR j.status = $1)
+          AND ($2::text IS NULL OR j.kind = $2)
+          AND ($3::text IS NULL OR j.user_id IS NULL OR j.user_id = $3)
+        ORDER BY j.created_at DESC NULLS LAST
+        LIMIT $4
+    """
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-    params.append(limit)
-    query = f"SELECT * FROM jobs {where} ORDER BY created_at DESC LIMIT ${idx}"
+    legacy_query = """
+        SELECT *, 'legacy' AS source
+        FROM jobs
+        WHERE ($1::text IS NULL OR status = $1)
+          AND ($2::text IS NULL OR kind = $2)
+          AND ($3::text IS NULL OR user_id IS NULL OR user_id = $3)
+        ORDER BY created_at DESC NULLS LAST
+        LIMIT $4
+    """
 
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(query, *params)
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(union_query, *params)
+    except asyncpg.UndefinedTableError:
+        # procrastinate_jobs table not yet created — fall back to legacy-only.
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(legacy_query, *params)
     return [dict(r) for r in rows]
 
 

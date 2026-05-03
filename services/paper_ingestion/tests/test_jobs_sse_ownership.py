@@ -32,6 +32,16 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
     terminal:
         When True (default) the row has ``status='succeeded'`` so the SSE
         generator loop exits immediately after the initial ownership check.
+
+    Implementation note
+    -------------------
+    ``get_unified`` calls BOTH the legacy ``get()`` (first fetchrow) and
+    ``get_procrastinate_job_for_jarvis_id()`` (subsequent fetchrow calls).
+    We use a callable ``side_effect`` that returns the job row on the first
+    call and ``None`` for all subsequent calls so the procrastinate lookup
+    returns None (legacy-only path) and ``procrastinate_row_to_jarvis_row``
+    is never called with the legacy row shape.  This also makes the SSE
+    stream_job_events loop terminate cleanly after one cycle.
     """
     job_row = {
         "id": _JOB_UUID,
@@ -48,8 +58,16 @@ def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicM
         "payload": {},
         "cancel_requested": False,
     }
+    _call_count = [0]
+
+    async def _fetchrow_side_effect(*_args, **_kwargs):
+        _call_count[0] += 1
+        # First call → legacy job row; all subsequent calls (procrastinate
+        # lookup + per-cycle polls) → None so stream terminates cleanly.
+        return job_row if _call_count[0] == 1 else None
+
     conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=job_row)
+    conn.fetchrow = _fetchrow_side_effect
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)

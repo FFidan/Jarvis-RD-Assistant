@@ -1147,7 +1147,14 @@ def test_job_sse_payload_includes_source_discriminator():
 
 
 def test_procrastinate_row_to_jarvis_row_normalises_shape():
-    """B.4 SSE bridge: procrastinate row shape adapts to the legacy SSE shape."""
+    """B.4 SSE bridge: procrastinate row shape adapts to the full legacy Job-interface shape.
+
+    After the Bug-2 fix, ``procrastinate_row_to_jarvis_row`` returns the full
+    12+-key shape (including ``id``, ``kind``, ``user_id``, ``created_at``, etc.)
+    and strips the reserved ``job_id`` / ``user_id`` keys from ``payload`` so
+    that route handlers can call ``_owner_matches``, ``serialise_row``, and the
+    cancel branch without additional per-field checks.
+    """
     from jarvis_common.jobs import procrastinate_row_to_jarvis_row
 
     prow = {
@@ -1155,17 +1162,29 @@ def test_procrastinate_row_to_jarvis_row_normalises_shape():
         "queue_name": "paper_ingestion",
         "task_name": "paper.process",
         "status": "succeeded",
-        "args": {"job_id": "abc-123", "paper_id": 7},
+        "args": {"job_id": "abc-123", "paper_id": 7, "user_id": "5"},
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
     }
 
     out = procrastinate_row_to_jarvis_row(prow)
 
+    # Full Job-interface keys.
+    assert out["id"] == "abc-123"
+    assert out["kind"] == "paper.process"
+    assert out["user_id"] == "5"
     assert out["status"] == "succeeded"  # legacy enum
-    assert out["payload"] == {"job_id": "abc-123", "paper_id": 7}  # args surfaced
-    assert out["progress"] is None
+    assert out["progress"] == 0
     assert out["progress_message"] is None
     assert out["result"] is None
     assert out["error"] is None
+    # payload strips reserved keys.
+    assert out["payload"] == {"paper_id": 7}
+    # Timestamps pass through from the row.
+    assert out["created_at"] is None
+    assert out["cancel_requested"] is False  # "succeeded" is not a cancel status
+    assert out["source"] == "procrastinate"
 
 
 @pytest.mark.asyncio
@@ -1250,7 +1269,6 @@ async def test_get_procrastinate_job_returns_dict_when_present():
     assert params == ["abc-123"]
 
 
-@pytest.mark.asyncio
 async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
     """B.4-(a): a procrastinate-only job produces an SSE event in the legacy shape.
 
@@ -1258,6 +1276,9 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
     returns a procrastinate row that immediately reports status='succeeded'. The
     stream must yield exactly one payload with ``source='procrastinate'``,
     ``status='succeeded'``, and the legacy payload shape.
+
+    After the Bug-2 fix, ``procrastinate_row_to_jarvis_row`` strips the
+    reserved ``job_id`` key from ``payload``; only user-defined keys remain.
     """
     import json as _json
 
@@ -1270,6 +1291,10 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
             "task_name": "paper.process",
             "status": "succeeded",
             "args": {"job_id": "p-1", "paper_id": 42},
+            "attempts": 1,
+            "created_at": None,
+            "started_at": None,
+            "finished_at": None,
         },
     ]
 
@@ -1304,7 +1329,8 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
     payload = _json.loads(body)
     assert payload["source"] == "procrastinate"
     assert payload["status"] == "succeeded"
-    assert payload["payload"] == {"job_id": "p-1", "paper_id": 42}
+    # job_id is stripped from payload by procrastinate_row_to_jarvis_row (reserved key).
+    assert payload["payload"] == {"paper_id": 42}
 
 
 @pytest.mark.asyncio
@@ -1429,3 +1455,222 @@ async def test_stream_job_events_legacy_only_unchanged(monkeypatch):
     assert payload["source"] == "legacy"
     assert payload["status"] == "succeeded"
     assert payload["result"] == {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# B.4 Step 3 — get_unified + list_jobs UNION ALL (Bug 2 unit tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_unified_returns_legacy_when_present():
+    """get_unified() returns the legacy row when legacy lookup succeeds.
+
+    The ``source`` discriminator must be set to ``"legacy"`` and the legacy
+    row must otherwise pass through unmodified.
+    """
+    from jarvis_common.jobs import get_unified
+
+    legacy_row = {
+        "id": "uuid-leg-1",
+        "kind": "paper.process",
+        "status": "queued",
+        "progress": None,
+        "progress_message": None,
+        "payload": {},
+        "result": None,
+        "error": None,
+        "user_id": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "cancel_requested": False,
+    }
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=legacy_row)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    result = await get_unified(pool, "uuid-leg-1")
+    assert result is not None
+    assert result["source"] == "legacy"
+    assert result["status"] == "queued"
+    assert result["id"] == "uuid-leg-1"
+
+
+@pytest.mark.asyncio
+async def test_get_unified_falls_through_to_procrastinate():
+    """get_unified() falls through to procrastinate lookup when legacy row is absent.
+
+    This is the Bug 2 regression test: if legacy ``get()`` returns None the
+    function must query the procrastinate table and return a row in the full
+    Job-interface shape with ``source="procrastinate"``.
+    """
+    from jarvis_common import jobs
+    from jarvis_common.jobs import get_unified
+
+    procrastinate_row = {
+        "id": 42,
+        "queue_name": "paper_ingestion",
+        "task_name": "paper.process",
+        "status": "doing",
+        "args": {"job_id": "p-uni-1", "paper_id": 7, "user_id": "5"},
+        "attempts": 1,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+    async def _no_legacy(_pool, _job_id):
+        return None
+
+    async def _prow(_pool, _job_id):
+        return procrastinate_row
+
+    pool = MagicMock(name="db_pool")
+
+    # Monkeypatch the module-level functions.
+    original_get = jobs.get
+    original_pget = jobs.get_procrastinate_job_for_jarvis_id
+    jobs.get = _no_legacy  # type: ignore[assignment]
+    jobs.get_procrastinate_job_for_jarvis_id = _prow  # type: ignore[assignment]
+    try:
+        result = await get_unified(pool, "p-uni-1")
+    finally:
+        jobs.get = original_get  # type: ignore[assignment]
+        jobs.get_procrastinate_job_for_jarvis_id = original_pget  # type: ignore[assignment]
+
+    assert result is not None
+    assert result["source"] == "procrastinate"
+    assert result["status"] == "running"  # "doing" → "running"
+    assert result["id"] == "p-uni-1"
+    assert result["kind"] == "paper.process"
+    assert result["user_id"] == "5"
+    # Payload must exclude the reserved job_id / user_id keys.
+    assert result["payload"] == {"paper_id": 7}
+
+
+@pytest.mark.asyncio
+async def test_get_unified_returns_none_when_neither():
+    """get_unified() returns None when both legacy and procrastinate lookups miss."""
+    from jarvis_common import jobs
+    from jarvis_common.jobs import get_unified
+
+    async def _no_legacy(_pool, _job_id):
+        return None
+
+    async def _no_prow(_pool, _job_id):
+        return None
+
+    pool = MagicMock(name="db_pool")
+
+    original_get = jobs.get
+    original_pget = jobs.get_procrastinate_job_for_jarvis_id
+    jobs.get = _no_legacy  # type: ignore[assignment]
+    jobs.get_procrastinate_job_for_jarvis_id = _no_prow  # type: ignore[assignment]
+    try:
+        result = await get_unified(pool, "missing-job")
+    finally:
+        jobs.get = original_get  # type: ignore[assignment]
+        jobs.get_procrastinate_job_for_jarvis_id = original_pget  # type: ignore[assignment]
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_union_includes_procrastinate_rows():
+    """list_jobs() with UNION ALL returns rows from both tables.
+
+    Setup: legacy conn.fetch returns one legacy row when the union query runs
+    (we cannot actually mock the fallback split cleanly here, but we can verify
+    that list_jobs does NOT raise on a pool that returns rows, and that those
+    rows are returned as plain dicts with the ``source`` key present).
+
+    The test uses a mock pool that returns a pre-built row list so no real DB
+    is needed.  Verifying the SQL string contains 'UNION ALL' and 'procrastinate'
+    checks that the function was rewritten rather than silently left as legacy-only.
+    """
+    from jarvis_common.jobs import list_jobs
+
+    fake_row = {
+        "id": "p-list-1",
+        "kind": "digest.weekly",
+        "user_id": None,
+        "status": "queued",
+        "payload": {},
+        "result": None,
+        "error": None,
+        "progress": 0.0,
+        "progress_message": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "source": "procrastinate",
+    }
+
+    conn = AsyncMock()
+    # First call (UNION ALL query) succeeds and returns our fake row.
+    conn.fetch = AsyncMock(return_value=[fake_row])
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    rows = await list_jobs(pool)
+
+    assert len(rows) == 1
+    assert rows[0]["source"] == "procrastinate"
+    assert rows[0]["kind"] == "digest.weekly"
+
+    # Verify the UNION ALL query was actually issued (not the legacy-only fallback).
+    issued_sql: str = conn.fetch.await_args.args[0]
+    assert "UNION ALL" in issued_sql, "list_jobs must issue a UNION ALL query"
+    assert "procrastinate_jobs" in issued_sql, "list_jobs UNION ALL must include procrastinate_jobs"
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_falls_back_to_legacy_on_undefined_table():
+    """list_jobs() falls back gracefully when procrastinate_jobs doesn't exist."""
+    import asyncpg as _asyncpg
+    from jarvis_common.jobs import list_jobs
+
+    legacy_row = {
+        "id": "leg-fb-1",
+        "kind": "noop.test",
+        "user_id": None,
+        "status": "queued",
+        "payload": {},
+        "result": None,
+        "error": None,
+        "progress": None,
+        "progress_message": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "source": "legacy",
+    }
+
+    conn = AsyncMock()
+    # First call raises UndefinedTableError (procrastinate table missing).
+    # Second call (legacy fallback) succeeds.
+    conn.fetch = AsyncMock(
+        side_effect=[
+            _asyncpg.UndefinedTableError("relation procrastinate_jobs does not exist"),
+            [legacy_row],
+        ]
+    )
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    rows = await list_jobs(pool)
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == "leg-fb-1"

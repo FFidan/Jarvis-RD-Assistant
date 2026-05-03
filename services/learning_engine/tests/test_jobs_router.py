@@ -53,13 +53,23 @@ async def test_create_job_rejects_disallowed_kind(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_create_job_enqueues_allowed_kind(monkeypatch):
-    """POST /api/jobs with card.generate enqueues and returns job_id."""
+    """POST /api/jobs with card.generate dispatches via KIND_TO_TASK and returns job_id.
+
+    After the B.4 Step 3 cutover, ``create_job`` dispatches via
+    ``KIND_TO_TASK.defer_async`` for all 19 registered kinds (including
+    ``card.generate``).  The test patches ``defer_async`` on the task object
+    to avoid a live procrastinate connection.
+    """
     monkeypatch.delenv("DEV_MODE", raising=False)
 
     mock_request = MagicMock()
     mock_pool = MagicMock()
 
-    with patch.object(jobs_router.jobs_lib, "enqueue", AsyncMock(return_value="abc-123")):
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    fake_kind_to_task = {"card.generate": fake_task}
+
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
         result = await jobs_router.create_job.__wrapped__(
             mock_request,
             body=CreateJobRequest(kind="card.generate"),
@@ -67,8 +77,11 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
             db_pool=mock_pool,
         )
 
-    assert result.job_id == "abc-123"
     assert result.status == "queued"
+    assert isinstance(result.job_id, str)
+    call_kwargs = fake_task.defer_async.await_args.kwargs
+    assert call_kwargs["user_id"] == 42
+    assert "job_id" in call_kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +91,19 @@ async def test_create_job_enqueues_allowed_kind(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_job_returns_404_when_not_found():
+    """GET /api/jobs/{id} → 404 when neither legacy nor procrastinate table has the job."""
     mock_request = MagicMock()
     mock_pool = MagicMock()
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=None)):
+    # Patch both lookup paths in get_unified so the route sees no row from either.
+    with (
+        patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=None)),
+        patch.object(
+            jobs_router.jobs_lib,
+            "get_procrastinate_job_for_jarvis_id",
+            AsyncMock(return_value=None),
+        ),
+    ):
         with pytest.raises(HTTPException) as exc_info:
             await jobs_router.get_job.__wrapped__(
                 mock_request,

@@ -83,12 +83,22 @@ async def test_build_jobs_router_unknown_kind_returns_400():
 
 @pytest.mark.asyncio
 async def test_build_jobs_router_known_kind_enqueues():
-    """Permissive mode: kind in allowlist → enqueue called and job_id returned."""
+    """Permissive mode: kind in allowlist → dispatches to KIND_TO_TASK and returns job_id.
+
+    After the B.4 Step 3 cutover, ``create_job`` dispatches via
+    ``KIND_TO_TASK.defer_async`` for all 19 registered kinds (including
+    ``card.generate``).  The test patches ``defer_async`` on the task object
+    to avoid a live procrastinate connection.
+    """
     _router, request_model, pool, handlers = _build_factory(
         schemas=None, kinds=frozenset({"card.generate"})
     )
 
-    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock(return_value="job-7")):
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    fake_kind_to_task = {"card.generate": fake_task}
+
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="card.generate", payload={"paper_id": 1}),
@@ -96,8 +106,13 @@ async def test_build_jobs_router_known_kind_enqueues():
             user_id=42,
         )
 
-    assert result.job_id == "job-7"
     assert result.status == "queued"
+    assert isinstance(result.job_id, str)
+    # defer_async must be called with the reserved keys + payload spread.
+    call_kwargs = fake_task.defer_async.await_args.kwargs
+    assert call_kwargs["user_id"] == 42
+    assert call_kwargs["paper_id"] == 1
+    assert "job_id" in call_kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -513,3 +528,198 @@ async def test_stream_job_route_surfaces_procrastinate_source():
     assert parsed["source"] == "procrastinate"
     assert parsed["status"] == "succeeded"
     assert parsed["payload"]["paper_id"] == 7
+
+
+# ---------------------------------------------------------------------------
+# B.4 Step 3 — procrastinate-only route parity (Bug 2 regression tests)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_job_route_finds_procrastinate_only_job():
+    """Bug 2 regression: stream_job must NOT 404 for procrastinate-only jobs.
+
+    Previously the route called ``jobs_lib.get`` which queries only the legacy
+    table.  Procrastinate-only rows (no legacy row) returned 404.  After the
+    fix, ``get_unified`` falls through to the procrastinate table.
+
+    Setup: ``jobs_lib.get`` returns None (no legacy row) and
+    ``get_procrastinate_job_for_jarvis_id`` returns a procrastinate prow.
+    """
+    import json
+    from collections.abc import AsyncIterator
+
+    _router, _rm, pool, handlers = _build_factory()
+
+    procrastinate_row = {
+        "id": "p-stream-only",
+        "kind": "digest.weekly",
+        "status": "queued",
+        "progress": 0,
+        "progress_message": None,
+        "payload": {},
+        "result": None,
+        "error": None,
+        "user_id": None,
+        "cancel_requested": False,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "source": "procrastinate",
+    }
+
+    async def _fake_stream(_pool, _job_id, *, is_disconnected) -> AsyncIterator[str]:
+        yield (
+            "data: "
+            + json.dumps({"status": "queued", "source": "procrastinate", "progress": None})
+            + "\n\n"
+        )
+
+    with (
+        # get_unified: legacy returns None, procrastinate returns the row
+        patch.object(
+            jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=procrastinate_row)
+        ),
+        patch.object(jobs_router_mod.jobs_lib, "stream_job_events", _fake_stream),
+    ):
+        request = MagicMock()
+        request.is_disconnected = AsyncMock(return_value=False)
+        # Must NOT raise HTTPException(404).
+        response = await handlers["stream_job"](
+            request=request,
+            job_id="p-stream-only",
+            db_pool=pool,
+            user_id=None,
+        )
+
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk if isinstance(chunk, str) else chunk.decode())
+    body = "".join(chunks)
+    assert "data:" in body, "stream must emit at least one SSE frame"
+    parsed = json.loads(body.strip().splitlines()[0].removeprefix("data: "))
+    assert parsed["source"] == "procrastinate"
+
+
+@pytest.mark.asyncio
+async def test_get_job_route_finds_procrastinate_only():
+    """Bug 2 parity: GET /api/jobs/{id} must return 200 for procrastinate-only jobs.
+
+    ``get_unified`` falls through to procrastinate; the route returns the row.
+    """
+    _router, _rm, pool, handlers = _build_factory()
+
+    procrastinate_row = {
+        "id": "p-get-only",
+        "kind": "paper.process",
+        "status": "running",
+        "progress": 0,
+        "progress_message": None,
+        "payload": {"paper_id": 7},
+        "result": None,
+        "error": None,
+        "user_id": None,
+        "cancel_requested": False,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "source": "procrastinate",
+    }
+
+    with patch.object(
+        jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=procrastinate_row)
+    ):
+        result = await handlers["get_job"](
+            request=MagicMock(),
+            job_id="p-get-only",
+            db_pool=pool,
+            user_id=None,
+        )
+
+    assert result["id"] == "p-get-only"
+    assert result["status"] == "running"
+    assert result["source"] == "procrastinate"
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_route_calls_procrastinate_cancel():
+    """cancel_job must dispatch to procrastinate.cancel_job_by_id_async for procrastinate rows."""
+    _router, _rm, pool, handlers = _build_factory()
+
+    procrastinate_unified_row = {
+        "id": "p-cancel-only",
+        "kind": "paper.process",
+        "status": "running",
+        "user_id": None,
+        "source": "procrastinate",
+    }
+    procrastinate_prow = {
+        "id": 99,
+        "queue_name": "paper_ingestion",
+        "task_name": "paper.process",
+        "status": "doing",
+        "args": {"job_id": "p-cancel-only", "paper_id": 7},
+        "attempts": 1,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
+
+    fake_job_manager = AsyncMock()
+    fake_job_manager.cancel_job_by_id_async = AsyncMock(return_value=None)
+    fake_app = MagicMock()
+    fake_app.job_manager = fake_job_manager
+
+    with (
+        patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_unified",
+            AsyncMock(return_value=procrastinate_unified_row),
+        ),
+        patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_procrastinate_job_for_jarvis_id",
+            AsyncMock(return_value=procrastinate_prow),
+        ),
+        patch("jarvis_common.task_registry.app", fake_app),
+    ):
+        result = await handlers["cancel_job"](
+            request=MagicMock(),
+            job_id="p-cancel-only",
+            db_pool=pool,
+            user_id=None,
+        )
+
+    assert result == {"ok": True}
+    fake_job_manager.cancel_job_by_id_async.assert_awaited_once_with(99, abort=True)
+
+
+@pytest.mark.asyncio
+async def test_create_job_route_dispatches_to_task_registry():
+    """create_job must dispatch via KIND_TO_TASK.defer_async for registered kinds."""
+    _router, request_model, pool, handlers = _build_factory(kinds=frozenset({"paper.process"}))
+
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    fake_kind_to_task = {"paper.process": fake_task}
+
+    with (
+        patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task),
+        patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock()) as legacy_enqueue,
+    ):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="paper.process", payload={"paper_id": 42}),
+            db_pool=pool,
+            user_id=7,
+        )
+
+    assert result.status == "queued"
+    assert isinstance(result.job_id, str)
+    # defer_async must have been called with the reserved keys + payload.
+    call_kwargs = fake_task.defer_async.await_args.kwargs
+    assert "job_id" in call_kwargs
+    assert call_kwargs["user_id"] == 7
+    assert call_kwargs["paper_id"] == 42
+    # Regression guard: NO legacy jobs row may be written for registered kinds.
+    legacy_enqueue.assert_not_called()

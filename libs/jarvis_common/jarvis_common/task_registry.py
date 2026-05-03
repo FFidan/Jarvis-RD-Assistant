@@ -318,10 +318,45 @@ async def card_generate_batch(context: procrastinate.JobContext, **payload: Any)
 
 
 # ---------------------------------------------------------------------------
+# KIND_TO_TASK mapping — used by create_job for procrastinate dispatch
+# ---------------------------------------------------------------------------
+#
+# Maps each JARVIS job kind string to its registered procrastinate task object.
+# The ``create_job`` route uses this to defer a task via procrastinate instead
+# of inserting a legacy row, so GET/stream/cancel routes (now backed by
+# ``get_unified``) can find the job in ``procrastinate_jobs``.
+#
+# ``noop.test`` is intentionally absent — the noop handler is a legacy-only
+# test helper and falls through to the legacy ``enqueue`` path.
+
+KIND_TO_TASK: dict[str, Any] = {
+    "paper.process": paper_process,
+    "paper.analyze": paper_analyze,
+    "paper.summarize": paper_summarize,
+    "papers.batch_process": papers_batch_process,
+    "papers.batch_summarize": papers_batch_summarize,
+    "papers.scan_local": papers_scan_local,
+    "citations.batch_fetch": citations_batch_fetch,
+    "digest.weekly": digest_weekly,
+    "extraction.single": extraction_single,
+    "extraction.batch": extraction_batch,
+    "contradictions.scan": contradictions_scan,
+    "pulse.generate": pulse_generate,
+    "pulse.train_classifier": pulse_train_classifier,
+    "zotero.push": zotero_push,
+    "zotero.resync": zotero_resync,
+    "zotero.sync_from_zotero": zotero_sync_from_zotero,
+    "zotero.sync_annotations": zotero_sync_annotations,
+    "card.generate": card_generate,
+    "card.generate_batch": card_generate_batch,
+}
+
+# ---------------------------------------------------------------------------
 # Public exports
 # ---------------------------------------------------------------------------
 
 __all__ = [
     "app",
     "set_dependencies",
+    "KIND_TO_TASK",
 ]
