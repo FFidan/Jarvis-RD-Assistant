@@ -17,7 +17,6 @@ from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
     build_litellm_headers,
     get_litellm_config,
-    observe,
 )
 from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
 
@@ -28,6 +27,16 @@ from paper_ingestion.routers._sse import SSE_DONE, sse_event
 if TYPE_CHECKING:
     from paper_ingestion.extraction.verify import QuoteVerifier
     from paper_ingestion.ingestion.embedder import Embedder
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
 
 
 logger = logging.getLogger(__name__)
@@ -82,7 +91,6 @@ async def sse_error_stream(message: str):
 # ---------------------------------------------------------------------------
 
 
-@observe()
 async def prepare_single_paper_rag(
     embedder: "Embedder",
     db_pool: asyncpg.Pool,
@@ -145,7 +153,6 @@ async def prepare_single_paper_rag(
     return messages, sources_list
 
 
-@observe()
 async def prepare_cross_paper_rag(
     embedder: "Embedder",
     db_pool: asyncpg.Pool,

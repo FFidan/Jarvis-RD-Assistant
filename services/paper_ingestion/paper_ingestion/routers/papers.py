@@ -67,27 +67,23 @@ async def list_papers_brief(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return lightweight paper list for selector dropdowns."""
-    caller_id = await current_user_id_or_none(request)
+    _ = request  # required by @limiter.limit; not used in body
     async with db_pool.acquire() as conn:
         if search:
             rows = await conn.fetch(
                 """SELECT id, title, source_type, published_date
                    FROM papers
                    WHERE title ILIKE '%' || $1 || '%' ESCAPE '\\'
-                     AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2)
                    ORDER BY created_at DESC
                    LIMIT 200""",
                 escape_like(search),
-                caller_id,
             )
         else:
             rows = await conn.fetch(
                 """SELECT id, title, source_type, published_date
                    FROM papers
-                   WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)
                    ORDER BY created_at DESC
-                   LIMIT 200""",
-                caller_id,
+                   LIMIT 200"""
             )
     return [dict(r) for r in rows]
 
@@ -355,35 +351,10 @@ async def submit_feedback(
     Writes to the ``recommendation_feedback`` table (one row per
     ``(paper_id, user_id, source)`` triple — repeat submissions overwrite
     the prior row).
-
-    ``source`` values that are Pulse-specific (``pulse_thumbs``,
-    ``feed_thumbs``, ``dismiss_combined``) are only accepted when the paper's
-    ``discovery_origin`` is ``'pulse_discovery'``.  Mismatches return 400.
     """
-    # Sources that are only valid for Pulse-discovered papers
-    pulse_only_sources = frozenset({"pulse_thumbs", "feed_thumbs", "dismiss_combined"})
-
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-
-        # Validate source vs discovery_origin
-        if body.source in pulse_only_sources:
-            origin_row = await conn.fetchrow(
-                "SELECT discovery_origin FROM papers WHERE id = $1",
-                paper_id,
-            )
-            if origin_row is None:
-                raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
-            if origin_row["discovery_origin"] != "pulse_discovery":
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"source '{body.source}' is only valid for Pulse-discovered papers; "
-                        f"this paper has discovery_origin='{origin_row['discovery_origin']}'"
-                    ),
-                )
-
         try:
             await _upsert_recommendation_feedback(
                 conn,
@@ -523,11 +494,8 @@ async def _restore_paper(
 
     Also clears ``state_before_trash`` so the field only carries meaning
     while the paper is in trash.
-
-    Raises HTTPException(404) if no matching row was updated (paper not found
-    or not in trash for this caller).
     """
-    status = await conn.execute(
+    await conn.execute(
         """UPDATE paper_user_state
               SET state = COALESCE(state_before_trash, 'inbox'),
                   state_before_trash = NULL
@@ -535,10 +503,6 @@ async def _restore_paper(
         paper_id,
         user_id,
     )
-    # asyncpg returns e.g. "UPDATE 1" — extract the count
-    updated = int(status.split()[-1]) if status else 0
-    if updated == 0:
-        raise HTTPException(status_code=404, detail="Paper not found or not in trash")
 
 
 async def _apply_bulk_action(
@@ -546,8 +510,6 @@ async def _apply_bulk_action(
     paper_id: int,
     user_id: int | None,
     action: str,
-    *,
-    _hard_deleted_ids: list[int] | None = None,
 ) -> None:
     """Dispatch a single bulk action to the appropriate state mutation."""
     if action == "save":
@@ -576,20 +538,13 @@ async def _apply_bulk_action(
         # Caller (bulk_action_papers) already wraps each paper in a per-paper
         # SAVEPOINT (async with conn.transaction()), so no inner txn is needed.
         await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
-        # Collect the ID for Qdrant cleanup OUTSIDE the transaction.
-        # Callers that do not pass _hard_deleted_ids get the legacy inline
-        # behaviour as a fallback (e.g. tests that call this directly).
-        if _hard_deleted_ids is not None:
-            _hard_deleted_ids.append(paper_id)
-        else:
-            try:
-                await delete_paper_vectors(paper_id)
-            except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
-                logger.exception(
-                    "Qdrant cleanup failed for paper %d in bulk hard_delete; "
-                    "vectors are now orphans",
-                    paper_id,
-                )
+        try:
+            await delete_paper_vectors(paper_id)
+        except Exception:  # noqa: BLE001 — best-effort cleanup; orphan vectors are harmless
+            logger.exception(
+                "Qdrant cleanup failed for paper %d in bulk hard_delete; vectors are now orphans",
+                paper_id,
+            )
     else:
         raise ValueError(f"Unknown bulk action: {action}")
 
@@ -736,17 +691,17 @@ async def star_paper(
     2. The paper is linked to at least one project (``project_papers`` row).
     3. ``zotero.auto_push_on_star`` is ``true`` in ``user_config``.
 
-    The off→on transition is detected atomically via a CTE + RETURNING so that
-    double-star calls (client retry, double-tap) do not double-enqueue.
+    The transition guard ensures double-/star calls (client retry, double-tap)
+    do not double-enqueue.
 
-    The enqueue runs OUTSIDE the connection block so ``zotero_push.defer_async``
+    The enqueue runs OUTSIDE the connection block so ``jobs_lib.enqueue``
     (which acquires its own pool connection) cannot deadlock against the
     connection we hold here. Failures to enqueue are logged but do not
     fail the star mutation itself (best-effort).
     """
     _ = request  # required by @limiter.limit; not used in body
     user_id = await current_user_id_or_none(request)
-    was_new_star = False
+    was_unstarred = False
     project_link_count = 0
     auto_push_on_star = False
     async with db_pool.acquire() as conn:
@@ -754,31 +709,14 @@ async def star_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        # Atomically upsert starred=TRUE and detect the off→on transition.
-        # A CTE snapshots the previous starred value before the upsert so we
-        # can determine whether this is a genuine transition without a separate
-        # pre-flight SELECT (which would have a TOCTOU race window).
-        upsert_result = await conn.fetchrow(
-            """
-            WITH before AS (
-                SELECT starred FROM paper_user_state
-                WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
-            )
-            INSERT INTO paper_user_state (paper_id, user_id, starred)
-            VALUES ($1, $2, TRUE)
-            ON CONFLICT (paper_id, user_id) DO UPDATE
-                SET starred = TRUE
-            RETURNING
-                (xmax = 0) AS is_new_row,
-                (SELECT COALESCE(starred, FALSE) FROM before) AS prev_starred
-            """,
+        prev_starred_row = await conn.fetchval(
+            "SELECT starred FROM paper_user_state "
+            "WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
             user_id,
         )
-        if upsert_result is not None:
-            was_new_star = bool(upsert_result["is_new_row"]) or not bool(
-                upsert_result["prev_starred"]
-            )
+        was_unstarred = not bool(prev_starred_row)
+        await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
         project_link_count = (
             await conn.fetchval(
                 "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
@@ -791,7 +729,7 @@ async def star_paper(
         )
         auto_push_on_star = _cfg_value is True
     # Outside conn block: enqueue without holding the pool slot
-    if was_new_star and project_link_count > 0 and auto_push_on_star:
+    if was_unstarred and project_link_count > 0 and auto_push_on_star:
         try:
             from jarvis_common.task_registry import zotero_push
 
@@ -1019,9 +957,6 @@ async def bulk_action_papers(
     user_id = await current_user_id_or_none(request)
     succeeded: list[int] = []
     failed: list[dict[str, object]] = []
-    # Track hard-deleted IDs for Qdrant cleanup OUTSIDE the transaction so that
-    # Qdrant I/O does not block or deadlock inside a PostgreSQL SAVEPOINT.
-    hard_deleted_ids: list[int] = []
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -1032,28 +967,10 @@ async def bulk_action_papers(
                 try:
                     async with conn.transaction():
                         await assert_paper_ownership(conn, paper_id, user_id)
-                        await _apply_bulk_action(
-                            conn,
-                            paper_id,
-                            user_id,
-                            body.action,
-                            _hard_deleted_ids=hard_deleted_ids,
-                        )
+                        await _apply_bulk_action(conn, paper_id, user_id, body.action)
                     succeeded.append(paper_id)
                 except Exception as exc:  # noqa: BLE001
                     failed.append({"paper_id": paper_id, "error": str(exc)})
-
-    # Qdrant cleanup runs OUTSIDE the PostgreSQL transaction to avoid deadlock /
-    # SAVEPOINT bloat.  Failures are logged but do not affect the HTTP response.
-    for pid in hard_deleted_ids:
-        try:
-            await delete_paper_vectors(pid)
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "Qdrant cleanup failed for paper %d after bulk hard_delete; "
-                "vectors are now orphans",
-                pid,
-            )
 
     return {"succeeded": succeeded, "failed": failed}
 
@@ -1082,13 +999,6 @@ async def process_batch(
     from jarvis_common.task_registry import papers_batch_process
 
     user_id = await current_user_id_or_none(request)
-
-    # Assert ownership for each paper before enqueuing to prevent IDOR via
-    # batch-processing another user's papers.
-    async with db_pool.acquire() as conn:
-        for paper_id in body.paper_ids:
-            await assert_paper_ownership(conn, paper_id, user_id)
-
     jarvis_job_id = str(uuid.uuid4())
     await papers_batch_process.defer_async(
         job_id=jarvis_job_id, user_id=user_id, paper_ids=body.paper_ids

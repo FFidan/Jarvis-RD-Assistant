@@ -234,7 +234,6 @@ async def get_stats(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseStatsResponse:
     """Aggregate Pulse run stats over the past *days* days."""
-    caller_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -249,7 +248,6 @@ async def get_stats(
                     FROM pulse_decks
                     WHERE stats->>'last_error' IS NOT NULL
                       AND generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS last_error,
@@ -258,16 +256,13 @@ async def get_stats(
                     FROM pulse_decks
                     WHERE degraded_reason IS NOT NULL
                       AND generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS degraded_reason
             FROM pulse_decks
             WHERE generated_at >= NOW() - make_interval(days => $1)
-              AND user_id IS NOT DISTINCT FROM $2
             """,
             days,
-            caller_id,
         )
     return PulseStatsResponse(
         window_days=days,
@@ -299,18 +294,15 @@ async def debug_pulse(
     * Topic-embedding sanity check (non-null, correct dimension).
     * Top-10 card signal breakdown (paper_id, title, signals, final_score).
     """
-    caller_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        # Fetch the most recent deck row for this caller
+        # Fetch the most recent deck row
         deck_row = await conn.fetchrow(
             """
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
-            WHERE user_id IS NOT DISTINCT FROM $1
             ORDER BY generated_at DESC
             LIMIT 1
-            """,
-            caller_id,
+            """
         )
         if deck_row is None:
             raise HTTPException(status_code=404, detail="No Pulse deck found")

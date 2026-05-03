@@ -39,8 +39,8 @@ export function HeroPulse() {
       setCurrentIndex(0);
       return;
     }
-    // Clamp if currentIndex meets or exceeds available cards (e.g. deck shrunk from refetch)
-    if (currentIndex >= deck.cards.length) {
+    // Clamp if currentIndex exceeds available cards (e.g. deck shrunk from refetch)
+    if (currentIndex > deck.cards.length) {
       setCurrentIndex(deck.cards.length);
     }
   }, [deck?.deck_id, deck?.cards.length, currentIndex]);

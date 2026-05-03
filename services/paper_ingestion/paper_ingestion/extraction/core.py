@@ -17,7 +17,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common import get_smart_model
-from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured, observe
+from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 
 from paper_ingestion.extraction.dynamic_models import (
@@ -29,6 +29,17 @@ from paper_ingestion.models import (
     ExtractedField,
     ExtractionResponse,
 )
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
 
 logger = logging.getLogger(__name__)
 
@@ -287,7 +298,6 @@ async def extract_fields_for_paper(
     )
 
 
-@observe()
 async def batch_extract(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,

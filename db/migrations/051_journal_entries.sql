@@ -19,5 +19,5 @@ DO $$ BEGIN
     ALTER TABLE journal_entries
         ADD CONSTRAINT journal_entries_user_id_date_key
         UNIQUE NULLS NOT DISTINCT (user_id, date);
-EXCEPTION WHEN duplicate_object THEN NULL;
+EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;

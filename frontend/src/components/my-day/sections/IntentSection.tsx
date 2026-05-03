@@ -48,7 +48,7 @@ export function IntentSection() {
 
   const queryClient = useQueryClient();
 
-  const { data, isError } = useQuery({
+  const { data } = useQuery({
     queryKey: ['my-day'],
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
@@ -79,15 +79,6 @@ export function IntentSection() {
   useEffect(() => {
     if (completedToday.length === 0) setShowCompleted(false);
   }, [completedToday.length]);
-
-  if (isError) {
-    return (
-      <section id="intent">
-        <SectionHeader marker="Today's intent" />
-        <p className="text-[12px] font-mono text-meta pl-5">Couldn't load tasks</p>
-      </section>
-    );
-  }
 
   return (
     <section id="intent">

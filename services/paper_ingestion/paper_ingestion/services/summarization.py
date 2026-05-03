@@ -4,26 +4,23 @@ Extracted from main.py so that the rag and summarize routers can share
 ``generate_paper_summary`` and ``_find_cross_references``.
 """
 
+import json
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
-import pydantic
 from fastapi import HTTPException
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_LONG,
     ChatCompletionOptions,
-    call_llm_structured,
     get_litellm_config,
-    observe,
+    request_chat_completion_content,
 )
 from jarvis_common.prompt_safety import wrap_delimited
 
-from paper_ingestion._state import svc
 from paper_ingestion.converters import (
     deduplicate_by_paper_id,
     row_to_chunk_response,
@@ -38,10 +35,6 @@ from paper_ingestion.models import (
     SummaryResponse,
 )
 from paper_ingestion.services.pdf_workflow import advisory_lock
-from paper_ingestion.services.summarization_models import SummarizationOutput
-
-if TYPE_CHECKING:
-    import openai
 
 logger = logging.getLogger(__name__)
 
@@ -169,28 +162,18 @@ async def _find_cross_references(
     ]
 
 
-@observe()
 async def generate_paper_summary(
     paper_id: int,
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     verifier: "QuoteVerifier",
     embedder,
-    *,
-    openai_client: "openai.AsyncOpenAI | None" = None,
 ) -> SummaryResponse:
     """Generate an LLM summary for a paper with quote verification.
 
     Fetches chunks, calls the LLM, verifies quoted findings against source
     text, and stores the resulting summary.  Returns the existing summary
     if one already exists (idempotent).
-
-    Parameters
-    ----------
-    openai_client:
-        Instructor-patched ``openai.AsyncOpenAI`` client.  Defaults to
-        ``svc.openai_client`` (set by the service lifespan).  Tests may
-        inject a mock here directly.
     """
     # --- Phase 1: fetch all needed data under advisory lock ---
     # Capture everything as plain Python objects before releasing the connection.
@@ -234,55 +217,63 @@ async def generate_paper_summary(
         text=wrap_delimited("paper_text", full_text, max_chars=50000),
     )
 
-    # --- Phase 2: call LiteLLM via Instructor (no connection held) ---
-    client = openai_client if openai_client is not None else svc.openai_client
+    # --- Phase 2: call LiteLLM (no connection held) ---
     litellm_config = get_litellm_config()
     try:
-        parsed = await call_llm_structured(
-            client,
-            response_model=SummarizationOutput,
+        raw_content = await request_chat_completion_content(
+            http_client,
             prompt=prompt,
             options=ChatCompletionOptions(
                 model=llm_model_name,
                 max_tokens=2000,
                 temperature=0.1,
                 timeout=LLM_TIMEOUT_LONG,
+                response_format={"type": "json_object"},
             ),
             config=litellm_config,
         )
-    except pydantic.ValidationError:
-        raise HTTPException(status_code=502, detail="Malformed LLM response") from None
     except RuntimeError as exc:
         msg = str(exc)
-        if "timed out" in msg.lower():
+        if "timed out" in msg:
             raise HTTPException(
                 status_code=504,
                 detail="LLM request timed out. Local models may need more time on first run.",
             ) from None
         raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="LLM request timed out. Local models may need more time on first run.",
-        ) from None
-    except httpx.HTTPStatusError:
-        raise HTTPException(status_code=502, detail="LLM API error during summarization") from None
+    except ValueError:
+        raise HTTPException(status_code=502, detail="Malformed LLM response") from None
 
-    raw_content = parsed.model_dump_json()
+    try:
+        parsed = json.loads(raw_content)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=502, detail="LLM returned invalid JSON") from None
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=502, detail="Malformed LLM response")
+    raw_findings = parsed.get("key_findings", [])
+    if raw_findings is None:
+        raw_findings = []
+    if not isinstance(raw_findings, list) or any(
+        not isinstance(item, dict) for item in raw_findings
+    ):
+        raise HTTPException(status_code=502, detail="Malformed LLM response")
     llm_model = llm_model_name
 
-    # Build findings list — attribute access on the validated Pydantic model.
+    # Build findings list
     key_findings = [
         KeyFinding(
-            finding=f.finding,
-            quote=f.quote,
-            page_number=f.page_number,
+            finding=f.get("finding", ""),
+            quote=f.get("quote", ""),
+            page_number=f.get("page_number"),
         )
-        for f in parsed.key_findings
+        for f in parsed["key_findings"]
     ]
 
     # Extract and cap TLDR to 30 words; fall back to S2 TLDR
-    tldr = " ".join((parsed.tldr or "").split()[:30])
+    tldr = parsed.get("tldr", "")
+    if isinstance(tldr, str):
+        tldr = " ".join(tldr.split()[:30])
+    else:
+        tldr = ""
     if not tldr.strip() and s2_tldr:
         tldr = " ".join(s2_tldr.split()[:30])
 
@@ -302,8 +293,8 @@ async def generate_paper_summary(
                 f.snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
     # If verification failed or no findings, fall back to abstract (AGENTS.md rule 6)
-    summary_brief = parsed.summary_brief
-    summary_detailed = parsed.summary_detailed
+    summary_brief = parsed.get("summary_brief", "")
+    summary_detailed = parsed.get("summary_detailed", "")
     if report.total_findings == 0:
         # LLM produced no verifiable findings -- treat as verification failure
         summary_brief = (
@@ -358,9 +349,9 @@ async def generate_paper_summary(
             summary_detailed,
             tldr or None,
             [f.model_dump() for f in verified_findings],
-            parsed.methodology,
-            parsed.limitations,
-            parsed.relevance_notes,
+            parsed.get("methodology"),
+            parsed.get("limitations"),
+            parsed.get("relevance_notes"),
             report.confidence.value,
             [r.model_dump() for r in cross_references],
             llm_model,

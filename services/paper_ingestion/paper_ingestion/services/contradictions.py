@@ -20,12 +20,21 @@ from jarvis_common.llm_client import (
     ChatCompletionOptions,
     call_llm_structured,
     get_litellm_config,
-    observe,
 )
 from jarvis_common.prompt_safety import wrap_delimited
 
 if TYPE_CHECKING:
     import openai
+
+try:
+    from langfuse.decorators import observe
+except ImportError:
+
+    def observe(**kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator
 
 
 from paper_ingestion.converters import row_to_chunk_response
@@ -510,7 +519,6 @@ async def _persist_contradiction(
     return row["id"] if row else None
 
 
-@observe()
 async def _classify_candidate(
     openai_client: openai.AsyncOpenAI,
     http_client: httpx.AsyncClient,

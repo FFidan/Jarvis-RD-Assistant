@@ -72,12 +72,9 @@ router_settings:
   allowed_fails: 2
   retry_after: 5
 
-general_settings:
-  # master_key gates all LiteLLM admin endpoints (/config/update, /model/*, etc.).
-  # Value is read from LITELLM_MASTER_KEY env var at runtime via LiteLLM's
-  # os.environ/ reference syntax.  Loopback binding (127.0.0.1:4000) is kept
-  # as defence-in-depth; the master_key adds a second layer.
-  master_key: os.environ/LITELLM_MASTER_KEY
+# No master_key: litellm runs loopback-only (127.0.0.1:4000) and fronts Ollama only.
+# Cloud LLM keys flow direct app→provider via encrypted user_config; reintroduce
+# auth only if port 4000 is exposed beyond loopback.
 
 litellm_settings:
   drop_params: true

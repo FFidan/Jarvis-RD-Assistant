@@ -88,9 +88,7 @@ async def test_generate_weekly_summary_with_synthesis():
             "paper_ingestion.weekly_summary.call_llm_structured",
             AsyncMock(return_value=mock_output),
         ):
-            result = await generate_weekly_summary(
-                db_pool, client, days=7, openai_client=MagicMock()
-            )
+            result = await generate_weekly_summary(db_pool, client, days=7)
 
     assert result["total_papers"] == 3
     assert len(result["topics"]) == 2
@@ -116,7 +114,7 @@ async def test_generate_weekly_summary_empty():
     db_pool = _make_pool([])
 
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7, openai_client=MagicMock())
+        result = await generate_weekly_summary(db_pool, client, days=7)
 
     assert result["total_papers"] == 0
     assert result["topics"] == []
@@ -139,9 +137,7 @@ async def test_generate_weekly_summary_llm_failure():
             "paper_ingestion.weekly_summary.call_llm_structured",
             AsyncMock(side_effect=RuntimeError("LLM backend error")),
         ):
-            result = await generate_weekly_summary(
-                db_pool, client, days=7, openai_client=MagicMock()
-            )
+            result = await generate_weekly_summary(db_pool, client, days=7)
 
     assert result["total_papers"] == 2
     assert len(result["topics"]) == 1
@@ -172,7 +168,7 @@ async def test_generate_weekly_summary_top_papers_structure():
     db_pool = _make_pool(rows)
 
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7, openai_client=MagicMock())
+        result = await generate_weekly_summary(db_pool, client, days=7)
 
     paper = result["topics"][0]["top_papers"][0]
     assert paper["id"] == 10
@@ -200,9 +196,7 @@ async def test_generate_weekly_summary_calls_llm_structured():
         "paper_ingestion.weekly_summary.call_llm_structured",
         AsyncMock(return_value=mock_output),
     ) as mock_structured:
-        result = await generate_weekly_summary(
-            db_pool, http_client, days=7, openai_client=MagicMock()
-        )
+        result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     assert result["topics"][0]["summary"] == "Weekly summary: no themes this period."
     mock_structured.assert_awaited_once()
@@ -225,7 +219,7 @@ async def test_excludes_unengaged_papers():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     # P is not in the output
     all_ids = [p["id"] for topic in result["topics"] for p in topic["top_papers"]]
@@ -246,7 +240,7 @@ async def test_includes_saved_papers():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     all_ids = [p["id"] for topic in result["topics"] for p in topic["top_papers"]]
     assert 42 in all_ids
@@ -263,7 +257,7 @@ async def test_includes_positively_rated_pulse_papers():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     all_ids = [p["id"] for topic in result["topics"] for p in topic["top_papers"]]
     assert 43 in all_ids
@@ -279,7 +273,7 @@ async def test_excludes_negatively_rated_pulse_papers():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     assert result["total_papers"] == 0
     assert result["topics"] == []
@@ -296,7 +290,7 @@ async def test_dismiss_rating_excluded():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     assert result["total_papers"] == 0
     assert result["topics"] == []
@@ -313,7 +307,7 @@ async def test_empty_when_no_engagement():
 
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(db_pool, http_client, days=7)
 
     assert result["total_papers"] == 0
     assert result["topics"] == []
@@ -370,9 +364,7 @@ async def test_weekly_summary_splits_verified_and_unverified_themes():
             "paper_ingestion.weekly_summary.call_llm_structured",
             AsyncMock(return_value=mock_output),
         ):
-            result = await generate_weekly_summary(
-                db_pool, client, days=7, verifier=verifier, openai_client=MagicMock()
-            )
+            result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
 
     nlp = next(t for t in result["topics"] if t["name"] == "NLP")
     assert "verified_themes" in nlp
@@ -404,9 +396,7 @@ async def test_weekly_summary_no_verifier_treats_all_themes_unverified():
             "paper_ingestion.weekly_summary.call_llm_structured",
             AsyncMock(return_value=mock_output),
         ):
-            result = await generate_weekly_summary(
-                db_pool, client, days=7, openai_client=MagicMock()
-            )  # no verifier
+            result = await generate_weekly_summary(db_pool, client, days=7)  # no verifier
 
     ml = result["topics"][0]
     assert ml["verified_themes"] == []
@@ -428,9 +418,7 @@ async def test_weekly_summary_llm_failure_has_empty_theme_splits():
             "paper_ingestion.weekly_summary.call_llm_structured",
             AsyncMock(side_effect=RuntimeError("LLM backend error")),
         ):
-            result = await generate_weekly_summary(
-                db_pool, client, days=7, verifier=verifier, openai_client=MagicMock()
-            )
+            result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
 
     nlp = result["topics"][0]
     assert nlp["themes"] == []
@@ -482,9 +470,7 @@ async def test_user_id_filters_to_user_a_only():
     pool, captured = _make_pool_capturing_params({1: [row_a], 2: [row_b]})
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(
-        pool, http_client, days=7, user_id=1, openai_client=MagicMock()
-    )
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=1)
 
     # The pool received user_id=1 as the $2 bind param.
     assert captured == [1]
@@ -503,9 +489,7 @@ async def test_user_id_filters_to_user_b_only():
     pool, captured = _make_pool_capturing_params({1: [row_a], 2: [row_b]})
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(
-        pool, http_client, days=7, user_id=2, openai_client=MagicMock()
-    )
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=2)
 
     assert captured == [2]
     all_ids = {p["id"] for topic in result["topics"] for p in topic["top_papers"]}
@@ -523,9 +507,7 @@ async def test_user_id_none_aggregates_all_users():
     pool, captured = _make_pool_capturing_params({None: [row_a, row_b]})
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(
-        pool, http_client, days=7, user_id=None, openai_client=MagicMock()
-    )
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=None)
 
     # $2 was NULL (None), meaning no user filter applied.
     assert captured == [None]
@@ -542,7 +524,7 @@ async def test_user_id_default_is_none():
     http_client = AsyncMock()
 
     # No user_id kwarg — must default to None.
-    result = await generate_weekly_summary(pool, http_client, days=7, openai_client=MagicMock())
+    result = await generate_weekly_summary(pool, http_client, days=7)
 
     assert captured == [None]
     assert result["total_papers"] == 1
@@ -553,9 +535,7 @@ async def test_user_id_unknown_user_returns_empty():
     pool, captured = _make_pool_capturing_params({1: [], 2: []})
     http_client = AsyncMock()
 
-    result = await generate_weekly_summary(
-        pool, http_client, days=7, user_id=99, openai_client=MagicMock()
-    )
+    result = await generate_weekly_summary(pool, http_client, days=7, user_id=99)
 
     assert captured == [99]
     assert result["total_papers"] == 0

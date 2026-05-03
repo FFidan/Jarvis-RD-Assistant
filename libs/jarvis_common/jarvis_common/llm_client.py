@@ -1,6 +1,5 @@
 """Shared LiteLLM request helpers for paper-ingestion modules and scripts."""
 
-import functools
 import logging
 import os
 import re
@@ -14,38 +13,14 @@ if TYPE_CHECKING:
     import openai
 
 try:
-    from langfuse.decorators import observe  # type: ignore[import-not-found]
+    from langfuse.decorators import observe
 except ImportError:
-    try:
-        # langfuse 3.x / 4.x — observe re-exported at the package root.
-        from langfuse import observe  # type: ignore[no-redef]
-    except ImportError:
 
-        def observe(*args, **kwargs):  # type: ignore[misc]
-            """No-op fallback when langfuse is not installed.
+    def observe(**kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
 
-            Uses ``functools.wraps`` so callers (and tests) can still rely on
-            ``__wrapped__`` to assert that ``@observe()`` is present on
-            trace-boundary functions per docs/contracts/04-observability.md.
-            """
-
-            def decorator(fn):  # type: ignore[misc]
-                @functools.wraps(fn)
-                async def _async_wrapper(*a, **kw):
-                    return await fn(*a, **kw)
-
-                @functools.wraps(fn)
-                def _sync_wrapper(*a, **kw):
-                    return fn(*a, **kw)
-
-                import asyncio  # noqa: PLC0415
-
-                return _async_wrapper if asyncio.iscoroutinefunction(fn) else _sync_wrapper
-
-            # Support both @observe and @observe(...) call styles.
-            if args and callable(args[0]) and not kwargs:
-                return decorator(args[0])
-            return decorator
+        return decorator
 
 
 T = TypeVar("T", bound=BaseModel)
@@ -106,13 +81,9 @@ def get_litellm_config(
 def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG001
     """Return auth headers for a LiteLLM request.
 
-    When LITELLM_MASTER_KEY is set, returns ``{"Authorization": "Bearer <key>"}``.
-    When unset (e.g. dev without a key configured), returns ``{}`` so that
-    loopback-only enforcement still protects the endpoint.
+    Always returns an empty dict: litellm runs as a transparent loopback proxy
+    with no master_key.  The parameter is kept for call-site compatibility.
     """
-    master_key = os.environ.get("LITELLM_MASTER_KEY")
-    if master_key:
-        return {"Authorization": f"Bearer {master_key}"}
     return {}
 
 
@@ -218,25 +189,13 @@ async def call_llm_structured(
     elif not _messages:
         raise ValueError("Either prompt or messages must be provided")
 
-    if openai_client is None:
-        raise RuntimeError(
-            "openai_client is required for call_llm_structured (typically "
-            "svc.openai_client wired up by the service lifespan)"
-        )
-    if not _options.model:
-        raise ValueError(
-            "ChatCompletionOptions.model must be a non-empty model alias "
-            "(e.g. 'smart' / 'fast'); got an empty value"
-        )
-
     client = instructor.from_openai(openai_client, mode=Mode.JSON)
     return await client.chat.completions.create(
-        model=_options.model,
+        model=_options.model or _config.base_url,
         response_model=response_model,
         messages=_messages,  # type: ignore[arg-type]
         max_tokens=_options.max_tokens,
         temperature=_options.temperature,
-        timeout=_options.timeout,
         max_retries=max_retries,
     )
 

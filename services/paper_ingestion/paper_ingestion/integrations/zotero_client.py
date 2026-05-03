@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import email.utils
 import ipaddress
 import logging
 import os
 import urllib.parse
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -18,6 +21,78 @@ logger = logging.getLogger(__name__)
 
 # Hostnames that are intentionally private/docker-internal and explicitly allowed.
 _BBT_ALLOWED_PRIVATE_HOSTS: frozenset[str] = frozenset({"host.docker.internal"})
+
+# Maximum wait for a Retry-After header before giving up. Zotero rarely returns
+# values above 60s; capping protects against a malicious or buggy upstream
+# returning "Retry-After: 86400" which would block the worker for a day.
+_MAX_RETRY_AFTER_SECONDS = 60.0
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a Retry-After header value (delta-seconds OR HTTP-date).
+
+    Returns the delay in seconds, clamped to ``_MAX_RETRY_AFTER_SECONDS``,
+    or ``None`` when the header is absent / unparseable.
+    """
+    if not value:
+        return None
+    value = value.strip()
+    # Try delta-seconds first (RFC 7231 §7.1.3 form 1).
+    try:
+        seconds = float(value)
+        if seconds < 0:
+            return None
+        return min(seconds, _MAX_RETRY_AFTER_SECONDS)
+    except ValueError:
+        pass
+    # Fall back to HTTP-date (form 2).
+    try:
+        retry_dt = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if retry_dt is None:
+        return None
+    if retry_dt.tzinfo is None:
+        retry_dt = retry_dt.replace(tzinfo=UTC)
+    delta = (retry_dt - datetime.now(UTC)).total_seconds()
+    if delta <= 0:
+        return 0.0
+    return min(delta, _MAX_RETRY_AFTER_SECONDS)
+
+
+async def _zotero_request_with_retry(
+    method: str,
+    http: httpx.AsyncClient,
+    url: str,
+    **kwargs,
+) -> httpx.Response:
+    """Issue a Zotero request, honouring 429 Retry-After once.
+
+    On HTTP 429 the server's ``Retry-After`` header (delta-seconds or
+    HTTP-date) is parsed via :func:`_parse_retry_after` and the request is
+    retried exactly once. The single retry mirrors the existing source-plugin
+    posture (see ``paper_ingestion.sources.base._safe_get``) and bounds tail
+    latency under sustained throttling.
+
+    The caller still owns ``raise_for_status()`` — this helper only retries;
+    it does not promote 429 into an exception.
+    """
+    resp = await http.request(method, url, **kwargs)
+    if resp.status_code != 429:
+        return resp
+    delay = _parse_retry_after(resp.headers.get("Retry-After"))
+    if delay is None:
+        # No usable Retry-After — return the 429 unchanged so the caller's
+        # raise_for_status() surfaces the rate limit. We don't blind-retry
+        # because Zotero's rate-limit window is typically minutes-long.
+        return resp
+    logger.info(
+        "Zotero 429 — sleeping %.1fs before retry (url=%s)",
+        delay,
+        url,
+    )
+    await asyncio.sleep(delay)
+    return await http.request(method, url, **kwargs)
 
 
 def validate_bbt_base_url(url: str = BBT_BASE_URL) -> None:
@@ -92,7 +167,9 @@ class ZoteroClient:
 
     async def create_item(self, item_data: dict) -> dict:
         """POST /items — create a new Zotero item. Returns the created item."""
-        resp = await self._http.post(
+        resp = await _zotero_request_with_retry(
+            "POST",
+            self._http,
             f"{self._base}/items",
             json=[item_data],
             headers=self._headers(),
@@ -115,7 +192,9 @@ class ZoteroClient:
 
     async def search_by_doi(self, doi: str) -> dict | None:
         """GET /items?q=doi — find existing item by DOI. Returns first match or None."""
-        resp = await self._http.get(
+        resp = await _zotero_request_with_retry(
+            "GET",
+            self._http,
             f"{self._base}/items",
             params={"q": doi, "qmode": "everything"},
             headers=self._headers(),
@@ -134,7 +213,9 @@ class ZoteroClient:
         all_collections: list[dict] = []
         start = 0
         while True:
-            resp = await self._http.get(
+            resp = await _zotero_request_with_retry(
+                "GET",
+                self._http,
                 f"{self._base}/collections",
                 params={"start": start, "limit": 100},
                 headers=self._headers(),
@@ -148,26 +229,45 @@ class ZoteroClient:
                 break
             start += 100
 
-        # Deduplicate by key (last write wins for duplicates, which shouldn't occur)
+        # Deduplicate by key. Defensive ``.get()`` chain — Zotero responses
+        # have, in rare cases, been observed to drop the ``key`` field on
+        # malformed entries. Skip such rows rather than KeyError.
         seen: dict[str, dict] = {}
         for col in all_collections:
-            seen[col["key"]] = col
+            key = col.get("key")
+            if key is None:
+                continue
+            seen[key] = col
         all_collections = list(seen.values())
 
         for col in all_collections:
-            if col["data"]["name"] == name:
-                return col["key"]
+            data = col.get("data") or {}
+            if data.get("name") == name:
+                key = col.get("key")
+                if key is not None:
+                    return key
 
         # Create new collection
         payload = [{"name": name, "parentCollection": parent_key or False}]
-        resp = await self._http.post(
+        resp = await _zotero_request_with_retry(
+            "POST",
+            self._http,
             f"{self._base}/collections",
             json=payload,
             headers=self._headers(),
             timeout=15.0,
         )
         resp.raise_for_status()
-        return resp.json()["successful"]["0"]["key"]
+        body = resp.json() or {}
+        successful = body.get("successful") or {}
+        # Zotero returns successful entries keyed by stringified index ("0", "1", ...).
+        first_entry = successful.get("0") or {}
+        new_key = first_entry.get("key")
+        if not new_key:
+            raise RuntimeError(
+                f"Zotero create-collection response missing successful.0.key: {body!r}"
+            )
+        return new_key
 
     async def fetch_bbt_citation_key(self, item_key: str) -> str | None:
         """Try to get Better BibTeX citation key from local BBT plugin.
@@ -202,7 +302,9 @@ class ZoteroClient:
         new_version: int = version
         start = 0
         while True:
-            resp = await self._http.get(
+            resp = await _zotero_request_with_retry(
+                "GET",
+                self._http,
                 f"{self._base}/items",
                 params={"since": version, "format": "json", "limit": 100, "start": start},
                 headers=self._headers(),
@@ -237,7 +339,9 @@ class ZoteroClient:
         all_items: list[dict] = []
         start = 0
         while True:
-            resp = await self._http.get(
+            resp = await _zotero_request_with_retry(
+                "GET",
+                self._http,
                 f"{self._base}/items/{urllib.parse.quote(item_key, safe='')}/children",
                 params={
                     "itemType": item_type,

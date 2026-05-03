@@ -11,8 +11,7 @@ x-shared-env: &shared-env
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
-  # master_key for LiteLLM admin endpoints; propagated to all services that call LiteLLM.
-  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+  # litellm runs as a transparent loopback proxy (no auth). See litellm/config.yaml header.
   QDRANT_URL: http://qdrant:6333
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
   EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-768}
@@ -205,10 +204,8 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
     command: ["--config", "/app/config.yaml"]
-    # master_key is set in litellm/config.yaml via os.environ/LITELLM_MASTER_KEY.
-    # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
+    # litellm runs as transparent loopback proxy (no auth). See litellm/config.yaml header.
     mem_limit: 4g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')\""]
