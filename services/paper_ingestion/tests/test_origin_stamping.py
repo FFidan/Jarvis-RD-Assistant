@@ -794,8 +794,12 @@ async def test_zotero_sync_stamps_user_initiated() -> None:
             AsyncMock(side_effect=_fake_upsert),
         ),
         patch(
-            "paper_ingestion.integrations.zotero_service.jobs_lib.enqueue",
-            AsyncMock(return_value="job-123"),
+            "jarvis_common.task_registry.paper_analyze.defer_async",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "jarvis_common.task_registry.zotero_sync_annotations.defer_async",
+            AsyncMock(return_value=None),
         ),
         patch(
             "paper_ingestion.integrations.zotero_client.ZoteroClient",

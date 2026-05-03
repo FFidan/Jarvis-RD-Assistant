@@ -219,26 +219,28 @@ async def test_generate_cards_core_propagates_progress():
 
 @pytest.mark.asyncio
 async def test_generate_cards_endpoint_returns_job_id():
-    """POST /api/generate enqueues a DB job and returns {job_id, status}."""
+    """POST /api/generate enqueues a procrastinate job and returns {job_id, status}."""
     pool, conn = _make_pool_and_conn()
 
-    fake_job_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-
-    with patch("jarvis_common.jobs.enqueue", AsyncMock(return_value=fake_job_id)) as mock_enqueue:
+    with patch(
+        "jarvis_common.task_registry.card_generate.defer_async",
+        new_callable=AsyncMock,
+    ) as mock_defer:
         response = await generation.generate_cards.__wrapped__(
             MagicMock(),
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
             db_pool=pool,
         )
 
-    assert response.job_id == fake_job_id
     assert response.status == "queued"
-    mock_enqueue.assert_awaited_once()
-    call_kwargs = mock_enqueue.await_args
+    assert response.job_id  # UUID generated inside the handler
+    mock_defer.assert_awaited_once()
+    call_kwargs = mock_defer.await_args
     assert call_kwargs is not None
-    assert call_kwargs.args[1] == "card.generate"
-    assert call_kwargs.kwargs["payload"]["paper_id"] == 101
-    assert call_kwargs.kwargs["payload"]["deck_id"] == 1
+    assert call_kwargs.kwargs["paper_id"] == 101
+    assert call_kwargs.kwargs["deck_id"] == 1
+    assert call_kwargs.kwargs["job_id"] == response.job_id
+    assert call_kwargs.kwargs["user_id"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -248,13 +250,14 @@ async def test_generate_cards_endpoint_returns_job_id():
 
 @pytest.mark.asyncio
 async def test_batch_generate_cards_returns_202_with_job_id():
-    """POST /api/generate/batch enqueues a DB job and returns 202 with job_id."""
+    """POST /api/generate/batch enqueues a procrastinate job and returns 202 with job_id."""
     pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = 1  # deck exists
 
-    fake_job_id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
-
-    with patch("jarvis_common.jobs.enqueue", AsyncMock(return_value=fake_job_id)):
+    with patch(
+        "jarvis_common.task_registry.card_generate_batch.defer_async",
+        new_callable=AsyncMock,
+    ) as mock_defer:
         response = await generation.batch_generate_cards.__wrapped__(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=1),
@@ -262,7 +265,13 @@ async def test_batch_generate_cards_returns_202_with_job_id():
         )
 
     assert response.status == "queued"
-    assert response.job_id == fake_job_id
+    assert response.job_id  # UUID generated inside the handler
+    mock_defer.assert_awaited_once()
+    call_kwargs = mock_defer.await_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs["deck_id"] == 1
+    assert call_kwargs.kwargs["job_id"] == response.job_id
+    assert call_kwargs.kwargs["user_id"] is None
 
 
 # ---------------------------------------------------------------------------

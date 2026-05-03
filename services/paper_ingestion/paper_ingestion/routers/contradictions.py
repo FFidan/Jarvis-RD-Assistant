@@ -1,9 +1,11 @@
 """API routes for verified cross-paper contradiction detection."""
 
+import uuid
+
 import asyncpg
 from fastapi import APIRouter, Body, Depends, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
-from jarvis_common import jobs as jobs_lib
+from jarvis_common.task_registry import contradictions_scan
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import ContradictionListResponse, ContradictionScanRequest
@@ -49,8 +51,9 @@ async def scan_contradictions(
 ) -> JobCreateResponse:
     """Enqueue a bounded cross-paper contradiction scan."""
     payload = body.model_dump() if body else {"paper_id": None, "limit": 25}
-    job_id = await jobs_lib.enqueue(db_pool, "contradictions.scan", payload)
-    return JobCreateResponse(job_id=job_id, status="queued")
+    jarvis_job_id = str(uuid.uuid4())
+    await contradictions_scan.defer_async(job_id=jarvis_job_id, user_id=None, **payload)
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 @router.post(
@@ -67,9 +70,8 @@ async def scan_paper_contradictions(
 ) -> JobCreateResponse:
     """Enqueue a contradiction scan focused on one paper."""
     limit = body.limit if body else 25
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "contradictions.scan",
-        {"paper_id": paper_id, "limit": limit},
+    jarvis_job_id = str(uuid.uuid4())
+    await contradictions_scan.defer_async(
+        job_id=jarvis_job_id, user_id=None, paper_id=paper_id, limit=limit
     )
-    return JobCreateResponse(job_id=job_id, status="queued")
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")

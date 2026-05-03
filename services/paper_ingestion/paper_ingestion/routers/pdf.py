@@ -17,7 +17,6 @@ from fastapi import (
     UploadFile,
 )
 from jarvis_common import JobCreateResponse
-from jarvis_common import jobs as jobs_lib
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor, limiter
@@ -139,10 +138,15 @@ async def process_pdf(
         Sync mode: ``{"paper_id": ..., "chunk_count": ..., "status": ...}``.
     """
     if not sync:
-        from jarvis_common.jobs import enqueue
+        import uuid  # noqa: PLC0415
 
-        job_id = await enqueue(db_pool, "paper.process", {"paper_id": paper_id, "force": force})
-        return {"job_id": job_id, "status": "queued"}
+        from jarvis_common.task_registry import paper_process  # noqa: PLC0415
+
+        jarvis_job_id = str(uuid.uuid4())
+        await paper_process.defer_async(
+            job_id=jarvis_job_id, user_id=None, paper_id=paper_id, force=force
+        )
+        return {"job_id": jarvis_job_id, "status": "queued"}
 
     # Synchronous path (sync=True) — original blocking behaviour
     async with db_pool.acquire() as conn:
@@ -325,8 +329,13 @@ async def scan_local_pdfs(
     The worker performs filesystem access and returns the import summary in
     the job result.
     """
-    job_id = await jobs_lib.enqueue(db_pool, "papers.scan_local", {})
-    return JobCreateResponse(job_id=job_id, status="queued")
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import papers_scan_local  # noqa: PLC0415
+
+    jarvis_job_id = str(uuid.uuid4())
+    await papers_scan_local.defer_async(job_id=jarvis_job_id, user_id=None)
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -365,7 +374,9 @@ async def batch_process_papers(
     dict
         ``{queued, total_unprocessed, skipped_missing_pdf, job_id}``
     """
-    from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import papers_batch_process  # noqa: PLC0415
 
     async with db_pool.acquire() as conn:
         if force:
@@ -412,11 +423,8 @@ async def batch_process_papers(
 
     job_id: str | None = None
     if queued_ids:
-        job_id = await jobs_lib.enqueue(
-            db_pool,
-            "papers.batch_process",
-            payload={"paper_ids": queued_ids},
-        )
+        job_id = str(uuid.uuid4())
+        await papers_batch_process.defer_async(job_id=job_id, user_id=None, paper_ids=queued_ids)
 
     return {
         "queued": len(queued_ids),

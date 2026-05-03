@@ -114,7 +114,7 @@ def _make_pool_capturing_conn(execute_returns: list[Any] | None = None):
 
 
 # ---------------------------------------------------------------------------
-# Shared patch context — patches ZoteroClient + jobs_lib.enqueue
+# Shared patch context — patches ZoteroClient + paper_analyze.defer_async
 # ---------------------------------------------------------------------------
 
 
@@ -151,7 +151,10 @@ async def test_fresh_sync_inserts_to_read_state() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch("paper_ingestion.integrations.zotero_service.jobs_lib.enqueue", AsyncMock()),
+        patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            AsyncMock(),
+        ),
     ):
         result = await poll_zotero_library(pool, http_client)
 
@@ -214,7 +217,10 @@ async def test_resync_same_item_does_not_duplicate_state_row() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch("paper_ingestion.integrations.zotero_service.jobs_lib.enqueue", AsyncMock()),
+        patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            AsyncMock(),
+        ),
     ):
         result1 = await poll_zotero_library(pool1, http_client)
 
@@ -234,7 +240,10 @@ async def test_resync_same_item_does_not_duplicate_state_row() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch("paper_ingestion.integrations.zotero_service.jobs_lib.enqueue", AsyncMock()),
+        patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            AsyncMock(),
+        ),
     ):
         result2 = await poll_zotero_library(pool2, http_client)
 
@@ -293,7 +302,10 @@ async def test_resync_does_not_overwrite_user_modified_state() -> None:
     # each time — the DB side-effects differ but the SQL shape is what we test.
     with (
         _patch_zotero_client([item]),
-        patch("paper_ingestion.integrations.zotero_service.jobs_lib.enqueue", AsyncMock()),
+        patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            AsyncMock(),
+        ),
     ):
         result = await poll_zotero_library(pool, http_client)
 
@@ -345,7 +357,10 @@ async def test_paper_user_state_insert_order() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch("paper_ingestion.integrations.zotero_service.jobs_lib.enqueue", AsyncMock()),
+        patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            AsyncMock(),
+        ),
     ):
         await poll_zotero_library(pool, http_client)
 

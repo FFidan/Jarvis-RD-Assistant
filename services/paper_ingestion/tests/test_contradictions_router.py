@@ -90,21 +90,22 @@ async def test_scan_contradictions_endpoint_enqueues_job(app_with_pool):
     """POST /api/contradictions/scan returns a durable job id."""
     app, pool, _conn = app_with_pool
     with patch(
-        "paper_ingestion.routers.contradictions.jobs_lib.enqueue",
-        new=AsyncMock(return_value="job-contradictions"),
-    ) as enqueue:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post("/api/contradictions/scan", json={"paper_id": 5, "limit": 9})
+        "paper_ingestion.routers.contradictions.contradictions_scan.defer_async",
+        new=AsyncMock(),
+    ) as defer:
+        with patch(
+            "paper_ingestion.routers.contradictions.uuid.uuid4", return_value="job-contradictions"
+        ):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post(
+                    "/api/contradictions/scan", json={"paper_id": 5, "limit": 9}
+                )
 
     assert resp.status_code == 202
     assert resp.json() == {"job_id": "job-contradictions", "status": "queued"}
-    enqueue.assert_awaited_once_with(
-        pool,
-        "contradictions.scan",
-        {"paper_id": 5, "limit": 9},
-    )
+    defer.assert_awaited_once_with(job_id="job-contradictions", user_id=None, paper_id=5, limit=9)
 
 
 @pytest.mark.asyncio
@@ -112,18 +113,20 @@ async def test_scan_paper_contradictions_endpoint_enqueues_scoped_job(app_with_p
     """POST /api/papers/{paper_id}/contradictions/scan scopes the job payload."""
     app, pool, _conn = app_with_pool
     with patch(
-        "paper_ingestion.routers.contradictions.jobs_lib.enqueue",
-        new=AsyncMock(return_value="job-paper-contradictions"),
-    ) as enqueue:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            resp = await client.post("/api/papers/7/contradictions/scan", json={"limit": 12})
+        "paper_ingestion.routers.contradictions.contradictions_scan.defer_async",
+        new=AsyncMock(),
+    ) as defer:
+        with patch(
+            "paper_ingestion.routers.contradictions.uuid.uuid4",
+            return_value="job-paper-contradictions",
+        ):
+            async with httpx.AsyncClient(
+                transport=ASGITransport(app=app), base_url="http://test"
+            ) as client:
+                resp = await client.post("/api/papers/7/contradictions/scan", json={"limit": 12})
 
     assert resp.status_code == 202
     assert resp.json() == {"job_id": "job-paper-contradictions", "status": "queued"}
-    enqueue.assert_awaited_once_with(
-        pool,
-        "contradictions.scan",
-        {"paper_id": 7, "limit": 12},
+    defer.assert_awaited_once_with(
+        job_id="job-paper-contradictions", user_id=None, paper_id=7, limit=12
     )

@@ -461,12 +461,14 @@ async def test_poll_library_skips_jarvis_origin():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([jarvis_item], 5))
 
-        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
-            mock_jobs.enqueue = AsyncMock()
+        with patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            new_callable=AsyncMock,
+        ) as mock_defer:
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # JARVIS-originated item must not be enqueued
-    mock_jobs.enqueue.assert_not_called()
+    mock_defer.assert_not_called()
     assert result["status"] == "ok"
     assert result["new_items"] == 0
     assert result["enqueued"] == 0
@@ -490,16 +492,18 @@ async def test_poll_library_enqueues_new_items():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 10))
 
-        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
-            mock_jobs.enqueue = AsyncMock(return_value="job-uuid-1")
+        with patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            new_callable=AsyncMock,
+        ) as mock_defer:
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
-    mock_jobs.enqueue.assert_called_once()
-    call_args = mock_jobs.enqueue.call_args
-    # PI-002: job kind is now paper.analyze, payload has paper_id
-    assert call_args[0][1] == "paper.analyze"
-    payload = call_args[0][2]
-    assert payload["paper_id"] == 99
+    mock_defer.assert_called_once()
+    call_kwargs = mock_defer.call_args.kwargs
+    # PI-002: job deferred via paper_analyze task with paper_id kwarg
+    assert call_kwargs["paper_id"] == 99
+    assert call_kwargs["user_id"] is None
+    assert "job_id" in call_kwargs
     assert result["enqueued"] == 1
     assert result["new_items"] == 1
 
@@ -519,8 +523,10 @@ async def test_poll_library_updates_version():
         # Return a newer version (42) than the current (0)
         mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
 
-        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
-            mock_jobs.enqueue = AsyncMock(return_value="job-uuid-2")
+        with patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            new_callable=AsyncMock,
+        ):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # The version-persist connection should have had execute called
@@ -620,13 +626,15 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
         # Library version advances to 999 on the Zotero side.
         mock_client.fetch_items_since = AsyncMock(return_value=(items, 999))
 
-        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
-            mock_jobs.enqueue = AsyncMock(return_value="job-uuid")
+        with patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            new_callable=AsyncMock,
+        ) as mock_defer:
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Exactly MAX_ENQUEUE_PER_SYNC jobs must have been enqueued.
-    assert mock_jobs.enqueue.call_count == MAX_ENQUEUE_PER_SYNC, (
-        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_jobs.enqueue.call_count}"
+    assert mock_defer.call_count == MAX_ENQUEUE_PER_SYNC, (
+        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_defer.call_count}"
     )
     assert result["enqueued"] == MAX_ENQUEUE_PER_SYNC
 
@@ -862,8 +870,10 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([bad_item], 999))
 
-        with patch("paper_ingestion.integrations.zotero_service.jobs_lib") as mock_jobs:
-            mock_jobs.enqueue = AsyncMock()
+        with patch(
+            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
+            new_callable=AsyncMock,
+        ) as mock_defer:
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Cursor must NOT have advanced — version_to should remain at last_version (0).
@@ -872,7 +882,7 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
     )
     assert result["status"] == "ok"
     # No jobs should have been enqueued for the failed item.
-    mock_jobs.enqueue.assert_not_called()
+    mock_defer.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

@@ -44,52 +44,67 @@ def app_with_pool():
 async def test_summarize_endpoint_enqueues_job(app_with_pool):
     """POST /api/summarize/{paper_id} returns a durable job id."""
     app, _pool = app_with_pool
-    with patch("paper_ingestion.routers.rag.jobs_lib.enqueue", new_callable=AsyncMock) as enqueue:
-        enqueue.return_value = "job-summary"
+    with patch(
+        "jarvis_common.task_registry.paper_summarize.defer_async", new_callable=AsyncMock
+    ) as defer_async:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.post("/api/summarize/42")
 
     assert resp.status_code == 202
-    assert resp.json() == {"job_id": "job-summary", "status": "queued"}
-    enqueue.assert_awaited_once_with(_pool, "paper.summarize", {"paper_id": 42})
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]  # UUID assigned at runtime
+    defer_async.assert_awaited_once()
+    call_kwargs = defer_async.call_args.kwargs
+    assert call_kwargs["paper_id"] == 42
+    assert "job_id" in call_kwargs
+    assert "user_id" in call_kwargs
 
 
 async def test_extract_endpoint_enqueues_single_extraction_job(app_with_pool):
     """POST /api/papers/{paper_id}/extract returns a durable job id."""
     app, _pool = app_with_pool
     with patch(
-        "paper_ingestion.routers.extractions.jobs_lib.enqueue", new_callable=AsyncMock
-    ) as enqueue:
-        enqueue.return_value = "job-extract"
+        "jarvis_common.task_registry.extraction_single.defer_async", new_callable=AsyncMock
+    ) as defer_async:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.post("/api/papers/42/extract", json={"template_id": 3})
 
     assert resp.status_code == 202
-    assert resp.json() == {"job_id": "job-extract", "status": "queued"}
-    enqueue.assert_awaited_once_with(
-        _pool,
-        "extraction.single",
-        {"paper_id": 42, "template_id": 3},
-    )
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]  # UUID assigned at runtime
+    defer_async.assert_awaited_once()
+    call_kwargs = defer_async.call_args.kwargs
+    assert call_kwargs["paper_id"] == 42
+    assert call_kwargs["template_id"] == 3
+    assert "job_id" in call_kwargs
+    assert "user_id" in call_kwargs
 
 
 async def test_scan_local_pdfs_endpoint_enqueues_job(app_with_pool):
     """POST /api/scan-local-pdfs returns a durable job id instead of blocking."""
     app, _pool = app_with_pool
-    with patch("paper_ingestion.routers.pdf.jobs_lib.enqueue", new_callable=AsyncMock) as enqueue:
-        enqueue.return_value = "job-scan"
+    with patch(
+        "jarvis_common.task_registry.papers_scan_local.defer_async", new_callable=AsyncMock
+    ) as defer_async:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
             resp = await client.post("/api/scan-local-pdfs")
 
     assert resp.status_code == 202
-    assert resp.json() == {"job_id": "job-scan", "status": "queued"}
-    enqueue.assert_awaited_once_with(_pool, "papers.scan_local", {})
+    body = resp.json()
+    assert body["status"] == "queued"
+    assert body["job_id"]  # UUID assigned at runtime
+    defer_async.assert_awaited_once()
+    call_kwargs = defer_async.call_args.kwargs
+    assert "job_id" in call_kwargs
+    assert "user_id" in call_kwargs
 
 
 # ---------------------------------------------------------------------------

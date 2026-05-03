@@ -137,27 +137,47 @@ async def test_run_pulse_wrapper_swallows_errors(scheduler_module, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_run_pulse_classifier_training_wrapper_skips_when_disabled(scheduler_module):
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": False})
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    with patch("jarvis_common.jobs.enqueue", new_callable=AsyncMock) as enqueue:
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
         await scheduler_module.run_pulse_classifier_training_wrapper(app)
 
-    enqueue.assert_not_awaited()
+    assert len(in_memory.jobs) == 0
 
 
 @pytest.mark.asyncio
-async def test_run_pulse_classifier_training_wrapper_enqueues_when_enabled(scheduler_module):
+async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(scheduler_module):
+    """B.4 Step 3: pulse.train_classifier now defers via procrastinate.
+
+    Asserts the in-memory connector recorded a deferred job whose args carry
+    the JARVIS UUID under ``job_id`` and ``user_id=None`` (system call).
+    """
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    with patch("jarvis_common.jobs.enqueue", new_callable=AsyncMock) as enqueue:
-        enqueue.return_value = "job-train"
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
         await scheduler_module.run_pulse_classifier_training_wrapper(app)
 
-    enqueue.assert_awaited_once_with(pool, "pulse.train_classifier", {})
+    jobs = in_memory.jobs
+    assert len(jobs) == 1
+    deferred = next(iter(jobs.values()))
+    assert deferred["task_name"] == "pulse.train_classifier"
+    assert deferred["queue_name"] == "paper_ingestion"
+    args = deferred["args"]
+    assert args["user_id"] is None
+    assert isinstance(args["job_id"], str)
+    assert len(args["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio

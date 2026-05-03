@@ -13,11 +13,12 @@ preserved as the contract-test gate.
 """
 
 import logging
+import uuid
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
-from jarvis_common import jobs as jobs_lib
+from jarvis_common.task_registry import pulse_generate
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -72,14 +73,15 @@ async def generate_pulse(
     logger.info("pulse.generate: enqueueing job")
     # H16: system job — user_id=None until real auth resolver lands.
     # pulse.generate is a system-level cron job, not user-owned.
-    job_id = await jobs_lib.enqueue(db_pool, "pulse.generate", payload={}, user_id=None)
+    jarvis_job_id = str(uuid.uuid4())
+    await pulse_generate.defer_async(job_id=jarvis_job_id, user_id=None)
     await log_audit(
         db_pool,
         action="pulse_generate_enqueued",
         resource="pulse:deck",
-        metadata={"job_id": job_id},
+        metadata={"job_id": jarvis_job_id},
     )
-    return PulseGenerateResponse(job_id=job_id, status="queued")
+    return PulseGenerateResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------

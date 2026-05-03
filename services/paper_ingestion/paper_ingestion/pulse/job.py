@@ -21,13 +21,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.task_registry import pulse_train_classifier
 
 from paper_ingestion._state import svc
 from paper_ingestion.pulse.citation_signals import compute_citation_signals
@@ -374,7 +375,7 @@ async def run_pulse(
         stats["degraded_reason"] = degraded_reason
     if ctx:
         try:
-            await jobs_lib.enqueue(db_pool, "pulse.train_classifier", {})
+            await pulse_train_classifier.defer_async(job_id=str(uuid.uuid4()), user_id=None)
             stats["classifier_training_enqueued"] = True
         except Exception:
             stats["classifier_training_enqueued"] = False

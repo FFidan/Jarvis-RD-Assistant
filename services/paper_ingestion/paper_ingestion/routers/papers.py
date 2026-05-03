@@ -1,13 +1,13 @@
 """Paper CRUD and metadata endpoints."""
 
 import logging
+import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.converters import (
@@ -731,7 +731,11 @@ async def star_paper(
     # Outside conn block: enqueue without holding the pool slot
     if was_unstarred and project_link_count > 0 and auto_push_on_star:
         try:
-            await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
+            from jarvis_common.task_registry import zotero_push
+
+            await zotero_push.defer_async(
+                job_id=str(uuid.uuid4()), user_id=user_id, paper_id=paper_id
+            )
         except Exception:
             logger.exception("zotero.push enqueue failed for paper %d", paper_id)
     return {"status": "ok", "paper_id": paper_id}
@@ -992,9 +996,11 @@ async def process_batch(
     Returns ``{"job_id": "<uuid>", "status": "queued"}``.
     """
     _ = request  # required by @limiter.limit; not used in body
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "papers.batch_process",
-        payload={"paper_ids": body.paper_ids},
+    from jarvis_common.task_registry import papers_batch_process
+
+    user_id = await current_user_id_or_none(request)
+    jarvis_job_id = str(uuid.uuid4())
+    await papers_batch_process.defer_async(
+        job_id=jarvis_job_id, user_id=user_id, paper_ids=body.paper_ids
     )
-    return {"job_id": job_id, "status": "queued"}
+    return {"job_id": jarvis_job_id, "status": "queued"}

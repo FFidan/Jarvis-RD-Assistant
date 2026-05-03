@@ -114,19 +114,25 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
 
 
 async def run_zotero_sync_wrapper(app: Any) -> None:
-    """APScheduler entrypoint for Zotero library sync — enqueues via job system."""
+    """APScheduler entrypoint for Zotero library sync — defers via procrastinate."""
     db_pool = app.state.db_pool
     poll_enabled, _ = await _get_zotero_poll_config(db_pool)
     if not poll_enabled:
         logger.info("zotero: poll disabled via user_config, skipping scheduled sync")
         return
     try:
-        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
 
-        await jobs_lib.enqueue(db_pool, "zotero.sync_from_zotero", {})
-        logger.info("zotero: enqueued zotero.sync_from_zotero job")
+        from jarvis_common.task_registry import zotero_sync_from_zotero  # noqa: PLC0415
+
+        jarvis_job_id = str(uuid.uuid4())
+        await zotero_sync_from_zotero.defer_async(job_id=jarvis_job_id, user_id=None)
+        logger.info(
+            "zotero: deferred zotero.sync_from_zotero job %s via procrastinate",
+            jarvis_job_id,
+        )
     except Exception:
-        logger.exception("zotero: failed to enqueue sync job")
+        logger.exception("zotero: failed to defer sync job")
 
 
 async def run_pulse_wrapper(app: Any) -> None:
@@ -156,12 +162,18 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping classifier retraining")
         return
     try:
-        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+        import uuid  # noqa: PLC0415
 
-        await jobs_lib.enqueue(db_pool, "pulse.train_classifier", {})
-        logger.info("pulse: enqueued pulse.train_classifier job")
+        from jarvis_common.task_registry import pulse_train_classifier  # noqa: PLC0415
+
+        jarvis_job_id = str(uuid.uuid4())
+        await pulse_train_classifier.defer_async(job_id=jarvis_job_id, user_id=None)
+        logger.info(
+            "pulse: deferred pulse.train_classifier job %s via procrastinate",
+            jarvis_job_id,
+        )
     except Exception:
-        logger.exception("pulse: failed to enqueue classifier training job")
+        logger.exception("pulse: failed to defer classifier training job")
 
 
 async def run_weekly_digest_wrapper(app: Any) -> None:

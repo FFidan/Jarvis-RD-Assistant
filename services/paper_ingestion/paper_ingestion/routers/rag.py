@@ -10,7 +10,6 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
@@ -72,8 +71,13 @@ async def summarize_paper(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    job_id = await jobs_lib.enqueue(db_pool, "paper.summarize", {"paper_id": paper_id})
-    return JobCreateResponse(job_id=job_id, status="queued")
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import paper_summarize  # noqa: PLC0415
+
+    jarvis_job_id = str(uuid.uuid4())
+    await paper_summarize.defer_async(job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id)
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +99,9 @@ async def batch_summarize_papers(
     Returns immediately with a ``job_id`` that can be polled via
     ``GET /api/jobs/{job_id}``.
     """
-    from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import papers_batch_summarize  # noqa: PLC0415
 
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
@@ -111,11 +117,13 @@ async def batch_summarize_papers(
     paper_ids = [row["id"] for row in rows]
     job_id: str | None = None
     if paper_ids:
-        job_id = await jobs_lib.enqueue(
-            db_pool,
-            "papers.batch_summarize",
-            payload={"paper_ids": paper_ids},
+        jarvis_job_id = str(uuid.uuid4())
+        await papers_batch_summarize.defer_async(
+            job_id=jarvis_job_id,
+            user_id=user_id,
+            paper_ids=paper_ids,
         )
+        job_id = jarvis_job_id
     return {"total_unsummarized": len(rows), "job_id": job_id}
 
 

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import jobs as jobs_lib
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
@@ -88,8 +88,11 @@ async def push_paper_to_zotero(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    job_id = await jobs_lib.enqueue(db_pool, "zotero.push", {"paper_id": paper_id})
-    return {"job_id": job_id, "status": "queued"}
+    from jarvis_common.task_registry import zotero_push
+
+    jarvis_job_id = str(uuid.uuid4())
+    await zotero_push.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    return {"job_id": jarvis_job_id, "status": "queued"}
 
 
 # ---------------------------------------------------------------------------
@@ -149,8 +152,11 @@ async def resync_paper_to_zotero(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    job_id = await jobs_lib.enqueue(db_pool, "zotero.resync", {"paper_id": paper_id})
-    return {"job_id": job_id, "status": "queued"}
+    from jarvis_common.task_registry import zotero_resync
+
+    jarvis_job_id = str(uuid.uuid4())
+    await zotero_resync.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    return {"job_id": jarvis_job_id, "status": "queued"}
 
 
 # ---------------------------------------------------------------------------
@@ -175,8 +181,11 @@ async def sync_annotations_for_paper(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    job_id = await jobs_lib.enqueue(db_pool, "zotero.sync_annotations", {"paper_id": paper_id})
-    return JobEnqueuedResponse(job_id=str(job_id), status="queued")
+    from jarvis_common.task_registry import zotero_sync_annotations
+
+    jarvis_job_id = str(uuid.uuid4())
+    await zotero_sync_annotations.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +204,9 @@ async def poll_now(
     Returns immediately with a ``job_id`` so the caller can poll
     ``GET /api/jobs/{job_id}`` for progress.  Rate-limited to 6/hour.
     """
+    from jarvis_common.task_registry import zotero_sync_from_zotero
+
     logger.info("zotero.poll: enqueueing sync job")
-    job_id = await jobs_lib.enqueue(db_pool, "zotero.sync_from_zotero", {})
-    return JobEnqueuedResponse(job_id=str(job_id), status="queued")
+    jarvis_job_id = str(uuid.uuid4())
+    await zotero_sync_from_zotero.defer_async(job_id=jarvis_job_id, user_id=None)
+    return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")

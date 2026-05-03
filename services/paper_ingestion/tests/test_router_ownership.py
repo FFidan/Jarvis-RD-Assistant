@@ -74,13 +74,10 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
     """POST /api/summarize/{paper_id} returns 202 in single-user mode."""
     app, conn = _app
 
-    # Stub out jobs_lib.enqueue so we don't need a real DB
-    async def _fake_enqueue(*args, **kwargs):
-        return "00000000-0000-0000-0000-000000000001"
+    # Stub out paper_summarize.defer_async so we don't need a real DB / procrastinate
+    from jarvis_common import task_registry
 
-    from jarvis_common import jobs as jobs_lib
-
-    monkeypatch.setattr(jobs_lib, "enqueue", _fake_enqueue)
+    monkeypatch.setattr(task_registry.paper_summarize, "defer_async", AsyncMock())
 
     # In single-user mode (current_user_id_or_none returns None) the
     # ownership helper short-circuits and never calls fetchrow.
@@ -104,14 +101,13 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
 @pytest.mark.asyncio
 async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkeypatch):
     """POST /api/papers/{paper_id}/extract returns 202 in single-user mode."""
+    from unittest.mock import AsyncMock
+
+    from jarvis_common import task_registry
+
     app, conn = _app
 
-    async def _fake_enqueue(*args, **kwargs):
-        return "00000000-0000-0000-0000-000000000002"
-
-    from jarvis_common import jobs as jobs_lib
-
-    monkeypatch.setattr(jobs_lib, "enqueue", _fake_enqueue)
+    monkeypatch.setattr(task_registry.extraction_single, "defer_async", AsyncMock())
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

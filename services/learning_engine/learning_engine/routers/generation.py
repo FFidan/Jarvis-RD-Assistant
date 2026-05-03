@@ -6,14 +6,15 @@ in-memory ``app.jobs`` module is no longer used by this router.
 """
 
 import logging
+import uuid
 from typing import Any
 
 import asyncpg
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, JobError, job_handler
+from jarvis_common.task_registry import card_generate, card_generate_batch
 
 from learning_engine.card_generator import CardGenerator
 from learning_engine.card_store import insert_card
@@ -273,16 +274,15 @@ async def generate_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "card.generate",
-        payload={
-            "paper_id": body.paper_id,
-            "deck_id": body.deck_id,
-            "max_cards": body.max_cards,
-        },
+    jarvis_job_id = str(uuid.uuid4())
+    await card_generate.defer_async(
+        job_id=jarvis_job_id,
+        user_id=None,
+        paper_id=body.paper_id,
+        deck_id=body.deck_id,
+        max_cards=body.max_cards,
     )
-    return BatchAcceptedResponse(job_id=job_id, status="queued")
+    return BatchAcceptedResponse(job_id=jarvis_job_id, status="queued")
 
 
 @router.post("/batch", status_code=202, response_model=BatchAcceptedResponse)
@@ -298,15 +298,14 @@ async def batch_generate_cards(
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
 
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "card.generate_batch",
-        payload={
-            "deck_id": body.deck_id,
-            "max_per_paper": body.max_per_paper,
-        },
+    jarvis_job_id = str(uuid.uuid4())
+    await card_generate_batch.defer_async(
+        job_id=jarvis_job_id,
+        user_id=None,
+        deck_id=body.deck_id,
+        max_per_paper=body.max_per_paper,
     )
-    return BatchAcceptedResponse(job_id=job_id, status="queued")
+    return BatchAcceptedResponse(job_id=jarvis_job_id, status="queued")
 
 
 # NOTE: GET /api/generate/batch/{job_id} has been removed (LE-004).

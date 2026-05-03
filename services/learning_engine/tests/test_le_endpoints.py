@@ -605,14 +605,10 @@ async def test_get_stats_success(_app):
 
 @pytest.mark.asyncio
 async def test_generate_enqueues_job_and_returns_202(_app):
-    """POST /api/generate now enqueues a DB job and returns 202 with job_id."""
-    from learning_engine.routers import generation
-
+    """POST /api/generate defers a procrastinate task and returns 202 with job_id."""
     app, conn, _, mock_fsrs, mock_generator, _ = _app
 
-    fake_job_id = "cccccccc-dddd-eeee-ffff-000000000001"
-
-    with patch.object(generation.jobs_lib, "enqueue", AsyncMock(return_value=fake_job_id)):
+    with patch("jarvis_common.task_registry.card_generate.defer_async", AsyncMock()):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -623,7 +619,7 @@ async def test_generate_enqueues_job_and_returns_202(_app):
 
     assert resp.status_code == 202
     body = resp.json()
-    assert body["job_id"] == fake_job_id
+    assert isinstance(body["job_id"], str) and len(body["job_id"]) == 36
     assert body["status"] == "queued"
 
 
@@ -662,7 +658,7 @@ async def test_batch_generate_deck_not_found(_app):
 
 @pytest.mark.asyncio
 async def test_batch_generate_success_returns_202_accepted(_app):
-    """batch_generate_cards enqueues a DB job and returns 202 with job_id."""
+    """batch_generate_cards defers a procrastinate task and returns 202 with job_id."""
     from learning_engine.models import BatchGenerateRequest
     from learning_engine.routers import generation
 
@@ -672,10 +668,9 @@ async def test_batch_generate_success_returns_202_accepted(_app):
     pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
 
     conn.fetchval.return_value = 1  # deck exists
-    fake_job_id = "dddddddd-eeee-ffff-0000-111111111111"
     handler = generation.batch_generate_cards.__wrapped__
 
-    with patch.object(generation.jobs_lib, "enqueue", AsyncMock(return_value=fake_job_id)):
+    with patch("jarvis_common.task_registry.card_generate_batch.defer_async", AsyncMock()):
         resp = await handler(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=1),
@@ -683,7 +678,7 @@ async def test_batch_generate_success_returns_202_accepted(_app):
         )
 
     assert resp.status == "queued"
-    assert resp.job_id == fake_job_id
+    assert isinstance(resp.job_id, str) and len(resp.job_id) == 36
 
 
 def test_batch_generate_declares_accepted_response_type():

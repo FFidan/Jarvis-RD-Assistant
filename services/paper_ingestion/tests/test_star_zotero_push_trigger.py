@@ -89,7 +89,7 @@ async def test_star_no_project_links_does_not_enqueue():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
+            "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
     ):
@@ -128,15 +128,17 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
+            "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
     ):
         result = await papers.star_paper.__wrapped__(_mock_request(), paper_id=10, db_pool=pool)
 
     assert result == {"status": "ok", "paper_id": 10}
-    # First positional arg is the pool itself; second is the job name; third is the payload
-    mock_enqueue.assert_awaited_once_with(pool, "zotero.push", {"paper_id": 10})
+    mock_enqueue.assert_awaited_once()
+    call_kwargs = mock_enqueue.await_args.kwargs
+    assert call_kwargs.get("paper_id") == 10
+    assert "job_id" in call_kwargs
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +170,7 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
+            "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
     ):
@@ -210,7 +212,7 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
+            "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
     ):
@@ -250,9 +252,8 @@ async def test_star_enqueue_failure_is_best_effort():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("queue down"),
+            "jarvis_common.task_registry.zotero_push.defer_async",
+            new=AsyncMock(side_effect=RuntimeError("queue down")),
         ),
         patch.object(papers.logger, "exception") as mock_log_exc,
     ):
@@ -298,7 +299,7 @@ async def test_star_already_starred_does_not_double_enqueue():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers.jobs_lib.enqueue",
+            "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
     ):

@@ -1,6 +1,7 @@
 """Project ↔ Papers linking endpoints."""
 
 import logging
+import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -55,6 +56,7 @@ async def link_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict | JSONResponse:
     """Link a paper to a project."""
+    should_push_zotero = False
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             project = await conn.fetchrow("SELECT id FROM projects WHERE id = $1", project_id)
@@ -84,39 +86,44 @@ async def link_paper(
             # Trigger Zotero push when a paper is linked to a project if it is starred
             # or was previously pushed to Zotero.  The job handler checks config at runtime
             # and returns early if Zotero is disabled.
-            # LE-012: enqueue inside the same transaction so the job is never lost
-            # if the commit succeeds.  We inline the INSERT because jobs_lib.enqueue
-            # only accepts asyncpg.Pool, not asyncpg.Connection.
-            try:
-                row = await conn.fetchrow(
-                    """
-                    SELECT pus.starred, p.zotero_item_key
-                    FROM papers p
-                    LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                    WHERE p.id = $1
-                    """,
-                    paper_id,
-                )
-                if row and (row["starred"] or row["zotero_item_key"]):
-                    await conn.execute(
-                        """
-                        INSERT INTO jobs (kind, payload)
-                        VALUES ('zotero.push', $1::jsonb)
-                        """,
-                        {"paper_id": paper_id},
-                    )
-                    logger.debug(
-                        "Enqueued zotero.push for paper %d linked to project %d",
-                        paper_id,
-                        project_id,
-                    )
-            except Exception:
-                logger.warning(
-                    "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
-                    paper_id,
-                    project_id,
-                    exc_info=True,
-                )
+            # LE-012: capture push intent inside the transaction; defer_async is called
+            # after commit (procrastinate uses its own pool and cannot join this txn).
+            row = await conn.fetchrow(
+                """
+                SELECT pus.starred, p.zotero_item_key
+                FROM papers p
+                LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+                WHERE p.id = $1
+                """,
+                paper_id,
+            )
+            if row and (row["starred"] or row["zotero_item_key"]):
+                should_push_zotero = True
+
+    # Fire zotero.push after transaction commits so the linked row is visible.
+    # The handler is idempotent: it reads from DB and returns early if conditions
+    # are no longer met, so a stale fire is harmless.
+    if should_push_zotero:
+        from jarvis_common.task_registry import zotero_push
+
+        try:
+            await zotero_push.defer_async(
+                job_id=str(uuid.uuid4()),
+                user_id=None,
+                paper_id=paper_id,
+            )
+            logger.debug(
+                "Enqueued zotero.push for paper %d linked to project %d",
+                paper_id,
+                project_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to enqueue zotero.push after project link (paper=%d project=%d)",
+                paper_id,
+                project_id,
+                exc_info=True,
+            )
 
     return {"project_id": project_id, "paper_id": paper_id}
 

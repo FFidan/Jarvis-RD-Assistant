@@ -13,7 +13,6 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
 from starlette.responses import StreamingResponse
@@ -226,12 +225,18 @@ async def extract_paper(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "extraction.single",
-        {"paper_id": paper_id, "template_id": body.template_id},
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import extraction_single  # noqa: PLC0415
+
+    jarvis_job_id = str(uuid.uuid4())
+    await extraction_single.defer_async(
+        job_id=jarvis_job_id,
+        user_id=user_id,
+        paper_id=paper_id,
+        template_id=body.template_id,
     )
-    return JobCreateResponse(job_id=job_id, status="queued")
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
 @router.get("/papers/{paper_id}/extractions", response_model=list[ExtractionResponse])
@@ -288,15 +293,18 @@ async def batch_extract_papers(
     async with db_pool.acquire() as conn:
         for paper_id in body.paper_ids:
             await assert_paper_ownership(conn, paper_id, user_id)
-    job_id = await jobs_lib.enqueue(
-        db_pool,
-        "extraction.batch",
-        payload={
-            "paper_ids": body.paper_ids,
-            "template_id": body.template_id,
-        },
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import extraction_batch  # noqa: PLC0415
+
+    jarvis_job_id = str(uuid.uuid4())
+    await extraction_batch.defer_async(
+        job_id=jarvis_job_id,
+        user_id=user_id,
+        paper_ids=body.paper_ids,
+        template_id=body.template_id,
     )
-    return {"job_id": job_id, "total": len(body.paper_ids)}
+    return {"job_id": jarvis_job_id, "total": len(body.paper_ids)}
 
 
 @router.get("/extractions/table", response_model=None)

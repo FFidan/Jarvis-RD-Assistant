@@ -215,10 +215,13 @@ async def analyze_paper(
     ``{"job_id": "...", "status": "queued"}`` immediately.
     """
     if async_mode:
-        from jarvis_common.jobs import enqueue
+        import uuid
 
-        job_id = await enqueue(db_pool, "paper.analyze", {"paper_id": paper_id})
-        return {"job_id": job_id, "status": "queued"}
+        from jarvis_common.task_registry import paper_analyze
+
+        jarvis_job_id = str(uuid.uuid4())
+        await paper_analyze.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+        return {"job_id": jarvis_job_id, "status": "queued"}
 
     return StreamingResponse(
         _analyze_stream(request, paper_id, db_pool, http_client, pdf_processor, embedder, verifier),

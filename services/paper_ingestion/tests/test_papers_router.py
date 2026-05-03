@@ -1794,22 +1794,28 @@ async def test_process_batch_happy_path_returns_job_id():
 
     pool = _make_pool_and_conn()[0]
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
-    fake_job_id = "aaaabbbb-cccc-dddd-eeee-ffffffffffff"
-
-    with patch(
-        "paper_ingestion.routers.papers.jobs_lib.enqueue",
-        new=AsyncMock(return_value=fake_job_id),
-    ) as mock_enqueue:
+    with (
+        patch(
+            "jarvis_common.task_registry.papers_batch_process.defer_async",
+            new_callable=AsyncMock,
+        ) as mock_defer,
+        patch(
+            "paper_ingestion.routers.papers.current_user_id_or_none",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
         from paper_ingestion.models import ProcessBatchRequest
 
         body = ProcessBatchRequest(paper_ids=[1, 2, 3])
         result = await papers.process_batch.__wrapped__(request, body, db_pool=pool)
 
-    assert result == {"job_id": fake_job_id, "status": "queued"}
-    mock_enqueue.assert_awaited_once()
-    assert mock_enqueue.await_args is not None
-    call_kwargs = mock_enqueue.await_args.kwargs
-    assert call_kwargs.get("payload") == {"paper_ids": [1, 2, 3]}
+    assert result["status"] == "queued"
+    assert "job_id" in result
+    mock_defer.assert_awaited_once()
+    assert mock_defer.await_args is not None
+    call_kwargs = mock_defer.await_args.kwargs
+    assert call_kwargs.get("paper_ids") == [1, 2, 3]
+    assert "job_id" in call_kwargs
 
 
 @pytest.mark.asyncio

@@ -1,10 +1,11 @@
 """Paper-ingestion analytics endpoints."""
 
+import uuid
 from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from jarvis_common import jobs as jobs_lib
+from jarvis_common.task_registry import paper_analyze, paper_process
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -109,11 +110,17 @@ async def fetch_and_process_foundational(
         )
 
     if paper["pdf_downloaded"] and paper["pdf_local_path"]:
-        job_id = await jobs_lib.enqueue(db_pool, "paper.process", {"paper_id": body.paper_id})
-        return FetchAndProcessResponse(paper_id=body.paper_id, status="queued", job_id=job_id)
+        jarvis_job_id = str(uuid.uuid4())
+        await paper_process.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id)
+        return FetchAndProcessResponse(
+            paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
+        )
     if paper["pdf_url"]:
-        job_id = await jobs_lib.enqueue(db_pool, "paper.analyze", {"paper_id": body.paper_id})
-        return FetchAndProcessResponse(paper_id=body.paper_id, status="queued", job_id=job_id)
+        jarvis_job_id = str(uuid.uuid4())
+        await paper_analyze.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id)
+        return FetchAndProcessResponse(
+            paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
+        )
     return FetchAndProcessResponse(
         paper_id=body.paper_id,
         status="no_pdf",

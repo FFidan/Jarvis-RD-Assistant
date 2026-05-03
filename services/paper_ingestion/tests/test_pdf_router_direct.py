@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import sys
-import types
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -195,15 +193,18 @@ async def test_process_pdf_delegates_to_run_process_pdf(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_process_pdf_async_enqueues_job():
-    """process_pdf without sync=True (default) enqueues a paper.process job."""
+    """process_pdf without sync=True (default) defers a paper_process task."""
     from unittest.mock import patch as mock_patch
 
-    job_id = "test-job-uuid"
+    fake_uuid = "test-job-uuid"
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
-    pool = MagicMock()  # not used in async path — enqueue is patched
+    pool = MagicMock()  # not used in async path — defer_async is patched
 
-    # Patch jarvis_common.jobs.enqueue so no DB connection is needed
-    with mock_patch("jarvis_common.jobs.enqueue", new=AsyncMock(return_value=job_id)):
+    mock_defer = AsyncMock()
+    with (
+        mock_patch("jarvis_common.task_registry.paper_process.defer_async", new=mock_defer),
+        mock_patch("uuid.uuid4", return_value=fake_uuid),
+    ):
         result = await pdf.process_pdf.__wrapped__(
             request,
             paper_id=42,
@@ -213,8 +214,9 @@ async def test_process_pdf_async_enqueues_job():
             embedder=MagicMock(),
         )
 
-    assert result["job_id"] == job_id
+    assert result["job_id"] == fake_uuid
     assert result["status"] == "queued"
+    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_id=42, force=False)
 
 
 @pytest.mark.asyncio
@@ -276,36 +278,29 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
 
-    # Mock jobs_lib.enqueue (imported lazily inside the router)
-    fake_jobs = types.ModuleType("jarvis_common.jobs")
-    fake_enqueue = AsyncMock(return_value="job-abc123")
-    fake_jobs.enqueue = fake_enqueue  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "jarvis_common.jobs", fake_jobs)
+    fake_uuid = "job-abc123"
+    mock_defer = AsyncMock()
 
-    # jarvis_common package with .jobs attribute (for `from jarvis_common import jobs as jobs_lib`)
-    import jarvis_common  # noqa: PLC0415
+    from unittest.mock import patch as mock_patch  # noqa: PLC0415
 
-    monkeypatch.setattr(jarvis_common, "jobs", fake_jobs, raising=False)
-
-    result = await pdf.batch_process_papers.__wrapped__(
-        request,
-        background_tasks=background_tasks,
-        limit=10,
-        db_pool=pool,
-    )
+    with (
+        mock_patch("jarvis_common.task_registry.papers_batch_process.defer_async", new=mock_defer),
+        mock_patch("uuid.uuid4", return_value=fake_uuid),
+    ):
+        result = await pdf.batch_process_papers.__wrapped__(
+            request,
+            background_tasks=background_tasks,
+            limit=10,
+            db_pool=pool,
+        )
 
     assert result == {
         "queued": 1,
         "total_unprocessed": 3,
         "skipped_missing_pdf": 2,
-        "job_id": "job-abc123",
+        "job_id": fake_uuid,
     }
-    fake_enqueue.assert_awaited_once()
-    # Verify payload contains only the valid paper_id
-    call_kwargs = fake_enqueue.await_args.kwargs
-    call_args = fake_enqueue.await_args.args
-    payload = call_kwargs.get("payload") if "payload" in call_kwargs else call_args[2]
-    assert payload == {"paper_ids": [10]}
+    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_ids=[10])
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +401,8 @@ def test_process_pdf_async_response_model_no_500():
     app.dependency_overrides[get_embedder] = lambda: MagicMock()
 
     with (
-        mock_patch("jarvis_common.jobs.enqueue", new=AsyncMock(return_value=fake_job_id)),
+        mock_patch("jarvis_common.task_registry.paper_process.defer_async", new=AsyncMock()),
+        mock_patch("uuid.uuid4", return_value=fake_job_id),
         TestClient(app, raise_server_exceptions=True) as client,
     ):
         resp = client.post("/api/process-pdf/1")  # sync defaults to False

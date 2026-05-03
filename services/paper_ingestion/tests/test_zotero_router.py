@@ -8,7 +8,6 @@ Covers:
 
 from __future__ import annotations
 
-import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -102,12 +101,11 @@ def _app():
 async def test_poll_now_enqueues_job(_app):
     """POST /api/zotero/poll enqueues a zotero.sync_from_zotero job and returns 200."""
     app, _conn = _app
-    fake_job_id = uuid.uuid4()
 
     with patch(
-        "paper_ingestion.routers.zotero.jobs_lib.enqueue",
-        new=AsyncMock(return_value=fake_job_id),
-    ) as mock_enqueue:
+        "jarvis_common.task_registry.zotero_sync_from_zotero.defer_async",
+        new=AsyncMock(return_value=None),
+    ) as mock_defer:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -118,22 +116,22 @@ async def test_poll_now_enqueues_job(_app):
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["job_id"] == str(fake_job_id)
+    assert isinstance(body["job_id"], str)
     assert body["status"] == "queued"
-    mock_enqueue.assert_awaited_once()
-    call_args = mock_enqueue.call_args
-    assert call_args.args[1] == "zotero.sync_from_zotero"
+    mock_defer.assert_awaited_once()
+    call_kwargs = mock_defer.call_args.kwargs
+    assert "job_id" in call_kwargs
+    assert call_kwargs.get("user_id") is None
 
 
 @pytest.mark.asyncio
 async def test_poll_now_response_shape(_app):
     """POST /api/zotero/poll response conforms to JobEnqueuedResponse schema."""
     app, _conn = _app
-    fake_job_id = uuid.uuid4()
 
     with patch(
-        "paper_ingestion.routers.zotero.jobs_lib.enqueue",
-        new=AsyncMock(return_value=fake_job_id),
+        "jarvis_common.task_registry.zotero_sync_from_zotero.defer_async",
+        new=AsyncMock(return_value=None),
     ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

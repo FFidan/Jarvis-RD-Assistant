@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -107,9 +107,9 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
     }
 
     with patch(
-        "paper_ingestion.routers.analytics.jobs_lib.enqueue",
-        new=AsyncMock(return_value="job-local"),
-    ) as enqueue:
+        "paper_ingestion.routers.analytics.paper_process.defer_async",
+        new=AsyncMock(),
+    ) as defer_async:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -119,16 +119,15 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
             )
 
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {
-        "paper_id": 42,
-        "status": "queued",
-        "job_id": "job-local",
-        "message": None,
-    }
+    data = resp.json()
+    assert data["paper_id"] == 42
+    assert data["status"] == "queued"
+    assert data["job_id"] is not None
+    assert data["message"] is None
     conn.execute.assert_awaited_once()
     assert "UPDATE papers" in conn.execute.await_args.args[0]
     assert conn.execute.await_args.args[1] == 42
-    enqueue.assert_awaited_once_with(pool, "paper.process", {"paper_id": 42})
+    defer_async.assert_awaited_once_with(job_id=ANY, user_id=None, paper_id=42)
 
 
 @pytest.mark.asyncio
@@ -144,9 +143,9 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
     }
 
     with patch(
-        "paper_ingestion.routers.analytics.jobs_lib.enqueue",
-        new=AsyncMock(return_value="job-url"),
-    ) as enqueue:
+        "paper_ingestion.routers.analytics.paper_analyze.defer_async",
+        new=AsyncMock(),
+    ) as defer_async:
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -156,9 +155,13 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
             )
 
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"paper_id": 43, "status": "queued", "job_id": "job-url", "message": None}
+    data = resp.json()
+    assert data["paper_id"] == 43
+    assert data["status"] == "queued"
+    assert data["job_id"] is not None
+    assert data["message"] is None
     conn.execute.assert_awaited_once()
-    enqueue.assert_awaited_once_with(pool, "paper.analyze", {"paper_id": 43})
+    defer_async.assert_awaited_once_with(job_id=ANY, user_id=None, paper_id=43)
 
 
 @pytest.mark.asyncio
@@ -173,7 +176,14 @@ async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(
         "metadata": {"stub": "true"},
     }
 
-    with patch("paper_ingestion.routers.analytics.jobs_lib.enqueue", new=AsyncMock()) as enqueue:
+    with (
+        patch(
+            "paper_ingestion.routers.analytics.paper_process.defer_async", new=AsyncMock()
+        ) as defer_process,
+        patch(
+            "paper_ingestion.routers.analytics.paper_analyze.defer_async", new=AsyncMock()
+        ) as defer_analyze,
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -190,7 +200,8 @@ async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(
         "message": "No PDF URL is available for this citation stub.",
     }
     conn.execute.assert_awaited_once()
-    enqueue.assert_not_awaited()
+    defer_process.assert_not_awaited()
+    defer_analyze.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -199,7 +210,14 @@ async def test_fetch_and_process_missing_or_non_stub_row_returns_404(app_with_po
     app, _pool, conn = app_with_pool
     conn.fetchrow.return_value = None
 
-    with patch("paper_ingestion.routers.analytics.jobs_lib.enqueue", new=AsyncMock()) as enqueue:
+    with (
+        patch(
+            "paper_ingestion.routers.analytics.paper_process.defer_async", new=AsyncMock()
+        ) as defer_process,
+        patch(
+            "paper_ingestion.routers.analytics.paper_analyze.defer_async", new=AsyncMock()
+        ) as defer_analyze,
+    ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -211,4 +229,5 @@ async def test_fetch_and_process_missing_or_non_stub_row_returns_404(app_with_po
     assert resp.status_code == 404
     assert resp.json()["detail"] == "Citation stub paper not found"
     conn.execute.assert_not_awaited()
-    enqueue.assert_not_awaited()
+    defer_process.assert_not_awaited()
+    defer_analyze.assert_not_awaited()

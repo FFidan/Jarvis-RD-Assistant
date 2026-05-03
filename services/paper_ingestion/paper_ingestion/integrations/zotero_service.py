@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common import jobs as jobs_lib
 from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.task_registry import paper_analyze, zotero_sync_annotations
 
 from paper_ingestion.models.papers import PaperCreate, SourceType
 from paper_ingestion.services.pdf_workflow import upsert_paper
@@ -476,10 +477,10 @@ async def poll_zotero_library(
                                 row["id"],
                             )
                         try:
-                            await jobs_lib.enqueue(
-                                db_pool,
-                                "zotero.sync_annotations",
-                                {"paper_id": row["id"]},
+                            await zotero_sync_annotations.defer_async(
+                                job_id=str(uuid.uuid4()),
+                                user_id=None,
+                                paper_id=row["id"],
                             )
                         except Exception:
                             logger.debug(
@@ -544,7 +545,11 @@ async def poll_zotero_library(
                         item_key,
                         paper_id,
                     )
-            await jobs_lib.enqueue(db_pool, "paper.analyze", {"paper_id": paper_id})
+            await paper_analyze.defer_async(
+                job_id=str(uuid.uuid4()),
+                user_id=None,
+                paper_id=paper_id,
+            )
             enqueued_count += 1
         except Exception:
             logger.error(

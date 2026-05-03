@@ -476,26 +476,26 @@ async def test_batch_fetch_citations_enqueues_job():
     """POST /api/citations/batch-fetch enqueues a citations.batch_fetch job.
 
     PI-007: endpoint must no longer use BackgroundTasks — it must call
-    jobs_lib.enqueue and return a job_id in the response.
+    citations_batch_fetch.defer_async and return a job_id in the response.
     """
     from paper_ingestion.routers import citations as citations_router
 
     pool, _conn = _make_pool_and_conn()
-    fake_job_id = "aabb-ccdd-eeff"
 
     with patch(
-        "paper_ingestion.routers.citations.jobs_lib.enqueue",
-        new=AsyncMock(return_value=fake_job_id),
-    ) as mock_enqueue:
+        "paper_ingestion.routers.citations.citations_batch_fetch.defer_async",
+        new=AsyncMock(return_value=None),
+    ) as mock_defer:
         result = await citations_router.batch_fetch_citations.__wrapped__(
             MagicMock(),
             db_pool=pool,
         )
 
-    mock_enqueue.assert_awaited_once()
-    call_args = mock_enqueue.call_args
-    assert call_args.args[1] == "citations.batch_fetch"
-    assert result.message == f"Job {fake_job_id} queued"
+    mock_defer.assert_awaited_once()
+    call_kwargs = mock_defer.call_args.kwargs
+    assert "job_id" in call_kwargs
+    assert call_kwargs["user_id"] is None
+    assert result.message == f"Job {call_kwargs['job_id']} queued"
     assert result.queued == 1
 
 
@@ -507,13 +507,14 @@ async def test_batch_fetch_citations_response_shape():
     pool, _conn = _make_pool_and_conn()
 
     with patch(
-        "paper_ingestion.routers.citations.jobs_lib.enqueue",
-        new=AsyncMock(return_value="test-uuid"),
+        "paper_ingestion.routers.citations.citations_batch_fetch.defer_async",
+        new=AsyncMock(return_value=None),
     ):
         result = await citations_router.batch_fetch_citations.__wrapped__(
             MagicMock(),
             db_pool=pool,
         )
 
-    assert "test-uuid" in result.message
+    assert result.message.startswith("Job ")
+    assert "queued" in result.message
     assert result.queued >= 1

@@ -5,11 +5,12 @@ and query stored citation relationships.
 """
 
 import logging
+import uuid
 from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import jobs as jobs_lib
+from jarvis_common.task_registry import citations_batch_fetch
 
 from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
 from paper_ingestion.deps import get_db_pool, get_s2_source, limiter
@@ -50,8 +51,9 @@ async def batch_fetch_citations(
     The job is durable and visible in the jobs table.  The handler runs in the
     paper_ingestion worker loop (``citations_jobs.py``).
     """
-    job_id = await jobs_lib.enqueue(db_pool, "citations.batch_fetch", {})
-    return BatchCitationFetchResponse(queued=1, message=f"Job {job_id} queued")
+    jarvis_job_id = str(uuid.uuid4())
+    await citations_batch_fetch.defer_async(job_id=jarvis_job_id, user_id=None)
+    return BatchCitationFetchResponse(queued=1, message=f"Job {jarvis_job_id} queued")
 
 
 @router.post("/{paper_id}/fetch", response_model=CitationFetchResponse)
