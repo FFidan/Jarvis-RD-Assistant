@@ -8,12 +8,22 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - **B.4 Step 1:** procrastinate broker dependency + migration 052 (schema apply).
   No behavioral change — worker is not yet wired up. Foundation for the
   procrastinate cutover spec'd at `docs/specs/2026-05-03-b4-job-broker.md`.
+- **B.4 Step 5:** migration 053 drops the legacy `jobs` table
+  (`DROP TABLE jobs CASCADE` + `trg_jobs_notify_update` trigger and
+  `notify_jobs_update` function). Idempotent.
 
 ### Changed
-- **B.4 Step 3 canary:** `digest.weekly` migrated to procrastinate. Legacy
-  `@job_handler("digest.weekly")` body retained — procrastinate task dispatches
-  into it via the registry shim. Soak target: ≥48 hours organic usage before
-  Group D batch migrations.
+- **B.4 cutover complete (Steps 3-5):** all 19 job kinds run on procrastinate;
+  legacy `jobs` table dropped (migration 053). `jobs_lib.enqueue`,
+  `worker_loop`, `_HANDLERS` registry, `@job_handler` decorator, `request_cancel`,
+  `get(pool, job_id)`, and `noop.test` self-test all removed. `get_unified`
+  and `list_jobs` collapsed to procrastinate-only paths. `cancel_job` route
+  dispatches via `procrastinate_app.job_manager.cancel_job_by_id_async`.
+  POST `/api/jobs` dispatches via `KIND_TO_TASK[kind].defer_async`. Net delta:
+  ~-2200 LoC across `jobs.py`, handler files, and tests.
+- **Bug 2 fix:** procrastinate-only jobs now correctly resolve through
+  `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream`, `GET /api/jobs/`, and
+  `POST /api/jobs/{id}/cancel` (route prechecks now use `get_unified`).
 
 ## [1.6.1] — 2026-05-03
 

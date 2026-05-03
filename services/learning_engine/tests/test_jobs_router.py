@@ -95,15 +95,8 @@ async def test_get_job_returns_404_when_not_found():
     mock_request = MagicMock()
     mock_pool = MagicMock()
 
-    # Patch both lookup paths in get_unified so the route sees no row from either.
-    with (
-        patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=None)),
-        patch.object(
-            jobs_router.jobs_lib,
-            "get_procrastinate_job_for_jarvis_id",
-            AsyncMock(return_value=None),
-        ),
-    ):
+    # Patch get_unified so the route sees no row.
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=None)):
         with pytest.raises(HTTPException) as exc_info:
             await jobs_router.get_job.__wrapped__(
                 mock_request,
@@ -122,7 +115,7 @@ async def test_get_job_returns_404_for_wrong_owner():
     mock_pool = MagicMock()
     row = {"id": "job-1", "user_id": 7, "status": "done", "kind": "card.generate", "payload": {}}
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         with pytest.raises(HTTPException) as exc_info:
             await jobs_router.get_job.__wrapped__(
                 mock_request,
@@ -204,7 +197,7 @@ async def test_get_job_str_user_id_row_matches_int_caller():
         "payload": {},
     }
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         # user_id=1 (int) should match row["user_id"]="1" (str) — should NOT raise
         result = await jobs_router.get_job.__wrapped__(
             mock_request,
@@ -229,7 +222,7 @@ async def test_get_job_str_user_id_row_rejects_wrong_int_caller():
         "payload": {},
     }
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         with pytest.raises(HTTPException) as exc_info:
             await jobs_router.get_job.__wrapped__(
                 mock_request,
@@ -252,16 +245,28 @@ async def test_cancel_job_str_user_id_row_matches_int_caller():
         "status": "queued",
         "kind": "card.generate",
         "payload": {},
+        "source": "procrastinate",
     }
+    prow = {"id": 99}
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
-        with patch.object(jobs_router.jobs_lib, "request_cancel", AsyncMock()):
-            result = await jobs_router.cancel_job.__wrapped__(
-                mock_request,
-                job_id="job-cancel",
-                user_id=5,
-                db_pool=mock_pool,
-            )
+    mock_job_manager = AsyncMock()
+    mock_job_manager.cancel_job_by_id_async = AsyncMock()
+    mock_procrastinate_app = MagicMock()
+    mock_procrastinate_app.job_manager = mock_job_manager
+
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=row)):
+        with patch.object(
+            jobs_router.jobs_lib,
+            "get_procrastinate_job_for_jarvis_id",
+            AsyncMock(return_value=prow),
+        ):
+            with patch("jarvis_common.task_registry.app", mock_procrastinate_app):
+                result = await jobs_router.cancel_job.__wrapped__(
+                    mock_request,
+                    job_id="job-cancel",
+                    user_id=5,
+                    db_pool=mock_pool,
+                )
 
     assert result == {"ok": True}
 
@@ -277,9 +282,10 @@ async def test_cancel_job_str_user_id_row_rejects_wrong_int_caller():
         "status": "queued",
         "kind": "card.generate",
         "payload": {},
+        "source": "procrastinate",
     }
 
-    with patch.object(jobs_router.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         with pytest.raises(HTTPException) as exc_info:
             await jobs_router.cancel_job.__wrapped__(
                 mock_request,

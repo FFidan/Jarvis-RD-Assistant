@@ -310,15 +310,11 @@ def build_jobs_router(
         if row is None or not _owner_matches(row.get("user_id"), user_id):
             raise HTTPException(status_code=404, detail=f"Job {job_id!r} not found")
 
-        if row.get("source") == "procrastinate":
-            from jarvis_common.task_registry import app as procrastinate_app
+        from jarvis_common.task_registry import app as procrastinate_app
 
-            prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
-            if prow:
-                await procrastinate_app.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
-            return {"ok": True}
-
-        await jobs_lib.request_cancel(db_pool, job_id)
+        prow = await jobs_lib.get_procrastinate_job_for_jarvis_id(db_pool, job_id)
+        if prow:
+            await procrastinate_app.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
         return {"ok": True}
 
     # Expose the request model on the router so service-level shims (and

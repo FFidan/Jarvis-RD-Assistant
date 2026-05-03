@@ -23,48 +23,43 @@ _JOB_UUID = "00000000-0000-0000-0000-000000000001"
 
 
 def _make_pool_with_job(user_id: int | None, *, terminal: bool = True) -> MagicMock:
-    """Return a mock asyncpg pool whose jobs.get() returns a row with given user_id.
+    """Return a mock asyncpg pool whose get_procrastinate_job_for_jarvis_id() returns a row.
 
     Parameters
     ----------
     user_id:
-        Value to set on the job row's ``user_id`` column.
+        Value to set on the job row's ``user_id`` key inside ``args``.
     terminal:
         When True (default) the row has ``status='succeeded'`` so the SSE
         generator loop exits immediately after the initial ownership check.
 
     Implementation note
     -------------------
-    ``get_unified`` calls BOTH the legacy ``get()`` (first fetchrow) and
-    ``get_procrastinate_job_for_jarvis_id()`` (subsequent fetchrow calls).
-    We use a callable ``side_effect`` that returns the job row on the first
-    call and ``None`` for all subsequent calls so the procrastinate lookup
-    returns None (legacy-only path) and ``procrastinate_row_to_jarvis_row``
-    is never called with the legacy row shape.  This also makes the SSE
-    stream_job_events loop terminate cleanly after one cycle.
+    ``get_unified`` now calls only ``get_procrastinate_job_for_jarvis_id``,
+    which issues a ``fetchrow``.  ``stream_job_events`` also calls
+    ``get_procrastinate_job_for_jarvis_id`` on each poll cycle.  We return
+    the procrastinate-shaped row on every ``fetchrow`` call so both the
+    ownership check and the SSE loop work correctly (the terminal status
+    causes the SSE loop to exit after one cycle).
     """
-    job_row = {
-        "id": _JOB_UUID,
-        "kind": "test.noop",
+    prow = {
+        "id": 1,
+        "queue_name": "paper_ingestion",
+        "task_name": "test.noop",
         # Use a terminal status so the SSE generator exits without blocking forever.
-        "status": "succeeded" if terminal else "queued",
-        "progress": 1.0 if terminal else None,
-        "progress_message": "done" if terminal else None,
-        "result": {"ok": True} if terminal else None,
-        "error": None,
-        "user_id": user_id,
+        "status": "succeeded" if terminal else "todo",
+        "args": {
+            "job_id": _JOB_UUID,
+            **({"user_id": str(user_id)} if user_id is not None else {}),
+        },
+        "attempts": 1,
         "created_at": None,
-        "updated_at": None,
-        "payload": {},
-        "cancel_requested": False,
+        "started_at": None,
+        "finished_at": None,
     }
-    _call_count = [0]
 
     async def _fetchrow_side_effect(*_args, **_kwargs):
-        _call_count[0] += 1
-        # First call → legacy job row; all subsequent calls (procrastinate
-        # lookup + per-cycle polls) → None so stream terminates cleanly.
-        return job_row if _call_count[0] == 1 else None
+        return prow
 
     conn = AsyncMock()
     conn.fetchrow = _fetchrow_side_effect

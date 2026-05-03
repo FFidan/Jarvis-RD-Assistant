@@ -12,7 +12,6 @@ import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.jobs import JobContext
 
 # ---------------------------------------------------------------------------
 # Tests: cancel_job route (procrastinate-side)
@@ -93,55 +92,3 @@ async def test_cancel_job_route_404_when_not_found():
         result = await jobs_router_mod.jobs_lib.get_unified(pool, str(uuid.uuid4()))
         # No row → route would raise 404
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# Tests: JobContext.is_cancelled (pure unit, no legacy machinery)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_is_cancelled_caches_true_result():
-    """Once is_cancelled returns True it caches and stops polling the DB."""
-    job_id = str(uuid.uuid4())
-    poll_count = 0
-
-    async def _fetchrow(sql, *args, **kwargs):
-        nonlocal poll_count
-        poll_count += 1
-        return {"cancel_requested": poll_count >= 1}
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
-    ctx_mgr = MagicMock()
-    ctx_mgr.__aenter__ = AsyncMock(return_value=conn)
-    ctx_mgr.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx_mgr
-
-    ctx = JobContext(job_id=job_id, _pool=pool)
-    assert await ctx.is_cancelled()  # first poll → True
-    assert await ctx.is_cancelled()  # cached → no extra poll
-    assert await ctx.is_cancelled()  # cached → no extra poll
-    assert poll_count == 1, f"Expected 1 DB poll but got {poll_count}"
-
-
-@pytest.mark.asyncio
-async def test_is_cancelled_returns_false_before_flag_set():
-    """is_cancelled returns False when cancel_requested is still FALSE in DB."""
-    job_id = str(uuid.uuid4())
-
-    async def _fetchrow(sql, *args, **kwargs):
-        return {"cancel_requested": False}
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
-    ctx_mgr = MagicMock()
-    ctx_mgr.__aenter__ = AsyncMock(return_value=conn)
-    ctx_mgr.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx_mgr
-
-    ctx = JobContext(job_id=job_id, _pool=pool)
-    assert not await ctx.is_cancelled()
-    assert not await ctx.is_cancelled()

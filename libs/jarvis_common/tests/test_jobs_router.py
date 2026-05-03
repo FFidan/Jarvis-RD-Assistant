@@ -224,7 +224,7 @@ async def test_get_job_owner_coerces_str_int():
     _router, _request_model, pool, handlers = _build_factory()
     row = {"id": "j1", "user_id": "3", "kind": "foo.bar", "status": "queued"}
 
-    with patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         result = await handlers["get_job"](
             request=MagicMock(),
             job_id="j1",
@@ -239,7 +239,7 @@ async def test_get_job_owner_mismatch_returns_404():
     _router, _request_model, pool, handlers = _build_factory()
     row = {"id": "j2", "user_id": "3", "kind": "foo.bar", "status": "queued"}
 
-    with patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         with pytest.raises(HTTPException) as exc:
             await handlers["get_job"](
                 request=MagicMock(),
@@ -256,7 +256,7 @@ async def test_get_job_null_owner_is_public():
     _router, _request_model, pool, handlers = _build_factory()
     row = {"id": "j3", "user_id": None, "kind": "foo.bar", "status": "queued"}
 
-    with patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=row)):
+    with patch.object(jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=row)):
         result = await handlers["get_job"](
             request=MagicMock(),
             job_id="j3",
@@ -451,7 +451,7 @@ async def test_stream_job_route_returns_legacy_sse_payload():
         )
 
     with (
-        patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=legacy_row)),
+        patch.object(jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=legacy_row)),
         patch.object(jobs_router_mod.jobs_lib, "stream_job_events", _fake_stream),
     ):
         request = MagicMock()
@@ -513,7 +513,7 @@ async def test_stream_job_route_surfaces_procrastinate_source():
         )
 
     with (
-        patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=legacy_row)),
+        patch.object(jobs_router_mod.jobs_lib, "get_unified", AsyncMock(return_value=legacy_row)),
         patch.object(jobs_router_mod.jobs_lib, "stream_job_events", _fake_stream),
     ):
         request = MagicMock()

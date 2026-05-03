@@ -1,31 +1,12 @@
-"""Unit tests for jarvis_common.jobs.
-
-Tests use a real asyncpg pool against a PostgreSQL database.
-Set TEST_DATABASE_URL (e.g. postgresql://user:pass@localhost:5432/testdb) to run.
-Tests are skipped automatically when the env var is unset or the DB is unreachable.
-
-The test schema is isolated in a per-test temporary table (prefix-renamed) so
-concurrent test runs don't interfere with each other.  Each test function
-gets a fresh jobs table via the ``db_pool`` fixture.
-"""
+"""Unit tests for jarvis_common.jobs."""
 
 from __future__ import annotations
 
 import asyncio
-import os
-import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-import pytest_asyncio
-
-# ---------------------------------------------------------------------------
-# Conditional skip if no real DB is available
-# ---------------------------------------------------------------------------
-
-_DB_URL = os.environ.get("TEST_DATABASE_URL", "")
-
 
 # ---------------------------------------------------------------------------
 # Pure-unit tests (no DB required) — test registration and helpers
@@ -230,191 +211,6 @@ def _make_mock_pool_returning(rows: list[dict | None]):
 
 
 # ---------------------------------------------------------------------------
-# DB-backed tests — require TEST_DATABASE_URL
-# ---------------------------------------------------------------------------
-
-_SKIP_NO_DB = pytest.mark.skipif(
-    not _DB_URL,
-    reason="TEST_DATABASE_URL not set — skipping live DB tests",
-)
-
-
-@pytest_asyncio.fixture(scope="function")
-async def db_pool():
-    """Create a real asyncpg pool, create a fresh jobs table, yield, teardown."""
-    if not _DB_URL:
-        pytest.skip("TEST_DATABASE_URL not set")
-
-    import asyncpg
-    from jarvis_common import init_pg_connection
-
-    try:
-        pool = await asyncpg.create_pool(
-            _DB_URL,
-            min_size=1,
-            max_size=3,
-            init=init_pg_connection,
-        )
-    except Exception as exc:
-        pytest.skip(f"Cannot connect to test DB: {exc}")
-        return  # unreachable but satisfies type checker
-
-    # Ensure the jobs table exists (applied by migration 023; create it if missing).
-    async with pool.acquire() as conn:
-        await conn.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
-                id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                kind            TEXT NOT NULL,
-                status          TEXT NOT NULL DEFAULT 'queued',
-                payload         JSONB NOT NULL DEFAULT '{}',
-                result          JSONB,
-                error           JSONB,
-                progress        FLOAT,
-                progress_message TEXT,
-                cancel_requested BOOLEAN NOT NULL DEFAULT FALSE,
-                user_id         TEXT,
-                created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                started_at      TIMESTAMPTZ,
-                finished_at     TIMESTAMPTZ,
-                last_heartbeat_at TIMESTAMPTZ
-            )
-        """)
-        # Migration 035: ensure the heartbeat column exists in pre-existing DBs.
-        await conn.execute(
-            "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ"
-        )
-        # Clean slate for each test
-        await conn.execute("DELETE FROM jobs")
-
-    yield pool
-
-    async with pool.acquire() as conn:
-        await conn.execute("DELETE FROM jobs")
-    await pool.close()
-
-
-@_SKIP_NO_DB
-@pytest.mark.asyncio
-async def test_get_returns_queued_row(db_pool):
-    """get() on a freshly-inserted job should return status='queued' with correct fields."""
-    from jarvis_common.jobs import get
-
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO jobs (kind, payload, user_id)
-            VALUES ('noop.test', '{"hello": "world"}'::jsonb, 'user-1')
-            RETURNING id::text
-            """
-        )
-    assert row is not None
-    job_id = row["id"]
-    row = await get(db_pool, job_id)
-
-    assert row is not None
-    assert row["status"] == "queued"
-    assert row["kind"] == "noop.test"
-    assert row["payload"] == {"hello": "world"}
-    assert row["user_id"] == "user-1"
-    assert row["result"] is None
-    assert row["error"] is None
-
-
-@_SKIP_NO_DB
-@pytest.mark.asyncio
-async def test_get_returns_none_for_missing(db_pool):
-    """get() on a non-existent job should return None."""
-    from jarvis_common.jobs import get
-
-    row = await get(db_pool, str(uuid.uuid4()))
-    assert row is None
-
-
-@_SKIP_NO_DB
-@pytest.mark.asyncio
-async def test_list_jobs_filters_by_status(db_pool):
-    """list_jobs() with status= filter should only return matching jobs."""
-    from jarvis_common.jobs import list_jobs
-
-    async with db_pool.acquire() as conn:
-        r1 = await conn.fetchrow("INSERT INTO jobs (kind) VALUES ('noop.test') RETURNING id::text")
-        r2 = await conn.fetchrow("INSERT INTO jobs (kind) VALUES ('noop.test') RETURNING id::text")
-    assert r1 is not None and r2 is not None
-    j1, j2 = r1["id"], r2["id"]
-
-    # Manually flip j2 to running
-    async with db_pool.acquire() as conn:
-        await conn.execute("UPDATE jobs SET status = 'running' WHERE id = $1::uuid", j2)
-
-    queued = await list_jobs(db_pool, status="queued")
-    running = await list_jobs(db_pool, status="running")
-
-    queued_ids = {r["id"] if isinstance(r["id"], str) else str(r["id"]) for r in queued}
-    running_ids = {r["id"] if isinstance(r["id"], str) else str(r["id"]) for r in running}
-
-    assert j1 in queued_ids
-    assert j2 not in queued_ids
-    assert j2 in running_ids
-
-
-@_SKIP_NO_DB
-@pytest.mark.asyncio
-async def test_list_jobs_filters_by_kind(db_pool):
-    """list_jobs() with kind= filter should only return matching jobs."""
-    from jarvis_common.jobs import list_jobs
-
-    async with db_pool.acquire() as conn:
-        r1 = await conn.fetchrow(
-            "INSERT INTO jobs (kind) VALUES ('card.generate') RETURNING id::text"
-        )
-        await conn.fetchrow("INSERT INTO jobs (kind) VALUES ('noop.test') RETURNING id::text")
-    assert r1 is not None
-    j1 = r1["id"]
-
-    rows = await list_jobs(db_pool, kind="card.generate")
-    ids = {r["id"] if isinstance(r["id"], str) else str(r["id"]) for r in rows}
-    assert j1 in ids
-    assert all(r["kind"] == "card.generate" for r in rows)
-
-
-# ---------------------------------------------------------------------------
-# JOB-003 — JobStatusResponse.error is dict, not str
-# ---------------------------------------------------------------------------
-
-
-@_SKIP_NO_DB
-@pytest.mark.asyncio
-async def test_job_status_response_error_is_dict(db_pool):
-    """JOB-003: error column (JSONB) must be deserialised as dict, not coerced to str."""
-    from jarvis_common.jobs import get
-    from jarvis_common.models import JobStatusResponse
-
-    # Insert a job row whose error column is a JSONB dict (simulating a real failure)
-    async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO jobs (kind, status, error, finished_at)
-            VALUES ('noop.test', 'failed', $1::jsonb, NOW())
-            RETURNING id::text
-            """,
-            '{"message": "boom", "type": "RuntimeError"}',
-        )
-    assert row is not None
-    job_id = row["id"]
-
-    db_row = await get(db_pool, job_id)
-    assert db_row is not None
-
-    # Pydantic model must accept and preserve the dict (not coerce to str)
-    status_resp = JobStatusResponse(**db_row)
-    assert isinstance(status_resp.error, dict), (
-        f"Expected dict, got {type(status_resp.error)}: {status_resp.error!r}"
-    )
-    assert status_resp.error["message"] == "boom"
-    assert status_resp.error["type"] == "RuntimeError"
-
-
-# ---------------------------------------------------------------------------
 # B.4 Step 2 — procrastinate SSE bridge
 # ---------------------------------------------------------------------------
 
@@ -582,15 +378,13 @@ async def test_get_procrastinate_job_returns_dict_when_present():
 
 
 async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
-    """B.4-(a): a procrastinate-only job produces an SSE event in the legacy shape.
+    """A procrastinate job produces an SSE event in the legacy shape.
 
-    Setup: ``get`` returns None (no legacy row), ``get_procrastinate_job_for_jarvis_id``
-    returns a procrastinate row that immediately reports status='succeeded'. The
-    stream must yield exactly one payload with ``source='procrastinate'``,
-    ``status='succeeded'``, and the legacy payload shape.
-
-    After the Bug-2 fix, ``procrastinate_row_to_jarvis_row`` strips the
-    reserved ``job_id`` key from ``payload``; only user-defined keys remain.
+    ``get_procrastinate_job_for_jarvis_id`` returns a row that immediately
+    reports status='succeeded'. The stream must yield exactly one payload with
+    ``source='procrastinate'``, ``status='succeeded'``, and the legacy payload
+    shape.  ``procrastinate_row_to_jarvis_row`` strips the reserved ``job_id``
+    key from ``payload``; only user-defined keys remain.
     """
     import json as _json
 
@@ -610,9 +404,6 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
         },
     ]
 
-    async def _fake_legacy_get(_pool, _job_id):
-        return None
-
     async def _fake_procrastinate_get(_pool, _job_id):
         return procrastinate_rows[0]
 
@@ -622,7 +413,6 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
     async def _never_disconnected():
         return False
 
-    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
     monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
     monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
 
@@ -645,182 +435,17 @@ async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
     assert payload["payload"] == {"paper_id": 42}
 
 
-@pytest.mark.asyncio
-async def test_stream_job_events_mixed_legacy_and_procrastinate(monkeypatch):
-    """B.4-(b): a job that exists in BOTH tables emits one frame per source on first cycle.
-
-    The legacy row reports ``running`` while the procrastinate row reports
-    ``succeeded``. The stream should:
-      1. yield the legacy ``running`` frame (source=legacy),
-      2. yield the procrastinate ``succeeded`` frame (source=procrastinate),
-      3. terminate because procrastinate has reached a terminal state.
-    """
-    import json as _json
-
-    from jarvis_common import jobs
-
-    legacy_row = {
-        "id": "uuid-mixed",
-        "kind": "paper.process",
-        "status": "running",
-        "progress": 0.4,
-        "progress_message": "halfway",
-        "payload": {"foo": "bar"},
-        "result": None,
-        "error": None,
-    }
-    procrastinate_row = {
-        "id": 99,
-        "queue_name": "paper_ingestion",
-        "task_name": "paper.process",
-        "status": "succeeded",
-        "args": {"job_id": "uuid-mixed"},
-    }
-
-    async def _fake_legacy_get(_pool, _job_id):
-        return legacy_row
-
-    async def _fake_procrastinate_get(_pool, _job_id):
-        return procrastinate_row
-
-    async def _no_wait(_pool, _job_id, _timeout):
-        return False
-
-    async def _never_disconnected():
-        return False
-
-    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
-    monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
-    monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
-
-    pool_marker = MagicMock(name="db_pool")
-    frames: list[str] = []
-    async for frame in jobs.stream_job_events(
-        pool_marker, "uuid-mixed", is_disconnected=_never_disconnected
-    ):
-        frames.append(frame)
-
-    data_frames = [f for f in frames if f.startswith("data:")]
-    payloads = [_json.loads(f.removeprefix("data: ").rstrip("\n")) for f in data_frames]
-
-    sources = [p["source"] for p in payloads]
-    statuses = [p["status"] for p in payloads]
-
-    # Both sources must produce a frame, in order: legacy first then procrastinate.
-    assert sources == ["legacy", "procrastinate"], (
-        f"expected ['legacy', 'procrastinate'], got {sources!r}"
-    )
-    assert statuses == ["running", "succeeded"]
-
-    # Stream must terminate as soon as procrastinate reaches a terminal status.
-    # (No infinite loop — verified by the fact that this test returns at all.)
-
-
-@pytest.mark.asyncio
-async def test_stream_job_events_legacy_only_unchanged(monkeypatch):
-    """B.4 regression: legacy-only path still terminates at legacy terminal status.
-
-    When the procrastinate table doesn't have a matching row,
-    stream_job_events must behave exactly like the pre-bridge implementation.
-    """
-    import json as _json
-
-    from jarvis_common import jobs
-
-    legacy_row = {
-        "id": "uuid-legacy",
-        "kind": "paper.process",
-        "status": "succeeded",
-        "progress": 1.0,
-        "progress_message": "done",
-        "payload": {"x": 1},
-        "result": {"ok": True},
-        "error": None,
-    }
-
-    async def _fake_legacy_get(_pool, _job_id):
-        return legacy_row
-
-    async def _fake_procrastinate_get(_pool, _job_id):
-        return None  # no procrastinate row
-
-    async def _no_wait(_pool, _job_id, _timeout):
-        return False
-
-    async def _never_disconnected():
-        return False
-
-    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
-    monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
-    monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
-
-    pool_marker = MagicMock(name="db_pool")
-    frames: list[str] = []
-    async for frame in jobs.stream_job_events(
-        pool_marker, "uuid-legacy", is_disconnected=_never_disconnected
-    ):
-        frames.append(frame)
-
-    data_frames = [f for f in frames if f.startswith("data:")]
-    assert len(data_frames) == 1
-    payload = _json.loads(data_frames[0].removeprefix("data: ").rstrip("\n"))
-    assert payload["source"] == "legacy"
-    assert payload["status"] == "succeeded"
-    assert payload["result"] == {"ok": True}
-
-
 # ---------------------------------------------------------------------------
-# B.4 Step 3 — get_unified + list_jobs UNION ALL (Bug 2 unit tests)
+# B.4 Step 3 — get_unified + list_jobs (Bug 2 unit tests)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_unified_returns_legacy_when_present():
-    """get_unified() returns the legacy row when legacy lookup succeeds.
+async def test_get_unified_returns_procrastinate_when_present():
+    """get_unified() returns the procrastinate row in the Job-interface shape.
 
-    The ``source`` discriminator must be set to ``"legacy"`` and the legacy
-    row must otherwise pass through unmodified.
-    """
-    from jarvis_common.jobs import get_unified
-
-    legacy_row = {
-        "id": "uuid-leg-1",
-        "kind": "paper.process",
-        "status": "queued",
-        "progress": None,
-        "progress_message": None,
-        "payload": {},
-        "result": None,
-        "error": None,
-        "user_id": None,
-        "created_at": None,
-        "started_at": None,
-        "finished_at": None,
-        "cancel_requested": False,
-    }
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(return_value=legacy_row)
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=conn)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=cm)
-
-    result = await get_unified(pool, "uuid-leg-1")
-    assert result is not None
-    assert result["source"] == "legacy"
-    assert result["status"] == "queued"
-    assert result["id"] == "uuid-leg-1"
-
-
-@pytest.mark.asyncio
-async def test_get_unified_falls_through_to_procrastinate():
-    """get_unified() falls through to procrastinate lookup when legacy row is absent.
-
-    This is the Bug 2 regression test: if legacy ``get()`` returns None the
-    function must query the procrastinate table and return a row in the full
-    Job-interface shape with ``source="procrastinate"``.
+    The function must query the procrastinate table and return a row with
+    ``source="procrastinate"`` in the full Job-interface shape.
     """
     from jarvis_common import jobs
     from jarvis_common.jobs import get_unified
@@ -837,23 +462,16 @@ async def test_get_unified_falls_through_to_procrastinate():
         "finished_at": None,
     }
 
-    async def _no_legacy(_pool, _job_id):
-        return None
-
     async def _prow(_pool, _job_id):
         return procrastinate_row
 
     pool = MagicMock(name="db_pool")
 
-    # Monkeypatch the module-level functions.
-    original_get = jobs.get
     original_pget = jobs.get_procrastinate_job_for_jarvis_id
-    jobs.get = _no_legacy  # type: ignore[assignment]
     jobs.get_procrastinate_job_for_jarvis_id = _prow  # type: ignore[assignment]
     try:
         result = await get_unified(pool, "p-uni-1")
     finally:
-        jobs.get = original_get  # type: ignore[assignment]
         jobs.get_procrastinate_job_for_jarvis_id = original_pget  # type: ignore[assignment]
 
     assert result is not None
@@ -868,43 +486,31 @@ async def test_get_unified_falls_through_to_procrastinate():
 
 @pytest.mark.asyncio
 async def test_get_unified_returns_none_when_neither():
-    """get_unified() returns None when both legacy and procrastinate lookups miss."""
+    """get_unified() returns None when the procrastinate lookup misses."""
     from jarvis_common import jobs
     from jarvis_common.jobs import get_unified
-
-    async def _no_legacy(_pool, _job_id):
-        return None
 
     async def _no_prow(_pool, _job_id):
         return None
 
     pool = MagicMock(name="db_pool")
 
-    original_get = jobs.get
     original_pget = jobs.get_procrastinate_job_for_jarvis_id
-    jobs.get = _no_legacy  # type: ignore[assignment]
     jobs.get_procrastinate_job_for_jarvis_id = _no_prow  # type: ignore[assignment]
     try:
         result = await get_unified(pool, "missing-job")
     finally:
-        jobs.get = original_get  # type: ignore[assignment]
         jobs.get_procrastinate_job_for_jarvis_id = original_pget  # type: ignore[assignment]
 
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_list_jobs_union_includes_procrastinate_rows():
-    """list_jobs() with UNION ALL returns rows from both tables.
+async def test_list_jobs_returns_only_procrastinate_rows():
+    """list_jobs() queries procrastinate_jobs exclusively and returns plain dicts.
 
-    Setup: legacy conn.fetch returns one legacy row when the union query runs
-    (we cannot actually mock the fallback split cleanly here, but we can verify
-    that list_jobs does NOT raise on a pool that returns rows, and that those
-    rows are returned as plain dicts with the ``source`` key present).
-
-    The test uses a mock pool that returns a pre-built row list so no real DB
-    is needed.  Verifying the SQL string contains 'UNION ALL' and 'procrastinate'
-    checks that the function was rewritten rather than silently left as legacy-only.
+    Verifies that the SQL issued queries procrastinate_jobs and that rows are
+    returned with ``source='procrastinate'``.
     """
     from jarvis_common.jobs import list_jobs
 
@@ -925,7 +531,6 @@ async def test_list_jobs_union_includes_procrastinate_rows():
     }
 
     conn = AsyncMock()
-    # First call (UNION ALL query) succeeds and returns our fake row.
     conn.fetch = AsyncMock(return_value=[fake_row])
     cm = MagicMock()
     cm.__aenter__ = AsyncMock(return_value=conn)
@@ -939,50 +544,6 @@ async def test_list_jobs_union_includes_procrastinate_rows():
     assert rows[0]["source"] == "procrastinate"
     assert rows[0]["kind"] == "digest.weekly"
 
-    # Verify the UNION ALL query was actually issued (not the legacy-only fallback).
+    # Verify the query targets procrastinate_jobs.
     issued_sql: str = conn.fetch.await_args.args[0]
-    assert "UNION ALL" in issued_sql, "list_jobs must issue a UNION ALL query"
-    assert "procrastinate_jobs" in issued_sql, "list_jobs UNION ALL must include procrastinate_jobs"
-
-
-@pytest.mark.asyncio
-async def test_list_jobs_falls_back_to_legacy_on_undefined_table():
-    """list_jobs() falls back gracefully when procrastinate_jobs doesn't exist."""
-    import asyncpg as _asyncpg
-    from jarvis_common.jobs import list_jobs
-
-    legacy_row = {
-        "id": "leg-fb-1",
-        "kind": "noop.test",
-        "user_id": None,
-        "status": "queued",
-        "payload": {},
-        "result": None,
-        "error": None,
-        "progress": None,
-        "progress_message": None,
-        "created_at": None,
-        "started_at": None,
-        "finished_at": None,
-        "source": "legacy",
-    }
-
-    conn = AsyncMock()
-    # First call raises UndefinedTableError (procrastinate table missing).
-    # Second call (legacy fallback) succeeds.
-    conn.fetch = AsyncMock(
-        side_effect=[
-            _asyncpg.UndefinedTableError("relation procrastinate_jobs does not exist"),
-            [legacy_row],
-        ]
-    )
-    cm = MagicMock()
-    cm.__aenter__ = AsyncMock(return_value=conn)
-    cm.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=cm)
-
-    rows = await list_jobs(pool)
-
-    assert len(rows) == 1
-    assert rows[0]["id"] == "leg-fb-1"
+    assert "procrastinate_jobs" in issued_sql, "list_jobs must query procrastinate_jobs"

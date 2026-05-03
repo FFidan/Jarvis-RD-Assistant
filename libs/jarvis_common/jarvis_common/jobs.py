@@ -274,22 +274,11 @@ async def get_procrastinate_job_for_jarvis_id(
 
 
 async def get_unified(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
-    """Unified lookup: legacy jobs table first, then procrastinate fallback.
+    """Lookup a job exclusively from the procrastinate table.
 
-    Returns a row dict in the legacy Job interface shape with an additional
-    ``source`` discriminator field (``"legacy"`` or ``"procrastinate"``) so
-    routes can branch on cancel paths.
-
-    This is the Bug 2 fix: previously ``stream_job``, ``get_job``, and
-    ``cancel_job`` all called :func:`get` directly, which only queries the
-    legacy table.  Pre-migrated jobs written exclusively by procrastinate
-    tasks have no legacy row and therefore 404d.  :func:`get_unified` falls
-    through to the procrastinate table when the legacy lookup misses.
+    Returns a row dict in the legacy Job interface shape, or None if not found.
+    The ``source`` field is always ``"procrastinate"``.
     """
-    legacy = await get(pool, job_id)
-    if legacy is not None:
-        legacy["source"] = "legacy"
-        return legacy
     prow = await get_procrastinate_job_for_jarvis_id(pool, job_id)
     if prow is None:
         return None
@@ -379,22 +368,11 @@ async def stream_job_events(
 ) -> AsyncIterator[str]:
     """Yield SSE frames for a job, using LISTEN/NOTIFY with polling fallback.
 
-    Subscribes to both the legacy ``jarvis_jobs`` channel and the procrastinate
-    ``procrastinate_any_queue_v1`` channel (B.4 Step 2). On each cycle we poll
-    BOTH the legacy ``jobs`` table and the ``procrastinate_jobs`` table; either
-    path can yield a frame. The procrastinate row is normalised to the legacy
-    SSE payload shape via :func:`procrastinate_row_to_jarvis_row` and tagged
-    with ``source: "procrastinate"`` for debugging.
-
-    The stream terminates when EITHER source reaches a JARVIS-terminal status
-    (``succeeded`` / ``failed`` / ``cancelled``) — this preserves the legacy
-    contract that the SSE response closes once the job is done. During the
-    dual-write period (Step 2) only the legacy path drives terminal events
-    in production; the procrastinate branch is exercised by tests today and
-    becomes the primary signal once the actual enqueue path migrates in
-    Group C.
+    Polls the ``procrastinate_jobs`` table on each cycle and normalises the row
+    to the legacy SSE payload shape via :func:`procrastinate_row_to_jarvis_row`.
+    The stream terminates when the job reaches a JARVIS-terminal status
+    (``succeeded`` / ``failed`` / ``cancelled``).
     """
-    last_legacy_key: tuple[Any, Any, Any] | None = None
     last_procrastinate_key: tuple[Any, Any, Any] | None = None
     loop = asyncio.get_running_loop()
     loop_start = loop.time()
@@ -421,19 +399,7 @@ async def stream_job_events(
             yield ": keepalive\n\n"
             last_keepalive = now
 
-        legacy_row = await get(pool, job_id)
         procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
-
-        # Emit legacy frame if changed.
-        if legacy_row is not None:
-            legacy_key = (
-                legacy_row.get("progress"),
-                legacy_row.get("progress_message"),
-                legacy_row["status"],
-            )
-            if legacy_key != last_legacy_key:
-                last_legacy_key = legacy_key
-                yield f"data: {json.dumps(job_sse_payload(legacy_row, source='legacy'))}\n\n"
 
         # Emit procrastinate frame if changed.
         procrastinate_row: dict[str, Any] | None = None
@@ -452,20 +418,15 @@ async def stream_job_events(
                     + "\n\n"
                 )
 
-        # If the legacy row vanished AND no procrastinate row exists, the job
-        # is unknown — terminate (matches pre-bridge behavior).
-        if legacy_row is None and procrastinate_row is None:
+        # If no procrastinate row exists, the job is unknown — terminate.
+        if procrastinate_row is None:
             break
 
-        # Adaptive poll throttling keys off the legacy row's state when it
-        # exists; otherwise the procrastinate row drives the cadence so a
-        # procrastinate-only stream still backs off when idle.
-        active_row = legacy_row if legacy_row is not None else procrastinate_row
-        assert active_row is not None  # narrowing — unreachable when both None (handled above)
+        # Adaptive poll throttling.
         current_state = (
-            active_row.get("progress"),
-            active_row.get("progress_message"),
-            active_row["status"],
+            procrastinate_row.get("progress"),
+            procrastinate_row.get("progress_message"),
+            procrastinate_row["status"],
         )
         if current_state != last_state:
             last_state = current_state
@@ -476,12 +437,7 @@ async def stream_job_events(
             if idle_ticks * poll_interval > 30:
                 poll_interval = min(poll_interval + 1.0, 5.0)
 
-        # Terminate as soon as EITHER source has reached a terminal state.
-        legacy_terminal = legacy_row is not None and legacy_row["status"] in TERMINAL_STATUSES
-        procrastinate_terminal = (
-            procrastinate_row is not None and procrastinate_row["status"] in TERMINAL_STATUSES
-        )
-        if legacy_terminal or procrastinate_terminal:
+        if procrastinate_row["status"] in TERMINAL_STATUSES:
             break
 
         await _wait_for_job_notification(pool, job_id, poll_interval)
@@ -507,59 +463,32 @@ class JobError(Exception):
 
 @dataclass
 class JobContext:
-    """Passed to each handler; allows progress reporting and cancellation checks."""
+    """Legacy handler context — superseded by ProcrastinateJobContextShim.
+
+    All job handlers now run under procrastinate and receive a
+    ``ProcrastinateJobContextShim`` instead.  This class is kept for
+    type-annotation compatibility only; its DB methods are no-ops because
+    the ``jobs`` table was dropped in migration 053.
+    """
 
     job_id: str
     _pool: asyncpg.Pool = field(repr=False)
     _cancelled: bool = field(default=False, init=False, repr=False)
 
     async def update_progress(self, progress: float, message: str | None = None) -> None:
-        """Persist progress (0–1) and optional human-readable message to the DB.
-
-        Also refreshes ``last_heartbeat_at`` so the stale-job reaper does not
-        kill long-running jobs that are actively reporting progress.
-        """
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE jobs"
-                " SET progress = $1, progress_message = $2, last_heartbeat_at = NOW()"
-                " WHERE id = $3::uuid",
-                progress,
-                message,
-                self.job_id,
-            )
-            await notify_job_update(conn, self.job_id)
-        logger.debug("job %s progress=%.2f msg=%s", self.job_id, progress, message)
+        """No-op stub — progress reporting is handled by ProcrastinateJobContextShim."""
+        logger.debug(
+            "job %s progress=%.2f msg=%s (legacy JobContext no-op)", self.job_id, progress, message
+        )
 
     async def is_cancelled(self) -> bool:
-        """Return True if a cancel has been requested since the job started."""
-        if self._cancelled:
-            return True
-        async with self._pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT cancel_requested FROM jobs WHERE id = $1::uuid",
-                self.job_id,
-            )
-        if row and row["cancel_requested"]:
-            self._cancelled = True
+        """No-op stub — cancellation is handled by ProcrastinateJobContextShim."""
         return self._cancelled
 
 
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
-
-
-async def get(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
-    """Fetch a single job row by UUID; returns None if not found."""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT * FROM jobs WHERE id = $1::uuid",
-            job_id,
-        )
-    if row is None:
-        return None
-    return dict(row)
 
 
 async def list_jobs(
@@ -572,15 +501,10 @@ async def list_jobs(
 ) -> list[dict[str, Any]]:
     """Return jobs filtered by status and/or kind, newest first.
 
-    Performs a UNION ALL of the legacy ``jobs`` table and the
-    ``procrastinate_jobs`` table so that pre-migrated jobs written exclusively
-    via procrastinate tasks appear alongside legacy rows.  A ``source``
-    discriminator column (``"legacy"`` or ``"procrastinate"``) is added to
-    every row.
-
-    The procrastinate arm is wrapped in a graceful ``UndefinedTableError``
-    catch so this function continues to work on legacy-only databases where
-    migration 052 has not been applied.
+    Queries the ``procrastinate_jobs`` table exclusively (the legacy ``jobs``
+    table has been dropped as of migration 053).  A ``source`` discriminator
+    column with value ``"procrastinate"`` is added to every row for API
+    compatibility.
 
     When ``user_id`` is provided only jobs owned by that user (or jobs with a
     NULL user_id, i.e. system jobs) are returned.  Passing ``user_id=None``
@@ -595,80 +519,46 @@ async def list_jobs(
         limit,  # $4 — LIMIT
     ]
 
-    # Try the UNION ALL query first (procrastinate table present).
-    union_query = """
-        SELECT * FROM (
-          SELECT id::text AS id, kind, user_id, status, payload, result, error,
-                 progress, progress_message, created_at, started_at, finished_at,
-                 'legacy' AS source
-          FROM jobs
-          UNION ALL
-          SELECT pj.args->>'job_id' AS id,
-                 pj.task_name AS kind,
-                 pj.args->>'user_id' AS user_id,
-                 CASE pj.status
-                   WHEN 'todo'       THEN 'queued'
-                   WHEN 'doing'      THEN 'running'
-                   WHEN 'succeeded'  THEN 'succeeded'
-                   WHEN 'failed'     THEN 'failed'
-                   WHEN 'cancelled'  THEN 'cancelled'
-                   WHEN 'aborting'   THEN 'cancelled'
-                   WHEN 'aborted'    THEN 'cancelled'
-                   ELSE 'running' END AS status,
-                 pj.args - 'job_id' - 'user_id' AS payload,
-                 NULL::jsonb AS result,
-                 NULL::jsonb AS error,
-                 0::float AS progress,
-                 NULL::text AS progress_message,
-                 (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-                 (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-                 (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
-                 'procrastinate' AS source
-          FROM procrastinate_jobs pj
-          WHERE pj.args ? 'job_id'
-        ) j
-        WHERE ($1::text IS NULL OR j.status = $1)
-          AND ($2::text IS NULL OR j.kind = $2)
-          AND ($3::text IS NULL OR j.user_id IS NULL OR j.user_id = $3)
-        ORDER BY j.created_at DESC NULLS LAST
+    query = """
+        SELECT pj.args->>'job_id' AS id,
+               pj.task_name AS kind,
+               pj.args->>'user_id' AS user_id,
+               CASE pj.status
+                 WHEN 'todo'       THEN 'queued'
+                 WHEN 'doing'      THEN 'running'
+                 WHEN 'succeeded'  THEN 'succeeded'
+                 WHEN 'failed'     THEN 'failed'
+                 WHEN 'cancelled'  THEN 'cancelled'
+                 WHEN 'aborting'   THEN 'cancelled'
+                 WHEN 'aborted'    THEN 'cancelled'
+                 ELSE 'running' END AS status,
+               pj.args - 'job_id' - 'user_id' AS payload,
+               NULL::jsonb AS result,
+               NULL::jsonb AS error,
+               0::float AS progress,
+               NULL::text AS progress_message,
+               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
+               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
+               (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
+               'procrastinate' AS source
+        FROM procrastinate_jobs pj
+        WHERE pj.args ? 'job_id'
+          AND ($1::text IS NULL OR
+               CASE pj.status
+                 WHEN 'todo'       THEN 'queued'
+                 WHEN 'doing'      THEN 'running'
+                 WHEN 'succeeded'  THEN 'succeeded'
+                 WHEN 'failed'     THEN 'failed'
+                 WHEN 'cancelled'  THEN 'cancelled'
+                 WHEN 'aborting'   THEN 'cancelled'
+                 WHEN 'aborted'    THEN 'cancelled'
+                 ELSE 'running' END = $1)
+          AND ($2::text IS NULL OR pj.task_name = $2)
+          AND ($3::text IS NULL OR pj.args->>'user_id' IS NULL OR pj.args->>'user_id' = $3)
+        ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """
 
-    legacy_query = """
-        SELECT *, 'legacy' AS source
-        FROM jobs
-        WHERE ($1::text IS NULL OR status = $1)
-          AND ($2::text IS NULL OR kind = $2)
-          AND ($3::text IS NULL OR user_id IS NULL OR user_id = $3)
-        ORDER BY created_at DESC NULLS LAST
-        LIMIT $4
-    """
-
-    try:
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(union_query, *params)
-    except asyncpg.UndefinedTableError:
-        # procrastinate_jobs table not yet created — fall back to legacy-only.
-        async with pool.acquire() as conn:
-            rows = await conn.fetch(legacy_query, *params)
-    return [dict(r) for r in rows]
-
-
-async def request_cancel(pool: asyncpg.Pool, job_id: str) -> None:
-    """Set cancel_requested=TRUE for a legacy jobs-table row.
-
-    Used by ``cancel_job`` in jobs_router for rows whose ``source='legacy'``.
-    Once Group 4 drops the jobs table this function can be removed.
-    """
     async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE jobs
-               SET cancel_requested = TRUE,
-                   status = CASE WHEN status = 'queued' THEN 'cancelled' ELSE status END,
-                   finished_at = CASE WHEN status = 'queued' THEN NOW() ELSE finished_at END
-             WHERE id = $1::uuid
-            """,
-            job_id,
-        )
-        await notify_job_update(conn, job_id)
+        rows = await conn.fetch(query, *params)
+    return [dict(r) for r in rows]
