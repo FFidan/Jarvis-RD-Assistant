@@ -62,9 +62,7 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
     """
     # F-01: Refuse to start unauthenticated internal API in DEV_MODE
     core = get_core_settings()
-    api_key_secret = core.jarvis_api_key
-    api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
-    if core.dev_mode and not api_key:
+    if core.dev_mode and not core.jarvis_api_key:
         logger.warning(
             "Refusing to start telegram_bot internal API: DEV_MODE=true and "
             "JARVIS_API_KEY is empty — unauthenticated endpoint would accept any caller."
@@ -72,20 +70,9 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         return
 
     _internal_app.state.scheduler = scheduler  # type: ignore[attr-defined]
-    # H.9: bind to 0.0.0.0 inside the container so the paper_ingestion sibling
-    # service can reach this endpoint over the Docker bridge network at
-    # http://telegram_bot:8002. The telegram_bot service does NOT publish
-    # this port to the host (no `ports:` block in docker-compose.yml), so
-    # reachability is limited to the internal Docker network. The endpoint
-    # is additionally protected by ``verify_api_key`` (X-API-Key check) and
-    # the F-01 startup guard above refuses to bind at all when DEV_MODE=true
-    # and JARVIS_API_KEY is empty. If the deployment posture ever changes
-    # to host-network or to a config where host port 8002 is published,
-    # tighten this to 127.0.0.1 and route reload-nudges via a UNIX socket
-    # or an external load balancer instead.
     config = uvicorn.Config(
         _internal_app,
-        host="0.0.0.0",  # noqa: S104 — see comment above
+        host="0.0.0.0",
         port=port,
         log_level="warning",
         # Reuse the running asyncio event loop managed by PTB

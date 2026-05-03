@@ -102,58 +102,6 @@ _ENCRYPTED_KEYS: frozenset[str] = frozenset(
     }
 )
 
-
-async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
-    """Eagerly re-encrypt any plaintext rows for keys in :data:`_ENCRYPTED_KEYS`.
-
-    Older rows may still hold a plaintext secret in ``user_config.value`` while
-    ``encrypted_value`` is NULL — the result of upgrading from a release that
-    predated envelope encryption. This helper runs once at service startup and
-    rewrites such rows in place: encrypts ``value`` into ``encrypted_value``
-    and clears ``value`` so the API never returns plaintext.
-
-    Skips rows that already have ``encrypted_value`` populated (idempotent).
-    Returns the number of rows rewritten.
-    """
-    if not _ENCRYPTED_KEYS:
-        return 0
-    keys = sorted(_ENCRYPTED_KEYS)
-    rewritten = 0
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT key, value FROM user_config "
-            "WHERE key = ANY($1::text[]) AND value IS NOT NULL AND encrypted_value IS NULL",
-            keys,
-        )
-        for row in rows:
-            value = row["value"]
-            # asyncpg JSONB codec auto-decodes — accept str or numeric values.
-            if value is None:
-                continue
-            plaintext = value if isinstance(value, str) else str(value)
-            if not plaintext:
-                continue
-            try:
-                ciphertext_bytes = encrypt_secret(plaintext).encode("ascii")
-            except Exception:
-                logger.warning(
-                    "migrate_plaintext_secrets: encrypt failed for key=%s; skipping",
-                    row["key"],
-                    exc_info=True,
-                )
-                continue
-            await conn.execute(
-                "UPDATE user_config SET value = NULL, encrypted_value = $2, updated_at = NOW() "
-                "WHERE key = $1",
-                row["key"],
-                ciphertext_bytes,
-            )
-            rewritten += 1
-    if rewritten:
-        logger.info("migrate_plaintext_secrets: re-encrypted %d row(s)", rewritten)
-    return rewritten
-
-
 _NUDGE_ALLOWED_COLUMNS: set[str] = {"cron_expression", "enabled"}
 _NUDGE_JSONB_COLUMNS: frozenset[str] = frozenset()
 
@@ -256,13 +204,11 @@ async def _reload_telegram_nudges() -> None:
     if not telegram_url:
         logger.debug("TELEGRAM_BOT_URL empty — skipping nudge reload")
         return
-    api_key_secret = get_core_settings().jarvis_api_key
-    api_key = api_key_secret.get_secret_value() if api_key_secret is not None else ""
     with contextlib.suppress(Exception):
         async with httpx.AsyncClient() as client:
             await client.post(
                 f"{telegram_url}/internal/reload-nudges",
-                headers={"X-API-Key": api_key},
+                headers={"X-API-Key": get_core_settings().jarvis_api_key or ""},
                 timeout=2.0,
             )
 

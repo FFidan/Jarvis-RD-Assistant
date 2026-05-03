@@ -13,24 +13,13 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common import escape_like, get_fast_model
-from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured
+from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured, observe
 from jarvis_common.prompt_safety import wrap_delimited
 
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import EntityExtractionResponse
-
-try:
-    from langfuse.decorators import observe  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover
-
-    def observe(*args, **kwargs):  # type: ignore[misc]
-        def decorator(fn):  # type: ignore[misc]
-            return fn
-
-        return decorator if args and callable(args[0]) else decorator
-
 
 logger = logging.getLogger(__name__)
 

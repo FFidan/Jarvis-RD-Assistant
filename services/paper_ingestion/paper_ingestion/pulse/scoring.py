@@ -17,18 +17,8 @@ import pydantic
 from jarvis_common.llm_client import (
     ChatCompletionOptions,
     call_llm_structured,
+    observe,
 )
-
-try:
-    from langfuse.decorators import observe
-except ImportError:
-
-    def observe(**kwargs):  # type: ignore[misc]
-        def decorator(fn):  # type: ignore[misc]
-            return fn
-
-        return decorator
-
 
 try:
     from instructor.core import InstructorRetryException

@@ -43,7 +43,7 @@ def test_core_settings_defaults(monkeypatch):
 
 
 def test_core_settings_reads_env(monkeypatch):
-    """Env vars are picked up case-insensitively. Secrets are wrapped in SecretStr."""
+    """Env vars are picked up case-insensitively."""
     monkeypatch.setenv("DEV_MODE", "true")
     monkeypatch.setenv("JARVIS_API_KEY", "secret-key")
     monkeypatch.setenv("JARVIS_CONFIG_KEY", "fernet-key")
@@ -53,24 +53,11 @@ def test_core_settings_reads_env(monkeypatch):
 
     settings = CoreSettings()
     assert settings.dev_mode is True
-    assert settings.jarvis_api_key is not None
-    assert settings.jarvis_api_key.get_secret_value() == "secret-key"
-    assert settings.jarvis_config_key is not None
-    assert settings.jarvis_config_key.get_secret_value() == "fernet-key"
+    assert settings.jarvis_api_key == "secret-key"
+    assert settings.jarvis_config_key == "fernet-key"
     assert settings.log_level == "DEBUG"
     assert settings.environment == "production"
     assert settings.trusted_proxy_hosts_list == ["dashboard", "nginx", "cf"]
-
-
-def test_core_settings_secrets_do_not_leak_in_repr(monkeypatch):
-    """SecretStr fields must mask their values in string representations."""
-    monkeypatch.setenv("JARVIS_API_KEY", "leaky-key-value")
-    monkeypatch.setenv("JARVIS_CONFIG_KEY", "leaky-fernet-value")
-    settings = CoreSettings()
-    # repr() and str() must not contain the raw secret
-    assert "leaky-key-value" not in repr(settings)
-    assert "leaky-fernet-value" not in repr(settings)
-    assert "leaky-key-value" not in str(settings)
 
 
 def test_core_settings_trusted_proxy_list_ignores_empties(monkeypatch):

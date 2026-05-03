@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 
-const TEST_API_KEY = process.env.JARVIS_API_KEY || process.env.VITE_DASHBOARD_PASSWORD || 'test-key';
+const TEST_API_KEY = process.env.JARVIS_API_KEY || 'test-key';
 const AUTH_LABEL = /API Key|Password/i;
 
 export async function isAuthGateEnabled(page: Page): Promise<boolean> {

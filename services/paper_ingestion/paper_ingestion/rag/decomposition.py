@@ -12,22 +12,10 @@ from jarvis_common.llm_client import (
     LLM_TIMEOUT_SHORT,
     ChatCompletionOptions,
     call_llm_structured,
+    observe,
 )
 from jarvis_common.prompt_safety import wrap_delimited
 from pydantic import RootModel
-
-try:
-    from langfuse.decorators import observe  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover
-
-    def observe(*args, **kwargs):  # type: ignore[misc]
-        """No-op shim when langfuse is not installed."""
-
-        def decorator(fn):  # type: ignore[misc]
-            return fn
-
-        return decorator if args and callable(args[0]) else decorator
-
 
 logger = logging.getLogger(__name__)
 
