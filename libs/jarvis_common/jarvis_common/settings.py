@@ -23,6 +23,7 @@ Notes
 
 from __future__ import annotations
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
@@ -48,8 +49,12 @@ class CoreSettings(BaseSettings):
     model_config = _COMMON_CONFIG
 
     dev_mode: bool = False
-    jarvis_api_key: str | None = None
-    jarvis_config_key: str | None = None
+    # Wrapped in SecretStr so accidental ``repr(settings)`` / structured-log
+    # serialisations print ``SecretStr('**********')`` instead of the raw
+    # value. Call sites must use ``.get_secret_value()`` to obtain the
+    # plaintext for HTTP headers / Fernet keys.
+    jarvis_api_key: SecretStr | None = None
+    jarvis_config_key: SecretStr | None = None
     log_level: str = "INFO"
     environment: str = "development"
     # Comma-separated list of trusted proxy hostnames for ProxyHeadersMiddleware.

@@ -127,6 +127,25 @@ async def _run_migrations_hook(app: FastAPI) -> None:
     await run_migrations(app.state.db_pool)
 
 
+async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
+    """Eagerly re-encrypt any legacy plaintext secret rows in user_config.
+
+    Runs after migrations so the schema is at the latest version. Best-effort:
+    failures are logged inside the helper so this hook never blocks startup.
+    """
+    from paper_ingestion.routers.settings import (  # noqa: PLC0415
+        migrate_plaintext_secrets,
+    )
+
+    try:
+        await migrate_plaintext_secrets(app.state.db_pool)
+    except Exception:
+        logger.warning(
+            "migrate_plaintext_secrets failed during startup — continuing",
+            exc_info=True,
+        )
+
+
 async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
     """Construct Qdrant client + Embedder + PDFProcessor + QuoteVerifier."""
     qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
@@ -285,6 +304,7 @@ _lifespan_config = ServiceLifespanConfig(
         _warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
+        _migrate_plaintext_secrets_hook,
         _init_qdrant_and_pdf_pipeline,
         _init_source_singletons,
         _refresh_telegram_username,
@@ -297,6 +317,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _warn_multitenant_stub
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
+        None,  # _migrate_plaintext_secrets_hook
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
         None,  # _init_source_singletons
         None,  # _refresh_telegram_username
