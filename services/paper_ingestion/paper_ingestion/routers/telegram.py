@@ -8,13 +8,15 @@ user pastes into Telegram (`/start PAIR_<code>`). The bot then calls
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import log_audit
 from pydantic import BaseModel
 
@@ -26,6 +28,16 @@ router = APIRouter(prefix="/api/telegram", tags=["telegram"])
 
 _PAIRING_TTL = timedelta(minutes=10)
 _TELEGRAM_BASE_URL = "https://t.me"
+
+# Global cooldown between pairing-code generations across the whole instance.
+# The slowapi ``@limiter.limit("10/minute")`` decorator below enforces a
+# per-client-IP cap; the global cooldown defends against a distributed
+# attempt to brute-force the code space by rotating IPs (slowapi cannot see
+# across IPs). 5 seconds is short enough not to disrupt legitimate setup
+# wizard retries while still cutting attack throughput by orders of magnitude.
+_GLOBAL_PAIRING_COOLDOWN_SECONDS = 5.0
+_pairing_cooldown_lock = asyncio.Lock()
+_last_pairing_request_monotonic: float = 0.0
 
 
 class PairingResponse(BaseModel):
@@ -68,9 +80,29 @@ async def create_pairing(
     - Expire-only sweep instead of full table wipe (preserves concurrent callers' codes).
     - DELETE + INSERT wrapped in a single transaction so a crash cannot leave
       the table empty without a valid code.
-    - Rate-limited to 10 requests per minute per IP.
+    - Rate-limited to 10 requests per minute per IP **plus** a global
+      :data:`_GLOBAL_PAIRING_COOLDOWN_SECONDS` cooldown that defends against
+      a distributed brute-force where an attacker rotates source IPs to
+      bypass the per-IP slowapi limit.
+    - Pairing code now uses ``secrets.token_hex(8)`` (64-bit entropy, 16 hex
+      chars) — up from 48-bit so even a fully throttled attacker cannot
+      enumerate the code space within the 10-minute TTL.
     """
-    code = secrets.token_hex(6)  # 12 hex chars
+    # Global cooldown — defends against IP-rotating brute force.
+    global _last_pairing_request_monotonic
+    async with _pairing_cooldown_lock:
+        now_mono = time.monotonic()
+        elapsed = now_mono - _last_pairing_request_monotonic
+        if elapsed < _GLOBAL_PAIRING_COOLDOWN_SECONDS:
+            remaining = int(_GLOBAL_PAIRING_COOLDOWN_SECONDS - elapsed) + 1
+            raise HTTPException(
+                status_code=429,
+                detail="Pairing code generation is globally rate-limited; "
+                f"please wait {remaining}s before trying again.",
+            )
+        _last_pairing_request_monotonic = now_mono
+
+    code = secrets.token_hex(8)  # 16 hex chars, 64-bit entropy
     expires_at = datetime.now(UTC) + _PAIRING_TTL
 
     async with db_pool.acquire() as conn:

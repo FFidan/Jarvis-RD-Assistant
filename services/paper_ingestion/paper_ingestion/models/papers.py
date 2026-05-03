@@ -70,6 +70,11 @@ class PaperBase(BaseModel):
 class PaperCreate(PaperBase):
     """Used when inserting a new paper from a source."""
 
+    # H.11 cross-ref: the literal union below is mirrored in
+    # frontend/src/types/index.ts ('inbox'|'to_read'|'reading'|'done'|'trash'
+    # for LifecycleState plus the discovery-origin enum below). When you
+    # add or rename a discovery_origin value here, also update the
+    # frontend type and any constants in frontend/src/components/feed/.
     discovery_origin: Literal["user_initiated", "pulse", "recommender", "citation_batch"] = (
         "user_initiated"
     )
@@ -153,7 +158,14 @@ class SummaryResponse(BaseModel):
 
 
 class UserStateResponse(BaseModel):
-    """User reading state for a paper (post-redesign per spec §9.1)."""
+    """User reading state for a paper (post-redesign per spec §9.1).
+
+    H.11 cross-ref: the ``state`` and ``state_before_trash`` literal unions
+    below MUST stay in sync with ``LifecycleState`` and ``StateBeforeTrash``
+    in ``frontend/src/types/index.ts``. The frontend uses the same string
+    values verbatim, so any addition / rename / removal here is a
+    breaking schema change requiring a coordinated frontend update.
+    """
 
     state: Literal["inbox", "to_read", "reading", "done", "trash"]
     state_before_trash: Literal["inbox", "to_read", "reading", "done"] | None = None
@@ -288,7 +300,12 @@ class SourceUpdate(BaseModel):
 
 
 class FeedPaper(PaperResponse):
-    """Paper with joined summary and user-state fields for the feed."""
+    """Paper with joined summary and user-state fields for the feed.
+
+    H.11 cross-ref: ``state`` / ``state_before_trash`` mirror the
+    ``LifecycleState`` / ``StateBeforeTrash`` types in
+    ``frontend/src/types/index.ts``. Keep them in lockstep.
+    """
 
     summary_brief: str | None = None
     tldr: str | None = None

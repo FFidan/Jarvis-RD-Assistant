@@ -644,10 +644,22 @@ export interface SearchPreviewResponse {
 
 // --- Phase A core enums ---
 
-/** Phase A lifecycle state per spec §2 (post-2026-04-29 redesign). */
+/** Phase A lifecycle state per spec §2 (post-2026-04-29 redesign).
+ *
+ * H.11 cross-ref: this union MUST stay in sync with the ``state`` Literal
+ * in services/paper_ingestion/paper_ingestion/models/papers.py
+ * (``UserStateResponse.state`` and ``FeedPaper.state``). The backend uses
+ * the same string values verbatim; renaming one side without the other
+ * causes silent client/server desync at runtime.
+ */
 export type LifecycleState = 'inbox' | 'to_read' | 'reading' | 'done' | 'trash';
 
-/** State that the paper had before being trashed (for restore). null when never trashed. */
+/** State that the paper had before being trashed (for restore). null when never trashed.
+ *
+ * H.11 cross-ref: mirrors ``state_before_trash`` Literal in
+ * services/paper_ingestion/paper_ingestion/models/papers.py. Keep both sides
+ * synchronised when adding / renaming lifecycle states.
+ */
 export type StateBeforeTrash = 'inbox' | 'to_read' | 'reading' | 'done' | null;
 
 // --- Phase A User State ---

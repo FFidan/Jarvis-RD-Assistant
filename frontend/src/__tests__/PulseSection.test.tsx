@@ -65,7 +65,7 @@ describe('PulseSection', () => {
       { key: 'pulse.enabled', value: false },
       { key: 'pulse.cron', value: '0 4 * * *' },
       { key: 'pulse.deck_size', value: 10 },
-      { key: 'pulse.stage2_top_k', value: 50 },
+      { key: 'pulse.stage2_top_k', value: 40 },
     ]);
     vi.mocked(fetchPulseStats).mockResolvedValue(baseStats);
   });

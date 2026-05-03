@@ -888,7 +888,7 @@ INSERT INTO user_config (key, value) VALUES
     ('pulse.enabled', 'false'::jsonb),
     ('pulse.cron', '"0 4 * * *"'::jsonb),
     ('pulse.deck_size', '10'::jsonb),
-    ('pulse.stage2_top_k', '50'::jsonb),
+    ('pulse.stage2_top_k', '40'::jsonb),
     ('pulse.weights',
      '{"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1, "author_bonus": 0.15, "recency": 0.05, "citation_pagerank": 0.0, "citation_count": 0.0, "citation_adamic_adar": 0.0, "classifier": 0.0}'::jsonb)
 ON CONFLICT (key) DO NOTHING;
@@ -978,5 +978,5 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT INTO schema_migrations (version)
-SELECT generate_series(1, 49)
+SELECT generate_series(1, 56)
 ON CONFLICT (version) DO NOTHING;

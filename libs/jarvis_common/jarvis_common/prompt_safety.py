@@ -52,21 +52,34 @@ def _strip_bidi_zw(text: str) -> str:
 def safe_for_prompt(text: str | None, mode: str = "escape") -> str:
     """Sanitise text before interpolating it into an LLM prompt.
 
+    .. warning::
+        ``mode='strip'`` removes control / BIDI / zero-width characters but
+        does **NOT** escape ``<`` and ``>``. If the sanitised text will be
+        interpolated into a prompt that uses XML-style delimiters (e.g.
+        ``<paper_text>...</paper_text>``), use ``mode='escape'`` (the
+        default) or :func:`wrap_delimited`. Otherwise an attacker can close
+        the surrounding tag with ``</paper_text>`` and inject instructions
+        the LLM treats as part of the system prompt.
+
     Parameters
     ----------
     text:
         Raw input string (user question, paper title, abstract, etc.).
         ``None`` is treated as an empty string.
     mode:
-        ``'escape'`` — HTML-encode ``<`` and ``>`` so XML-style delimiters
-        cannot be forged (former :func:`escape_llm_text` behaviour).
+        ``'escape'`` *(default, recommended for prompt interpolation)* —
+        HTML-encode ``<`` and ``>`` so XML-style delimiters cannot be forged
+        (former :func:`escape_llm_text` behaviour).
 
         ``'delimit'`` — escape then wrap in XML delimiters.  Not useful
         on its own; delegates to :func:`wrap_delimited`.  Raises
         ``ValueError`` unless called via :func:`wrap_delimited`.
 
         ``'strip'`` — strip ASCII/Unicode control characters that could
-        confuse tokenisers or embed hidden instructions.
+        confuse tokenisers or embed hidden instructions. **Does not escape
+        angle brackets** — only safe for text that will NOT be wrapped in
+        XML-style delimiters in the LLM prompt. Prefer ``mode='escape'``
+        (or :func:`wrap_delimited`) for any prompt-interpolation use case.
 
     Returns
     -------
