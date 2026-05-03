@@ -50,6 +50,35 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+async def _init_langfuse_hook(app: FastAPI) -> None:
+    """Initialize Langfuse SDK and Instructor-patched OpenAI client.
+
+    No-op when LANGFUSE_HOST is unset — local dev without --profile observability.
+    Attaches ``app.state.openai_client`` (and ``svc.openai_client``) for use by
+    ``call_llm_structured`` in ``CardGenerator.generate_cards``.
+    """
+    import instructor  # noqa: PLC0415
+    import openai  # noqa: PLC0415
+    from jarvis_common.llm_client import (  # noqa: PLC0415
+        _langfuse_lifespan_hook,
+        get_litellm_config,
+    )
+
+    from learning_engine._state import svc  # noqa: PLC0415
+
+    _langfuse_lifespan_hook()
+    litellm_config = get_litellm_config()
+    openai_client = instructor.from_openai(
+        openai.AsyncOpenAI(
+            base_url=f"{litellm_config.base_url}/v1",
+            api_key="dummy",
+        ),
+        mode=instructor.Mode.JSON,
+    )
+    app.state.openai_client = openai_client
+    svc.openai_client = openai_client
+
+
 async def _warn_multitenant_stub(app: FastAPI) -> None:
     """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
     if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
@@ -99,13 +128,15 @@ _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     jobs_worker_kinds=_LEARNING_ENGINE_JOB_KINDS,
     custom_init_tasks=[
+        _init_langfuse_hook,
         _warn_multitenant_stub,
         _init_fsrs_and_generators,
         _register_le_job_handlers,
         _log_le_started,
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
-    custom_teardown_tasks=[None, None, None, None],
+    # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
+    custom_teardown_tasks=[None, None, None, None, None],
 )
 
 app = FastAPI(

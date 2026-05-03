@@ -1,6 +1,7 @@
 """Tests for the cross-encoder reranker module."""
 
 import importlib
+import importlib.util
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -151,7 +152,7 @@ def test_load_model_passes_onnx_backend_when_optimum_present():
     fake_onnxruntime = MagicMock()
 
     reranker = Reranker.__new__(Reranker)
-    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model_name = "mixedbread-ai/mxbai-rerank-base-v2"
     reranker._model = None
 
     with (
@@ -176,7 +177,7 @@ def test_load_model_omits_onnx_backend_when_optimum_missing():
     mock_cross_encoder_cls = MagicMock(return_value=MagicMock())
 
     reranker = Reranker.__new__(Reranker)
-    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model_name = "mixedbread-ai/mxbai-rerank-base-v2"
     reranker._model = None
 
     # Remove optimum + onnxruntime from sys.modules so the import inside the method fails.
@@ -211,7 +212,7 @@ def test_load_model_falls_back_to_pytorch_on_onnx_export_error():
     mock_cross_encoder_cls = MagicMock(side_effect=_side_effect)
 
     reranker = Reranker.__new__(Reranker)
-    reranker._model_name = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker._model_name = "mixedbread-ai/mxbai-rerank-base-v2"
     reranker._model = None
 
     fake_optimum = MagicMock()

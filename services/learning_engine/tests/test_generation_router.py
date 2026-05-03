@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from jarvis_common.db_helpers import get_smart_model  # noqa: E402
 from jarvis_common.jobs import JobContext, JobError  # noqa: E402
+from learning_engine import _state as le_state  # noqa: E402
 from learning_engine.models import BatchGenerateRequest, GenerateCardsRequest  # noqa: E402
 from learning_engine.routers import generation  # noqa: E402
 
@@ -122,6 +123,7 @@ async def test_generate_cards_core_success():
         patch.object(
             generation, "insert_card", AsyncMock(return_value=_make_card_row(id=501, paper_id=101))
         ),
+        patch.object(le_state.svc, "openai_client", MagicMock()),
     ):
         result = await generation.generate_cards_core(
             pool=pool,
@@ -191,6 +193,7 @@ async def test_generate_cards_core_propagates_progress():
     with (
         patch.object(generation, "get_smart_model", MagicMock(return_value="smart")),
         patch.object(generation, "insert_card", AsyncMock(return_value=_make_card_row())),
+        patch.object(le_state.svc, "openai_client", MagicMock()),
     ):
         await generation.generate_cards_core(
             pool=pool,

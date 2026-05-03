@@ -39,6 +39,7 @@ class _ServiceState:
     embedder: Embedder | None = None
     verifier: QuoteVerifier | None = None
     sources: dict[str, Any] | None = None
+    openai_client: Any | None = None  # Instructor-patched openai.AsyncOpenAI, set in lifespan
 
 
 svc = _ServiceState()

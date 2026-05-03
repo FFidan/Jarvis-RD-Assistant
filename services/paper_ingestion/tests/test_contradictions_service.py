@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from paper_ingestion.extraction.verify import QuoteVerifier
+from paper_ingestion.services.contradiction_models import ContradictionClassification
 from paper_ingestion.services.contradictions import (
     ContradictionCandidate,
     VerifiedFinding,
@@ -223,24 +224,28 @@ async def test_scan_contradictions_persists_only_when_both_quotes_verify(monkeyp
     ]
     conn.fetchrow.return_value = FakeRecord({"id": 99})
 
-    async def fake_classify(_http_client, candidate: ContradictionCandidate, *, model: str):
+    async def fake_classify(
+        _openai_client, _http_client, candidate: ContradictionCandidate, *, model: str
+    ):
         assert candidate.a.paper_id == 1
         assert model
-        return {
-            "is_contradiction": True,
-            "contradiction_type": "result",
-            "explanation": "The reported accuracy direction conflicts.",
-            "quote_a": "Method improves accuracy.",
-            "quote_b": "Method reduces accuracy.",
-            "confidence": 0.91,
-        }
+        return ContradictionClassification(
+            is_contradiction=True,
+            contradiction_type="result",
+            explanation="The reported accuracy direction conflicts.",
+            quote_a="Method improves accuracy.",
+            quote_b="Method reduces accuracy.",
+            confidence=0.91,
+        )
 
     monkeypatch.setattr(
         "paper_ingestion.services.contradictions._classify_candidate",
         fake_classify,
     )
 
-    result = await scan_contradictions(pool, AsyncMock(), QuoteVerifier())
+    result = await scan_contradictions(
+        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+    )
 
     assert result["contradictions_found"] == 1
     assert result["contradiction_ids"] == [99]
@@ -303,20 +308,26 @@ async def test_scan_contradictions_discards_unverified_llm_quotes(monkeypatch):
         ],
     ]
 
-    async def fake_classify(_http_client, _candidate: ContradictionCandidate, *, model: str):
-        return {
-            "is_contradiction": True,
-            "quote_a": "invented A",
-            "quote_b": "actual B",
-            "confidence": 0.9,
-        }
+    async def fake_classify(
+        _openai_client, _http_client, _candidate: ContradictionCandidate, *, model: str
+    ):
+        return ContradictionClassification(
+            is_contradiction=True,
+            contradiction_type="direct",
+            explanation="The reported findings directly conflict with each other.",
+            quote_a="invented A",
+            quote_b="actual B",
+            confidence=0.9,
+        )
 
     monkeypatch.setattr(
         "paper_ingestion.services.contradictions._classify_candidate",
         fake_classify,
     )
 
-    result = await scan_contradictions(pool, AsyncMock(), QuoteVerifier())
+    result = await scan_contradictions(
+        pool, AsyncMock(), QuoteVerifier(), openai_client=AsyncMock()
+    )
 
     assert result["contradictions_found"] == 0
     assert result["verification_failures"] == 1

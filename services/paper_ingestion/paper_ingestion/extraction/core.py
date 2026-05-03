@@ -10,7 +10,6 @@ Anti-hallucination strategy:
 4. Verify quotes using QuoteVerifier
 """
 
-import json
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -18,14 +17,29 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common import get_smart_model
-from jarvis_common.llm_client import ChatCompletionOptions, call_llm
+from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured
 from jarvis_common.prompt_safety import safe_for_prompt, wrap_delimited
 
+from paper_ingestion.extraction.dynamic_models import (
+    ExtractedFieldOutput,
+    _build_extraction_response_model,
+)
 from paper_ingestion.models import (
     BatchExtractionResponse,
     ExtractedField,
     ExtractionResponse,
 )
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +97,7 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
     )
 
 
+@observe()
 async def extract_fields_for_paper(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,
@@ -90,6 +105,7 @@ async def extract_fields_for_paper(
     template_id: int,
     embedder: Any | None = None,
     verifier: Any | None = None,
+    openai_client: Any | None = None,
 ) -> ExtractionResponse:
     """Extract template fields for one paper and persist the extraction payload."""
     async with db_pool.acquire() as conn:
@@ -153,10 +169,20 @@ async def extract_fields_for_paper(
         full_text = full_text[:15000]
 
     prompt = build_extraction_prompt(fields, paper["title"], full_text)
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    _openai_client = openai_client if openai_client is not None else svc.openai_client
+    if _openai_client is None:
+        raise RuntimeError(
+            "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
+        )
+    field_names = tuple(f["name"] for f in fields)
+    response_model = _build_extraction_response_model(field_names)
     try:
-        llm_result = await call_llm(
-            http_client,
-            prompt,
+        llm_result = await call_llm_structured(
+            _openai_client,
+            response_model=response_model,
+            prompt=prompt,
             options=ChatCompletionOptions(model=smart_model),
         )
     except Exception:
@@ -184,12 +210,11 @@ async def extract_fields_for_paper(
 
     for field in fields:
         field_name = field["name"]
-        field_data = llm_result.get(field_name, {})
-        if not isinstance(field_data, dict):
-            field_data = {"value": field_data, "quote": None}
+        _raw: ExtractedFieldOutput | None = getattr(llm_result, field_name, None)
+        field_output: ExtractedFieldOutput = _raw if _raw is not None else ExtractedFieldOutput()
 
-        value = field_data.get("value")
-        quote = field_data.get("quote")
+        value = field_output.value
+        quote = field_output.quote
         verified = False
         chunk_id = None
         page_number = None
@@ -250,7 +275,7 @@ async def extract_fields_for_paper(
                 template_id,
                 extraction_json,
                 smart_model,
-                json.dumps(llm_result),
+                llm_result.model_dump_json(),
             )
         except asyncpg.exceptions.UndefinedTableError:
             raise ValueError(

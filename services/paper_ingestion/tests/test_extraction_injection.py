@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -89,10 +89,12 @@ async def test_end_to_end_injection_mocked_llm_respects_mock_output() -> None:
     output, not the spoofed 999.
     """
     from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     body = (FIXTURE_DIR / "extraction_injection.txt").read_text()
-    # The mock LLM ignores the injection and returns a legitimate result.
-    intended_llm_output = '{"n_subjects": {"value": 42, "quote": "Normal-looking abstract."}}'
 
     mock_conn = AsyncMock()
     mock_cm = AsyncMock()
@@ -129,13 +131,21 @@ async def test_end_to_end_injection_mocked_llm_respects_mock_output() -> None:
         {"id": 100, "chunk_index": 0, "content": body, "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"choices": [{"message": {"content": intended_llm_output}}]}
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    # The mock LLM ignores the injection and returns a legitimate result.
+    response_model_cls = _build_extraction_response_model(("n_subjects",))
+    mock_llm_result = response_model_cls(
+        n_subjects=ExtractedFieldOutput(value=42, quote="Normal-looking abstract.")
+    )
 
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, openai_client=MagicMock()
+        )
     assert result.paper_id == 10
     # The returned value must match the mock's intended output, not the spoofed 999.
     stored_value = result.extractions["n_subjects"].value
@@ -151,6 +161,10 @@ async def test_end_to_end_injection_mocked_llm_respects_mock_output() -> None:
 async def test_unverified_field_value_is_none() -> None:
     """When the verifier returns vr.verified=False, the extracted value becomes None."""
     from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     # Set up mocks
     mock_conn = AsyncMock()
@@ -201,22 +215,21 @@ async def test_unverified_field_value_is_none() -> None:
         {"id": 100, "chunk_index": 0, "content": "We enrolled 42 subjects.", "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
     # LLM returns a value with a quote, but verifier will reject it
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": '{"n_subjects": {"value": 42, "quote": "We enrolled 42 subjects."}}'
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    response_model_cls = _build_extraction_response_model(("n_subjects",))
+    mock_llm_result = response_model_cls(
+        n_subjects=ExtractedFieldOutput(value=42, quote="We enrolled 42 subjects.")
+    )
 
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=mock_verifier)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, verifier=mock_verifier, openai_client=MagicMock()
+        )
 
     # The verifier returned False → value must be None
     n_subjects = result.extractions["n_subjects"]
@@ -230,6 +243,10 @@ async def test_unverified_field_value_is_none() -> None:
 async def test_verified_field_value_is_preserved() -> None:
     """Sanity check: when verifier returns vr.verified=True, value is kept."""
     from paper_ingestion.extraction.core import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
     mock_cm = AsyncMock()
@@ -275,21 +292,20 @@ async def test_verified_field_value_is_preserved() -> None:
         {"id": 100, "chunk_index": 0, "content": "We enrolled 42 subjects.", "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": '{"n_subjects": {"value": 42, "quote": "We enrolled 42 subjects."}}'
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    response_model_cls = _build_extraction_response_model(("n_subjects",))
+    mock_llm_result = response_model_cls(
+        n_subjects=ExtractedFieldOutput(value=42, quote="We enrolled 42 subjects.")
+    )
 
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=mock_verifier)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, verifier=mock_verifier, openai_client=MagicMock()
+        )
 
     n_subjects = result.extractions["n_subjects"]
     assert n_subjects.verified is True

@@ -470,7 +470,12 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     return await generate_weekly_summary(
-        db_pool, http_client, days=days, verifier=verifier, user_id=user_id
+        db_pool,
+        http_client,
+        days=days,
+        verifier=verifier,
+        user_id=user_id,
+        openai_client=getattr(request.app.state, "openai_client", None),
     )
 
 

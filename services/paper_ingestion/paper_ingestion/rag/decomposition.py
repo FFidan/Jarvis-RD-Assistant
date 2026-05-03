@@ -5,22 +5,42 @@ enabling broader retrieval coverage across the paper collection.
 """
 
 import logging
+from typing import Any
 
 import httpx
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_SHORT,
     ChatCompletionOptions,
-    call_llm_json_value,
+    call_llm_structured,
 )
 from jarvis_common.prompt_safety import wrap_delimited
+from pydantic import RootModel
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        """No-op shim when langfuse is not installed."""
+
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["decompose_query"]
 
 
+@observe()
 async def decompose_query(
-    question: str, http_client: httpx.AsyncClient, *, model: str = "fast"
+    question: str,
+    http_client: httpx.AsyncClient,
+    *,
+    model: str = "fast",
+    openai_client: Any | None = None,
 ) -> list[str]:
     """Decompose a complex question into 2-4 simpler sub-queries via LLM.
 
@@ -33,9 +53,13 @@ async def decompose_query(
     question : str
         The user's original complex question.
     http_client : httpx.AsyncClient
-        Shared HTTP client for LiteLLM API calls.
+        Kept for API compatibility; no longer used directly (calls go through
+        the Instructor-patched openai_client).
     model : str
         LLM model alias or name (default ``"fast"``).
+    openai_client : AsyncOpenAI | None
+        Instructor-patched OpenAI client.  Falls back to ``svc.openai_client``
+        when not provided.
 
     Returns
     -------
@@ -58,9 +82,17 @@ async def decompose_query(
     )
 
     try:
-        parsed = await call_llm_json_value(
-            http_client,
-            prompt,
+        from paper_ingestion._state import svc  # noqa: PLC0415
+
+        _openai_client = openai_client if openai_client is not None else svc.openai_client
+        if _openai_client is None:
+            raise RuntimeError(
+                "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
+            )
+        llm_result = await call_llm_structured(
+            _openai_client,
+            response_model=RootModel[list[str]],
+            prompt=prompt,
             options=ChatCompletionOptions(
                 model=model,
                 max_tokens=200,
@@ -68,8 +100,7 @@ async def decompose_query(
                 timeout=LLM_TIMEOUT_SHORT,
             ),
         )
-        if not isinstance(parsed, list):
-            return [question]
+        parsed = llm_result.root
         result: list[str] = []
         seen: set[str] = set()
         for item in parsed:

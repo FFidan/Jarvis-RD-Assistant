@@ -32,7 +32,7 @@ class Reranker:
         HuggingFace model name for the cross-encoder.
     """
 
-    def __init__(self, model_name: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+    def __init__(self, model_name: str = "mixedbread-ai/mxbai-rerank-base-v2"):
         self._model_name = model_name
         self._model: Any | None = None
 

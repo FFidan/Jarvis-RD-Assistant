@@ -39,7 +39,7 @@ onnxruntime==1.25.1
 optimum==2.1.0
 optimum-onnx==0.1.0
 packaging==26.2
-protobuf==7.34.1
+protobuf==6.33.6
 pyyaml==6.0.3
 regex==2024.11.6
 requests==2.33.1

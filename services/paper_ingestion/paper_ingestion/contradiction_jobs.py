@@ -25,6 +25,9 @@ async def _contradictions_scan_job(
     verifier = svc.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
+    openai_client = svc.openai_client
+    if openai_client is None:
+        raise RuntimeError("openai_client not initialized")
     paper_id = payload.get("paper_id")
     limit = int(payload.get("limit") or 25)
     await ctx.update_progress(0.1, "Collecting verified findings")
@@ -32,6 +35,7 @@ async def _contradictions_scan_job(
         pool,
         http_client,
         verifier,
+        openai_client=openai_client,
         paper_id=int(paper_id) if paper_id is not None else None,
         limit=limit,
     )

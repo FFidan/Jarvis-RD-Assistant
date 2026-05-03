@@ -1,5 +1,5 @@
 # Instructor + Langfuse Integration — Design Spec
-**Status:** DRAFT (awaiting user review)
+**Status:** RATIFIED 2026-05-02
 **Date:** 2026-05-02
 **Scope:** Marathon Phase B.1 (Instructor) + B.2 (Langfuse) combined
 **Supersedes (in scope only):** B.1 and B.2 sub-specs in [docs/plans/2026-04-30-marathon-meta.md](../plans/2026-04-30-marathon-meta.md) §"Phase B — Library Modernization (Detailed)"

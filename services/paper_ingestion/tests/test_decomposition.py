@@ -1,30 +1,24 @@
 """Tests for query decomposition and cross-paper RAG decomposition flow."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
 from paper_ingestion.models import CrossPaperAskRequest
+from pydantic import RootModel
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _llm_response(content: str) -> dict:
-    """Build a minimal LiteLLM-style chat completion response."""
-    return {"choices": [{"message": {"content": content}}]}
+def _mock_openai_client() -> MagicMock:
+    """Return a dummy openai client to bypass svc.openai_client lookup."""
+    return MagicMock()
 
 
-def _make_http_client_with_response(response_body: dict, status_code: int = 200):
-    """Create an AsyncMock httpx client that returns a fixed response."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = status_code
-    mock_resp.json.return_value = response_body
-    mock_resp.raise_for_status = MagicMock()
-
-    client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.return_value = mock_resp
-    return client
+def _llm_result(items: list[str]) -> RootModel:
+    return RootModel[list[str]](root=items)
 
 
 # ---------------------------------------------------------------------------
@@ -32,30 +26,47 @@ def _make_http_client_with_response(response_body: dict, status_code: int = 200)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_happy_path():
-    """decompose_query parses a valid JSON array from LLM."""
+    """decompose_query parses a valid sub-query list from call_llm_structured."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    sub_queries = '["What is attention?", "How do transformers work?"]'
-    client = _make_http_client_with_response(_llm_response(sub_queries))
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_llm_result(["What is attention?", "How do transformers work?"]),
+    ):
+        result = await decompose_query(
+            "Explain attention in transformers",
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query("Explain attention in transformers", client)
     assert result == ["What is attention?", "How do transformers work?"]
 
 
 # ---------------------------------------------------------------------------
-# Test 2: Garbage fallback — LLM returns non-JSON
+# Test 2: Exception fallback — call_llm_structured raises
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_garbage_fallback():
-    """decompose_query returns [original_question] when LLM returns garbage."""
+    """decompose_query returns [original_question] when call_llm_structured raises."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    client = _make_http_client_with_response(_llm_response("I don't know"))
     question = "What are the benefits of attention?"
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        side_effect=ValueError("unexpected response"),
+    ):
+        result = await decompose_query(
+            question,
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query(question, client)
     assert result == [question]
 
 
@@ -64,47 +75,73 @@ async def test_decompose_query_garbage_fallback():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_empty_array_fallback():
-    """decompose_query returns [original_question] when LLM returns empty array."""
+    """decompose_query returns [original_question] when structured result is empty."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    client = _make_http_client_with_response(_llm_response("[]"))
     question = "What is BERT?"
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_llm_result([]),
+    ):
+        result = await decompose_query(
+            question,
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query(question, client)
     assert result == [question]
 
 
 # ---------------------------------------------------------------------------
-# Test 4: Non-list JSON fallback
+# Test 4: Schema validation error fallback (non-list JSON rejected by Instructor/Pydantic)
 # ---------------------------------------------------------------------------
 
 
-async def test_decompose_query_non_list_fallback():
-    """decompose_query returns [original_question] when LLM returns non-list JSON."""
+@pytest.mark.asyncio
+async def test_decompose_query_validation_error_fallback():
+    """decompose_query returns [original_question] when structured parsing fails."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    client = _make_http_client_with_response(_llm_response('{"sub": "query"}'))
     question = "Compare BERT and GPT"
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        side_effect=ValueError("Input is not a list"),
+    ):
+        result = await decompose_query(
+            question,
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query(question, client)
     assert result == [question]
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Exception fallback — HTTP error
+# Test 5: Exception fallback — generic exception
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_exception_fallback():
-    """decompose_query returns [original_question] on HTTP exception."""
+    """decompose_query returns [original_question] on any exception."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.side_effect = httpx.TimeoutException("timed out")
     question = "Timeout question"
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        side_effect=RuntimeError("connection refused"),
+    ):
+        result = await decompose_query(
+            question,
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query(question, client)
     assert result == [question]
 
 
@@ -113,43 +150,64 @@ async def test_decompose_query_exception_fallback():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_filters_empty_strings():
-    """decompose_query filters out empty strings from the parsed array."""
+    """decompose_query filters out empty and whitespace-only strings."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    sub_queries = '["valid query", "", "  ", "another valid"]'
-    client = _make_http_client_with_response(_llm_response(sub_queries))
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_llm_result(["valid query", "", "  ", "another valid"]),
+    ):
+        result = await decompose_query(
+            "complex question",
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query("complex question", client)
     assert result == ["valid query", "another valid"]
 
 
+@pytest.mark.asyncio
 async def test_decompose_query_dedupes_and_caps_results():
-    """decompose_query should dedupe repeated sub-queries and cap fan-out to four."""
+    """decompose_query dedupes repeated sub-queries and caps fan-out to four."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    sub_queries = '["q1", "q2", "q1", "q3", "q4", "q5"]'
-    client = _make_http_client_with_response(_llm_response(sub_queries))
-
-    result = await decompose_query("complex question", client)
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_llm_result(["q1", "q2", "q1", "q3", "q4", "q5"]),
+    ):
+        result = await decompose_query(
+            "complex question",
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
     assert result == ["q1", "q2", "q3", "q4"]
 
 
 # ---------------------------------------------------------------------------
-# Test 6b: Strips <think> tags from thinking models (e.g. qwen3.5)
+# Test 6b: openai_client=None raises RuntimeError (caught as fallback)
 # ---------------------------------------------------------------------------
 
 
-async def test_decompose_query_strips_think_tags():
-    """decompose_query strips <think>...</think> blocks before parsing JSON."""
+@pytest.mark.asyncio
+async def test_decompose_query_none_openai_client_falls_back():
+    """When openai_client is None and svc.openai_client is None, falls back gracefully."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    content = '<think>Let me break this down into parts</think>\n["sub1", "sub2"]'
-    client = _make_http_client_with_response(_llm_response(content))
+    question = "What is RAG?"
+    with patch("paper_ingestion._state.svc") as mock_svc:
+        mock_svc.openai_client = None
+        result = await decompose_query(
+            question,
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=None,
+        )
 
-    result = await decompose_query("complex question", client)
-    assert result == ["sub1", "sub2"]
+    assert result == [question]
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +226,6 @@ def test_merge_dedup_keeps_highest_score():
         {"paper_id": 3, "chunk_index": 0, "content": "B1", "page_number": 1, "score": 0.7},
     ]
 
-    # Replicate the merge logic from ask_cross_paper
     seen: dict[tuple[int, int], dict] = {}
     for chunk_list in [chunks_a, chunks_b]:
         for chunk in chunk_list:
@@ -177,12 +234,9 @@ def test_merge_dedup_keeps_highest_score():
                 seen[key] = chunk
     merged = list(seen.values())
 
-    # Paper 1, chunk 0 should keep score 0.9 from chunks_b
     p1_c0 = [c for c in merged if c["paper_id"] == 1 and c["chunk_index"] == 0]
     assert len(p1_c0) == 1
     assert p1_c0[0]["score"] == 0.9
-
-    # All 3 unique (paper_id, chunk_index) should be present
     assert len(merged) == 3
     paper_ids = {c["paper_id"] for c in merged}
     assert paper_ids == {1, 2, 3}
@@ -193,25 +247,30 @@ def test_merge_dedup_keeps_highest_score():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_concurrent_search_per_sub_query():
     """With decomposition, search_chunks_global is called once per sub-query."""
     from paper_ingestion.rag.decomposition import decompose_query
 
-    # Build sub-queries
-    sub_queries = '["sub1", "sub2", "sub3"]'
-    llm_client = _make_http_client_with_response(_llm_response(sub_queries))
+    with patch(
+        "paper_ingestion.rag.decomposition.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_llm_result(["sub1", "sub2", "sub3"]),
+    ):
+        result = await decompose_query(
+            "complex question",
+            AsyncMock(spec=httpx.AsyncClient),
+            openai_client=_mock_openai_client(),
+        )
 
-    result = await decompose_query("complex question", llm_client)
     assert len(result) == 3
 
-    # Mock embedder.search_chunks_global
     mock_search = AsyncMock(
         return_value=[
             {"paper_id": 1, "chunk_index": 0, "content": "chunk", "page_number": 1, "score": 0.8},
         ]
     )
 
-    # Simulate the concurrent gather logic from ask_cross_paper
     import asyncio
 
     max_chunks = 10
@@ -229,16 +288,15 @@ async def test_concurrent_search_per_sub_query():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.asyncio
 async def test_decompose_false_skips_decomposition():
     """When decompose=False, decompose_query is NOT called."""
-    # Verify the model field default and override
     req_default = CrossPaperAskRequest(question="What is attention?")
     assert req_default.decompose is True
 
     req_no_decompose = CrossPaperAskRequest(question="What is attention?", decompose=False)
     assert req_no_decompose.decompose is False
 
-    # Simulate the branch logic from ask_cross_paper
     decompose_called = False
 
     async def mock_decompose(q, c):
@@ -246,7 +304,6 @@ async def test_decompose_false_skips_decomposition():
         decompose_called = True
         return [q]
 
-    # When decompose=False, the function should NOT call decompose_query
     if req_no_decompose.decompose:
         await mock_decompose(req_no_decompose.question, None)
 

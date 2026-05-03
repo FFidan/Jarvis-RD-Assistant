@@ -66,6 +66,8 @@ async def generate_cards_core(
     """
     from jarvis_common.llm_client import get_litellm_config
 
+    from learning_engine._state import svc  # noqa: PLC0415
+
     # Lazily create dependencies when running inside a job handler
     if fsrs_manager is None:
         fsrs_manager = FSRSManager()
@@ -75,6 +77,8 @@ async def generate_cards_core(
             http_client=http_client,
             litellm_config=litellm_config,
         )
+
+    openai_client = svc.openai_client
 
     if ctx:
         await ctx.update_progress(0.1, "Validating deck and paper")
@@ -115,11 +119,17 @@ async def generate_cards_core(
     if ctx:
         await ctx.update_progress(0.4, "Streaming generation")
 
+    if openai_client is None:
+        raise RuntimeError(
+            "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
+        )
+
     try:
         result = await card_generator.generate_cards(
             title=paper["title"],
             authors=paper["authors"],
             chunks=chunks,
+            openai_client=openai_client,
             paper_id=paper_id,
             abstract=paper.get("abstract"),
             max_cards=max_cards,

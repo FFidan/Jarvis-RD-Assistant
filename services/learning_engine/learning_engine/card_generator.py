@@ -9,10 +9,13 @@ Implements AGENTS.md anti-hallucination rules 5/6/7:
   7. Link verified cards to PDF page snapshots
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import unicodedata
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 from jarvis_common import validated_model
@@ -20,14 +23,29 @@ from jarvis_common.llm_client import (
     LLM_TIMEOUT_LONG,
     ChatCompletionOptions,
     LiteLLMConfig,
-    call_llm,
+    call_llm_structured,
 )
 from jarvis_common.prompt_safety import wrap_delimited
 
+from learning_engine.card_models import CardGenerationOutput, CardOutput
+
+if TYPE_CHECKING:
+    import openai
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover — optional observability dep
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        """No-op shim when langfuse is not installed."""
+
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
+
 logger = logging.getLogger(__name__)
-
-
-VALID_CARD_TYPES = frozenset({"concept", "quote", "method", "comparison"})
 
 CARD_GENERATION_PROMPT = """\
 You are a research study assistant. Generate {max_cards} flashcards from the following paper.
@@ -102,13 +120,18 @@ class CardGenerator:
         self.http_client = http_client
         self.litellm_config = litellm_config
 
-    async def _call_llm_for_cards(self, prompt: str, model: str) -> list[dict] | None:
-        """Call LiteLLM and parse the JSON response into a raw card list.
+    async def _call_llm_for_cards(
+        self, prompt: str, model: str, openai_client: openai.AsyncOpenAI
+    ) -> CardGenerationOutput | None:
+        """Call LiteLLM via Instructor and return a validated CardGenerationOutput.
 
-        Returns the parsed list of card dicts, or ``None`` on unrecoverable
-        parse failure (caller should return an empty result).  HTTP /
-        timeout errors are re-raised so the caller can propagate them.
+        Returns a ``CardGenerationOutput`` on success, or ``None`` on
+        unrecoverable validation / parse failure (caller should return an
+        empty result).  HTTP / timeout errors are re-raised so the caller
+        can propagate them.
         """
+        import pydantic  # noqa: PLC0415
+
         options = ChatCompletionOptions(
             model=validated_model(model),
             temperature=0.2,
@@ -116,28 +139,30 @@ class CardGenerator:
             timeout=LLM_TIMEOUT_LONG,
         )
         try:
-            result = await call_llm(
-                self.http_client,
-                prompt,
+            return await call_llm_structured(
+                openai_client,
+                response_model=CardGenerationOutput,
+                prompt=prompt,
                 options=options,
                 config=self.litellm_config,
             )
-        except RuntimeError as exc:
+        except (RuntimeError, pydantic.ValidationError) as exc:
             logger.error("LLM call failed during card generation: %s", exc)
             return None
-        if isinstance(result, dict):
-            return result.get("cards", [])
-        if isinstance(result, list) and result and isinstance(result[0], dict):
-            return result[0].get("cards", [])
-        logger.warning(
-            "card_generator: LLM returned unexpected type %r — discarding",
-            type(result).__name__,
-        )
-        return None
+        except Exception as exc:  # noqa: BLE001
+            try:
+                from instructor.core import InstructorRetryException  # noqa: PLC0415
+
+                if isinstance(exc, InstructorRetryException):
+                    logger.error("LLM card generation retry limit exceeded: %s", exc)
+                    return None
+            except ImportError:
+                pass
+            raise
 
     def _verify_raw_cards(
         self,
-        raw_cards: list[dict],
+        raw_cards: list[CardOutput],
         full_text: str,
         chunks: list[dict],
         paper_id: int | None,
@@ -147,6 +172,10 @@ class CardGenerator:
         Applies rules 5 and 7: discard cards whose quote cannot be found in
         the source text, validate page numbers from chunk metadata, and link
         accepted cards to PDF page snapshots.
+
+        ``card_type`` is validated at the LLM boundary by ``CardOutput``
+        (``Literal["concept", "quote", "method", "comparison"]``), so no
+        post-hoc clamp is needed here.
         """
         verified_cards: list[dict] = []
 
@@ -159,13 +188,13 @@ class CardGenerator:
         snapshot_base_path = Path(snapshot_base).resolve()
 
         for card in raw_cards:
-            quote = card.get("evidence_quote", "")
+            quote = card.evidence_quote
             if not _verify_quote(quote, full_text, _normalized_source=normalized_full):
                 logger.info("Discarding card with unverified quote: %.60s...", quote)
                 continue
 
             chunk_id = _find_chunk_id(quote, chunks, _normalized_chunks=normalized_chunks)
-            page_num = card.get("page_number")
+            page_num: int | None = card.page_number
 
             # Validate page_number against chunk data — don't trust LLM blindly
             if chunk_id is not None:
@@ -180,15 +209,12 @@ class CardGenerator:
                 if candidate.resolve().is_relative_to(snapshot_base_path) and candidate.exists():
                     snapshot_path = str(candidate.relative_to(snapshot_base_path))
 
-            card_type = card.get("card_type", "concept")
-            if card_type not in VALID_CARD_TYPES:
-                card_type = "concept"
-
+            # card_type is a Literal — Pydantic validated it at the LLM boundary
             verified_cards.append(
                 {
-                    "card_type": card_type,
-                    "front": card.get("front", ""),
-                    "back": card.get("back", ""),
+                    "card_type": card.card_type,
+                    "front": card.front,
+                    "back": card.back,
                     "evidence": {
                         "quote": quote,
                         "page_number": page_num,
@@ -262,17 +288,23 @@ class CardGenerator:
             "total_count": total_count,
         }
 
+    @observe()
     async def generate_cards(
         self,
         title: str,
         authors: list[str],
         chunks: list[dict],
+        openai_client: openai.AsyncOpenAI,
         paper_id: int | None = None,
         abstract: str | None = None,
         max_cards: int = 5,
         model: str = "smart",
     ) -> dict:
         """Generate and verify flashcards from paper chunks.
+
+        The ``@observe()`` decorator marks this as a Langfuse trace boundary.
+        Each ``call_llm_structured`` call inside produces a child ``generation``
+        span automatically via the Langfuse SDK's OpenAI integration.
 
         Parameters
         ----------
@@ -282,6 +314,8 @@ class CardGenerator:
             Paper authors (from DB metadata, not LLM).
         chunks : list[dict]
             Paper chunks with keys: id, content, page_number.
+        openai_client : openai.AsyncOpenAI
+            Instructor-patched OpenAI client from ``app.state.openai_client``.
         paper_id : int | None
             Paper ID for snapshot path linking (rule 7).
         abstract : str | None
@@ -306,12 +340,10 @@ class CardGenerator:
             max_cards=max_cards,
         )
 
-        raw_cards = await self._call_llm_for_cards(prompt, model)
-        if raw_cards is None:
-            return _empty_result()
-        if not isinstance(raw_cards, list):
-            logger.warning("LLM returned non-list cards: %s", type(raw_cards).__name__)
+        output = await self._call_llm_for_cards(prompt, model, openai_client)
+        if output is None:
             return _empty_result()
 
+        raw_cards: list[CardOutput] = output.cards
         verified_cards = self._verify_raw_cards(raw_cards, full_text, chunks, paper_id)
         return self._compute_result(verified_cards, len(raw_cards), title, abstract)

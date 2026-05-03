@@ -1,9 +1,10 @@
 """Structured-extraction + quote-verification Pydantic models."""
 
+import re
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from paper_ingestion.models.papers import Confidence
 
@@ -44,6 +45,13 @@ class ExtractionField(BaseModel):
     label: str
     description: str
     type: str = "text"  # text, number, list
+
+    @field_validator("name")
+    @classmethod
+    def name_must_be_identifier(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", v):
+            raise ValueError(f"Template field name '{v}' must be a valid Python identifier")
+        return v
 
 
 class ExtractionTemplateCreate(BaseModel):

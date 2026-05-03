@@ -1,15 +1,14 @@
 """Tests for the weekly research summary generator."""
 
-import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import respx
 from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.weekly_summary import generate_weekly_summary
+from paper_ingestion.weekly_summary_models import ThemeOutput, WeeklyDigestOutput
 
 
 def _make_paper_row(
@@ -37,11 +36,17 @@ def _make_paper_row(
     }
 
 
-def _llm_response(themes: list[dict], summary: str) -> dict:
-    """Build a mock LiteLLM chat completion response."""
-    return {
-        "choices": [{"message": {"content": json.dumps({"themes": themes, "summary": summary})}}]
-    }
+def _llm_output(themes: list[dict], summary: str) -> WeeklyDigestOutput:
+    """Build a mock WeeklyDigestOutput for call_llm_structured patching."""
+    theme_objects = [
+        ThemeOutput(
+            theme=t["theme"],
+            supporting_papers=t.get("supporting_papers", [1]),
+            notes=t.get("notes") or None,
+        )
+        for t in themes
+    ]
+    return WeeklyDigestOutput(themes=theme_objects, summary=summary)
 
 
 def _make_pool(rows: list) -> MagicMock:
@@ -59,7 +64,6 @@ def _make_pool(rows: list) -> MagicMock:
     return pool
 
 
-@respx.mock
 async def test_generate_weekly_summary_with_synthesis():
     """Digest groups papers by topic and calls LLM for synthesis."""
     rows = [
@@ -72,19 +76,19 @@ async def test_generate_weekly_summary_with_synthesis():
 
     llm_themes = [
         {
-            "theme": "Attention mechanisms dominate",
+            "theme": "Attention mechanisms dominate NLP research",
             "supporting_papers": [1, 2],
             "notes": "",
         }
     ]
-    llm_resp = _llm_response(llm_themes, "NLP is evolving fast.")
-
-    respx.post("http://litellm:4000/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=llm_resp)
-    )
+    mock_output = _llm_output(llm_themes, "NLP is evolving fast.")
 
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7)
+        with patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            AsyncMock(return_value=mock_output),
+        ):
+            result = await generate_weekly_summary(db_pool, client, days=7)
 
     assert result["total_papers"] == 3
     assert len(result["topics"]) == 2
@@ -95,7 +99,7 @@ async def test_generate_weekly_summary_with_synthesis():
     nlp_topic = next(t for t in result["topics"] if t["name"] == "NLP")
     assert nlp_topic["paper_count"] == 2
     assert len(nlp_topic["themes"]) == 1
-    assert nlp_topic["themes"][0]["theme"] == "Attention mechanisms dominate"
+    assert nlp_topic["themes"][0]["theme"] == "Attention mechanisms dominate NLP research"
     assert nlp_topic["summary"] == "NLP is evolving fast."
 
     # CV topic has only 1 paper -- no LLM call, fallback summary
@@ -105,7 +109,6 @@ async def test_generate_weekly_summary_with_synthesis():
     assert "1 papers on CV" in cv_topic["summary"]
 
 
-@respx.mock
 async def test_generate_weekly_summary_empty():
     """Weekly summary handles no engaged papers gracefully with honest empty response."""
     db_pool = _make_pool([])
@@ -120,7 +123,6 @@ async def test_generate_weekly_summary_empty():
     assert "message" in result
 
 
-@respx.mock
 async def test_generate_weekly_summary_llm_failure():
     """Digest returns topics without themes when LLM fails."""
     rows = [
@@ -130,12 +132,12 @@ async def test_generate_weekly_summary_llm_failure():
 
     db_pool = _make_pool(rows)
 
-    respx.post("http://litellm:4000/v1/chat/completions").mock(
-        return_value=httpx.Response(500, text="Internal Server Error")
-    )
-
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7)
+        with patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            AsyncMock(side_effect=RuntimeError("LLM backend error")),
+        ):
+            result = await generate_weekly_summary(db_pool, client, days=7)
 
     assert result["total_papers"] == 2
     assert len(result["topics"]) == 1
@@ -151,7 +153,6 @@ async def test_generate_weekly_summary_llm_failure():
     assert len(nlp_topic["top_papers"]) == 2
 
 
-@respx.mock
 async def test_generate_weekly_summary_top_papers_structure():
     """Top papers contain expected fields."""
     rows = [
@@ -177,29 +178,28 @@ async def test_generate_weekly_summary_top_papers_structure():
     assert paper["relevance_score"] == 0.95
 
 
-async def test_generate_weekly_summary_calls_llm_without_auth_headers():
-    """Weekly summary calls LiteLLM without Authorization headers.
+async def test_generate_weekly_summary_calls_llm_structured():
+    """Weekly summary delegates to call_llm_structured for LLM synthesis.
 
-    LiteLLM runs as a no-auth loopback proxy; auth was removed in Wave 1 of
-    the Round-15 audit.
+    Migrated from call_llm (HTTP) to call_llm_structured (Instructor) in
+    Wave 2.A.2.  Verifies the new path is taken and produces expected output.
     """
     rows = [
         _make_paper_row(1, "Paper A", "NLP", summary_brief="NLP finding A"),
         _make_paper_row(2, "Paper B", "NLP", summary_brief="NLP finding B"),
     ]
     db_pool = _make_pool(rows)
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = _llm_response([], "fallback")
+    mock_output = WeeklyDigestOutput(themes=[], summary="Weekly summary: no themes this period.")
     http_client = AsyncMock()
-    http_client.post.return_value = response
 
-    result = await generate_weekly_summary(db_pool, http_client, days=7)
+    with patch(
+        "paper_ingestion.weekly_summary.call_llm_structured",
+        AsyncMock(return_value=mock_output),
+    ) as mock_structured:
+        result = await generate_weekly_summary(db_pool, http_client, days=7)
 
-    assert result["topics"][0]["summary"] == "fallback"
-    http_client.post.assert_awaited_once()
-    # No auth headers — LiteLLM loopback proxy requires none.
-    assert http_client.post.await_args.kwargs.get("headers", {}) == {}
+    assert result["topics"][0]["summary"] == "Weekly summary: no themes this period."
+    mock_structured.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +325,6 @@ async def test_empty_when_no_engagement():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_weekly_summary_splits_verified_and_unverified_themes():
     """Themes that match the paper corpus land in verified_themes; others in unverified_themes."""
     rows = [
@@ -357,14 +356,15 @@ async def test_weekly_summary_splits_verified_and_unverified_themes():
             "notes": "",
         },
     ]
-    llm_resp = _llm_response(llm_themes, "NLP evolves.")
-    respx.post("http://litellm:4000/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=llm_resp)
-    )
+    mock_output = _llm_output(llm_themes, "NLP evolves this week and beyond.")
 
     verifier = QuoteVerifier()
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
+        with patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            AsyncMock(return_value=mock_output),
+        ):
+            result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
 
     nlp = next(t for t in result["topics"] if t["name"] == "NLP")
     assert "verified_themes" in nlp
@@ -378,7 +378,6 @@ async def test_weekly_summary_splits_verified_and_unverified_themes():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_weekly_summary_no_verifier_treats_all_themes_unverified():
     """With verifier=None, verified_themes is empty and all themes flow to unverified."""
     rows = [
@@ -387,14 +386,17 @@ async def test_weekly_summary_no_verifier_treats_all_themes_unverified():
     ]
     db_pool = _make_pool(rows)
 
-    llm_themes = [{"theme": "Some claim", "supporting_papers": [1, 2], "notes": ""}]
-    llm_resp = _llm_response(llm_themes, "summary")
-    respx.post("http://litellm:4000/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json=llm_resp)
-    )
+    llm_themes = [
+        {"theme": "Some claim about ML findings", "supporting_papers": [1, 2], "notes": ""}
+    ]
+    mock_output = _llm_output(llm_themes, "ML summary overview for this week.")
 
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7)  # no verifier
+        with patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            AsyncMock(return_value=mock_output),
+        ):
+            result = await generate_weekly_summary(db_pool, client, days=7)  # no verifier
 
     ml = result["topics"][0]
     assert ml["verified_themes"] == []
@@ -402,7 +404,6 @@ async def test_weekly_summary_no_verifier_treats_all_themes_unverified():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_weekly_summary_llm_failure_has_empty_theme_splits():
     """When the LLM fails, both verified_themes and unverified_themes should be empty lists."""
     rows = [
@@ -410,13 +411,14 @@ async def test_weekly_summary_llm_failure_has_empty_theme_splits():
         _make_paper_row(2, "Paper B", "NLP", summary_brief="finding B"),
     ]
     db_pool = _make_pool(rows)
-    respx.post("http://litellm:4000/v1/chat/completions").mock(
-        return_value=httpx.Response(500, text="err")
-    )
 
     verifier = QuoteVerifier()
     async with httpx.AsyncClient() as client:
-        result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
+        with patch(
+            "paper_ingestion.weekly_summary.call_llm_structured",
+            AsyncMock(side_effect=RuntimeError("LLM backend error")),
+        ):
+            result = await generate_weekly_summary(db_pool, client, days=7, verifier=verifier)
 
     nlp = result["topics"][0]
     assert nlp["themes"] == []

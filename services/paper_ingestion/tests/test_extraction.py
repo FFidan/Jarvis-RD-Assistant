@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from typing import cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.models import (
@@ -35,6 +35,24 @@ def test_extraction_field_default_type():
     """ExtractionField defaults to text type."""
     f = ExtractionField(name="x", label="X", description="desc")
     assert f.type == "text"
+
+
+def test_extraction_field_name_validator_rejects_invalid():
+    """ExtractionField rejects names that are not valid Python identifiers."""
+    with pytest.raises(Exception, match="valid Python identifier"):
+        ExtractionField(name="bad name", label="Bad", description="d")
+
+
+def test_extraction_field_name_validator_rejects_leading_digit():
+    """ExtractionField rejects names starting with a digit."""
+    with pytest.raises(Exception, match="valid Python identifier"):
+        ExtractionField(name="1bad", label="Bad", description="d")
+
+
+def test_extraction_field_name_validator_accepts_underscore_prefix():
+    """ExtractionField accepts names starting with underscore."""
+    f = ExtractionField(name="_internal", label="Int", description="d")
+    assert f.name == "_internal"
 
 
 def test_template_create_valid():
@@ -202,6 +220,10 @@ def test_build_extraction_prompt_long_text():
 async def test_extract_fields_happy_path():
     """extract_fields_for_paper works end-to-end with mocks."""
     from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
 
@@ -248,21 +270,20 @@ async def test_extract_fields_happy_path():
         {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": '{"methodology": {"value": "survey", "quote": "We used a survey"}}'
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    response_model_cls = _build_extraction_response_model(("methodology",))
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="survey", quote="We used a survey")
+    )
 
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, openai_client=MagicMock()
+        )
     assert result.paper_id == 10
     assert "methodology" in result.extractions
 
@@ -271,6 +292,10 @@ async def test_extract_fields_happy_path():
 async def test_extract_fields_verifier_exception_clears_value_and_quote():
     """AH-002: when verify_quote raises, value AND quote are cleared (not kept unverified)."""
     from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
     mock_cm = AsyncMock()
@@ -314,26 +339,25 @@ async def test_extract_fields_verifier_exception_clears_value_and_quote():
         {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    # LLM returns a value + quote — both should be discarded on verifier crash
-                    "content": '{"methodology": {"value": "hallucinated", "quote": "fake quote"}}'
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    response_model_cls = _build_extraction_response_model(("methodology",))
+    # LLM returns a value + quote — both should be discarded on verifier crash
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="hallucinated", quote="fake quote")
+    )
 
     # Verifier raises instead of returning a VerificationResult
     mock_verifier = MagicMock()
     mock_verifier.verify_quote.side_effect = RuntimeError("verifier crashed")
 
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=mock_verifier)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, verifier=mock_verifier, openai_client=MagicMock()
+        )
 
     ef = result.extractions["methodology"]
     assert ef.value is None, "value must be cleared when verifier raises (AH-002)"
@@ -345,6 +369,10 @@ async def test_extract_fields_verifier_exception_clears_value_and_quote():
 async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fails():
     """Mixed chunk-search outcomes should use full paper context for all fields."""
     from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
 
@@ -394,22 +422,13 @@ async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fail
     ]
     mock_conn.fetch.return_value = chunks
 
+    response_model_cls = _build_extraction_response_model(("methodology", "limitation"))
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="survey", quote="We used a survey"),
+        limitation=ExtractedFieldOutput(value="sample bias", quote="The sample is biased"),
+    )
+
     mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": (
-                        '{"methodology": {"value": "survey", "quote": "We used a survey"}, '
-                        '"limitation": {"value": "sample bias", "quote": "The sample is biased"}}'
-                    )
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
 
     embedder = AsyncMock()
     embedder.search_chunks_in_paper.side_effect = [
@@ -417,9 +436,14 @@ async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fail
         RuntimeError("search failed"),
     ]
 
-    await extract_fields_for_paper(mock_http, mock_pool, 10, 1, embedder=embedder)
+    mock_structured = AsyncMock(return_value=mock_llm_result)
+    with patch("paper_ingestion.extraction.core.call_llm_structured", mock_structured):
+        await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, embedder=embedder, openai_client=MagicMock()
+        )
 
-    prompt = mock_http.post.await_args.kwargs["json"]["messages"][0]["content"]
+    # Extract the prompt that was passed to call_llm_structured
+    prompt = mock_structured.call_args.kwargs["prompt"]
     assert "We used a survey methodology." in prompt
     assert "The sample is biased." in prompt
 
@@ -428,6 +452,10 @@ async def test_extract_fields_falls_back_to_full_text_when_any_chunk_search_fail
 async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncates():
     """Fallback prompts should keep already-matched chunks ahead of truncation."""
     from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
 
@@ -475,22 +503,13 @@ async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncate
     ]
     mock_conn.fetch.return_value = chunks
 
+    response_model_cls = _build_extraction_response_model(("methodology", "limitation"))
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="survey", quote=None),
+        limitation=ExtractedFieldOutput(value="bias", quote=None),
+    )
+
     mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    "content": (
-                        '{"methodology": {"value": "survey", "quote": null}, '
-                        '"limitation": {"value": "bias", "quote": null}}'
-                    )
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
 
     embedder = AsyncMock()
     embedder.search_chunks_in_paper.side_effect = [
@@ -498,9 +517,14 @@ async def test_extract_fields_prioritizes_selected_chunks_when_fallback_truncate
         RuntimeError("search failed"),
     ]
 
-    await extract_fields_for_paper(mock_http, mock_pool, 10, 1, embedder=embedder)
+    mock_structured = AsyncMock(return_value=mock_llm_result)
+    with patch("paper_ingestion.extraction.core.call_llm_structured", mock_structured):
+        await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, embedder=embedder, openai_client=MagicMock()
+        )
 
-    prompt = mock_http.post.await_args.kwargs["json"]["messages"][0]["content"]
+    # Extract the prompt that was passed to call_llm_structured
+    prompt = mock_structured.call_args.kwargs["prompt"]
     assert selected_text in prompt
 
 
@@ -690,6 +714,10 @@ def test_build_extraction_prompt_escapes_injection_in_name_and_type():
 async def test_extract_fields_no_verifier_returns_zero_confidence():
     """PI-CORE-007: confidence must be 0.0 (not 0.5) when verifier=None, even if LLM supplies a quote."""
     from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
 
     mock_conn = AsyncMock()
     mock_cm = AsyncMock()
@@ -733,24 +761,22 @@ async def test_extract_fields_no_verifier_returns_zero_confidence():
         {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
     ]
 
-    mock_http = AsyncMock()
-    mock_response = MagicMock()
-    mock_response.json.return_value = {
-        "choices": [
-            {
-                "message": {
-                    # LLM returns a non-null quote — without a verifier this must NOT
-                    # produce confidence=0.5.  PI-CORE-007 demands confidence=0.0.
-                    "content": '{"methodology": {"value": "survey", "quote": "We used a survey"}}'
-                }
-            }
-        ]
-    }
-    mock_response.raise_for_status = MagicMock()
-    mock_http.post.return_value = mock_response
+    response_model_cls = _build_extraction_response_model(("methodology",))
+    # LLM returns a non-null quote — without a verifier this must NOT produce confidence=0.5
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="survey", quote="We used a survey")
+    )
 
-    # Pass verifier=None explicitly — this is the PI-CORE-007 scenario.
-    result = await extract_fields_for_paper(mock_http, mock_pool, 10, 1, verifier=None)
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        # Pass verifier=None explicitly — this is the PI-CORE-007 scenario.
+        result = await extract_fields_for_paper(
+            mock_http, mock_pool, 10, 1, verifier=None, openai_client=MagicMock()
+        )
 
     ef = result.extractions["methodology"]
     assert ef.verified is False, "Unverified field must have verified=False"

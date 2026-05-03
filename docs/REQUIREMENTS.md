@@ -287,7 +287,7 @@ The cross-encoder reranker is an optional heavy dependency gated by two flags:
 1. **Build flag**: `INSTALL_OPTIONAL=true docker compose build paper_ingestion` installs `sentence-transformers`, `optimum[onnxruntime]`, and `onnxruntime` from `services/paper_ingestion/requirements-optional.txt`.
 2. **Runtime flag**: `RERANKER_ENABLED=true` in `.env` activates the reranker at startup via `_HAS_RERANKER` import guard in `paper_ingestion/ingestion/reranker.py`.
 
-Without these flags the service starts normally and falls back to RRF-only ranking. The reranker model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) is downloaded from HuggingFace Hub on first use.
+Without these flags the service starts normally and falls back to RRF-only ranking. The reranker model (`mixedbread-ai/mxbai-rerank-base-v2`) is downloaded from HuggingFace Hub on first use. Note: this model is ~280 MB (vs ~22 MB for the previous ms-marco-MiniLM-L-6-v2 default) — a first-run download spike is expected.
 
 ## Migration History (024-043)
 

@@ -1,13 +1,29 @@
 """Shared LiteLLM request helpers for paper-ingestion modules and scripts."""
 
-import json
 import logging
 import os
 import re
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import httpx
+from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    import openai
+
+try:
+    from langfuse.decorators import observe
+except ImportError:
+
+    def observe(**kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator
+
+
+T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
@@ -127,77 +143,87 @@ async def request_chat_completion_content(
     return strip_think_blocks(raw)
 
 
-async def call_llm_json_value(
-    http_client: httpx.AsyncClient,
-    prompt: str,
+@observe(as_type="generation")
+async def call_llm_structured(
+    openai_client: "openai.AsyncOpenAI",
     *,
+    response_model: type[T],
+    prompt: str | None = None,
+    messages: list[dict[str, str]] | None = None,
     options: ChatCompletionOptions | None = None,
-    response_format: dict[str, str] | None = None,
     config: LiteLLMConfig | None = None,
-    allow_scalar: bool = False,
-) -> Any:
-    """Call LiteLLM and parse the response content as JSON.
+    max_retries: int = 2,
+) -> T:
+    """Structured LLM call via Instructor. Returns a validated Pydantic instance.
 
     Parameters
     ----------
-    allow_scalar:
-        When ``False`` (default), only JSON objects (``{``) and arrays (``[``)
-        are accepted — matches the legacy strict behaviour.  When ``True``,
-        scalar JSON values (``true``, ``false``, ``null``, numbers) are also
-        accepted.  Use this for prompts that intentionally return a single value
-        rather than a structured object.
+    openai_client:
+        An ``openai.AsyncOpenAI`` client patched with ``instructor.from_openai``.
+        Build once in the service lifespan (see ``_langfuse_lifespan_hook``).
+    response_model:
+        Pydantic model class that defines the expected response shape.
+    prompt:
+        Convenience shorthand for a single user-role message.  Mutually
+        exclusive with ``messages``.
+    messages:
+        Full message list (system + user).  If both ``prompt`` and ``messages``
+        are provided, ``prompt`` is appended as a final user message.
+    options:
+        Model / token / temperature options.  Defaults to ChatCompletionOptions().
+    config:
+        LiteLLM config; defaults to env-resolved config.
+    max_retries:
+        Instructor retry budget (default 2).
     """
-    resolved_options = options or ChatCompletionOptions()
-    if response_format is not None:
-        resolved_options = resolved_options.with_response_format(response_format)
-    raw = await request_chat_completion_content(
-        http_client,
-        prompt=prompt,
-        options=resolved_options,
-        config=config,
+    import instructor  # noqa: PLC0415
+    from instructor import Mode  # noqa: PLC0415
+
+    _options = options or ChatCompletionOptions()
+    _config = config or get_litellm_config()
+    _messages: list[dict[str, str]] = list(messages) if messages else []
+    if prompt:
+        if _options.system and not _messages:
+            _messages = [{"role": "system", "content": _options.system}]
+        _messages = _messages + [{"role": "user", "content": prompt}]
+    elif not _messages:
+        raise ValueError("Either prompt or messages must be provided")
+
+    client = instructor.from_openai(openai_client, mode=Mode.JSON)
+    return await client.chat.completions.create(
+        model=_options.model or _config.base_url,
+        response_model=response_model,
+        messages=_messages,  # type: ignore[arg-type]
+        max_tokens=_options.max_tokens,
+        temperature=_options.temperature,
+        max_retries=max_retries,
     )
-    stripped = raw.strip()
-    _is_object_or_array = stripped and stripped[0] in ("{", "[")
-    _is_scalar = (
-        allow_scalar
-        and stripped
-        and (
-            stripped[0] in ("-", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
-            or stripped in ("true", "false", "null")
-        )
-    )
-    if not (_is_object_or_array or _is_scalar):
-        raise ValueError(
-            f"LLM returned non-JSON content (expected '{{' or '[', got {stripped[:50]!r})"
-        )
+
+
+def _langfuse_lifespan_hook() -> None:
+    """Initialize Langfuse SDK. Call once at app startup.
+
+    No-op (logs info) if ``LANGFUSE_HOST`` is not set — local dev without the
+    ``--profile observability`` stack should not crash on missing env vars.
+    """
+    host = os.environ.get("LANGFUSE_HOST")
+    if not host:
+        logger.info("LANGFUSE_HOST unset; Langfuse traces will no-op")
+        return
     try:
-        return json.loads(stripped)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM returned invalid JSON: {raw[:200]}") from exc
+        from langfuse import Langfuse  # noqa: PLC0415
+
+        Langfuse(
+            host=host,
+            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+        )
+        logger.info("Langfuse configured, tracing to %s", host)
+    except Exception as exc:
+        logger.warning("Langfuse init failed (non-fatal): %s", exc)
 
 
-async def call_llm(
-    http_client: httpx.AsyncClient,
-    prompt: str,
-    *,
-    options: ChatCompletionOptions | None = None,
-    config: LiteLLMConfig | None = None,
-) -> dict[str, Any]:
-    """Call LiteLLM and parse JSON response, stripping thinking-model artifacts."""
-    resolved_options = options or ChatCompletionOptions()
-    if resolved_options.response_format is None:
-        resolved_options = resolved_options.with_response_format({"type": "json_object"})
-    parsed = await call_llm_json_value(
-        http_client,
-        prompt,
-        options=resolved_options,
-        config=config,
-    )
-    if not isinstance(parsed, dict):
-        raise ValueError("LiteLLM returned non-object JSON for an object-only request")
-    return parsed
-
-
+@observe(as_type="generation")
 async def embed_texts(
     http_client: httpx.AsyncClient,
     texts: list[str],

@@ -12,9 +12,12 @@ This is the Model C (Complementary) guarantee: Weekly Summary reflects
 what the user actually engaged with, not the full Pulse candidate firehose.
 """
 
+from __future__ import annotations
+
 import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 import asyncpg
 import httpx
@@ -23,13 +26,28 @@ from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
     LiteLLMConfig,
-    call_llm,
+    call_llm_structured,
     get_litellm_config,
 )
 from jarvis_common.prompt_safety import escape_llm_text
 from jarvis_common.time_utils import utc_now_iso
 
 from paper_ingestion.extraction.verify import QuoteVerifier
+from paper_ingestion.weekly_summary_models import WeeklyDigestOutput
+
+if TYPE_CHECKING:
+    import openai
+
+try:
+    from langfuse.decorators import observe
+except ImportError:  # pragma: no cover — langfuse optional in test env
+
+    def observe(**kwargs):  # type: ignore[misc]
+        def _decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return _decorator
+
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +78,7 @@ Respond in JSON format:
 """
 
 
+@observe()
 async def generate_weekly_summary(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -67,6 +86,7 @@ async def generate_weekly_summary(
     days: int = 7,
     verifier: QuoteVerifier | None = None,
     user_id: int | None = None,
+    openai_client: openai.AsyncOpenAI | None = None,
 ) -> dict:
     """Generate per-topic digests for papers the user engaged with in the lookback window.
 
@@ -78,12 +98,20 @@ async def generate_weekly_summary(
     Papers passively surfaced by Pulse but never acted on are excluded,
     preventing the Weekly Summary from becoming a noise-generator.
 
+    Each topic that meets the >=2 paper threshold produces one child
+    ``generation`` span via ``call_llm_structured``; the outer ``@observe()``
+    collects them all under a single ``generate_weekly_summary`` trace.
+
     Parameters
     ----------
     user_id:
         When provided, restricts ``paper_user_state`` and ``recommendation_feedback``
         lookups to the given user.  ``None`` (default) aggregates across all
         users, preserving backwards-compatible global behaviour.
+    openai_client:
+        Instructor-patched ``openai.AsyncOpenAI`` client for structured calls.
+        When provided, ``call_llm_structured`` is used.  Pass
+        ``app.state.openai_client`` from the service lifespan.
     """
     litellm_config = get_litellm_config()
     if litellm_url is not None:
@@ -175,9 +203,10 @@ async def generate_weekly_summary(
 
         if len(papers) >= 2:
             try:
-                llm_data = await call_llm(
-                    http_client,
-                    DIGEST_PROMPT.format(
+                llm_data = await call_llm_structured(
+                    openai_client,  # type: ignore[arg-type]
+                    response_model=WeeklyDigestOutput,
+                    prompt=DIGEST_PROMPT.format(
                         count=len(papers[:10]),
                         topic=escape_llm_text(topic_name),
                         papers_context=papers_context,
@@ -190,10 +219,12 @@ async def generate_weekly_summary(
                     ),
                     config=litellm_config,
                 )
-                themes = llm_data.get("themes", [])
-                summary = llm_data.get("summary", summary)
+                # Convert ThemeOutput objects to dicts for backward-compatible output.
+                themes = [t.model_dump() for t in llm_data.themes]
+                summary = llm_data.summary
             except Exception:
                 # weekly_summary generation degrades to the default summary if synthesis fails.
+                # pydantic.ValidationError is caught here (no special handling needed).
                 logger.exception("LLM weekly_summary generation failed for topic %s", topic_name)
 
         top_papers = [

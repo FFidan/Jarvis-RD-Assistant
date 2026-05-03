@@ -13,12 +13,24 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common import escape_like, get_fast_model
-from jarvis_common.llm_client import ChatCompletionOptions, call_llm
+from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured
 from jarvis_common.prompt_safety import wrap_delimited
 
 from paper_ingestion.converters import row_to_chunk_response
+from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import EntityExtractionResponse
+
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
 
 logger = logging.getLogger(__name__)
 
@@ -252,12 +264,14 @@ async def _find_or_create_entity(
     return entity_id, False
 
 
+@observe()
 async def extract_entities_for_paper(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,
     paper_id: int,
     embedder: Any | None = None,
     qdrant_client: Any | None = None,
+    openai_client: Any | None = None,
 ) -> EntityExtractionResponse:
     """Extract and persist entities and relationships for one paper."""
     async with db_pool.acquire() as conn:
@@ -284,20 +298,26 @@ async def extract_entities_for_paper(
     llm_text = full_text[:12000] if len(full_text) > 12000 else full_text
 
     prompt = build_entity_prompt(paper["title"], llm_text)
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    _openai_client = openai_client if openai_client is not None else svc.openai_client
+    if _openai_client is None:
+        raise RuntimeError(
+            "openai_client not initialized — check _init_langfuse_hook ran during lifespan"
+        )
     try:
-        llm_result = await call_llm(
-            http_client,
-            prompt,
+        llm_result = await call_llm_structured(
+            _openai_client,
+            response_model=KGExtractionOutput,
+            prompt=prompt,
             options=ChatCompletionOptions(model=fast_model),
         )
     except Exception:
         logger.exception("Entity extraction LLM call failed for paper %d", paper_id)
         raise
 
-    entities_data = llm_result.get("entities", [])
-    relationships_data = llm_result.get("relationships", [])
-
-    valid_types = {"method", "dataset", "metric", "author", "institution", "concept"}
+    entities_data = llm_result.entities
+    relationships_data = llm_result.relationships
 
     entities_added = 0
     entities_merged = 0
@@ -310,13 +330,11 @@ async def extract_entities_for_paper(
     # --- Phase 1: validate and pre-embed entities (no DB connection held) ---
     valid_entities: list[dict] = []
     for ent in entities_data:
-        if not isinstance(ent, dict):
+        name = ent.name.strip()
+        etype = ent.type  # already validated by Literal
+        if not name:
             continue
-        name = (ent.get("name") or "").strip()
-        etype = (ent.get("type") or "").strip().lower()
-        if not name or etype not in valid_types:
-            continue
-        valid_entities.append({"name": name, "type": etype, "description": ent.get("description")})
+        valid_entities.append({"name": name, "type": etype, "description": ent.description})
 
     # Pre-compute embeddings and similarity matches outside DB connection scope
     # so that long-running HTTP calls do not hold a database connection (PI-006).
@@ -377,12 +395,10 @@ async def extract_entities_for_paper(
             )
 
         for rel in relationships_data:
-            if not isinstance(rel, dict):
-                continue
-            source_name = (rel.get("source") or "").strip().lower()
-            target_name = (rel.get("target") or "").strip().lower()
-            rel_type = (rel.get("type") or "").strip()
-            evidence = rel.get("evidence")
+            source_name = rel.source.strip().lower()
+            target_name = rel.target.strip().lower()
+            rel_type = rel.type
+            evidence = rel.evidence
 
             source_id = entity_map.get(source_name)
             target_id = entity_map.get(target_name)
@@ -390,10 +406,7 @@ async def extract_entities_for_paper(
             if not source_id or not target_id or not rel_type:
                 continue
 
-            try:
-                confidence = float(rel.get("confidence", 1.0))
-            except (ValueError, TypeError):
-                confidence = 1.0
+            confidence = rel.confidence
 
             # --- Anti-hallucination: verify evidence quote before persisting ---
             vr = None

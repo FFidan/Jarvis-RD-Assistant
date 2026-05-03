@@ -79,6 +79,32 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
+async def _init_langfuse_hook(app: FastAPI) -> None:
+    """Initialize Langfuse SDK and Instructor-patched OpenAI client.
+
+    No-op when LANGFUSE_HOST is unset — local dev without --profile observability.
+    Attaches ``app.state.openai_client`` (and ``svc.openai_client``) for use by
+    ``call_llm_structured`` in request handlers and job workers.
+    """
+    import instructor  # noqa: PLC0415
+    import openai  # noqa: PLC0415
+    from jarvis_common.llm_client import _langfuse_lifespan_hook  # noqa: PLC0415
+
+    from paper_ingestion._state import svc  # noqa: PLC0415
+
+    _langfuse_lifespan_hook()
+    litellm_config = get_litellm_config()
+    openai_client = instructor.from_openai(
+        openai.AsyncOpenAI(
+            base_url=f"{litellm_config.base_url}/v1",
+            api_key="dummy",
+        ),
+        mode=instructor.Mode.JSON,
+    )
+    app.state.openai_client = openai_client
+    svc.openai_client = openai_client
+
+
 async def _warn_multitenant_stub(app: FastAPI) -> None:
     """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
     if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
@@ -243,6 +269,7 @@ _lifespan_config = ServiceLifespanConfig(
     },
     jobs_worker_kinds=_PAPER_INGESTION_JOB_KINDS,
     custom_init_tasks=[
+        _init_langfuse_hook,
         _warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
@@ -254,6 +281,7 @@ _lifespan_config = ServiceLifespanConfig(
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
+        None,  # _init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _warn_multitenant_stub
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
@@ -296,6 +324,7 @@ from paper_ingestion.routers import (  # noqa: E402
     feed,
     jobs,
     knowledge_graph,
+    my_day,
     notes,
     papers,
     pdf,
@@ -324,6 +353,7 @@ app.include_router(extractions.router)
 app.include_router(knowledge_graph.router)
 app.include_router(dashboard_api.router)
 app.include_router(analyze.router)
+app.include_router(my_day.router)
 app.include_router(notes.router)
 app.include_router(priority.router)
 app.include_router(recommendations.router)

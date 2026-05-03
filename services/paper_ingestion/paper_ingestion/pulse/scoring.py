@@ -10,16 +10,41 @@ import logging
 import math
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+import pydantic
 from jarvis_common.llm_client import (
     ChatCompletionOptions,
-    call_llm,
+    call_llm_structured,
 )
+
+try:
+    from langfuse.decorators import observe
+except ImportError:
+
+    def observe(**kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator
+
+
+try:
+    from instructor.core import InstructorRetryException
+except ImportError:
+    try:
+        from instructor.exceptions import InstructorRetryException  # type: ignore[no-redef]
+    except ImportError:
+        InstructorRetryException = Exception  # type: ignore[misc,assignment]
+
+
+if TYPE_CHECKING:
+    import openai
 
 from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import PaperCreate
+from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.prompts import build_scoring_prompt
 from paper_ingestion.pulse.verification import verify_pulse_reasoning
@@ -222,11 +247,13 @@ async def stage1_embedding_filter(
 # ---------------------------------------------------------------------------
 
 
+@observe()
 async def stage2_llm_rerank(
     stage1_out: list[ScoredCandidate],
     profile: UserProfile,
     http_client: httpx.AsyncClient,
     verifier: QuoteVerifier | None = None,
+    openai_client: "openai.AsyncOpenAI | None" = None,
 ) -> list[ScoredCandidate]:
     """Score each candidate via LLM with bounded concurrency.
 
@@ -237,13 +264,18 @@ async def stage2_llm_rerank(
     profile:
         UserProfile providing topic context and rating history.
     http_client:
-        Shared httpx.AsyncClient for LiteLLM requests.
+        Shared httpx.AsyncClient for LiteLLM requests (kept for back-compat).
     verifier:
         Optional :class:`QuoteVerifier` used to check the LLM-generated
         reasoning against the candidate's title+abstract.  When ``None``
         (legacy callers / tests) the verification step is skipped and each
         ``ScoredCandidate`` keeps ``reasoning_verified=None`` +
         ``reasoning_confidence=None``.
+    openai_client:
+        Instructor-patched ``openai.AsyncOpenAI`` client for structured calls.
+        When provided, ``call_llm_structured`` is used instead of the legacy
+        ``call_llm`` path.  Pass ``app.state.openai_client`` from the service
+        lifespan.
 
     Returns
     -------
@@ -267,30 +299,20 @@ async def stage2_llm_rerank(
                     negative_authors=profile.negative_authors,
                     candidate=sc.paper,
                 )
-                # Extract system and user content to pass via proper roles.
-                system_msg = next(
-                    (m["content"] for m in scoring_messages if m["role"] == "system"), None
-                )
-                user_msg = next(m["content"] for m in scoring_messages if m["role"] == "user")
                 options = ChatCompletionOptions(
                     model=_LLM_MODEL,
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
-                    response_format={"type": "json_object"},
-                    system=system_msg,
                 )
-                parsed = await call_llm(
-                    http_client,
-                    user_msg,
+                output: PulseScoringOutput = await call_llm_structured(
+                    openai_client,  # type: ignore[arg-type]
+                    response_model=PulseScoringOutput,
+                    messages=scoring_messages,
                     options=options,
                 )
-                relevance = int(parsed["relevance"])
-                novelty = int(parsed["novelty"])
-                reasoning = str(parsed.get("reasoning", ""))
-
-                # Clamp to valid range
-                relevance = max(1, min(10, relevance))
-                novelty = max(1, min(10, novelty))
+                relevance = output.relevance
+                novelty = output.novelty
+                reasoning = output.reasoning
 
                 new_signals = dict(sc.signals)
                 new_signals["llm_relevance"] = relevance / 10.0
@@ -317,7 +339,15 @@ async def stage2_llm_rerank(
                     reasoning_verified=reasoning_verified,
                     reasoning_confidence=reasoning_confidence,
                 )
-            except (ValueError, RuntimeError, httpx.HTTPError, KeyError, TypeError):
+            except (
+                ValueError,
+                RuntimeError,
+                httpx.HTTPError,
+                KeyError,
+                TypeError,
+                pydantic.ValidationError,
+                InstructorRetryException,
+            ):
                 logger.warning("stage2: LLM scoring failed for %r", sc.paper.title, exc_info=True)
                 return ScoredCandidate(
                     paper=sc.paper,

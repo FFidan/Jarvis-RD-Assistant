@@ -8,12 +8,13 @@ containing those same braces.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 from jarvis_common.llm_client import LiteLLMConfig
 from learning_engine.card_generator import CardGenerator
+from learning_engine.card_models import CardGenerationOutput, CardOutput
 
 
 def _make_generator() -> tuple[CardGenerator, AsyncMock]:
@@ -24,6 +25,11 @@ def _make_generator() -> tuple[CardGenerator, AsyncMock]:
         litellm_config=LiteLLMConfig(base_url="http://litellm:4000"),
     )
     return generator, http_client
+
+
+def _make_openai_client() -> MagicMock:
+    """Return a mock openai.AsyncOpenAI client."""
+    return MagicMock()
 
 
 @pytest.mark.asyncio
@@ -46,21 +52,24 @@ async def test_card_with_brace_quote_passes_verification() -> None:
     # LLM returns a card whose quote is a verbatim substring of paper_text,
     # including literal braces (as the LLM would actually return them).
     generator._call_llm_for_cards = AsyncMock(
-        return_value=[
-            {
-                "card_type": "concept",
-                "front": "What is the feasible set?",
-                "back": "The set of all x satisfying Ax = b within ℝⁿ.",
-                "evidence_quote": "{x ∈ ℝⁿ | Ax = b}",
-                "page_number": 1,
-            }
-        ]
+        return_value=CardGenerationOutput(
+            cards=[
+                CardOutput(
+                    card_type="concept",
+                    front="What is the feasible set?",
+                    back="The set of all x satisfying Ax = b within ℝⁿ.",
+                    evidence_quote="x ∈ {x ∈ ℝⁿ | Ax = b}",
+                    page_number=1,
+                )
+            ]
+        )
     )
 
     result = await generator.generate_cards(
         title="Convex Optimisation",
         authors=["Author A"],
         chunks=chunks,
+        openai_client=_make_openai_client(),
         paper_id=None,
         abstract="Abstract text.",
     )
@@ -91,8 +100,8 @@ async def test_full_text_with_braces_does_not_crash_format() -> None:
     """
     generator, _ = _make_generator()
 
-    # Simulate the LLM returning an empty list (all quotes fail, or none generated)
-    generator._call_llm_for_cards = AsyncMock(return_value=[])
+    # Simulate the LLM returning None (parse failure / all quotes fail)
+    generator._call_llm_for_cards = AsyncMock(return_value=None)
 
     chunks_with_braces = [
         {
@@ -107,10 +116,11 @@ async def test_full_text_with_braces_does_not_crash_format() -> None:
         title="Optimisation with Braces",
         authors=["Dr. Brace"],
         chunks=chunks_with_braces,
+        openai_client=_make_openai_client(),
         paper_id=None,
         abstract="Abstract without braces.",
     )
 
-    # With an empty LLM result the pipeline falls back to the abstract card
+    # With a None LLM result the pipeline returns _empty_result()
     assert isinstance(result, dict)
     assert "cards" in result

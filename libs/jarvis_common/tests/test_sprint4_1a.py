@@ -2,7 +2,6 @@
 
 Covers:
 - JC-005: validated_model_with_reason surfaces fallback reason
-- JC-006: call_llm_json_value allow_scalar parameter
 - SEC-107: validation_exception_handler redacts loc in production
 - SEC-108: current_user_id_or_none still returns None; assert_multi_tenant raises
 """
@@ -10,7 +9,7 @@ Covers:
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -77,96 +76,6 @@ class TestValidatedModelWithReason:
     def test_exported_from_jarvis_common_top_level(self) -> None:
         """validated_model_with_reason must be importable from jarvis_common directly."""
         from jarvis_common import validated_model_with_reason  # noqa: F401
-
-
-# ---------------------------------------------------------------------------
-# JC-006 — call_llm_json_value allow_scalar parameter
-# ---------------------------------------------------------------------------
-
-
-def _make_http_client_with_content(content: str) -> AsyncMock:
-    """Return a mock AsyncClient whose POST returns the given content string."""
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = {"choices": [{"message": {"content": content}}]}
-    http_client = AsyncMock()
-    http_client.post.return_value = response
-    return http_client
-
-
-_config = None  # lazy import inside tests
-
-
-@pytest.mark.asyncio
-async def test_call_llm_json_value_accepts_scalar_when_opted_in() -> None:
-    """allow_scalar=True must accept scalar JSON values like integers and booleans."""
-    from jarvis_common import llm_client
-
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
-
-    # Integer scalar
-    client = _make_http_client_with_content("42")
-    result = await llm_client.call_llm_json_value(
-        client, "How many?", config=config, allow_scalar=True
-    )
-    assert result == 42
-
-    # Boolean scalar
-    client = _make_http_client_with_content("true")
-    result = await llm_client.call_llm_json_value(
-        client, "Is it?", config=config, allow_scalar=True
-    )
-    assert result is True
-
-    # null scalar
-    client = _make_http_client_with_content("null")
-    result = await llm_client.call_llm_json_value(
-        client, "Anything?", config=config, allow_scalar=True
-    )
-    assert result is None
-
-    # Negative number
-    client = _make_http_client_with_content("-7")
-    result = await llm_client.call_llm_json_value(
-        client, "Delta?", config=config, allow_scalar=True
-    )
-    assert result == -7
-
-
-@pytest.mark.asyncio
-async def test_call_llm_json_value_rejects_scalar_by_default() -> None:
-    """Without allow_scalar=True, scalar responses must still raise ValueError."""
-    from jarvis_common import llm_client
-
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
-    client = _make_http_client_with_content("42")
-
-    with pytest.raises(ValueError, match="non-JSON content"):
-        await llm_client.call_llm_json_value(client, "How many?", config=config)
-
-
-@pytest.mark.asyncio
-async def test_call_llm_json_value_still_accepts_object() -> None:
-    """allow_scalar=False must still accept JSON objects (no regression)."""
-    from jarvis_common import llm_client
-
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
-    client = _make_http_client_with_content('{"key": "value"}')
-
-    result = await llm_client.call_llm_json_value(client, "Give me object", config=config)
-    assert result == {"key": "value"}
-
-
-@pytest.mark.asyncio
-async def test_call_llm_json_value_still_accepts_array() -> None:
-    """allow_scalar=False must still accept JSON arrays (no regression)."""
-    from jarvis_common import llm_client
-
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
-    client = _make_http_client_with_content("[1, 2, 3]")
-
-    result = await llm_client.call_llm_json_value(client, "Give me array", config=config)
-    assert result == [1, 2, 3]
 
 
 # ---------------------------------------------------------------------------

@@ -189,7 +189,11 @@ async def run_pulse(
                 for _batch_start in range(0, _stage2_total, _stage2_batch_size):
                     batch = stage1_out[_batch_start : _batch_start + _stage2_batch_size]
                     batch_results = await stage2_llm_rerank(
-                        batch, profile, http_client, verifier=svc.verifier
+                        batch,
+                        profile,
+                        http_client,
+                        verifier=svc.verifier,
+                        openai_client=svc.openai_client,
                     )
                     all_results.extend(batch_results)
                     _scored_so_far = len(all_results)

@@ -28,6 +28,17 @@ if TYPE_CHECKING:
     from paper_ingestion.extraction.verify import QuoteVerifier
     from paper_ingestion.ingestion.embedder import Embedder
 
+try:
+    from langfuse.decorators import observe  # type: ignore[import-untyped]
+except ImportError:  # pragma: no cover
+
+    def observe(*args, **kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator if args and callable(args[0]) else decorator
+
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -303,6 +314,7 @@ async def prepare_cross_paper_rag(
 # ---------------------------------------------------------------------------
 
 
+@observe(as_type="generation")
 async def stream_rag_events(
     http_client: httpx.AsyncClient,
     messages: list[dict],

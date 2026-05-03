@@ -404,7 +404,12 @@ async def _digest_weekly_job(
     user_id: int | None = payload.get("user_id")
     await ctx.update_progress(0.1, "Generating weekly digest")
     digest = await generate_weekly_summary(
-        pool, http_client, days=days, verifier=verifier, user_id=user_id
+        pool,
+        http_client,
+        days=days,
+        verifier=verifier,
+        user_id=user_id,
+        openai_client=svc.openai_client,
     )
     await ctx.update_progress(1.0, "Done")
     return digest

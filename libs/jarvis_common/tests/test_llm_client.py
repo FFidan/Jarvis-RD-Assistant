@@ -8,62 +8,6 @@ import pytest
 from jarvis_common import llm_client
 
 
-@pytest.mark.asyncio
-async def test_call_llm_posts_expected_payload(monkeypatch):
-    """call_llm should send the standard JSON-object completion payload (no auth headers)."""
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = {"choices": [{"message": {"content": '{"answer": "ok"}'}}]}
-    http_client = AsyncMock()
-    http_client.post.return_value = response
-    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
-
-    result = await llm_client.call_llm(
-        http_client,
-        "Summarize this.",
-        options=llm_client.ChatCompletionOptions(
-            model="fast",
-            max_tokens=123,
-            temperature=0.2,
-        ),
-        config=config,
-    )
-
-    assert result == {"answer": "ok"}
-    http_client.post.assert_awaited_once_with(
-        "http://litellm.test:4000/v1/chat/completions",
-        json={
-            "model": "fast",
-            "messages": [{"role": "user", "content": "Summarize this."}],
-            "max_tokens": 123,
-            "temperature": 0.2,
-            "response_format": {"type": "json_object"},
-        },
-        headers={},
-        timeout=120.0,
-    )
-
-
-@pytest.mark.asyncio
-async def test_call_llm_strips_think_blocks(monkeypatch):
-    """call_llm should remove thinking-model markup before JSON parsing."""
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = {
-        "choices": [{"message": {"content": '<think>hidden</think>\n{"answer":"clean"}'}}]
-    }
-    http_client = AsyncMock()
-    http_client.post.return_value = response
-
-    result = await llm_client.call_llm(
-        http_client,
-        "Summarize this.",
-        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
-    )
-
-    assert result == {"answer": "clean"}
-
-
 def test_get_litellm_config_reads_base_url_from_env(monkeypatch):
     """get_litellm_config should resolve LITELLM_BASE_URL from environment."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
@@ -164,27 +108,6 @@ async def test_request_chat_completion_content_forwards_response_format():
         headers={},
         timeout=45.0,
     )
-
-
-@pytest.mark.asyncio
-async def test_call_llm_json_value_parses_array_payload():
-    """call_llm_json_value should support non-object JSON payloads."""
-    response = MagicMock()
-    response.raise_for_status = MagicMock()
-    response.json.return_value = {
-        "choices": [{"message": {"content": '<think>ignore</think>\n["a", "b"]'}}]
-    }
-    http_client = AsyncMock()
-    http_client.post.return_value = response
-
-    result = await llm_client.call_llm_json_value(
-        http_client,
-        "Decompose this.",
-        options=llm_client.ChatCompletionOptions(),
-        config=llm_client.LiteLLMConfig(base_url="http://litellm.test:4000"),
-    )
-
-    assert result == ["a", "b"]
 
 
 @pytest.mark.asyncio

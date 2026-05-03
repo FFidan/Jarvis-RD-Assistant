@@ -2,6 +2,23 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.6.0] — 2026-05-03
+
+### Added (B.1 + B.2 — Instructor + Langfuse)
+- **Structured LLM output** via [Instructor](https://github.com/jxnl/instructor) across all call sites: `extraction/core.py`, `extraction/entities.py`, `pulse/scoring.py`, `services/contradictions.py`, `weekly_summary.py`, `card_generator.py`, `rag/decomposition.py`. All LLM responses are now validated Pydantic models — no more `dict.get()` on raw JSON.
+- **Langfuse tracing** (`@observe()` decorators) on all structured LLM calls and `stream_rag_events`. Activate with `--profile observability` (`docker compose --profile observability up`).
+- `call_llm_structured` in `jarvis_common.llm_client` — single entrypoint for all structured calls (Instructor + Langfuse integrated).
+- Dynamic extraction response models (`_build_extraction_response_model`) built and cached per template field tuple.
+- `KGExtractionOutput`, `PulseScoringOutput`, `WeeklyDigestOutput`, `ContradictionClassification`, `CardGenerationOutput` — typed Pydantic output models replacing free-form dicts.
+
+### Removed (BREAKING — internal API)
+- `call_llm` and `call_llm_json_value` deleted from `jarvis_common.llm_client` and `jarvis_common.__init__`. Replace all callers with `call_llm_structured` (structured) or `request_chat_completion_content` (raw string).
+
+## [1.5.1] — 2026-05-02
+
+### Changed
+- **B.3** Replace default reranker model with `mixedbread-ai/mxbai-rerank-base-v2` (outperforms ms-marco-MiniLM-L-6-v2 on BEIR benchmark at same latency). First-run download ~280 MB.
+
 ## [1.5.0] - 2026-05-02 — Contracts Wave 1 (settings cleanup + Pulse tuning + UX polish)
 
 Phase-A continuation per [docs/plans/2026-05-02-contracts-settings-and-ux.md](plans/2026-05-02-contracts-settings-and-ux.md). 6 commits on `feat/contract-impl-wave-1` (`75ffd80..50941c1`) + 2 carryover follow-up commits (`0b732b6` star transition guard, `18457d4` slider fallback). All 4 evergreen contracts at [docs/contracts/](contracts/) refreshed with the now-resolved dispositions for the GHOST/PARTIAL/ANOMALY tail.

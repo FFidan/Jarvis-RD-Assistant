@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import asyncpg
 import httpx
@@ -18,10 +18,24 @@ from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
     ChatCompletionOptions,
-    call_llm,
+    call_llm_structured,
     get_litellm_config,
 )
 from jarvis_common.prompt_safety import wrap_delimited
+
+if TYPE_CHECKING:
+    import openai
+
+try:
+    from langfuse.decorators import observe
+except ImportError:
+
+    def observe(**kwargs):  # type: ignore[misc]
+        def decorator(fn):  # type: ignore[misc]
+            return fn
+
+        return decorator
+
 
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.extraction.verify import QuoteVerifier
@@ -29,6 +43,7 @@ from paper_ingestion.models import (
     ChunkResponse,
     PaperContradictionResponse,
 )
+from paper_ingestion.services.contradiction_models import ContradictionClassification
 
 logger = logging.getLogger(__name__)
 
@@ -428,7 +443,7 @@ async def _quotes_verify(
 async def _persist_contradiction(
     conn: ConnLike,
     candidate: ContradictionCandidate,
-    parsed: dict[str, Any],
+    parsed: ContradictionClassification,
     *,
     page_a: int | None,
     page_b: int | None,
@@ -436,14 +451,11 @@ async def _persist_contradiction(
 ) -> int | None:
     paper_a = candidate.a
     paper_b = candidate.b
-    quote_a = str(parsed["quote_a"]).strip()
-    quote_b = str(parsed["quote_b"]).strip()
-    contradiction_type = str(parsed.get("contradiction_type") or "direct").strip()
-    if contradiction_type not in _ALLOWED_TYPES:
-        contradiction_type = "direct"
-    confidence = float(parsed.get("confidence") or 0.0)
-    confidence = max(0.0, min(confidence, 1.0))
-    explanation = str(parsed.get("explanation") or "").strip()
+    quote_a = parsed.quote_a.strip()
+    quote_b = parsed.quote_b.strip()
+    contradiction_type = parsed.contradiction_type
+    confidence = parsed.confidence
+    explanation = parsed.explanation.strip()
     if not explanation:
         explanation = "The verified findings make conflicting claims."
 
@@ -508,35 +520,36 @@ async def _persist_contradiction(
 
 
 async def _classify_candidate(
+    openai_client: openai.AsyncOpenAI,
     http_client: httpx.AsyncClient,
     candidate: ContradictionCandidate,
     *,
     model: str,
-) -> dict[str, Any] | None:
-    parsed = await call_llm(
-        http_client,
-        _build_prompt(candidate),
+) -> ContradictionClassification | None:
+    result = await call_llm_structured(
+        openai_client,
+        response_model=ContradictionClassification,
+        prompt=_build_prompt(candidate),
         options=ChatCompletionOptions(
             model=model,
             max_tokens=500,
             temperature=0.0,
             timeout=LLM_TIMEOUT_DEFAULT,
-            response_format={"type": "json_object"},
         ),
         config=get_litellm_config(),
     )
-    if not parsed.get("is_contradiction"):
+    if not result.is_contradiction:
         return None
-    if not str(parsed.get("quote_a") or "").strip() or not str(parsed.get("quote_b") or "").strip():
-        return None
-    return parsed
+    return result
 
 
+@observe()
 async def scan_contradictions(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     verifier: QuoteVerifier,
     *,
+    openai_client: openai.AsyncOpenAI,
     paper_id: int | None = None,
     limit: int = 25,
 ) -> dict[str, Any]:
@@ -555,7 +568,9 @@ async def scan_contradictions(
     verification_failures = 0
     for candidate in candidates:
         try:
-            parsed = await _classify_candidate(http_client, candidate, model=model)
+            classified = await _classify_candidate(
+                openai_client, http_client, candidate, model=model
+            )
         except Exception:
             llm_failures += 1
             logger.warning(
@@ -565,10 +580,10 @@ async def scan_contradictions(
                 exc_info=True,
             )
             continue
-        if parsed is None:
+        if classified is None:
             continue
-        quote_a = str(parsed["quote_a"]).strip()
-        quote_b = str(parsed["quote_b"]).strip()
+        quote_a = classified.quote_a.strip()
+        quote_b = classified.quote_b.strip()
         async with db_pool.acquire() as conn:
             verified, page_a, page_b = await _quotes_verify(
                 conn, verifier, candidate, quote_a, quote_b
@@ -579,7 +594,7 @@ async def scan_contradictions(
             contradiction_id = await _persist_contradiction(
                 conn,
                 candidate,
-                parsed,
+                classified,
                 page_a=page_a,
                 page_b=page_b,
                 model=model,

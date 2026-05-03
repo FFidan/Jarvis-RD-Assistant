@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from jarvis_common.llm_client import LiteLLMConfig
 from learning_engine.card_generator import CardGenerator, _empty_result
+from learning_engine.card_models import CardGenerationOutput, CardOutput
 
 
 def _make_generator() -> tuple[CardGenerator, AsyncMock]:
@@ -33,16 +34,21 @@ def _make_chunks() -> list[dict]:
     ]
 
 
+def _make_openai_client() -> MagicMock:
+    """Return a mock openai.AsyncOpenAI client."""
+    return MagicMock()
+
+
 @pytest.mark.asyncio
 async def test_call_llm_for_cards_returns_none_on_runtime_error():
-    """call_llm RuntimeError (e.g. LiteLLM unreachable) degrades to None."""
+    """call_llm_structured RuntimeError (e.g. LiteLLM unreachable) degrades to None."""
     generator, _ = _make_generator()
 
     with patch(
-        "learning_engine.card_generator.call_llm",
+        "learning_engine.card_generator.call_llm_structured",
         side_effect=RuntimeError("LLM call failed: upstream error"),
     ):
-        result = await generator._call_llm_for_cards("prompt", "smart")
+        result = await generator._call_llm_for_cards("prompt", "smart", _make_openai_client())
 
     assert result is None
 
@@ -56,9 +62,9 @@ async def test_call_llm_for_cards_reraises_http_errors():
     response = httpx.Response(status_code=502, request=request)
     exc = httpx.HTTPStatusError("bad gateway", request=request, response=response)
 
-    with patch("learning_engine.card_generator.call_llm", side_effect=exc):
+    with patch("learning_engine.card_generator.call_llm_structured", side_effect=exc):
         with pytest.raises(httpx.HTTPStatusError):
-            await generator._call_llm_for_cards("prompt", "smart")
+            await generator._call_llm_for_cards("prompt", "smart", _make_openai_client())
 
 
 def test_verify_raw_cards_attaches_chunk_metadata_and_snapshot(monkeypatch, tmp_path):
@@ -70,15 +76,16 @@ def test_verify_raw_cards_attaches_chunk_metadata_and_snapshot(monkeypatch, tmp_
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     (snapshot_dir / "page_3.png").write_bytes(b"")
 
+    # card_type must be a valid Literal now — Pydantic enforces at LLM boundary
     verified = generator._verify_raw_cards(
         raw_cards=[
-            {
-                "card_type": "invalid-type",
-                "front": "What changed?",
-                "back": "Retrieval improved.",
-                "evidence_quote": "improves retrieval quality",
-                "page_number": 99,
-            }
+            CardOutput(
+                card_type="concept",
+                front="What changed about retrieval?",
+                back="Retrieval improved.",
+                evidence_quote="improves retrieval quality",
+                page_number=99,
+            )
         ],
         full_text=" ".join(chunk["content"] for chunk in _make_chunks()),
         chunks=_make_chunks(),
@@ -146,6 +153,7 @@ async def test_generate_cards_returns_empty_result_on_parse_failure():
         title="Paper",
         authors=["Ada"],
         chunks=_make_chunks(),
+        openai_client=_make_openai_client(),
         paper_id=5,
         abstract="Abstract",
     )
@@ -158,28 +166,31 @@ async def test_generate_cards_filters_unverified_quotes_and_keeps_counts():
     """generate_cards discards unverified quotes but preserves total_count and confidence."""
     generator, _ = _make_generator()
     generator._call_llm_for_cards = AsyncMock(
-        return_value=[
-            {
-                "card_type": "concept",
-                "front": "Verified?",
-                "back": "Yes",
-                "evidence_quote": "improves retrieval quality",
-                "page_number": 3,
-            },
-            {
-                "card_type": "quote",
-                "front": "Fake?",
-                "back": "No",
-                "evidence_quote": "this quote does not exist",
-                "page_number": 9,
-            },
-        ]
+        return_value=CardGenerationOutput(
+            cards=[
+                CardOutput(
+                    card_type="concept",
+                    front="How does it improve retrieval?",
+                    back="Retrieval quality improves substantially.",
+                    evidence_quote="improves retrieval quality",
+                    page_number=3,
+                ),
+                CardOutput(
+                    card_type="quote",
+                    front="What is stated about the method?",
+                    back="This quote does not exist in the source text.",
+                    evidence_quote="this quote does not exist in the text",
+                    page_number=9,
+                ),
+            ]
+        )
     )
 
     result = await generator.generate_cards(
         title="Paper",
         authors=["Ada"],
         chunks=_make_chunks(),
+        openai_client=_make_openai_client(),
         paper_id=5,
         abstract="Abstract",
     )
@@ -255,7 +266,7 @@ async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
     generator, _ = _make_generator()
     # Inject a brace-laden LLM response that would be parsed as an empty list
     # (all quotes unverifiable), so generate_cards returns _empty_result().
-    generator._call_llm_for_cards = AsyncMock(return_value=[])
+    generator._call_llm_for_cards = AsyncMock(return_value=None)
 
     chunks_with_braces = [
         {
@@ -270,10 +281,11 @@ async def test_card_generation_succeeds_with_brace_in_paper_text() -> None:
         title="Convex Optimisation Primer",
         authors=["Author A"],
         chunks=chunks_with_braces,
+        openai_client=_make_openai_client(),
         paper_id=None,
         abstract="Abstract without braces.",
     )
 
-    # LLM returned empty list → fallback to abstract card
+    # LLM returned None → _empty_result()
     assert isinstance(result, dict)
     assert "cards" in result

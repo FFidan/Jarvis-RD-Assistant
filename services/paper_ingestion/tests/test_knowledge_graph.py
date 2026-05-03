@@ -389,21 +389,27 @@ async def test_extract_entities_for_paper_returns_counts():
     pool = _make_pool(mock_conn)
     http_client = AsyncMock()
 
-    llm_result = {
-        "entities": [
-            {"name": "BERT", "type": "method", "description": "encoder"},
-            {"name": "GLUE", "type": "dataset", "description": "benchmark"},
+    from paper_ingestion.extraction.kg_models import (
+        KGEntityCandidate,
+        KGExtractionOutput,
+        KGRelationshipCandidate,
+    )
+
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="BERT", type="method", description="encoder"),
+            KGEntityCandidate(name="GLUE", type="dataset", description="benchmark"),
         ],
-        "relationships": [
-            {
-                "source": "BERT",
-                "target": "GLUE",
-                "type": "evaluates",
-                "confidence": 0.9,
-                "evidence": "BERT evaluates GLUE",
-            }
+        relationships=[
+            KGRelationshipCandidate(
+                source="BERT",
+                target="GLUE",
+                type="evaluates",
+                evidence="BERT evaluates GLUE",
+                confidence=0.9,
+            )
         ],
-    }
+    )
 
     verified_result = VerificationResult(
         quote="BERT evaluates GLUE",
@@ -415,7 +421,10 @@ async def test_extract_entities_for_paper_returns_counts():
     )
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, True)]),
@@ -425,7 +434,9 @@ async def test_extract_entities_for_paper_returns_counts():
             return_value=verified_result,
         ),
     ):
-        result = await extract_entities_for_paper(http_client, pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            http_client, pool, paper_id=1, openai_client=MagicMock()
+        )
 
     assert result.entities_added == 1
     assert result.entities_merged == 1
@@ -450,9 +461,19 @@ async def test_extract_entities_for_paper_requires_existing_chunks():
 
 
 @pytest.mark.asyncio
-async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
-    """Malformed entities and unlinked relationships should be ignored, not persisted."""
+async def test_extract_entities_for_paper_skips_unlinked_relationships():
+    """Relationships whose source or target entity is not in entity_map are skipped.
+
+    With Instructor/Pydantic, malformed payloads are rejected before reaching
+    the function. This test covers the remaining skip path: a relationship
+    referencing an entity name that was not in the extracted entities list.
+    """
     from paper_ingestion.extraction.entities import extract_entities_for_paper
+    from paper_ingestion.extraction.kg_models import (
+        KGEntityCandidate,
+        KGExtractionOutput,
+        KGRelationshipCandidate,
+    )
 
     mock_conn = AsyncMock()
     mock_conn.fetchrow.return_value = {"id": 1, "title": "Paper A"}
@@ -472,27 +493,36 @@ async def test_extract_entities_for_paper_skips_invalid_llm_payload_entries():
     mock_conn.execute = AsyncMock(return_value="INSERT 0 1")
     pool = _make_pool(mock_conn)
 
-    llm_result = {
-        "entities": [
-            {"name": "BERT", "type": "method", "description": "encoder"},
-            {"name": "", "type": "dataset"},
-            "not-a-dict",
+    # Only "BERT" entity is extracted; relationship references "GLUE" which is
+    # not in entity_map — the relationship should be silently skipped.
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="BERT", type="method", description="encoder"),
         ],
-        "relationships": [
-            {"source": "BERT", "target": "GLUE", "type": "evaluates"},
-            {"source": "BERT", "target": "", "type": "evaluates"},
-            "not-a-dict",
+        relationships=[
+            KGRelationshipCandidate(
+                source="BERT",
+                target="GLUE",  # GLUE not in entity_map → skipped
+                type="evaluates",
+                evidence="BERT evaluates GLUE on the benchmark.",
+                confidence=0.9,
+            )
         ],
-    }
+    )
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(return_value=(1, False)),
         ),
     ):
-        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            AsyncMock(), pool, paper_id=1, openai_client=MagicMock()
+        )
 
     assert result.entities_added == 1
     assert result.entities_merged == 0

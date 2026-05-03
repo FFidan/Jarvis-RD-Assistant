@@ -10,6 +10,11 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from paper_ingestion.extraction.kg_models import (
+    KGEntityCandidate,
+    KGExtractionOutput,
+    KGRelationshipCandidate,
+)
 from paper_ingestion.models import VerificationResult
 
 # ---------------------------------------------------------------------------
@@ -85,25 +90,27 @@ async def test_extraction_rejects_hallucinated_evidence():
     mock_conn.fetchval = AsyncMock(return_value=None)
     pool = _make_pool(mock_conn)
 
-    llm_result = {
-        "entities": [
-            {"name": "Neural ODE", "type": "method", "description": "continuous depth"},
-            {"name": "CIFAR-10", "type": "dataset", "description": "image dataset"},
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="Neural ODE", type="method", description="continuous depth"),
+            KGEntityCandidate(name="CIFAR-10", type="dataset", description="image dataset"),
         ],
-        "relationships": [
-            {
-                "source": "Neural ODE",
-                "target": "CIFAR-10",
-                "type": "evaluated_on",
-                "confidence": 0.9,
-                # evidence is fabricated — will fail QuoteVerifier
-                "evidence": "This completely made-up sentence was never in the paper.",
-            }
+        relationships=[
+            KGRelationshipCandidate(
+                source="Neural ODE",
+                target="CIFAR-10",
+                type="evaluates",
+                evidence="This completely made-up sentence was never in the paper.",
+                confidence=0.9,
+            )
         ],
-    }
+    )
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
@@ -113,7 +120,9 @@ async def test_extraction_rejects_hallucinated_evidence():
             return_value=_unverified(),
         ),
     ):
-        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            AsyncMock(), pool, paper_id=1, openai_client=MagicMock()
+        )
 
     # Relationship was dropped — fetchval for INSERT should never have been called
     mock_conn.fetchval.assert_not_awaited()
@@ -141,24 +150,27 @@ async def test_extraction_persists_page_number_from_chunk():
     mock_conn.fetchval = AsyncMock(return_value=1)  # INSERT succeeds
     pool = _make_pool(mock_conn)
 
-    llm_result = {
-        "entities": [
-            {"name": "Neural ODE", "type": "method", "description": "continuous depth"},
-            {"name": "CIFAR-10", "type": "dataset", "description": "image dataset"},
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="Neural ODE", type="method", description="continuous depth"),
+            KGEntityCandidate(name="CIFAR-10", type="dataset", description="image dataset"),
         ],
-        "relationships": [
-            {
-                "source": "Neural ODE",
-                "target": "CIFAR-10",
-                "type": "evaluated_on",
-                "confidence": 0.85,
-                "evidence": chunk_content,
-            }
+        relationships=[
+            KGRelationshipCandidate(
+                source="Neural ODE",
+                target="CIFAR-10",
+                type="evaluates",
+                evidence=chunk_content,
+                confidence=0.85,
+            )
         ],
-    }
+    )
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
@@ -168,7 +180,9 @@ async def test_extraction_persists_page_number_from_chunk():
             return_value=_verified(text=matched_text, page=3),
         ),
     ):
-        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            AsyncMock(), pool, paper_id=1, openai_client=MagicMock()
+        )
 
     assert result.relationships_added == 1
     assert result.dropped_relationships == 0
@@ -200,24 +214,27 @@ async def test_extraction_keeps_verified_rows():
     mock_conn.fetchval = AsyncMock(return_value=1)
     pool = _make_pool(mock_conn)
 
-    llm_result = {
-        "entities": [
-            {"name": "Neural ODE", "type": "method", "description": "continuous depth"},
-            {"name": "ImageNet", "type": "dataset", "description": "large image dataset"},
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="Neural ODE", type="method", description="continuous depth"),
+            KGEntityCandidate(name="ImageNet", type="dataset", description="large image dataset"),
         ],
-        "relationships": [
-            {
-                "source": "Neural ODE",
-                "target": "ImageNet",
-                "type": "used_on",
-                "confidence": 0.95,
-                "evidence": evidence_text,
-            }
+        relationships=[
+            KGRelationshipCandidate(
+                source="Neural ODE",
+                target="ImageNet",
+                type="used_on",
+                evidence=evidence_text,
+                confidence=0.95,
+            )
         ],
-    }
+    )
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
@@ -227,7 +244,9 @@ async def test_extraction_keeps_verified_rows():
             return_value=_verified(text=evidence_text),
         ),
     ):
-        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            AsyncMock(), pool, paper_id=1, openai_client=MagicMock()
+        )
 
     assert result.relationships_added == 1
     assert result.dropped_relationships == 0
@@ -278,27 +297,30 @@ async def test_extraction_uses_full_text_for_verification():
     mock_conn.fetchval = AsyncMock(return_value=1)
     pool = _make_pool(mock_conn)
 
-    llm_result = {
-        "entities": [
-            {"name": "Method A", "type": "method", "description": "a method"},
-            {"name": "Dataset B", "type": "dataset", "description": "a dataset"},
+    kg_result = KGExtractionOutput(
+        entities=[
+            KGEntityCandidate(name="Method A", type="method", description="a method"),
+            KGEntityCandidate(name="Dataset B", type="dataset", description="a dataset"),
         ],
-        "relationships": [
-            {
-                "source": "Method A",
-                "target": "Dataset B",
-                "type": "evaluated_on",
-                "confidence": 0.9,
-                "evidence": evidence_text,
-            }
+        relationships=[
+            KGRelationshipCandidate(
+                source="Method A",
+                target="Dataset B",
+                type="evaluates",
+                evidence=evidence_text,
+                confidence=0.9,
+            )
         ],
-    }
+    )
 
     # The verifier returns success; evidence_text is present in full_text at pos > 12000
     verified_result = _verified(text=evidence_text, page=5)
 
     with (
-        patch("paper_ingestion.extraction.entities.call_llm", AsyncMock(return_value=llm_result)),
+        patch(
+            "paper_ingestion.extraction.entities.call_llm_structured",
+            AsyncMock(return_value=kg_result),
+        ),
         patch(
             "paper_ingestion.extraction.entities._find_or_create_entity",
             AsyncMock(side_effect=[(1, False), (2, False)]),
@@ -308,7 +330,9 @@ async def test_extraction_uses_full_text_for_verification():
             return_value=verified_result,
         ),
     ):
-        result = await extract_entities_for_paper(AsyncMock(), pool, paper_id=1)
+        result = await extract_entities_for_paper(
+            AsyncMock(), pool, paper_id=1, openai_client=MagicMock()
+        )
 
     # Relationship was added — full-text verify succeeded
     assert result.relationships_added == 1
