@@ -69,6 +69,45 @@ async def test_log_audit_never_raises_on_db_error():
 
 
 @pytest.mark.asyncio
+async def test_log_audit_passes_small_metadata_unchanged():
+    """Metadata under 4 KB must be stored as-is."""
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    small = {"key": "value", "n": 42, "items": list(range(10))}
+    await log_audit(pool, action="ok", resource="r", metadata=small)
+
+    metadata_param = conn.execute.call_args[0][4]
+    assert metadata_param == small
+    assert "_truncated" not in metadata_param
+
+
+@pytest.mark.asyncio
+async def test_log_audit_truncates_oversize_metadata():
+    """Metadata > 4 KB is replaced with a truncation marker."""
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+
+    pool = MagicMock()
+    pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+    pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    # 8 KB string -> well over the 4 KB limit even after JSON encoding overhead
+    huge = {"blob": "x" * 8192}
+    await log_audit(pool, action="dangerous", resource="r", metadata=huge)
+
+    metadata_param = conn.execute.call_args[0][4]
+    assert metadata_param.get("_truncated") is True
+    assert isinstance(metadata_param.get("_size"), int)
+    assert metadata_param["_size"] > 4096
+    assert "blob" not in metadata_param  # original payload dropped
+
+
+@pytest.mark.asyncio
 async def test_log_audit_user_id_defaults_to_none():
     """log_audit user_id should be None when not supplied."""
     conn = AsyncMock()

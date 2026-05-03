@@ -9,33 +9,57 @@ from collections.abc import Mapping
 from typing import Any
 
 import asyncpg
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, MultiFernet
 
 logger = logging.getLogger(__name__)
 
 
 @functools.lru_cache(maxsize=1)
-def _load_fernet() -> Fernet:
-    """Build a Fernet instance from JARVIS_CONFIG_KEY env var.
+def _load_fernet() -> Fernet | MultiFernet:
+    """Build a Fernet (or MultiFernet) instance from env vars.
 
-    Cached for process lifetime so repeated calls don't re-parse the key.
-    Send SIGHUP after rotating CONFIG_ENC_KEY to clear the cache (see
+    Reads ``JARVIS_CONFIG_KEY`` (the *current* / write key) plus the optional
+    ``JARVIS_CONFIG_KEY_OLD`` (a previous key kept for read-only decryption
+    during a rotation window). When ``OLD`` is set, returns a
+    :class:`MultiFernet([new, old])` so:
+
+    * ``encrypt`` always uses the new key (first in the list),
+    * ``decrypt`` accepts ciphertexts produced under either key.
+
+    This enables zero-downtime key rotation: deploy with both vars set, run a
+    background re-encrypt, then drop ``OLD`` on the next deploy.
+
+    Cached for process lifetime so repeated calls don't re-parse the keys.
+    Send SIGHUP after rotating ``JARVIS_CONFIG_KEY`` to clear the cache (see
     :func:`reload_fernet_on_sighup`).
-    Raises RuntimeError if the key is unset or malformed.
+    Raises RuntimeError if the new key is unset or malformed.
     """
-    raw = os.environ.get("JARVIS_CONFIG_KEY", "")
-    if not raw:
+    raw_new = os.environ.get("JARVIS_CONFIG_KEY", "")
+    if not raw_new:
         raise RuntimeError(
             "JARVIS_CONFIG_KEY is not set. "
             "Generate one with: python -c "
             "'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
         )
     try:
-        return Fernet(raw.encode() if isinstance(raw, str) else raw)
+        new_fernet = Fernet(raw_new.encode() if isinstance(raw_new, str) else raw_new)
     except Exception as exc:
         raise RuntimeError(
             f"JARVIS_CONFIG_KEY is malformed (expected urlsafe base64-encoded 32-byte key): {exc}"
         ) from exc
+
+    raw_old = os.environ.get("JARVIS_CONFIG_KEY_OLD", "")
+    if not raw_old:
+        return new_fernet
+    try:
+        old_fernet = Fernet(raw_old.encode() if isinstance(raw_old, str) else raw_old)
+    except Exception as exc:
+        raise RuntimeError(
+            "JARVIS_CONFIG_KEY_OLD is malformed (expected urlsafe base64-encoded "
+            f"32-byte key): {exc}"
+        ) from exc
+    # MultiFernet([new, old]) — encrypts with new, decrypts with either.
+    return MultiFernet([new_fernet, old_fernet])
 
 
 def refresh_fernet_cache() -> None:
@@ -179,15 +203,19 @@ async def validate_encrypted_config_rows(
 def mask_secret(plaintext: str) -> str:
     """Return a masked preview of *plaintext*.
 
+    Shows only the trailing 4 characters — never the prefix — so the masked
+    form leaks no information about how the secret was generated (e.g. the
+    ``sk-ant-`` provider prefix on Anthropic API keys).
+
     - Empty string -> ''
-    - Length <= 4   -> '****'
-    - Otherwise     -> first 4 chars + '****'
+    - Length < 4    -> '****'
+    - Otherwise     -> '****' + last 4 chars
     """
     if not plaintext:
         return ""
-    if len(plaintext) <= 4:
+    if len(plaintext) < 4:
         return "****"
-    return plaintext[:4] + "****"
+    return "****" + plaintext[-4:]
 
 
 def rotate_key(old_key: bytes, new_key: bytes, ciphertext: str) -> str:

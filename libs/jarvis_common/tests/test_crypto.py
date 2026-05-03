@@ -37,6 +37,7 @@ def valid_key(monkeypatch) -> bytes:
     """Generate a fresh Fernet key and wire it into JARVIS_CONFIG_KEY."""
     key = Fernet.generate_key()
     monkeypatch.setenv("JARVIS_CONFIG_KEY", key.decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     return key
 
@@ -81,11 +82,13 @@ def test_wrong_key_raises(monkeypatch) -> None:
 
     # Encrypt with key_a
     monkeypatch.setenv("JARVIS_CONFIG_KEY", key_a.decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     ciphertext = encrypt_secret("secret-value")
 
     # Switch to key_b and attempt decryption
     monkeypatch.setenv("JARVIS_CONFIG_KEY", key_b.decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     with pytest.raises(InvalidToken):
         decrypt_secret(ciphertext)
@@ -116,6 +119,36 @@ def test_rotation_works(valid_key) -> None:
         Fernet(old_key).decrypt(ciphertext_new.encode())
 
 
+def test_rotation_via_old_env_decrypts_legacy_ciphertext(monkeypatch) -> None:
+    """JARVIS_CONFIG_KEY_OLD lets the rotated process decrypt legacy ciphertexts.
+
+    Encrypt a value under ``key_a``, then start a process with ``key_b`` as
+    JARVIS_CONFIG_KEY and ``key_a`` as JARVIS_CONFIG_KEY_OLD. ``decrypt_secret``
+    must succeed (zero-downtime rotation), and a fresh ``encrypt_secret`` must
+    use the new key.
+    """
+    key_a = Fernet.generate_key()
+    key_b = Fernet.generate_key()
+
+    # Encrypt under key_a (the soon-to-be-old key)
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", key_a.decode())
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
+    refresh_fernet_cache()
+    legacy_ciphertext = encrypt_secret("rotation-target")
+
+    # Switch to key_b as the new key, with key_a kept as OLD for reads.
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", key_b.decode())
+    monkeypatch.setenv("JARVIS_CONFIG_KEY_OLD", key_a.decode())
+    refresh_fernet_cache()
+
+    # Old ciphertext still decrypts.
+    assert decrypt_secret(legacy_ciphertext) == "rotation-target"
+
+    # New writes use key_b — verify by trying to decrypt with key_b directly.
+    new_ciphertext = encrypt_secret("post-rotation-write")
+    assert Fernet(key_b).decrypt(new_ciphertext.encode()).decode() == "post-rotation-write"
+
+
 # ---------------------------------------------------------------------------
 # Missing env var
 # ---------------------------------------------------------------------------
@@ -124,6 +157,7 @@ def test_rotation_works(valid_key) -> None:
 def test_missing_env_raises(monkeypatch) -> None:
     """Calling encrypt_secret without JARVIS_CONFIG_KEY raises RuntimeError."""
     monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     with pytest.raises(RuntimeError, match="JARVIS_CONFIG_KEY"):
         encrypt_secret("anything")
@@ -135,12 +169,32 @@ def test_missing_env_raises(monkeypatch) -> None:
 
 
 def test_mask_secret() -> None:
-    """mask_secret covers empty, short (<= 4), and long inputs."""
+    """mask_secret covers empty, short (< 4), and long inputs.
+
+    The masked form must NEVER include the first 4 characters of the secret —
+    leaking the prefix would reveal e.g. ``sk-ant-`` for Anthropic keys.
+    """
     assert mask_secret("") == ""
     assert mask_secret("ab") == "****"
-    assert mask_secret("abcd") == "****"
-    assert mask_secret("abcde") == "abcd****"
-    assert mask_secret("supersecret") == "supe****"
+    assert mask_secret("abc") == "****"
+    assert mask_secret("abcd") == "****abcd"
+    assert mask_secret("abcde") == "****bcde"
+    assert mask_secret("supersecret") == "****cret"
+
+
+def test_mask_secret_does_not_leak_prefix() -> None:
+    """Masking a provider-prefixed key must not reveal the prefix.
+
+    Regression guard against the previous ``plaintext[:4] + "****"`` form
+    which leaked the first four characters (e.g. ``sk-a****`` exposed that
+    the secret is an Anthropic key).
+    """
+    secret = "sk-ant-api03-supersecret-verylong"
+    masked = mask_secret(secret)
+    assert "sk-a" not in masked
+    assert not masked.startswith(secret[:4])
+    # Trailing 4 chars are fine — they cannot be reverse-engineered to the prefix.
+    assert masked.endswith(secret[-4:])
 
 
 @pytest.mark.asyncio
@@ -159,6 +213,7 @@ async def test_validate_encrypted_config_rows_accepts_decryptable_rows(valid_key
 @pytest.mark.asyncio
 async def test_validate_encrypted_config_rows_fails_non_dev_on_missing_key(monkeypatch) -> None:
     monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
 
@@ -169,6 +224,7 @@ async def test_validate_encrypted_config_rows_fails_non_dev_on_missing_key(monke
 @pytest.mark.asyncio
 async def test_validate_encrypted_config_rows_warns_in_dev_on_bad_key(monkeypatch) -> None:
     monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_OLD", raising=False)
     refresh_fernet_cache()
     pool, _conn = _make_pool([FakeRecord({"key": "zotero.api_key", "encrypted_value": b"abc"})])
 
