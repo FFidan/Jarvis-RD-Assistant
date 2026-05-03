@@ -31,34 +31,6 @@ def test_paper_ingestion_owner_map_includes_sprint3_jobs():
     assert {jobs.JOB_HANDLER_OWNER[k] for k in expected} == {"paper_ingestion"}
 
 
-def test_sanitize_error_message_strips_ansi():
-    """_sanitize_error_message should remove ANSI escape sequences."""
-    from jarvis_common.jobs import _sanitize_error_message
-
-    raw = "\x1b[31mERROR\x1b[0m something failed"
-    out = _sanitize_error_message(raw)
-    assert "\x1b" not in out
-    assert "something failed" in out
-
-
-def test_sanitize_error_message_strips_paths():
-    """_sanitize_error_message should redact absolute filesystem paths."""
-    from jarvis_common.jobs import _sanitize_error_message
-
-    raw = "file not found: /home/user/secret/file.txt"
-    out = _sanitize_error_message(raw)
-    assert "/home/user/secret/file.txt" not in out
-    assert "file not found:" in out
-
-
-def test_sanitize_error_message_truncates_to_500():
-    """_sanitize_error_message caps the result at 500 characters."""
-    from jarvis_common.jobs import _sanitize_error_message
-
-    out = _sanitize_error_message("x" * 1000)
-    assert len(out) == 500
-
-
 def test_job_error_carries_action_link():
     """JobError stores action_link and message correctly."""
     from jarvis_common.jobs import JobError

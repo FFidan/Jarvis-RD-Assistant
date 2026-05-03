@@ -445,6 +445,7 @@ class MyDayProjectPulseItem(BaseModel):
 
     id: int
     name: str
+    color: str | None = None
     total_tasks: int
     done_tasks: int
     next_milestone: str | None = None

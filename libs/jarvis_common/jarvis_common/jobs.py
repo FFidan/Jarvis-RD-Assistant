@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -97,10 +96,6 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
 _KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
 _MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
 
-# Strip ANSI escape codes and absolute paths from error messages before persisting.
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
-_PATH_RE = re.compile(r"(/[^\s]+)+")
-
 
 class _PoolListenConnection:
     """Adapter letting asyncpg-listen borrow and release a pooled connection."""
@@ -140,12 +135,6 @@ class _PoolListenConnection:
         await self._pool.release(self._conn)
         self._released = True
         self._conn = None
-
-
-def _sanitize_error_message(raw: str) -> str:
-    msg = _ANSI_RE.sub("", raw)
-    msg = _PATH_RE.sub("<path>", msg)
-    return msg[:500]
 
 
 async def notify_job_update(

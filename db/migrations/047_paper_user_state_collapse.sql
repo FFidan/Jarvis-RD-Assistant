@@ -78,3 +78,7 @@ COMMENT ON COLUMN paper_user_state.state IS
     'Lifecycle position: inbox (untriaged), to_read (saved), reading (engaging), done (finished), trash (rejected). Replaces 5 booleans + status enum from migration 046.';
 COMMENT ON COLUMN paper_user_state.state_before_trash IS
     'For trash rows: the state to restore to. NULL for non-trash rows.';
+-- Note: the `archived` boolean column backfilled above was originally added by
+-- migration 044 (044_paper_user_state_flags.sql). The `preference` column added
+-- in the same migration is intentionally discarded here — its data is superseded
+-- by the new `state` enum and is not migrated forward.

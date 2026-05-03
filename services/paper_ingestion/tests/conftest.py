@@ -19,7 +19,6 @@ from unittest.mock import AsyncMock, MagicMock
 # test_pulse_scheduler.py cannot replace the real CronTrigger (needed by
 # the _validate_cron validator in app.routers.settings).
 import apscheduler.triggers.cron  # noqa: F401
-import jarvis_common.jobs as _jobs_module
 import pytest
 
 # ---------------------------------------------------------------------------
@@ -96,26 +95,6 @@ def live_pg_dsn() -> str:
         yield f"postgresql://jarvis:{password}@127.0.0.1:{host_port}/jarvis"
     finally:
         _docker(["rm", "-f", container], check=False, timeout=10)
-
-
-# ---------------------------------------------------------------------------
-# _HANDLERS isolation fixture
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=False)
-def _reset_job_handlers():
-    """Snapshot and restore jarvis_common.jobs._HANDLERS around each test.
-
-    Use this fixture in any test that registers new job handlers, to prevent
-    cross-test _HANDLERS state pollution.  Never rely on global _HANDLERS state
-    across tests — always opt-in to this fixture when your test touches handler
-    registration.
-    """
-    snapshot = dict(_jobs_module._HANDLERS)
-    yield
-    _jobs_module._HANDLERS.clear()
-    _jobs_module._HANDLERS.update(snapshot)
 
 
 # ---------------------------------------------------------------------------

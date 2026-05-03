@@ -26,11 +26,22 @@ def test_get_litellm_config_uses_default_url(monkeypatch):
     assert config.base_url == llm_client.DEFAULT_LITELLM_BASE_URL
 
 
-def test_build_litellm_headers_always_returns_empty_dict():
-    """build_litellm_headers must return {} — transparent proxy, no auth."""
+def test_build_litellm_headers_returns_empty_when_key_unset(monkeypatch):
+    """build_litellm_headers returns {} when LITELLM_MASTER_KEY is not set."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
     config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     assert llm_client.build_litellm_headers(config) == {}
+
+
+def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
+    """build_litellm_headers returns Authorization: Bearer <key> when LITELLM_MASTER_KEY is set."""
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-secret-key-abc123")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
+
+    assert llm_client.build_litellm_headers(config) == {
+        "Authorization": "Bearer test-secret-key-abc123"
+    }
 
 
 def test_strip_think_blocks_removes_multiple_sections():
@@ -72,8 +83,9 @@ async def test_request_chat_completion_content_requires_prompt_or_messages():
 
 
 @pytest.mark.asyncio
-async def test_request_chat_completion_content_forwards_response_format():
+async def test_request_chat_completion_content_forwards_response_format(monkeypatch):
     """The lower-level request helper should pass through response_format unchanged."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {

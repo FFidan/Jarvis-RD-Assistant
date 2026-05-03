@@ -17,8 +17,8 @@ TRUNCATION_HEADROOM = 100
 _ALLOWED_SCHEMES = frozenset({"http", "https"})
 
 # Matches BIDI control characters (U+202A–U+202E, U+2066–U+2069) and
-# zero-width/invisible characters (U+200B–U+200D, U+FEFF, etc.)
-_BIDI_ZW_RE = re.compile(r"[‪-‮⁦-⁩​-‍﻿]")
+# zero-width/invisible characters (U+200B–U+200F including LRM/RLM, U+FEFF, etc.)
+_BIDI_ZW_RE = re.compile(r"[‪-‮⁦-⁩​-‏﻿]")
 
 
 def safe_url(url: str) -> str:
@@ -46,7 +46,7 @@ def safe_url(url: str) -> str:
         return "#"
 
 
-def escape(text: str) -> str:
+def escape(text: str | None) -> str:
     """Escape HTML special characters for Telegram, stripping BIDI/zero-width chars."""
     if text is None:
         return ""
