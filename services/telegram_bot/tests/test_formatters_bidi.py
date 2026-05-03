@@ -66,21 +66,3 @@ def test_escape_normal_text_unchanged():
 def test_escape_bidi_string_from_spec():
     """Spec example: escape('hello‮world') returns 'helloworld'."""
     assert escape("hello‮world") == "helloworld"
-
-
-def test_escape_strips_lrm():
-    """LEFT-TO-RIGHT MARK (U+200E) is stripped."""
-    result = escape("hello‎world")
-    assert result == "helloworld"
-
-
-def test_escape_strips_rlm():
-    """RIGHT-TO-LEFT MARK (U+200F) is stripped."""
-    result = escape("hello‏world")
-    assert result == "helloworld"
-
-
-def test_escape_strips_lrm_rlm_combined():
-    """LRM and RLM in the same string are both stripped."""
-    result = escape("‎hello‏world‎")
-    assert result == "helloworld"

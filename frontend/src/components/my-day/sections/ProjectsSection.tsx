@@ -16,22 +16,13 @@ const formatDate = (iso: string | null) => {
 export function ProjectsSection() {
   const navigate = useNavigate();
 
-  const { data, isError } = useQuery<MyDayResponse>({
+  const { data } = useQuery<MyDayResponse>({
     queryKey: ['my-day'],
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
   });
 
   const projects = (data?.project_pulse ?? []).slice(0, 3);
-
-  if (isError) {
-    return (
-      <section id="projects">
-        <SectionHeader marker="Projects" />
-        <p className="text-[12px] font-mono text-meta pl-5">Couldn't load projects</p>
-      </section>
-    );
-  }
 
   if (!data || data.project_pulse.length === 0) {
     return (

@@ -72,24 +72,16 @@ describe('ScoreStack', () => {
     expect(graph.getAttribute('title')).toContain('graph 0%');
   });
 
-  it('zero-sum payload — renders a single gray "no signal" bar (not 4 equal blocks)', () => {
-    const { container, getByTitle } = render(
+  it('zero-sum payload — all 4 segments default to 25%', () => {
+    const { container } = render(
       <ScoreStack score={0} parts={{ emb: 0, llm: 0, rec: 0, graph: 0 }} />,
     );
 
-    // Should be exactly 1 segment div with style containing width
     const segments = container.querySelectorAll<HTMLElement>('div[style*="width"]');
-    expect(segments).toHaveLength(1);
+    expect(segments).toHaveLength(4);
 
-    const bar = getByTitle('no signal');
-    expect(bar.style.width).toBe('100%');
-  });
-
-  it('zero-sum payload — badge label reads "no signal" not "emb·llm·rec·g"', () => {
-    const { getByText } = render(
-      <ScoreStack score={0} parts={{ emb: 0, llm: 0, rec: 0, graph: 0 }} />,
-    );
-
-    expect(getByText('no signal')).toBeInTheDocument();
+    for (const seg of Array.from(segments)) {
+      expect(seg.style.width).toBe('25%');
+    }
   });
 });

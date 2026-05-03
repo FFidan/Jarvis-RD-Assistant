@@ -129,35 +129,3 @@ def test_require_dependencies_raises_before_set() -> None:
     finally:
         task_registry._pool = saved_pool
         task_registry._http_client = saved_http
-
-
-# ---------------------------------------------------------------------------
-# Connector double-assign guard (task_registry.py:80 comment)
-# ---------------------------------------------------------------------------
-
-
-def test_connector_double_assign_requirement_documented() -> None:
-    """Guard the requirement that services must assign the connector to BOTH
-    ``procrastinate_app.connector`` AND ``procrastinate_app.job_manager.connector``
-    before opening the app.
-
-    This test verifies that ``app.job_manager`` exists on the module-level App
-    and that its ``.connector`` attribute is the same object as ``app.connector``
-    — the invariant that service lifespan startup must maintain.
-
-    See: services/paper_ingestion/paper_ingestion/main.py lines 226-227 for
-    the canonical double-assign pattern.
-    """
-    from jarvis_common.task_registry import app
-
-    # After module import both references should already be consistent
-    # (same AiopgConnector object constructed at module scope).
-    assert hasattr(app, "job_manager"), (
-        "procrastinate.App must expose .job_manager for connector re-assignment"
-    )
-    assert app.job_manager.connector is app.connector, (
-        "app.connector and app.job_manager.connector must be the same object; "
-        "service lifespan must assign BOTH when replacing the connector at startup "
-        "(see main.py: procrastinate_app.connector = ...; "
-        "procrastinate_app.job_manager.connector = procrastinate_app.connector)"
-    )

@@ -105,7 +105,7 @@ async def get_my_day(
 
         # Project pulse: active projects with task progress and next milestone
         project_pulse = await conn.fetch("""
-            SELECT p.id, p.name, p.color,
+            SELECT p.id, p.name,
                    COUNT(t.id) AS total_tasks,
                    COUNT(t.id) FILTER (WHERE t.status = 'done') AS done_tasks,
                    (SELECT m.name FROM milestones m

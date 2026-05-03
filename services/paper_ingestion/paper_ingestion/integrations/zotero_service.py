@@ -623,17 +623,8 @@ async def _zotero_push_job(
 
     Payload keys:
         paper_id (int): DB paper ID to push.
-        user_id (int | None): Caller user ID for ownership check.
     """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
     paper_id: int = payload["paper_id"]
-    user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-
     await ctx.update_progress(0.1, "Starting Zotero push")
     await push_paper_to_zotero(paper_id, pool, http_client)
     await ctx.update_progress(1.0, "Done")
@@ -650,17 +641,8 @@ async def _zotero_resync_job(
 
     Payload keys:
         paper_id (int): DB paper ID to resync.
-        user_id (int | None): Caller user ID for ownership check.
     """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
     paper_id: int = payload["paper_id"]
-    user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-
     await ctx.update_progress(0.1, "Clearing existing Zotero key")
     await resync_paper_to_zotero(paper_id, pool, http_client)
     await ctx.update_progress(1.0, "Done")
@@ -690,21 +672,8 @@ async def _zotero_sync_annotations_job(
     payload: dict[str, Any],
     ctx: JobContext,
 ) -> dict[str, Any]:
-    """Job handler for importing Zotero annotations for a linked paper.
-
-    Payload keys:
-        paper_id (int): DB paper ID to sync annotations for.
-        user_id (int | None): Caller user ID for ownership check.
-    """
-    from jarvis_common.db_helpers import assert_paper_ownership
-
+    """Job handler for importing Zotero annotations for a linked paper."""
     paper_id = int(payload["paper_id"])
-    user_id = payload.get("user_id")
-
-    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
-    async with pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-
     await ctx.update_progress(0.1, "Fetching Zotero annotations")
     result = await sync_annotations_for_paper(paper_id, pool, http_client)
     await ctx.update_progress(1.0, "Done")

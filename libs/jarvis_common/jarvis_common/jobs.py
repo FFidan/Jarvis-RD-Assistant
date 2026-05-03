@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -96,6 +97,10 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
 _KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
 _MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
 
+# Strip ANSI escape codes and absolute paths from error messages before persisting.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+_PATH_RE = re.compile(r"(/[^\s]+)+")
+
 
 class _PoolListenConnection:
     """Adapter letting asyncpg-listen borrow and release a pooled connection."""
@@ -135,6 +140,12 @@ class _PoolListenConnection:
         await self._pool.release(self._conn)
         self._released = True
         self._conn = None
+
+
+def _sanitize_error_message(raw: str) -> str:
+    msg = _ANSI_RE.sub("", raw)
+    msg = _PATH_RE.sub("<path>", msg)
+    return msg[:500]
 
 
 async def notify_job_update(
@@ -199,24 +210,17 @@ def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
     required by ``get_unified`` so that route handlers can call
     ``_owner_matches``, ``serialise_row``, and the cancel branch without
     additional per-field checks.
-
-    ``progress`` and ``progress_message`` are lifted from the LEFT-JOINed
-    ``job_progress`` row (migration 054) when present; absent rows degrade
-    to ``progress=0`` / ``progress_message=None``.
     """
     args: dict[str, Any] = prow.get("args") or {}
     status = procrastinate_status_to_jarvis(prow["status"])
     cancel_requested = prow["status"] in {"cancelled", "aborting", "aborted"}
-    progress = prow.get("progress")
-    if progress is None:
-        progress = 0
     return {
         "id": args.get("job_id"),
         "kind": prow["task_name"],
         "user_id": args.get("user_id"),
         "status": status,
-        "progress": progress,
-        "progress_message": prow.get("progress_message"),
+        "progress": 0,
+        "progress_message": None,
         "payload": {k: v for k, v in args.items() if k not in {"job_id", "user_id"}},
         "result": None,
         "error": None,
@@ -238,49 +242,28 @@ async def get_procrastinate_job_for_jarvis_id(
       * the ``procrastinate_jobs`` table does not exist (migration 052 not
         applied — graceful degradation so legacy-only DBs still work).
 
-    The SELECT LEFT-JOINs ``job_progress`` (migration 054) so callers can
-    surface the latest progress snapshot through the SSE bridge. When
-    migration 054 has not been applied (older DBs), the JOIN is silently
-    dropped and the result still contains the procrastinate columns with
-    ``progress`` / ``progress_message`` as ``None``.
-    """
-    sql_with_progress = """
-        SELECT
-          pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
-          jp.progress AS progress,
-          jp.message  AS progress_message,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-          (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
-        FROM procrastinate_jobs pj
-        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
-        WHERE pj.args->>'job_id' = $1
-        ORDER BY pj.id DESC
-        LIMIT 1
-    """
-    sql_without_progress = """
-        SELECT
-          pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
-          NULL::REAL AS progress,
-          NULL::TEXT AS progress_message,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
-          (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
-          (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
-        FROM procrastinate_jobs pj
-        WHERE pj.args->>'job_id' = $1
-        ORDER BY pj.id DESC
-        LIMIT 1
+    Mirrors :func:`get` for the legacy table.  The SELECT now includes
+    ``attempts`` and timestamp subqueries so that the returned row can be
+    adapted to the full Job-interface shape via
+    :func:`procrastinate_row_to_jarvis_row`.
     """
     try:
         async with pool.acquire() as conn:
-            try:
-                row = await conn.fetchrow(sql_with_progress, str(jarvis_job_id))
-            except asyncpg.UndefinedTableError:
-                # job_progress missing (migration 054 not applied) — retry
-                # without the JOIN so callers still see procrastinate state.
-                row = await conn.fetchrow(sql_without_progress, str(jarvis_job_id))
+            row = await conn.fetchrow(
+                """
+                SELECT
+                  pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
+                  (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
+                  (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
+                  (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
+                FROM procrastinate_jobs pj
+                WHERE pj.args->>'job_id' = $1
+                ORDER BY pj.id DESC
+                LIMIT 1
+                """,
+                str(jarvis_job_id),
+            )
     except asyncpg.UndefinedTableError:
-        # procrastinate_jobs missing (migration 052 not applied).
         return None
     except Exception:
         logger.debug("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)

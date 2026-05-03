@@ -1,5 +1,7 @@
 """JobContext-compatible shim bridging procrastinate ↔ legacy ``jarvis_common.jobs.JobContext``.
 
+Step 2 of the B.4 cutover (spec: docs/specs/2026-05-03-b4-job-broker.md).
+
 The legacy 19 ``@job_handler``-decorated functions all expect a
 ``jarvis_common.jobs.JobContext`` (a ``@dataclass`` with ``job_id: str``,
 ``async update_progress(progress, message=None)``, ``async is_cancelled()``).
@@ -7,17 +9,15 @@ Procrastinate hands tasks its own ``procrastinate.JobContext`` — a different
 object with ``context.job.id``, ``context.should_abort()``, etc.
 
 This module provides a thin adapter so the legacy handlers can be invoked
-unchanged from inside a procrastinate task body:
+unchanged from inside a procrastinate task body. The adapter is intentionally
+no-op-shaped for Step 2:
 
-- ``update_progress``: UPSERTs into the ``job_progress`` table (migration
-  054). Silently degrades to a no-op when no pool is supplied or the table
-  is missing — older DBs without migration 054 still run, they just don't
-  surface progress.
-- ``is_cancelled``: bridges to procrastinate's ``should_abort()`` so
-  abort-requested propagates to handler bodies.
-- ``job_id``: prefers the JARVIS UUID stored in ``task_kwargs['job_id']``
-  (set by every enqueue path) and falls back to ``str(procrastinate.job.id)``
-  (the bigint id) only when the kwarg is missing.
+- ``update_progress``: logs a debug line; persistence will be wired in Step 3
+  (SSE bridge / progress storage).
+- ``is_cancelled``: returns ``False`` for now; Step 3 will route this through
+  procrastinate's ``should_abort()`` once the cancel-on-defer story is decided.
+- ``job_id``: extracted from the procrastinate context's ``job.id`` (an
+  integer) and stringified to match the legacy ``str`` type.
 """
 
 from __future__ import annotations
@@ -31,98 +31,63 @@ if TYPE_CHECKING:
     # Imported lazily — procrastinate is in the dependency graph but importing
     # it eagerly would couple every consumer of jarvis_common to libpq being
     # available, which is undesirable for unit tests.
-    import asyncpg
     from procrastinate import JobContext as _ProcrastinateJobContext
 
 
 class ProcrastinateJobContextShim:
     """Adapter exposing the legacy ``jarvis_common.jobs.JobContext`` surface.
 
-    The legacy contract (see ``libs/jarvis_common/jarvis_common/jobs.py:464``):
+    The legacy contract (see ``libs/jarvis_common/jarvis_common/jobs.py:324``):
         - ``job_id: str``                         — attribute
         - ``async update_progress(progress, message=None) -> None``
         - ``async is_cancelled() -> bool``
+
+    Step 2 only registers tasks; no live enqueue path uses them yet, so the
+    methods are deliberately minimal. Step 3 will swap the bodies for real
+    persistence once the SSE bridge is in place.
     """
 
-    __slots__ = ("job_id", "_procrastinate_ctx", "_pool")
+    __slots__ = ("job_id", "_procrastinate_ctx")
 
     def __init__(
         self,
         *,
         job_id: str,
         procrastinate_ctx: Any | None = None,
-        pool: asyncpg.Pool | None = None,
     ) -> None:
         self.job_id = job_id
         self._procrastinate_ctx = procrastinate_ctx
-        self._pool = pool
 
     async def update_progress(
         self,
         progress: float,
         message: str | None = None,
     ) -> None:
-        """UPSERT progress into the ``job_progress`` table.
+        """Step 2 no-op: log progress at debug level.
 
-        Silently degrades to a debug log when no pool is configured (unit
-        tests) or when the ``job_progress`` table doesn't exist (older DB
-        without migration 054 applied).
+        Step 3 will route this to the same DB row + ``notify_job_update`` path
+        that the legacy ``JobContext.update_progress`` uses today.
         """
-        if self._pool is None or not self.job_id:
-            logger.debug(
-                "ctx_shim.update_progress no-op (pool=%s, job_id=%r) progress=%.2f msg=%s",
-                self._pool,
-                self.job_id,
-                progress,
-                message,
-            )
-            return
-        try:
-            await self._pool.execute(
-                """
-                INSERT INTO job_progress (jarvis_job_id, progress, message, updated_at)
-                VALUES ($1, $2, $3, NOW())
-                ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = EXCLUDED.progress,
-                      message    = EXCLUDED.message,
-                      updated_at = EXCLUDED.updated_at
-                """,
-                self.job_id,
-                float(progress),
-                message,
-            )
-        except Exception:  # noqa: BLE001 — never let progress reporting kill the job
-            logger.debug(
-                "ctx_shim.update_progress UPSERT failed for job %s",
-                self.job_id,
-                exc_info=True,
-            )
+        logger.debug(
+            "task_registry shim: job=%s progress=%.2f msg=%s (no-op until Step 3)",
+            self.job_id,
+            progress,
+            message,
+        )
 
     async def is_cancelled(self) -> bool:
-        """Return True when procrastinate has flagged the job for abort.
+        """Step 2 stub: always False.
 
-        Bridges to ``procrastinate.JobContext.should_abort()`` (sync, so we
-        wrap the call). When no procrastinate context is attached (unit
-        tests instantiating the shim directly), always returns False.
+        Step 3 will bridge to ``procrastinate_ctx.should_abort()`` once the
+        cancel-on-defer flow is wired up.
         """
-        if self._procrastinate_ctx is None:
-            return False
-        try:
-            return bool(self._procrastinate_ctx.should_abort())
-        except Exception:  # noqa: BLE001 — defensive: never raise from a cancellation probe
-            logger.debug(
-                "ctx_shim.is_cancelled probe failed for job %s",
-                self.job_id,
-                exc_info=True,
-            )
-            return False
+        return False
 
 
 def make_ctx_shim(
     procrastinate_ctx: _ProcrastinateJobContext | None = None,
     *,
     job_id: str | None = None,
-    pool: asyncpg.Pool | None = None,
 ) -> ProcrastinateJobContextShim:
     """Build a ``ProcrastinateJobContextShim`` from a procrastinate ``JobContext``.
 
@@ -131,22 +96,13 @@ def make_ctx_shim(
             a ``@app.task(pass_context=True)`` body. May be ``None`` for tests
             that exercise the shim directly.
         job_id: explicit override for ``job_id``. If omitted, derived from
-            ``procrastinate_ctx.job.task_kwargs['job_id']`` (the JARVIS UUID),
-            falling back to ``str(procrastinate_ctx.job.id)`` (the
-            procrastinate bigint id) and finally to ``""``.
-        pool: asyncpg pool used by ``update_progress`` to UPSERT into
-            ``job_progress``. When ``None``, progress reporting is a no-op
-            (safe for unit tests).
+            ``procrastinate_ctx.job.id`` (stringified). Falls back to ``""``
+            when neither is available.
     """
     if job_id is None:
         if procrastinate_ctx is not None:
             try:
-                kwargs = procrastinate_ctx.job.task_kwargs or {}
-                kwarg_id = kwargs.get("job_id")
-                if kwarg_id:
-                    job_id = str(kwarg_id)
-                else:
-                    job_id = str(procrastinate_ctx.job.id)
+                job_id = str(procrastinate_ctx.job.id)
             except AttributeError:
                 job_id = ""
         else:
@@ -154,5 +110,4 @@ def make_ctx_shim(
     return ProcrastinateJobContextShim(
         job_id=job_id,
         procrastinate_ctx=procrastinate_ctx,
-        pool=pool,
     )

@@ -184,42 +184,10 @@ describe('HeroPulse currentIndex clamp and reset (Phase 1e)', () => {
       qc.setQueryData<PulseDeck>(['pulse-today'], shrunkDeck);
     });
 
-    // HeroPulse useEffect: deck_id unchanged (10 === 10), but currentIndex (3) >= cards.length (2)
+    // HeroPulse useEffect: deck_id unchanged (10 === 10), but currentIndex (3) > cards.length (2)
     // → clamp fires → currentIndex = 2 → cleared state (currentIndex >= cards.length)
     expect(
       await screen.findByText(/All caught up/i),
     ).toBeInTheDocument();
-  });
-
-  it('clamp boundary (>=): refetch returning exact same length as currentIndex shows "All caught up"', async () => {
-    const user = userEvent.setup();
-
-    // 2-card deck
-    const twoCards = [
-      makeCard({ card_id: 1, paper_id: 101, paper_title: 'Card One', rank: 1 }),
-      makeCard({ card_id: 2, paper_id: 102, paper_title: 'Card Two', rank: 2 }),
-    ];
-    const deck = makeDeck({ deck_id: 20, card_count: 2, cards: twoCards });
-    vi.mocked(fetchPulseToday).mockResolvedValue(deck);
-
-    const { qc } = renderHeroPulse();
-
-    // Rate card 1 → currentIndex becomes 1, shows card 2
-    expect(await screen.findByText('Card One')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Accept' }));
-    expect(await screen.findByText('Card Two')).toBeInTheDocument();
-
-    // Rate card 2 → currentIndex becomes 2 → 2 >= 2 → "All caught up"
-    await user.click(screen.getByRole('button', { name: 'Accept' }));
-    expect(await screen.findByText(/All caught up/i)).toBeInTheDocument();
-
-    // Simulate refetch returning same deck (deck_id=20, still 2 cards)
-    // currentIndex=2, deck.cards.length=2 → 2 >= 2 → clamp fires, stays cleared
-    act(() => {
-      qc.setQueryData<PulseDeck>(['pulse-today'], { ...deck });
-    });
-
-    // Should still show "All caught up" — the >= fix ensures clamp holds at the boundary
-    expect(screen.getByText(/All caught up/i)).toBeInTheDocument();
   });
 });

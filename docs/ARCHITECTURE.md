@@ -77,38 +77,15 @@ Rules:
 
 ## Unified Jobs
 
-Long-running work is brokered through **procrastinate** (PostgreSQL-backed) and
-exposed through a unified HTTP envelope:
+Long-running work is tracked in the shared `jobs` table and exposed through:
 
 - `POST /api/jobs`
 - `GET /api/jobs/{id}`
 - `GET /api/jobs/{id}/stream`
 - `POST /api/jobs/{id}/cancel`
 
-### Dispatch path
-
-`POST /api/jobs` receives a `kind` string and routes it through
-`KIND_TO_TASK` in `libs/jarvis_common/jarvis_common/task_registry.py`.
-`KIND_TO_TASK` maps every JARVIS job kind to the registered procrastinate
-task object, which `defer_async` enqueues into `procrastinate_jobs`.
-
-### Read / stream path
-
-`GET /api/jobs/{id}` and `GET /api/jobs/{id}/stream` use
-`get_unified` and `procrastinate_row_to_jarvis_row` (both in
-`libs/jarvis_common/jarvis_common/jobs.py`) to adapt a
-`procrastinate_jobs` row into the public job envelope the frontend
-expects.  SSE progress events are written to the sidecar
-`job_progress` table (added in migration 054) and pushed to listeners
-via `pg_notify`.
-
-### Connector wiring
-
-`task_registry.app` is a module-level `procrastinate.App` initialised
-with an unconnected `AiopgConnector`.  Each service's lifespan startup
-must call `task_registry.set_dependencies(pool, http_client)` before
-starting the worker so every task dispatcher can access the pool and
-HTTP client.
+Service-specific endpoints may defer procrastinate tasks, but their response contracts should
+stay consistent with the shared job model.
 
 ## Authentication And Ownership
 

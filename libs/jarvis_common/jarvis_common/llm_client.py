@@ -81,13 +81,9 @@ def get_litellm_config(
 def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG001
     """Return auth headers for a LiteLLM request.
 
-    When LITELLM_MASTER_KEY is set, returns ``{"Authorization": "Bearer <key>"}``.
-    When unset (e.g. dev without a key configured), returns ``{}`` so that
-    loopback-only enforcement still protects the endpoint.
+    Always returns an empty dict: litellm runs as a transparent loopback proxy
+    with no master_key.  The parameter is kept for call-site compatibility.
     """
-    master_key = os.environ.get("LITELLM_MASTER_KEY")
-    if master_key:
-        return {"Authorization": f"Bearer {master_key}"}
     return {}
 
 

@@ -14,7 +14,11 @@
 -- `jobs` table — all of them now refer to a table that no longer
 -- exists; they remain on disk for git history only).
 
+BEGIN;
+
 DROP TRIGGER IF EXISTS trg_jobs_notify_update ON jobs;
 DROP FUNCTION IF EXISTS notify_jobs_update();
 
 DROP TABLE IF EXISTS jobs CASCADE;
+
+COMMIT;
