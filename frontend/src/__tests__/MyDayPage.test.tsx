@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter } from 'react-router-dom';
 import { MyDayPage } from '@/pages/MyDayPage';
 import * as api from '@/lib/api';
-import type { MyDayResponse, RetentionStats, PulseDeck } from '@/types';
+import type { MyDayResponse, RetentionStats, PulseDeck, PulseCardItem } from '@/types';
 
 // Mock the api module
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -59,7 +60,7 @@ const mockMyDayData: MyDayResponse = {
   today_focus_hours: 2.5,
   focus_streak_days: 4,
   project_pulse: [
-    { id: 10, name: 'JARVIS', total_tasks: 10, done_tasks: 7, next_milestone: 'v2 release', next_milestone_deadline: null },
+    { id: 10, name: 'JARVIS', color: null, total_tasks: 10, done_tasks: 7, next_milestone: 'v2 release', next_milestone_deadline: null },
   ],
 };
 
@@ -114,16 +115,19 @@ describe('MyDayPage', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('renders Yesterday section marker', async () => {
+  it('hides Yesterday section (no backend data in Phase 1c)', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ Yesterday/i)).toBeInTheDocument();
+    await screen.findByText(/RESEARCH LOG/);
+    // YesterdaySection returns null when backend ships no yesterday data
+    expect(screen.queryByText(/§ Yesterday/i)).not.toBeInTheDocument();
   });
 
-  it('renders Now section with hero tabs', async () => {
+  it('renders Now section with Pulse #1 mode button', async () => {
     renderWithProviders();
     expect(await screen.findByText(/§ Now/i)).toBeInTheDocument();
-    expect(screen.getByText('Pulse #1')).toBeInTheDocument();
-    expect(screen.getByText('Continue task')).toBeInTheDocument();
+    // ModePicker uses plain buttons; Pulse #1 is always visible
+    expect(screen.getByRole('button', { name: 'Pulse #1' })).toBeInTheDocument();
+    // Continue task only shows with an active Pomodoro (none in this test)
   });
 
   it("renders Today's intent section marker", async () => {
@@ -165,9 +169,11 @@ describe('MyDayPage', () => {
     expect(await screen.findByText(/7d streak/)).toBeInTheDocument();
   });
 
-  it('renders End of day section marker', async () => {
+  it('hides End of day section (journal ships in Phase 2)', async () => {
     renderWithProviders();
-    expect(await screen.findByText(/§ End of day/i)).toBeInTheDocument();
+    await screen.findByText(/RESEARCH LOG/);
+    // EndOfDaySection returns null until Phase 2 journal endpoint ships
+    expect(screen.queryByText(/§ End of day/i)).not.toBeInTheDocument();
   });
 
   it('does not render Triage section when no action items or foundational gaps', async () => {
@@ -183,6 +189,114 @@ describe('MyDayPage', () => {
     // a "No Pulse for today yet" message instead of pulse card content.
     expect(
       await screen.findByText(/No Pulse for today yet/i),
+    ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HeroPulse-specific behaviour (B4)
+// ---------------------------------------------------------------------------
+
+function makePulseCard(overrides: Partial<PulseCardItem> = {}): PulseCardItem {
+  return {
+    card_id: 1,
+    paper_id: 101,
+    paper_title: 'Attention Is All You Need',
+    paper_authors: ['Vaswani et al.'],
+    paper_url: null,
+    rank: 1,
+    score: 0.9,
+    llm_relevance: null,
+    llm_novelty: null,
+    reasoning: null,
+    reasoning_verified: null,
+    reasoning_confidence: null,
+    signals: {},
+    user_state: null,
+    tags: null,
+    ...overrides,
+  };
+}
+
+function makeDeck(cards: PulseCardItem[]): PulseDeck {
+  return {
+    deck_id: 1,
+    deck_date: '2026-05-03',
+    card_count: cards.length,
+    generated_at: '2026-05-03T08:00:00Z',
+    cards,
+    stats: {},
+    degraded_reason: null,
+  };
+}
+
+describe('HeroPulse behaviour', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
+    vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
+    vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
+  });
+
+  it('two-card deck shows #1 of 2 in the meta text initially', async () => {
+    const cards = [
+      makePulseCard({ card_id: 1, paper_id: 101, paper_title: 'Paper One', rank: 1 }),
+      makePulseCard({ card_id: 2, paper_id: 102, paper_title: 'Paper Two', rank: 2 }),
+    ];
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck(cards));
+
+    renderWithProviders();
+
+    // HeroPulse meta line: "Triage today's pulse · ~6 min · #1 of 2"
+    expect(await screen.findByText(/#1 of 2/)).toBeInTheDocument();
+  });
+
+  it('after Accept mutation resolves, advances to #2 of 2', async () => {
+    const user = userEvent.setup();
+
+    const cards = [
+      makePulseCard({ card_id: 1, paper_id: 101, paper_title: 'Paper One', rank: 1 }),
+      makePulseCard({ card_id: 2, paper_id: 102, paper_title: 'Paper Two', rank: 2 }),
+    ];
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck(cards));
+    // ratePulseCard resolves immediately; onSuccess increments currentIndex
+    vi.mocked(api.ratePulseCard).mockResolvedValue(undefined as any);
+
+    renderWithProviders();
+
+    // Wait for initial render
+    expect(await screen.findByText(/#1 of 2/)).toBeInTheDocument();
+
+    // Click Accept (rating: 'up')
+    const acceptBtn = screen.getByRole('button', { name: 'Accept' });
+    await user.click(acceptBtn);
+
+    // After mutation onSuccess, currentIndex increments to 1 → "#2 of 2"
+    expect(await screen.findByText(/#2 of 2/)).toBeInTheDocument();
+  });
+
+  it('shows cleared state text when all cards in a 1-card deck are rated', async () => {
+    const user = userEvent.setup();
+
+    const cards = [
+      makePulseCard({ card_id: 1, paper_id: 101, paper_title: 'Solo Paper', rank: 1 }),
+    ];
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(makeDeck(cards));
+    vi.mocked(api.ratePulseCard).mockResolvedValue(undefined as any);
+
+    renderWithProviders();
+
+    // Wait for the card to appear
+    expect(await screen.findByText(/#1 of 1/)).toBeInTheDocument();
+
+    // Rate it (Skip or Accept both increment currentIndex via onSuccess)
+    const skipBtn = screen.getByRole('button', { name: 'Skip' });
+    await user.click(skipBtn);
+
+    // After rating the only card, cleared state should appear
+    expect(
+      await screen.findByText(/All caught up/i),
     ).toBeInTheDocument();
   });
 });

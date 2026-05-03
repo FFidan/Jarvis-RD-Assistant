@@ -132,3 +132,66 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* ── Accent presets ──────────────────────────────────── */
+html.accent-forest {
+  --ink-blue:        #0f5132;
+  --ink-blue-soft:   rgba(15, 81, 50, 0.08);
+  --ink-blue-border: rgba(15, 81, 50, 0.15);
+}
+html.dark.accent-forest {
+  --ink-blue:        #6ee7b7;
+  --ink-blue-soft:   rgba(110, 231, 183, 0.10);
+  --ink-blue-border: rgba(110, 231, 183, 0.20);
+}
+html.accent-burgundy {
+  --ink-blue:        #7a1f2b;
+  --ink-blue-soft:   rgba(122, 31, 43, 0.08);
+  --ink-blue-border: rgba(122, 31, 43, 0.15);
+}
+html.dark.accent-burgundy {
+  --ink-blue:        #fca5a5;
+  --ink-blue-soft:   rgba(252, 165, 165, 0.10);
+  --ink-blue-border: rgba(252, 165, 165, 0.20);
+}
+html.accent-slate {
+  --ink-blue:        #374151;
+  --ink-blue-soft:   rgba(55, 65, 81, 0.08);
+  --ink-blue-border: rgba(55, 65, 81, 0.15);
+}
+html.dark.accent-slate {
+  --ink-blue:        #d1d5db;
+  --ink-blue-soft:   rgba(209, 213, 219, 0.10);
+  --ink-blue-border: rgba(209, 213, 219, 0.20);
+}
+html.accent-plum {
+  --ink-blue:        #5b1864;
+  --ink-blue-soft:   rgba(91, 24, 100, 0.08);
+  --ink-blue-border: rgba(91, 24, 100, 0.15);
+}
+html.dark.accent-plum {
+  --ink-blue:        #d8b4fe;
+  --ink-blue-soft:   rgba(216, 180, 254, 0.10);
+  --ink-blue-border: rgba(216, 180, 254, 0.20);
+}
+
+/* ── Type pairing presets ───────────────────────────── */
+/* Default (serif-calm) is already :root — no class needed */
+html.type-sans-modern {
+  --font-serif: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, monospace;
+}
+html.type-editorial {
+  --font-serif: "PT Serif", "Georgia", ui-serif, serif;
+  --font-sans:  "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+}
+
+/* ── Density presets ─────────────────────────────────── */
+html.density-comfortable {
+  --section-rhythm: 60px;
+  font-size: 105%;
+}
+html.density-compact {
+  --section-rhythm: 36px;
+  font-size: 93%;
+}

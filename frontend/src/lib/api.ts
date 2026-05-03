@@ -193,6 +193,8 @@ import type {
   BulkAction,
   FeedbackListResponse,
   DeleteFeedbackResponse,
+  JournalEntry,
+  JournalPrompts,
 } from '@/types';
 
 // --- Dashboard ---
@@ -1070,6 +1072,35 @@ export async function fetchSnapshot(paperId: number, page: number): Promise<stri
   const res = await apiFetchRaw(`/api/snapshots/${paperId}/${page}`);
   const blob = await res.blob();
   return URL.createObjectURL(blob);
+}
+
+// --- My Day Journal ---
+
+export async function getJournalEntry(date: string): Promise<JournalEntry | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 300_000);
+  try {
+    const res = await fetch(`/api/my-day/journal?date=${date}`, {
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...authHeaders(),
+      },
+    });
+    handleAuthFailure(res.status);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new ApiError(res.status, await res.text());
+    return res.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+export async function upsertJournalEntry(date: string, prompts: JournalPrompts): Promise<JournalEntry> {
+  return apiFetch<JournalEntry>('/api/my-day/journal', {
+    method: 'POST',
+    body: JSON.stringify({ date, prompts }),
+  });
 }
 
 // --- React Query hooks ---

@@ -11,6 +11,7 @@ import { TimerSection } from '@/components/settings/TimerSection';
 import { PairTelegram } from '@/components/setup/PairTelegram';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
+import { AppearanceSection } from '@/components/settings/AppearanceSection';
 
 const VALID_TABS = new Set([
   'topics',
@@ -23,6 +24,7 @@ const VALID_TABS = new Set([
   'timer',
   'providers',
   'integrations',
+  'appearance',
 ]);
 
 export function SettingsPage() {
@@ -56,6 +58,7 @@ export function SettingsPage() {
           <TabsTrigger value="timer">Timer</TabsTrigger>
           <TabsTrigger value="providers">Providers</TabsTrigger>
           <TabsTrigger value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger value="appearance">Appearance</TabsTrigger>
         </TabsList>
 
         <TabsContent value="topics">
@@ -92,6 +95,10 @@ export function SettingsPage() {
 
         <TabsContent value="providers">
           <ProvidersSection />
+        </TabsContent>
+
+        <TabsContent value="appearance">
+          <AppearanceSection />
         </TabsContent>
 
         <TabsContent value="integrations">

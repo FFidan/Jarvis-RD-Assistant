@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { fetchMyDay } from '@/lib/api';
 import type { MyDayResponse } from '@/types';
 import { SectionHeader } from './SectionHeader';
+import { GradientProgressBar } from '@/components/my-day/primitives/GradientProgressBar';
 
 const COLORS = ['#2563eb', '#16a34a', '#9333ea'];
 
@@ -38,49 +39,65 @@ export function ProjectsSection() {
         meta={`${data.project_pulse.length} active`}
       />
 
-      <div className="space-y-3">
+      <div className="space-y-4">
         {projects.map((project, i) => {
           const pct =
             project.total_tasks > 0
               ? Math.round((project.done_tasks / project.total_tasks) * 100)
               : 0;
 
-          return (
-            <div key={project.id} className="grid grid-cols-[16px_1fr_auto] gap-3 items-start">
-              {/* Status dot */}
-              <div className="mt-[5px] flex-shrink-0">
-                <div className="h-2 w-2 rounded-full bg-emerald-500" />
-              </div>
+          const daysUntilDeadline = project.next_milestone_deadline
+            ? Math.floor(
+                (new Date(project.next_milestone_deadline).getTime() - Date.now()) / 86400000
+              )
+            : null;
+          const completionRatio = project.total_tasks > 0
+            ? project.done_tasks / project.total_tasks
+            : 1;
+          const isAtRisk =
+            daysUntilDeadline !== null && daysUntilDeadline <= 7 && completionRatio < 0.5;
+          const dotClass = isAtRisk ? 'bg-amber-500' : 'bg-emerald-500';
+          // Use project.color if set; fall back to rotating palette for gradient bar
+          const projectColor = project.color ?? COLORS[i % COLORS.length];
 
-              {/* Name + meta */}
-              <div className="min-w-0">
+          return (
+            <div key={project.id} className="space-y-1.5">
+              <div className="grid grid-cols-[16px_1fr_auto] gap-3 items-center">
+                {/* Status dot */}
+                <div className="flex-shrink-0">
+                  <div className={`h-2 w-2 rounded-full ${dotClass}`} />
+                </div>
+
+                {/* Name */}
                 <button
                   type="button"
-                  className="text-[14px] font-medium text-soft hover:text-[var(--ink-blue)] text-left leading-snug truncate w-full"
+                  className="text-[14px] font-medium text-soft hover:text-[var(--ink-blue)] text-left leading-snug truncate w-full flex items-center gap-1.5"
                   onClick={() => navigate('/projects', { state: { projectId: project.id } })}
                 >
+                  {project.color && (
+                    <span
+                      className="w-2 h-2 rounded-full inline-block flex-shrink-0"
+                      style={{ backgroundColor: project.color }}
+                    />
+                  )}
                   {project.name}
                 </button>
-                <p className="font-mono text-[10px] text-meta mt-0.5 truncate">
-                  {project.next_milestone || '—'} · due {formatDate(project.next_milestone_deadline)}
-                </p>
-              </div>
 
-              {/* Progress % + bar */}
-              <div className="flex flex-col items-end flex-shrink-0">
-                <span className="font-mono tabular-nums text-[12px] text-soft">
+                {/* Progress % */}
+                <span className="font-mono tabular-nums text-[10.5px] text-meta flex-shrink-0">
                   {pct}%
                 </span>
-                <div className="mt-1 h-1 w-20 rounded-full bg-zinc-100 dark:bg-zinc-800">
-                  <div
-                    className="h-1 rounded-full"
-                    style={{
-                      width: pct + '%',
-                      backgroundColor: COLORS[i % COLORS.length],
-                    }}
-                  />
-                </div>
               </div>
+
+              {/* Gradient progress bar — full width of card (skips the 16px dot column) */}
+              <div className="pl-5">
+                <GradientProgressBar value={pct} color={projectColor} />
+              </div>
+
+              {/* Milestone + due date below bar */}
+              <p className="pl-5 font-mono text-[10px] text-meta truncate">
+                {project.next_milestone || '—'} · due {formatDate(project.next_milestone_deadline)}
+              </p>
             </div>
           );
         })}

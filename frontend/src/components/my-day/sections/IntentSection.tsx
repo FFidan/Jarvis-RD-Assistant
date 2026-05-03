@@ -1,9 +1,42 @@
 import { useState } from 'react';
+import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ChevronDown, ChevronRight } from 'lucide-react';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { fetchMyDay, createQuickTask } from '@/lib/api';
+import { fetchMyDay, createQuickTask, updateTask } from '@/lib/api';
+import type { MyDayTask } from '@/types';
 import { SectionHeader } from './SectionHeader';
 import { TaskRow } from './TaskRow';
+
+function CompletedRow({ task }: { task: MyDayTask }) {
+  const queryClient = useQueryClient();
+  const reopenMutation = useMutation({
+    mutationFn: () => updateTask(task.id, { status: 'todo' }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+  });
+
+  return (
+    <div className="group flex items-center gap-3 py-1.5 -mx-2 px-2 hover:bg-white/60 dark:hover:bg-zinc-900/60 rounded-md">
+      <button
+        onClick={() => reopenMutation.mutate()}
+        disabled={reopenMutation.isPending}
+        className="font-mono text-[10px] text-zinc-400 dark:text-zinc-500 w-5 flex-shrink-0 hover:text-[var(--ink-blue)] transition-colors"
+        title="Reopen task"
+        aria-label="Reopen task"
+      >
+        ✓
+      </button>
+      <span className="text-[13.5px] line-through text-meta truncate flex-1">
+        {task.title}
+      </span>
+      {task.project_name && (
+        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 text-meta border-hair">
+          {task.project_name}
+        </span>
+      )}
+    </div>
+  );
+}
 
 export function IntentSection() {
   const [showAddForm, setShowAddForm] = useState(false);
@@ -46,9 +79,13 @@ export function IntentSection() {
       <SectionHeader marker="Today's intent" />
 
       {/* Intent line */}
-      <p className="font-serif text-[19px] leading-snug max-w-[58ch] border-l-2 border-[var(--ink-blue)] pl-5 mb-4">
-        Today's intent will live here. Phase 1b/2 will let you set &amp; persist it.
-      </p>
+      <button
+        type="button"
+        onClick={() => toast.info('Intent persistence ships in Phase 2.')}
+        className="font-serif italic text-faint text-[15px] hover:text-soft border-l-2 border-dashed border-hair pl-5 py-1 mb-4 transition-colors text-left block"
+      >
+        Set today's intent…
+      </button>
 
       {/* Tasks ladder */}
       <div className="pl-5 space-y-0">
@@ -122,7 +159,8 @@ export function IntentSection() {
             onClick={() => setShowAddForm(true)}
             className="flex items-center gap-2 text-[12px] font-mono text-faint hover:text-strong ml-8 mt-1 transition-colors"
           >
-            + add task
+            <kbd className="font-mono text-[10px] px-1 py-0.5 rounded border border-hair bg-paper text-meta">+</kbd>
+            add task
           </button>
         )}
 
@@ -131,33 +169,17 @@ export function IntentSection() {
           <div className="mt-2 pt-2 border-t border-zinc-100 dark:border-zinc-800">
             <button
               onClick={() => setShowCompleted((v) => !v)}
-              className="text-[11px] font-mono text-faint hover:text-soft transition-colors"
+              className="flex items-center gap-1 text-[11px] font-mono text-meta hover:text-soft transition-colors"
             >
-              {showCompleted ? '▾ Hide completed' : `▸ ${completedToday.length} done today`}
+              {showCompleted
+                ? <><ChevronDown className="h-3 w-3" /> Hide completed</>
+                : <><ChevronRight className="h-3 w-3" /> {completedToday.length} done today</>
+              }
             </button>
 
             {showCompleted && (
               <div className="mt-1 space-y-0">
-                {completedToday.map((task) => (
-                  <div
-                    key={task.id}
-                    className="flex items-center gap-3 py-1.5 -mx-2 px-2"
-                  >
-                    <span className="font-mono text-[10px] text-zinc-300 dark:text-zinc-600 tabular-nums w-5 flex-shrink-0">
-                      ✓
-                    </span>
-                    <span className="text-[13.5px] line-through text-faint truncate flex-1">
-                      {task.title}
-                    </span>
-                    {task.project_name && (
-                      <span
-                        className="text-[10px] font-mono px-1.5 py-0.5 rounded border flex-shrink-0 text-zinc-300 dark:text-zinc-600 border-hair"
-                      >
-                        {task.project_name}
-                      </span>
-                    )}
-                  </div>
-                ))}
+                {completedToday.map((task) => <CompletedRow key={task.id} task={task} />)}
               </div>
             )}
           </div>

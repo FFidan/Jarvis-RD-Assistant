@@ -5,6 +5,7 @@ import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
 import { Toaster } from '@/components/ui/toaster';
 import { usePomodoroTick } from '@/hooks/use-pomodoro-tick';
 import { useThemeEffect } from '@/hooks/use-theme-effect';
+import { useAppearance } from '@/hooks/use-appearance';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
 
@@ -16,6 +17,7 @@ export function AppShell({ children }: AppShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
   usePomodoroTick();
   useThemeEffect();
+  useAppearance();
 
   // Re-subscribe to any jobs that were running before the page was refreshed
   const hydrate = useJobStore((s) => s.hydrate);
@@ -47,7 +49,7 @@ export function AppShell({ children }: AppShellProps) {
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar onMenuClick={() => setMobileOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-6 bg-paper">{children}</main>
       </div>
 
       <Toaster position="bottom-right" />

@@ -16,6 +16,17 @@ import {
 import { cn } from '@/lib/utils';
 import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
+import { ScoreStack } from '@/components/my-day/sections/ScoreStack';
+
+/** Extract 4-stop score parts from the flat signals map. */
+function toScoreParts(signals: Record<string, number>) {
+  return {
+    emb: signals['embedding'] ?? signals['emb'] ?? 0,
+    llm: signals['llm'] ?? signals['llm_relevance'] ?? 0,
+    rec: signals['rec'] ?? signals['recommendation'] ?? 0,
+    graph: signals['graph'] ?? signals['graph_boost'] ?? 0,
+  };
+}
 
 export interface PulseCardProps {
   card: PulseCardItem;
@@ -173,6 +184,12 @@ export function PulseCard({
             {card.paper_title}
           </h3>
           <p className="mt-1 text-sm text-muted-foreground">{authorsDisplay}</p>
+          <ScoreStack
+            score={card.score}
+            parts={toScoreParts(card.signals ?? {})}
+            showBadges
+            className="max-w-[28rem] mt-2"
+          />
           {card.reasoning && (
             <div className="mt-2 flex items-start gap-1.5">
               <p className="line-clamp-2 text-sm italic text-muted-foreground">

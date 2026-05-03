@@ -11,11 +11,13 @@ import { HeroNow } from '@/components/my-day/sections/HeroNow';
 
 const startWorkMock = vi.fn();
 
+// Mutable state so individual tests can override hasTask
+let pomodoroState = { phase: 'idle' as string, attachedItem: null as { id: number; title: string; type: string } | null, pausedAt: null as number | null, secondsRemaining: 0 };
+
 vi.mock('@/stores/pomodoro-store', () => ({
   usePomodoroStore: Object.assign(
-    (selector?: (state: any) => any) => {
-      const state = { phase: 'idle', attachedItem: null, pausedAt: null };
-      return selector ? selector(state) : state;
+    (selector?: (state: typeof pomodoroState) => unknown) => {
+      return selector ? selector(pomodoroState) : pomodoroState;
     },
     { getState: () => ({ startWork: startWorkMock }) },
   ),
@@ -41,7 +43,6 @@ vi.mock('@/lib/api', () => ({
   getStats: vi.fn(),
 }));
 
-// Import after mock to get the mocked version
 const { fetchPulseToday } = await import('@/lib/api');
 
 // ---------------------------------------------------------------------------
@@ -69,49 +70,67 @@ describe('HeroNow', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    // Default: fetchPulseToday returns null (no deck yet)
+    // Reset to idle (no active task)
+    pomodoroState = { phase: 'idle', attachedItem: null, pausedAt: null, secondsRemaining: 0 };
     vi.mocked(fetchPulseToday).mockResolvedValue(null);
   });
 
   it('defaults to Pulse mode on first render with empty localStorage', async () => {
     renderWithProviders();
 
-    // Wait for the component to stabilize (HeroPulse renders)
+    // Wait for HeroPulse to render
     expect(await screen.findByText(/No Pulse for today yet/i)).toBeInTheDocument();
 
-    // The "Pulse #1" tab trigger should exist (it is the active tab)
-    const pulseTab = screen.getByRole('tab', { name: 'Pulse #1' });
-    expect(pulseTab).toBeInTheDocument();
-    // Radix Tabs sets aria-selected="true" on the active trigger
-    expect(pulseTab).toHaveAttribute('aria-selected', 'true');
+    // ModePicker uses plain <button> elements (not Radix tabs)
+    const pulseBtn = screen.getByRole('button', { name: 'Pulse #1' });
+    expect(pulseBtn).toBeInTheDocument();
   });
 
-  it('clicking "Continue task" tab switches to Task mode and persists to localStorage', async () => {
+  it('Continue task button is hidden when no Pomodoro is active', async () => {
+    renderWithProviders();
+    await screen.findByText(/No Pulse for today yet/i);
+
+    // With phase=idle, Continue task button should not exist
+    expect(screen.queryByRole('button', { name: 'Continue task' })).not.toBeInTheDocument();
+  });
+
+  it('Continue task button appears when Pomodoro is active', async () => {
+    pomodoroState = {
+      phase: 'work',
+      attachedItem: { id: 1, title: 'Test task', type: 'task' },
+      pausedAt: null,
+      secondsRemaining: 1500,
+    };
+
+    renderWithProviders();
+    await screen.findByText(/No Pulse for today yet/i);
+
+    expect(screen.getByRole('button', { name: 'Continue task' })).toBeInTheDocument();
+  });
+
+  it('clicking Continue task switches mode and persists to localStorage', async () => {
     const user = userEvent.setup();
-    renderWithProviders();
+    pomodoroState = {
+      phase: 'work',
+      attachedItem: { id: 1, title: 'Test task', type: 'task' },
+      pausedAt: null,
+      secondsRemaining: 1500,
+    };
 
-    // Wait for initial render
+    renderWithProviders();
     await screen.findByText(/No Pulse for today yet/i);
 
-    const taskTab = screen.getByRole('tab', { name: 'Continue task' });
-    await user.click(taskTab);
+    const taskBtn = screen.getByRole('button', { name: 'Continue task' });
+    await user.click(taskBtn);
 
-    // localStorage should now contain 'task'
     expect(localStorage.getItem('myday.heroMode')).toBe('task');
-
-    // The task tab should now be selected
-    expect(taskTab).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('"Resume reading" tab trigger is disabled', async () => {
+  it('Resume reading tab is gone (no thread data in Phase 1c)', async () => {
     renderWithProviders();
-
-    // Wait for component to render
     await screen.findByText(/No Pulse for today yet/i);
 
-    // The Resume reading trigger is wrapped in a span for Tooltip compatibility.
-    // The actual TabsTrigger element has disabled attribute.
-    const resumeTab = screen.getByRole('tab', { name: 'Resume reading' });
-    expect(resumeTab).toBeDisabled();
+    // Resume reading tab was removed per SPEC §States (no backend data)
+    expect(screen.queryByText(/Resume reading/i)).not.toBeInTheDocument();
   });
 });

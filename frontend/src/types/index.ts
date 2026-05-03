@@ -413,6 +413,8 @@ export interface Project {
   status: ProjectStatus;
   deadline: string | null;
   color: string | null;
+  next_milestone?: string | null;
+  next_milestone_due?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -469,6 +471,7 @@ export interface MyDayTask {
 export interface ProjectPulseItem {
   id: number;
   name: string;
+  color: string | null;
   total_tasks: number;
   done_tasks: number;
   next_milestone: string | null;
@@ -807,6 +810,22 @@ export interface CitationRelation {
   intent: string[];
 }
 
+// --- My Day Journal ---
+
+export interface JournalPrompts {
+  first_move?: string;
+  worked?: string;
+  blocked?: string;
+}
+
+export interface JournalEntry {
+  id: number;
+  date: string; // ISO date YYYY-MM-DD
+  prompts: JournalPrompts;
+  created_at: string;
+  updated_at: string;
+}
+
 // --- Priority Helper ---
 
 export function priorityLevel(score: number | null): PriorityLevel {
@@ -841,6 +860,7 @@ export interface PulseCardItem {
   signals: Record<string, number>;
   /** Current lifecycle state of the paper — used by Save button to enable unsave (to_read → inbox). */
   user_state?: LifecycleState | null;
+  tags?: string[] | null;
 }
 
 export interface PulseDeck {

@@ -1,48 +1,34 @@
-import { useLocation } from 'react-router-dom';
 import { Menu, Keyboard } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { HeaderPomodoro } from '@/components/layout/HeaderPomodoro';
 import { JobsIndicator } from '@/components/layout/JobsIndicator';
 import { ThemeToggle } from './ThemeToggle';
 import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
-
-const pageTitles: Record<string, string> = {
-  '/': 'Home',
-  '/my-day': 'My Day',
-  '/feed': 'Research Feed',
-  '/analytics': 'Analytics',
-  '/projects': 'Projects',
-  '/cards': 'Learning Cards',
-  '/settings': 'Settings',
-  '/citations': 'Citation Graph',
-  '/knowledge': 'Knowledge Graph',
-  '/extractions': 'Extraction Table',
-};
-
-function getPageTitle(pathname: string): string {
-  if (pageTitles[pathname]) return pageTitles[pathname];
-  if (pathname.startsWith('/paper/')) return 'Paper Detail';
-  return 'JARVIS';
-}
+import { BrandMark } from './BrandMark';
+import { CommandPaletteSearch } from './CommandPaletteSearch';
+import { UserAvatarMenu } from './UserAvatarMenu';
 
 interface TopBarProps {
   onMenuClick?: () => void;
 }
 
 export function TopBar({ onMenuClick }: TopBarProps) {
-  const location = useLocation();
-  const title = getPageTitle(location.pathname);
   const openShortcuts = useKeyboardShortcuts((s) => s.open);
 
   return (
-    <header className="flex h-14 items-center gap-4 border-b bg-card px-6">
+    <header className="flex h-14 items-center gap-4 border-b border-hair bg-paper px-6">
       {onMenuClick && (
         <Button variant="ghost" size="icon" onClick={onMenuClick} className="md:hidden" aria-label="Open menu">
           <Menu className="h-5 w-5" />
         </Button>
       )}
-      <h1 className="text-lg font-semibold">{title}</h1>
-      <div className="ml-auto flex items-center gap-2">
+      <BrandMark />
+      <div className="hidden md:flex flex-1 justify-center">
+        <CommandPaletteSearch />
+      </div>
+      <div className="ml-auto md:ml-0 flex items-center gap-2">
+        <JobsIndicator />
+        <HeaderPomodoro />
         <Button
           variant="ghost"
           size="icon"
@@ -53,8 +39,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
           <Keyboard className="h-5 w-5" />
         </Button>
         <ThemeToggle />
-        <JobsIndicator />
-        <HeaderPomodoro />
+        <UserAvatarMenu />
       </div>
     </header>
   );

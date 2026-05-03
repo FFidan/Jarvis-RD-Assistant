@@ -61,7 +61,7 @@ export function Sidebar() {
     <TooltipProvider delayDuration={0}>
       <div
         className={cn(
-          'flex h-full flex-col border-r bg-card transition-all duration-300',
+          'flex h-full flex-col border-r border-hair bg-paper transition-all duration-300',
           sidebarCollapsed ? 'w-16' : 'w-64',
         )}
       >

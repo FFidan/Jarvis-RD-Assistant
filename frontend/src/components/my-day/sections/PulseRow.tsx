@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { ratePulseCard } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
 import { ScoreStack } from './ScoreStack';
+import { HashtagChips } from '@/components/my-day/primitives/HashtagChips';
 
 export interface PulseRowProps {
   card: PulseCardItem;
@@ -55,7 +56,7 @@ export function PulseRow({ card, rank }: PulseRowProps) {
       {/* Column 2: body */}
       <div className="min-w-0 space-y-1">
         <button
-          className="font-serif text-[15px] leading-snug tracking-tight text-strong hover:text-[var(--ink-blue,#0b3a8a)] text-left transition-colors"
+          className="font-serif text-[16.5px] leading-snug tracking-tight text-strong hover:text-[var(--ink-blue,#0b3a8a)] text-left transition-colors"
           onClick={() => navigate(`/paper/${card.paper_id}`)}
         >
           {card.paper_title}
@@ -74,8 +75,9 @@ export function PulseRow({ card, rank }: PulseRowProps) {
         )}
 
         <div className="pt-1">
-          <ScoreStack score={card.score} parts={parts} className="max-w-[22rem]" />
+          <ScoreStack score={card.score} parts={parts} className="max-w-[22rem]" showBadges={false} />
         </div>
+        <HashtagChips tags={card.tags ?? null} />
       </div>
 
       {/* Column 3: action buttons */}

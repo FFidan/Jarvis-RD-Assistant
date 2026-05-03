@@ -43,7 +43,7 @@ export function HeaderPomodoro() {
   const tooltipText = `Pomodoro · ${phaseLabel} · click to open`;
 
   const handleTimeClick = () => {
-    navigate('/my-day');
+    navigate('/my-day#now');
   };
 
   const handleTogglePause = (e: React.MouseEvent) => {

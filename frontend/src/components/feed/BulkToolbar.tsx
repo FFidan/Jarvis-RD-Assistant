@@ -99,7 +99,7 @@ export function BulkToolbar({ surface, papersOnPage }: BulkToolbarProps) {
 
   return (
     <TooltipProvider delayDuration={400}>
-      <div className="sticky top-0 z-10 flex items-center gap-2 border-b bg-background px-4 py-2">
+      <div className="sticky top-2 z-10 flex items-center gap-2 rounded-lg border border-hair bg-paper/95 backdrop-blur-sm shadow-sm mx-4 px-3 py-1.5">
         {/* Select All checkbox */}
         <Tooltip>
           <TooltipTrigger asChild>

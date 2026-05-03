@@ -1,9 +1,11 @@
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { ScoreStack } from './ScoreStack';
+import { WhyChips } from '@/components/my-day/primitives/WhyChips';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchPulseToday, ratePulseCard } from '@/lib/api';
 import type { PulseDeck, PulseCardItem, PulseRating } from '@/types';
@@ -21,6 +23,7 @@ function toScoreParts(signals: Record<string, number>) {
 export function HeroPulse() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [currentIndex, setCurrentIndex] = useState(0);
 
   const { data: deck, isLoading, isError, error } = useQuery<PulseDeck | null>({
     queryKey: ['pulse-today'],
@@ -30,6 +33,9 @@ export function HeroPulse() {
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>
       ratePulseCard(paperId, rating),
+    onSuccess: () => {
+      setCurrentIndex((prev) => prev + 1);
+    },
     onMutate: async ({ paperId, rating }) => {
       if (rating !== 'save') return undefined;
       const prev = queryClient.getQueryData<PulseDeck>(['pulse-today']);
@@ -75,7 +81,16 @@ export function HeroPulse() {
     );
   }
 
-  const card = deck?.cards[0];
+  const card = deck?.cards[currentIndex];
+
+  // Cleared (rated all) — only when deck exists and we've advanced past last card
+  if (deck && currentIndex >= deck.cards.length) {
+    return (
+      <p className="text-faint italic font-serif text-center py-8">
+        All caught up — pulse cleared. Generate a fresh one from the Research Feed.
+      </p>
+    );
+  }
 
   if (!card) {
     return (
@@ -89,12 +104,24 @@ export function HeroPulse() {
   const authorsLine = card.paper_authors?.join(', ') ?? '';
 
   const handleOpenAndFocus = () => {
+    const store = usePomodoroStore.getState();
+    if (store.phase !== 'idle') {
+      toast.info(
+        `Already focusing on "${store.attachedItem?.title ?? 'a task'}". Replace timer?`,
+        {
+          action: {
+            label: 'Replace',
+            onClick: () => {
+              store.startWork({ id: card.paper_id, title: card.paper_title, type: 'paper' });
+              navigate(`/paper/${card.paper_id}`);
+            },
+          },
+        },
+      );
+      return;
+    }
     navigate(`/paper/${card.paper_id}`);
-    usePomodoroStore.getState().startWork({
-      id: card.paper_id,
-      title: card.paper_title,
-      type: 'paper',
-    });
+    store.startWork({ id: card.paper_id, title: card.paper_title, type: 'paper' });
   };
 
   return (
@@ -105,13 +132,13 @@ export function HeroPulse() {
           Next
         </span>
         <span className="font-mono text-[11px] text-faint">
-          Triage today's pulse · #1 of {deck?.card_count ?? 1}
+          Triage today's pulse · ~6 min · #{currentIndex + 1} of {deck?.card_count ?? 1}
         </span>
       </div>
 
       {/* Title */}
       <h2
-        className="font-serif text-[24px] leading-[1.18] tracking-tight max-w-[36ch] text-strong hover:text-[var(--ink-blue,#0b3a8a)] cursor-default transition-colors"
+        className="font-serif text-[26px] leading-[1.18] tracking-tight max-w-[36ch] text-strong hover:text-[var(--ink-blue,#0b3a8a)] cursor-default transition-colors"
         onClick={handleOpenAndFocus}
       >
         {card.paper_title}
@@ -123,11 +150,7 @@ export function HeroPulse() {
       )}
 
       {/* Reasoning / TL;DR */}
-      {card.reasoning && (
-        <p className="text-[14px] leading-relaxed max-w-[64ch] text-zinc-600 dark:text-zinc-400 font-sans">
-          {card.reasoning}
-        </p>
-      )}
+      <WhyChips signals={card.signals ?? {}} reasoning={card.reasoning} max={3} />
 
       {/* Score row */}
       <ScoreStack score={card.score} parts={parts} className="max-w-[28rem]" />
@@ -167,7 +190,7 @@ export function HeroPulse() {
         </Button>
 
         {/* Keyboard hint */}
-        <span className="ml-auto font-mono text-[10px] text-faint hidden sm:block">
+        <span className="ml-auto font-mono text-[10px] text-faint">
           ⏎ open · ⌥+a accept
         </span>
       </div>
