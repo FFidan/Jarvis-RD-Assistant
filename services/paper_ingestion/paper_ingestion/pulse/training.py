@@ -5,7 +5,7 @@ from __future__ import annotations
 import pickle
 from typing import Any
 
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 
 FEATURE_NAMES: list[str] = [
     "embedding",
@@ -152,7 +152,6 @@ async def classifier_scores(
     return [float(row[1]) for row in probabilities], meta
 
 
-@job_handler("pulse.train_classifier")
 async def _pulse_train_classifier_job(
     pool: Any,
     http_client: Any,

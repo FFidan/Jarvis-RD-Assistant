@@ -1,15 +1,12 @@
-"""Lifespan tests for paper_ingestion — B.4 Step 2 procrastinate worker wiring.
+"""Lifespan tests for paper_ingestion — B.4 Step 4 procrastinate worker wiring.
 
-Covers the new ``_start_procrastinate_worker`` /
+Covers the ``_start_procrastinate_worker`` /
 ``_shutdown_procrastinate_worker`` hooks added in Task B.2:
 
 - the procrastinate worker is created as a named asyncio.Task during startup
 - ``set_dependencies`` is called with the lifespan-owned pool + http_client
 - on shutdown the worker task is cancelled cleanly without an unawaited
   coroutine warning, and the procrastinate connector is closed.
-
-The main.py ``_lifespan_config`` is also asserted to wire both legacy job
-kinds AND the new procrastinate hooks so the dual-write contract holds.
 
 We don't drive the full real lifespan (real run_migrations, telegram
 bootstrap, scheduler init, etc. all need live DBs/HTTP) — instead we
@@ -69,12 +66,7 @@ def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list
 
 
 def test_lifespan_config_includes_procrastinate_hooks() -> None:
-    """The real main.py config must wire both the start + shutdown hook.
-
-    Guards the dual-write contract: legacy ``worker_loop`` (driven by the
-    factory's own ``start_jobs_worker`` when ``jobs_worker_kinds`` non-empty)
-    and the new procrastinate worker MUST coexist during cutover.
-    """
+    """The real main.py config must wire both the start + shutdown hook."""
     from paper_ingestion.main import (
         _lifespan_config,
         _shutdown_procrastinate_worker,
@@ -85,9 +77,6 @@ def test_lifespan_config_includes_procrastinate_hooks() -> None:
     init_idx = _lifespan_config.custom_init_tasks.index(_start_procrastinate_worker)
     # Same index in teardown list = compensating teardown wiring.
     assert _lifespan_config.custom_teardown_tasks[init_idx] is _shutdown_procrastinate_worker
-
-    # Legacy worker still wired — `paper.process` is one of the legacy kinds.
-    assert "paper.process" in _lifespan_config.jobs_worker_kinds
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +122,9 @@ class TestProcrastinateWorkerLifespan:
             _start_procrastinate_worker,
         )
 
-        # Minimal config: just the two procrastinate hooks; no legacy worker
-        # (jobs_worker_kinds=set() disables it) and no other init noise.
+        # Minimal config: just the two procrastinate hooks and no other init noise.
         minimal_config = ServiceLifespanConfig(
             service_name="test_paper_ingestion_lifespan",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[_start_procrastinate_worker],
             custom_teardown_tasks=[_shutdown_procrastinate_worker],
         )

@@ -344,14 +344,16 @@ async def test_create_job_skips_ownership_check_in_single_tenant_mode():
     """WS-6B-α: user_id=None → no DB acquire even when extractor would return an int."""
     _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
 
-    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock(return_value="j-1")):
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="foo.bar", payload={"paper_id": 42}),
             db_pool=pool,
             user_id=None,
         )
-    assert result.job_id == "j-1"
+    assert isinstance(result.job_id, str)
     # Single-tenant mode must not even acquire a connection for the ownership probe.
     pool.acquire.assert_not_called()
     conn.fetchrow.assert_not_called()
@@ -360,21 +362,24 @@ async def test_create_job_skips_ownership_check_in_single_tenant_mode():
 @pytest.mark.asyncio
 async def test_create_job_403_when_paper_owned_by_other_user():
     """WS-6B-α: caller=99, paper.user_id=42 → assert_paper_ownership raises 403."""
-    _r, request_model, pool, conn, _handlers = _build_factory_with_owner_hook()
+    _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
     # The ownership check fetches user_id from papers — return a row owned by 42.
     conn.fetchrow.return_value = {"user_id": 42}
-    handlers = _handlers
 
-    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock()) as enqueue:
-        with pytest.raises(HTTPException) as exc:
-            await handlers["create_job"](
-                request=MagicMock(),
-                body=request_model(kind="foo.bar", payload={"paper_id": 7}),
-                db_pool=pool,
-                user_id=99,
-            )
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    with (
+        patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="foo.bar", payload={"paper_id": 7}),
+            db_pool=pool,
+            user_id=99,
+        )
     assert exc.value.status_code == 403
-    enqueue.assert_not_called()  # ownership failure must abort before enqueue
+    fake_task.defer_async.assert_not_called()  # ownership failure must abort before defer
 
 
 @pytest.mark.asyncio
@@ -382,7 +387,9 @@ async def test_create_job_skips_acquire_when_extractor_returns_none():
     """WS-6B-α: batch payload with no single paper_id → extractor returns None → no acquire."""
     _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
 
-    with patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock(return_value="j-2")):
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", {"foo.bar": fake_task}):
         result = await handlers["create_job"](
             request=MagicMock(),
             # no paper_id key → extractor returns None → no ownership probe
@@ -390,7 +397,7 @@ async def test_create_job_skips_acquire_when_extractor_returns_none():
             db_pool=pool,
             user_id=99,
         )
-    assert result.job_id == "j-2"
+    assert isinstance(result.job_id, str)
     pool.acquire.assert_not_called()
     conn.fetchrow.assert_not_called()
 
@@ -703,10 +710,7 @@ async def test_create_job_route_dispatches_to_task_registry():
     fake_task.defer_async = AsyncMock(return_value=None)
     fake_kind_to_task = {"paper.process": fake_task}
 
-    with (
-        patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task),
-        patch.object(jobs_router_mod.jobs_lib, "enqueue", AsyncMock()) as legacy_enqueue,
-    ):
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
         result = await handlers["create_job"](
             request=MagicMock(),
             body=request_model(kind="paper.process", payload={"paper_id": 42}),
@@ -721,5 +725,3 @@ async def test_create_job_route_dispatches_to_task_registry():
     assert "job_id" in call_kwargs
     assert call_kwargs["user_id"] == 7
     assert call_kwargs["paper_id"] == 42
-    # Regression guard: NO legacy jobs row may be written for registered kinds.
-    legacy_enqueue.assert_not_called()

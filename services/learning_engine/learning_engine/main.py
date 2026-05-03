@@ -102,20 +102,11 @@ async def _init_fsrs_and_generators(app: FastAPI) -> None:
     app.state.anki_exporter = AnkiExporter()
 
 
-async def _register_le_job_handlers(app: FastAPI) -> None:
-    """Import modules whose ``@job_handler`` decorators must run before the worker."""
-    import importlib  # noqa: PLC0415
-
-    importlib.import_module("learning_engine.routers.generation")
-
-
 async def _start_procrastinate_worker(app: FastAPI) -> None:
-    """Step 2 of B.4 cutover — spawn the procrastinate worker alongside the legacy one.
+    """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
 
-    Mirrors the paper_ingestion lifespan: the legacy
-    ``jarvis_common.jobs.worker_loop`` keeps polling the legacy job queue while
-    procrastinate polls its own ``learning_engine`` + ``builtin`` queues. Both
-    workers run concurrently during dual-write (B.3+ flips the producer side).
+    Wires the procrastinate ``App`` connector to ``DATABASE_URL`` and starts the
+    worker polling the ``learning_engine`` + ``builtin`` queues.
     """
     from jarvis_common.task_registry import (  # noqa: PLC0415
         app as procrastinate_app,
@@ -164,24 +155,16 @@ async def _log_le_started(app: FastAPI) -> None:
     logger.info("Learning Engine init complete")
 
 
-_LEARNING_ENGINE_JOB_KINDS: set[str] = {
-    "card.generate",
-    "card.generate_batch",
-}
-
-
 # ---------------------------------------------------------------------------
 # App creation + middleware + error handlers
 # ---------------------------------------------------------------------------
 
 _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
-    jobs_worker_kinds=_LEARNING_ENGINE_JOB_KINDS,
     custom_init_tasks=[
         _init_langfuse_hook,
         _warn_multitenant_stub,
         _init_fsrs_and_generators,
-        _register_le_job_handlers,
         _start_procrastinate_worker,
         _log_le_started,
     ],
@@ -191,7 +174,6 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _init_langfuse_hook
         None,  # _warn_multitenant_stub
         None,  # _init_fsrs_and_generators
-        None,  # _register_le_job_handlers
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
         None,  # _log_le_started
     ],

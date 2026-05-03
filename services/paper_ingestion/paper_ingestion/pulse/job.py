@@ -27,7 +27,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 from jarvis_common.task_registry import pulse_train_classifier
 
 from paper_ingestion._state import svc
@@ -386,7 +386,6 @@ async def run_pulse(
     return stats
 
 
-@job_handler("pulse.generate")
 async def _pulse_generate_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

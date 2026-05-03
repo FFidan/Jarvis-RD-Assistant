@@ -1,12 +1,11 @@
-"""Lifespan tests for learning_engine — B.4 Step 2 procrastinate worker wiring.
+"""Lifespan tests for learning_engine — B.4 Step 4 procrastinate worker wiring.
 
 Mirrors ``services/paper_ingestion/tests/test_main_lifespan.py`` for the
-learning_engine service: the new ``_start_procrastinate_worker`` /
+learning_engine service: the ``_start_procrastinate_worker`` /
 ``_shutdown_procrastinate_worker`` hooks must spawn a named asyncio task
 on the ``learning_engine`` + ``builtin`` queues, thread the lifespan-owned
 pool + http_client into ``task_registry`` via ``set_dependencies``, and
-clean up cleanly on shutdown. Legacy ``worker_loop`` wiring is preserved
-during cutover (asserted structurally on the real ``_lifespan_config``).
+clean up cleanly on shutdown.
 """
 
 from __future__ import annotations
@@ -60,12 +59,7 @@ def _patch_factory_io(fake_pool: AsyncMock, fake_http_client: AsyncMock) -> list
 
 
 def test_lifespan_config_includes_procrastinate_hooks() -> None:
-    """The real main.py config must wire both the start + shutdown hook.
-
-    Guards the dual-write contract: legacy ``worker_loop`` (driven by the
-    factory's own ``start_jobs_worker`` when ``jobs_worker_kinds`` non-empty)
-    and the new procrastinate worker MUST coexist during cutover.
-    """
+    """The real main.py config must wire both the start + shutdown hook."""
     from learning_engine.main import (
         _lifespan_config,
         _shutdown_procrastinate_worker,
@@ -75,9 +69,6 @@ def test_lifespan_config_includes_procrastinate_hooks() -> None:
     assert _start_procrastinate_worker in _lifespan_config.custom_init_tasks
     init_idx = _lifespan_config.custom_init_tasks.index(_start_procrastinate_worker)
     assert _lifespan_config.custom_teardown_tasks[init_idx] is _shutdown_procrastinate_worker
-
-    # Legacy worker still wired — card.generate is one of the legacy kinds.
-    assert "card.generate" in _lifespan_config.jobs_worker_kinds
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +115,6 @@ class TestProcrastinateWorkerLifespan:
 
         minimal_config = ServiceLifespanConfig(
             service_name="test_learning_engine_lifespan",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[_start_procrastinate_worker],
             custom_teardown_tasks=[_shutdown_procrastinate_worker],
         )

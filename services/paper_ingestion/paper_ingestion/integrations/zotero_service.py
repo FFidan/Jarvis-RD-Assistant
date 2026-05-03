@@ -8,7 +8,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 from jarvis_common.task_registry import paper_analyze, zotero_sync_annotations
 
 from paper_ingestion.models.papers import PaperCreate, SourceType
@@ -613,7 +613,6 @@ async def poll_zotero_library(
 # ---------------------------------------------------------------------------
 
 
-@job_handler("zotero.push")
 async def _zotero_push_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -632,7 +631,6 @@ async def _zotero_push_job(
     return {"paper_id": paper_id, "status": "pushed"}
 
 
-@job_handler("zotero.resync")
 async def _zotero_resync_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -651,7 +649,6 @@ async def _zotero_resync_job(
     return {"paper_id": paper_id, "status": "resynced"}
 
 
-@job_handler("zotero.sync_from_zotero")
 async def _zotero_sync_from_zotero_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -669,7 +666,6 @@ async def _zotero_sync_from_zotero_job(
     return result
 
 
-@job_handler("zotero.sync_annotations")
 async def _zotero_sync_annotations_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

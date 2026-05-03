@@ -1,12 +1,11 @@
 """Async job queue backbone shared by all JARVIS microservices.
 
 Provides:
-- ``@job_handler`` decorator to register handlers by kind name.
 - ``JobContext`` for handler-side progress reporting and cancellation checks.
 - ``JobError`` for structured errors with an optional action_link payload.
-- ``enqueue``, ``get``, ``list_jobs``, ``request_cancel`` — DB helpers.
-- ``run_job`` — atomically claims and executes one queued job.
-- ``worker_loop`` — background polling loop; mount in service lifespan.
+- ``get``, ``list_jobs`` — DB helpers.
+- ``get_unified``, ``get_procrastinate_job_for_jarvis_id`` — procrastinate bridge.
+- ``stream_job_events``, ``job_sse_payload`` — SSE streaming.
 """
 
 from __future__ import annotations
@@ -14,9 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -24,25 +21,17 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 import asyncpg
 import asyncpg_listen
-import httpx
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Job-handler ownership map (documentation only — not runtime-enforced)
+# Job-handler ownership map (procrastinate queue routing)
 # ---------------------------------------------------------------------------
 #
-# Contract:
-#   - Each ``@job_handler`` kind is registered by exactly ONE service's worker
-#     loop (the OWNER listed below).  The owner's ``worker_loop`` will dequeue
-#     and execute jobs of that kind.
-#   - Any service may ENQUEUE a job of any kind via ``jobs_lib.enqueue``.
-#     The enqueuing service does NOT need to own the handler — it just writes
-#     a row to the ``jobs`` table and the owner's worker will pick it up.
-#   - This mapping is informational.  Adding a kind here does NOT register a
-#     handler; you must still decorate the function with ``@job_handler``.
+# Maps each job kind to the procrastinate queue (= service name) that handles it.
+# Used by task_registry.py to set task.queue, and by tests to verify routing.
 #
-# Ownership map (grep for ``@job_handler(`` to keep this in sync):
+# Ownership map:
 JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "telegram_bot"]] = {
     # paper_ingestion handlers
     "paper.process": "paper_ingestion",
@@ -79,15 +68,6 @@ class ProgressContext(Protocol):
     async def report_progress(self, percent: float, message: str = "") -> None: ...
 
 
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
-
-HandlerFn = Callable[
-    [asyncpg.Pool, httpx.AsyncClient, dict[str, Any], "JobContext"],
-    Awaitable[dict[str, Any]],
-]
-
 # SSE keepalive / max-stream constants shared across routers
 KEEPALIVE_INTERVAL = 15.0  # seconds between keepalive comments
 MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
@@ -116,8 +96,6 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
 # Backward-compatible aliases (deprecated — import the public names instead)
 _KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
 _MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
-
-_HANDLERS: dict[str, HandlerFn] = {}
 
 # Strip ANSI escape codes and absolute paths from error messages before persisting.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -523,21 +501,6 @@ class JobError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# Decorator
-# ---------------------------------------------------------------------------
-
-
-def job_handler(kind: str) -> Callable[[HandlerFn], HandlerFn]:
-    """Register a coroutine as the handler for jobs of the given ``kind``."""
-
-    def decorator(fn: HandlerFn) -> HandlerFn:
-        _HANDLERS[kind] = fn
-        return fn
-
-    return decorator
-
-
-# ---------------------------------------------------------------------------
 # JobContext
 # ---------------------------------------------------------------------------
 
@@ -585,32 +548,6 @@ class JobContext:
 # ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
-
-
-async def enqueue(
-    pool: asyncpg.Pool,
-    kind: str,
-    payload: dict[str, Any] | None = None,
-    *,
-    user_id: str | None = None,
-) -> str:
-    """Insert a new queued job and return its UUID string."""
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            INSERT INTO jobs (kind, payload, user_id)
-            VALUES ($1, $2::jsonb, $3)
-            RETURNING id::text
-            """,
-            kind,
-            payload or {},
-            user_id,
-        )
-        if row is not None:
-            await notify_job_update(conn, row["id"])
-    if row is None:
-        raise RuntimeError("enqueue returned no row")
-    return row["id"]
 
 
 async def get(pool: asyncpg.Pool, job_id: str) -> dict[str, Any] | None:
@@ -718,12 +655,10 @@ async def list_jobs(
 
 
 async def request_cancel(pool: asyncpg.Pool, job_id: str) -> None:
-    """Set cancel_requested=TRUE for the given job.
+    """Set cancel_requested=TRUE for a legacy jobs-table row.
 
-    If the job is still queued (not yet claimed by a worker), it is
-    transitioned immediately to the terminal 'cancelled' state so that the
-    worker_loop never picks it up.  Running jobs keep their status; the
-    handler is expected to poll ``JobContext.is_cancelled()`` co-operatively.
+    Used by ``cancel_job`` in jobs_router for rows whose ``source='legacy'``.
+    Once Group 4 drops the jobs table this function can be removed.
     """
     async with pool.acquire() as conn:
         await conn.execute(
@@ -737,262 +672,3 @@ async def request_cancel(pool: asyncpg.Pool, job_id: str) -> None:
             job_id,
         )
         await notify_job_update(conn, job_id)
-
-
-# ---------------------------------------------------------------------------
-# Internal finish helper
-# ---------------------------------------------------------------------------
-
-
-async def _finish(
-    pool: asyncpg.Pool,
-    job_id: str,
-    *,
-    status: str,
-    result: dict[str, Any] | None = None,
-    error: dict[str, Any] | None = None,
-) -> None:
-    async with pool.acquire() as conn:
-        await conn.execute(
-            """
-            UPDATE jobs
-            SET status = $1,
-                result = $2::jsonb,
-                error  = $3::jsonb,
-                finished_at = NOW(),
-                progress = CASE WHEN $1 = 'succeeded' THEN 1.0 ELSE progress END
-            WHERE id = $4::uuid
-            """,
-            status,
-            result,
-            error,
-            job_id,
-        )
-        await notify_job_update(conn, job_id)
-
-
-# ---------------------------------------------------------------------------
-# run_job
-# ---------------------------------------------------------------------------
-
-
-async def run_job(
-    pool: asyncpg.Pool,
-    http_client: httpx.AsyncClient,
-    job_id: str,
-) -> None:
-    """Atomically claim a queued job, execute its handler, then persist outcome.
-
-    If the job has already been picked up by another worker the function
-    returns silently (idempotent).
-    """
-    # Atomic queued → running transition
-    async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            UPDATE jobs
-            SET status = 'running', started_at = NOW()
-            WHERE id = $1::uuid AND status = 'queued'
-            RETURNING kind, payload
-            """,
-            job_id,
-        )
-        if row is not None:
-            await notify_job_update(conn, job_id)
-    if row is None:
-        logger.debug("job %s already picked up or not found — skipping", job_id)
-        return
-
-    kind: str = row["kind"]
-    payload: dict[str, Any] = row["payload"] or {}
-    logger.info("job %s starting kind=%s", job_id, kind)
-
-    handler = _HANDLERS.get(kind)
-    if handler is None:
-        await _finish(
-            pool,
-            job_id,
-            status="failed",
-            error={"message": f"no handler registered for job kind {kind!r}"},
-        )
-        msg = f"no handler registered for job kind {kind!r}"
-        logger.error("job %s failed: %s", job_id, msg)
-        raise ValueError(msg)
-
-    ctx = JobContext(job_id=job_id, _pool=pool)
-    try:
-        result = await handler(pool, http_client, payload, ctx)
-        await _finish(pool, job_id, status="succeeded", result=result)
-        logger.info("job %s succeeded", job_id)
-    except asyncio.CancelledError:
-        await _finish(pool, job_id, status="cancelled")
-        logger.info("job %s cancelled", job_id)
-        raise  # Re-raise to preserve task cancellation semantics
-    except JobError as exc:
-        error: dict[str, Any] = {"message": str(exc)}
-        if exc.action_link is not None:
-            error["action_link"] = exc.action_link
-        await _finish(pool, job_id, status="failed", error=error)
-        logger.warning("job %s failed (JobError): %s", job_id, exc)
-    except Exception as exc:
-        await _finish(
-            pool,
-            job_id,
-            status="failed",
-            error={"message": _sanitize_error_message(str(exc))},
-        )
-        logger.exception("job %s failed with unhandled exception", job_id)
-
-
-# ---------------------------------------------------------------------------
-# Stale-job reaper
-# ---------------------------------------------------------------------------
-
-_STALE_REAP_INTERVAL_SEC: float = 60.0
-
-
-async def _reap_stale_jobs(pool: asyncpg.Pool, kinds: list[str]) -> int:
-    """Mark stale ``running`` jobs owned by this worker as ``failed``.
-
-    A job is considered stale if it has not emitted a heartbeat (via
-    ``update_progress``) for 30 minutes.  ``COALESCE(last_heartbeat_at,
-    started_at)`` is used so pre-migration rows with a NULL heartbeat still fall
-    back to ``started_at`` for the staleness check.
-
-    The ``kinds`` filter ensures each service only reaps jobs it owns — preventing
-    paper_ingestion from killing pulse_ingestion jobs still running elsewhere.
-
-    Args:
-        pool:  asyncpg connection pool.
-        kinds: job kinds this worker handles.
-
-    Returns:
-        Number of jobs reaped.
-    """
-    # Pass a dict rather than a JSON string so the asyncpg JSONB codec
-    # (registered via ``init_pg_connection``) handles encoding.  Feeding a
-    # pre-serialised string results in double-encoded values that later
-    # decode as strings instead of objects.
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(
-            "UPDATE jobs"
-            " SET status = 'failed',"
-            "     error = $1::jsonb,"
-            "     finished_at = NOW()"
-            " WHERE status = 'running'"
-            "   AND ($2::text[] = '{}' OR kind = ANY($2::text[]))"
-            "   AND COALESCE(last_heartbeat_at, started_at)"
-            "       < NOW() - INTERVAL '30 minutes'"
-            " RETURNING id",
-            {"message": "reaped as stale (no heartbeat)", "type": "StaleJobReaped"},
-            kinds,
-        )
-        for row in rows:
-            await notify_job_update(conn, str(row["id"]))
-    count = len(rows)
-    if count:
-        logger.warning("jobs.reaper reaped %d stale job(s) for kinds=%s", count, kinds)
-    return count
-
-
-# ---------------------------------------------------------------------------
-# worker_loop
-# ---------------------------------------------------------------------------
-
-
-async def worker_loop(
-    pool: asyncpg.Pool,
-    http_client: httpx.AsyncClient,
-    *,
-    kinds: set[str] | None = None,
-    poll_interval: float = 2.0,
-    stop_event: asyncio.Event,
-) -> None:
-    """Poll for queued jobs and run them concurrently.
-
-    Args:
-        pool: asyncpg connection pool.
-        http_client: shared httpx client passed to handlers.
-        kinds: restrict polling to these job kinds; ``None`` = any kind.
-        poll_interval: seconds between polls when the queue is empty.
-        stop_event: set this to stop the loop gracefully.
-    """
-    # Local sentinel — 0.0 forces the reaper to fire on the first iteration.
-    # Using a local variable prevents cross-test state leakage.
-    last_reap_ts: float = 0.0
-
-    logger.info("jobs.worker_loop started (kinds=%s)", kinds or "all")
-    kind_list: list[str] = sorted(kinds) if kinds else []
-
-    while not stop_event.is_set():
-        try:
-            # Reap stale running jobs at most once per 60 seconds.
-            # Pass kind_list so each service only reaps jobs it owns — prevents
-            # paper_ingestion from killing pulse_ingestion jobs still running on
-            # another service's worker.
-            now = time.monotonic()
-            if now - last_reap_ts >= _STALE_REAP_INTERVAL_SEC:
-                last_reap_ts = now
-                try:
-                    await _reap_stale_jobs(pool, kind_list)
-                except Exception:
-                    logger.warning(
-                        "jobs.worker_loop stale-job reaper failed — continuing",
-                        exc_info=True,
-                    )
-
-            if kind_list:
-                rows = await pool.fetch(
-                    "SELECT id::text FROM jobs"
-                    " WHERE status = 'queued' AND cancel_requested = FALSE"
-                    " AND kind = ANY($1::text[])"
-                    " ORDER BY created_at LIMIT 5",
-                    kind_list,
-                )
-            else:
-                rows = await pool.fetch(
-                    "SELECT id::text FROM jobs"
-                    " WHERE status = 'queued' AND cancel_requested = FALSE"
-                    " ORDER BY created_at LIMIT 5"
-                )
-
-            if rows:
-                await asyncio.gather(
-                    *(run_job(pool, http_client, r["id"]) for r in rows),
-                    return_exceptions=True,
-                )
-            else:
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-                except TimeoutError:
-                    pass  # expected: poll interval elapsed, no stop signal — continue loop
-        except asyncio.CancelledError:
-            break
-        except Exception:
-            logger.exception("jobs.worker_loop unexpected error — continuing")
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-            except TimeoutError:
-                pass  # expected: poll interval elapsed, no stop signal — continue loop
-
-    logger.info("jobs.worker_loop stopped")
-
-
-# ---------------------------------------------------------------------------
-# Test-only noop handler — only registered when JARVIS_ENABLE_TEST_JOBS=1 so
-# that production workers cannot accidentally claim/execute it.
-# ---------------------------------------------------------------------------
-
-
-if os.environ.get("JARVIS_ENABLE_TEST_JOBS") == "1":
-
-    @job_handler("noop.test")
-    async def _noop_test(  # noqa: RUF029 — registered via @job_handler
-        _pool: asyncpg.Pool,
-        _http_client: httpx.AsyncClient,
-        payload: dict[str, Any],
-        ctx: JobContext,
-    ) -> dict[str, Any]:
-        await ctx.update_progress(0.5, "halfway")
-        await asyncio.sleep(0.1)
-        return {"ok": True, "echo": payload}

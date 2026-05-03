@@ -4,7 +4,6 @@ from jarvis_common.app_factory import (
     ServiceLifespanConfig,
     configure_lifespan,
     configure_middleware_and_errors,
-    start_jobs_worker,
 )
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
@@ -78,7 +77,6 @@ __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
-    "start_jobs_worker",
     "log_audit",
     "verify_api_key",
     "validate_production_config",

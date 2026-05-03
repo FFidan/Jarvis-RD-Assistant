@@ -1,8 +1,6 @@
 """Job handlers for paper ingestion ops: paper.process and paper.analyze.
 
-These handlers are registered with the jarvis_common jobs backbone so the
-worker_loop can pick them up.  They must be imported at startup (see main.py)
-so that the @job_handler decorators execute and populate _HANDLERS.
+These handlers are called by procrastinate task wrappers in task_registry.py.
 
 Handler signature: async (pool, http_client, payload, ctx) -> dict
 """
@@ -15,7 +13,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, JobError, job_handler
+from jarvis_common.jobs import JobContext, JobError
 
 from paper_ingestion._state import svc
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
@@ -64,7 +62,6 @@ class _SubCtx:
 # ---------------------------------------------------------------------------
 
 
-@job_handler("paper.process")
 async def _paper_process_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -126,7 +123,6 @@ async def _paper_process_job(
 # ---------------------------------------------------------------------------
 
 
-@job_handler("paper.analyze")
 async def _paper_analyze_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -228,7 +224,6 @@ async def _paper_analyze_job(
     }
 
 
-@job_handler("paper.summarize")
 async def _paper_summarize_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -257,7 +252,6 @@ async def _paper_summarize_job(
 # ---------------------------------------------------------------------------
 
 
-@job_handler("papers.batch_process")
 async def _papers_batch_process_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -320,7 +314,6 @@ async def _papers_batch_process_job(
     return {"processed": processed, "skipped": skipped, "errors": errors}
 
 
-@job_handler("papers.scan_local")
 async def _papers_scan_local_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -341,7 +334,6 @@ async def _papers_scan_local_job(
 # ---------------------------------------------------------------------------
 
 
-@job_handler("papers.batch_summarize")
 async def _papers_batch_summarize_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -387,7 +379,6 @@ async def _papers_batch_summarize_job(
     return {"summarized": summarized, "failed": failed, "errors": errors}
 
 
-@job_handler("digest.weekly")
 async def _digest_weekly_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

@@ -1,73 +1,16 @@
 """Tests for Sprint 5 Wave 1 Batch 1A fixes.
 
 Covers:
-- H4: _stop_jobs_worker awaits the task after cancel() to drain CancelledError
 - H5: validate_encrypted_config_rows tolerates missing table on fresh DB
 """
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import asyncpg
 import pytest
 from fastapi import FastAPI  # noqa: F401
-
-# ---------------------------------------------------------------------------
-# H4 — _stop_jobs_worker awaits task after cancel
-# ---------------------------------------------------------------------------
-
-
-class TestStopJobsWorkerAwaitsAfterCancel:
-    async def test_stop_jobs_worker_awaits_after_cancel(self) -> None:
-        """After task.cancel(), _stop_jobs_worker must await the task to drain CancelledError."""
-        from jarvis_common.app_factory import _stop_jobs_worker
-
-        app = FastAPI()
-        app.state.jobs_worker_stop = asyncio.Event()
-
-        # Build a real asyncio.Task wrapping a coroutine that blocks until cancelled.
-        async def blocking_worker() -> None:
-            await asyncio.sleep(3600)
-
-        task = asyncio.create_task(blocking_worker())
-        app.state.jobs_worker_task = task
-
-        # Simulate wait_for timing out so the cancel branch is exercised.
-        with patch(
-            "jarvis_common.app_factory.asyncio.wait_for",
-            side_effect=TimeoutError,
-        ):
-            await _stop_jobs_worker(app)
-
-        # After _stop_jobs_worker returns, the task must be done (cancelled).
-        assert task.done(), "task should be done after _stop_jobs_worker drains CancelledError"
-        assert task.cancelled(), "task should be in cancelled state"
-
-    async def test_stop_jobs_worker_suppresses_cancelled_error_on_await(self) -> None:
-        """_stop_jobs_worker must not propagate CancelledError raised by await task."""
-        from jarvis_common.app_factory import _stop_jobs_worker
-
-        app = FastAPI()
-        app.state.jobs_worker_stop = asyncio.Event()
-
-        async def cancellable_worker() -> None:
-            await asyncio.sleep(3600)
-
-        task = asyncio.create_task(cancellable_worker())
-        app.state.jobs_worker_task = task
-
-        # Patch wait_for to raise CancelledError (as if the lifespan itself was cancelled).
-        with patch(
-            "jarvis_common.app_factory.asyncio.wait_for",
-            side_effect=asyncio.CancelledError,
-        ):
-            # Must NOT raise — _stop_jobs_worker should suppress via contextlib.suppress.
-            await _stop_jobs_worker(app)
-
-        assert task.done()
-
 
 # ---------------------------------------------------------------------------
 # H5 — validate_encrypted_config_rows tolerates missing table
@@ -109,7 +52,6 @@ class TestValidateEncryptedConfigRowsToleratesMissingTable:
         ):
             config = ServiceLifespanConfig(
                 service_name="test_fresh_db",
-                jobs_worker_kinds=set(),
             )
             app = FastAPI()
             # Must not raise — the UndefinedTableError should be caught and warned.
@@ -149,7 +91,6 @@ class TestValidateEncryptedConfigRowsToleratesMissingTable:
         ):
             config = ServiceLifespanConfig(
                 service_name="test_fresh_db_col",
-                jobs_worker_kinds=set(),
             )
             app = FastAPI()
             async with configure_lifespan(config)(app):
@@ -201,7 +142,6 @@ class TestValidateEncryptedConfigRowsToleratesMissingTable:
         ):
             config = ServiceLifespanConfig(
                 service_name="test_ordering",
-                jobs_worker_kinds=set(),
                 custom_init_tasks=[init_hook],
                 custom_teardown_tasks=[None],
             )

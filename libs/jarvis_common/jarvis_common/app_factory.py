@@ -15,9 +15,6 @@ Public surface
 * :func:`configure_middleware_and_errors` -- registers the
   RequestID/SlowAPI/CORS/ProxyHeaders middleware stack and the standardized
   validation/HTTP/generic error handlers.
-* :func:`start_jobs_worker` -- starts ``jarvis_common.jobs.worker_loop`` as
-  a background task with a stop-event for graceful shutdown.
-
 The factory deliberately does not own scheduler creation, source-singleton
 initialization, FSRS construction, or any other domain object -- those
 remain in the service so the factory does not need to know about them.
@@ -25,8 +22,6 @@ remain in the service so the factory does not need to know about them.
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -89,9 +84,6 @@ class ServiceLifespanConfig:
     http_client_kwargs:
         Overrides for ``httpx.AsyncClient`` keyword arguments.  Defaults to a
         long-poll timeout (``connect=10s, read=120s, write=30s, pool=10s``).
-    jobs_worker_kinds:
-        Set of job kinds this service's worker should poll for.  Pass an
-        empty set to disable the jobs worker entirely.
     custom_init_tasks:
         Async callables run AFTER the DB pool, http client, and (optionally)
         encrypted-config validation have completed, but BEFORE the jobs worker
@@ -108,7 +100,6 @@ class ServiceLifespanConfig:
     service_name: str
     db_pool_settings: dict[str, Any] = field(default_factory=dict)
     http_client_kwargs: dict[str, Any] = field(default_factory=dict)
-    jobs_worker_kinds: set[str] = field(default_factory=set)
     custom_init_tasks: list[LifespanHook] = field(default_factory=list)
     custom_teardown_tasks: list[LifespanHook | None] = field(default_factory=list)
     # custom_init_tasks and custom_teardown_tasks MUST have equal length. For
@@ -163,10 +154,8 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
        hooks have their corresponding ``custom_teardown_tasks`` entry called in reverse
        order before the exception propagates
     6. auth-config status log line
-    7. jobs worker start (if ``jobs_worker_kinds`` non-empty)
-    8. yield
-    9. jobs worker stop (graceful 5s, then cancel)
-    10. each ``custom_teardown_tasks`` hook in order
+    7. yield
+    8. each ``custom_teardown_tasks`` hook in order
     11. http client + db pool close
 
     Custom hooks may raise to abort startup.
@@ -233,14 +222,9 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
 
             _log_auth_status()
 
-            if config.jobs_worker_kinds:
-                start_jobs_worker(app, kinds=config.jobs_worker_kinds)
-
             logger.info("%s started", config.service_name)
             yield
         finally:
-            await _stop_jobs_worker(app)
-
             for hook in config.custom_teardown_tasks:
                 if hook is None:
                     continue
@@ -264,43 +248,6 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
             logger.info("%s stopped", config.service_name)
 
     return lifespan
-
-
-def start_jobs_worker(app: FastAPI, *, kinds: set[str]) -> None:
-    """Start the shared ``jarvis_common.jobs.worker_loop`` background task.
-
-    Stores ``app.state.jobs_worker_stop`` (asyncio.Event) and
-    ``app.state.jobs_worker_task`` (asyncio.Task) for the symmetric stop in
-    :func:`_stop_jobs_worker`.
-    """
-    from jarvis_common import jobs as jobs_lib
-
-    stop_event = asyncio.Event()
-    app.state.jobs_worker_stop = stop_event
-    app.state.jobs_worker_task = asyncio.create_task(
-        jobs_lib.worker_loop(
-            app.state.db_pool,
-            app.state.http_client,
-            kinds=kinds,
-            stop_event=stop_event,
-        )
-    )
-
-
-async def _stop_jobs_worker(app: FastAPI) -> None:
-    """Signal the jobs worker to stop and wait up to 5s before cancelling."""
-    stop_event = getattr(app.state, "jobs_worker_stop", None)
-    task = getattr(app.state, "jobs_worker_task", None)
-    if stop_event is None or task is None:
-        return
-    stop_event.set()
-    try:
-        await asyncio.wait_for(task, timeout=5.0)
-    except (TimeoutError, asyncio.CancelledError):
-        logger.warning("jobs worker did not stop in time -- cancelling task")
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
 
 
 def configure_middleware_and_errors(
@@ -371,5 +318,4 @@ __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
-    "start_jobs_worker",
 ]

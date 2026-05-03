@@ -83,7 +83,6 @@ class TestCompensatingTeardown:
         # equal-length contract).
         config = ServiceLifespanConfig(
             service_name="test_compensate",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[init_first, init_second],
             custom_teardown_tasks=[teardown_first, None],
         )
@@ -139,7 +138,6 @@ class TestCompensatingTeardown:
 
         config = ServiceLifespanConfig(
             service_name="test_reverse_compensate",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[init_a, init_b, init_c],
             custom_teardown_tasks=[teardown_a, teardown_b, teardown_c],
         )
@@ -179,7 +177,6 @@ class TestCompensatingTeardown:
 
         config = ServiceLifespanConfig(
             service_name="test_ordering",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[init_hook],
             custom_teardown_tasks=[None],  # no teardown needed; pad with None
         )
@@ -238,7 +235,6 @@ class TestEqualLengthContract:
 
         config = ServiceLifespanConfig(
             service_name="test_mismatch",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[init_a, init_b],
             custom_teardown_tasks=[teardown_a],  # only 1 teardown for 2 inits
         )
@@ -274,7 +270,6 @@ class TestEqualLengthContract:
 
         config = ServiceLifespanConfig(
             service_name="test_none_pad",
-            jobs_worker_kinds=set(),
             custom_init_tasks=[init_a, init_b],
             custom_teardown_tasks=[teardown_a, None],  # init_b has no teardown
         )

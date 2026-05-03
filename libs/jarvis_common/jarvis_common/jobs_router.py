@@ -198,33 +198,26 @@ def build_jobs_router(
                     # runtime; the helper signature is asyncpg.Connection.
                     await assert_paper_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
 
-        # B.4 Step 3: dispatch via procrastinate task registry when the kind
-        # is registered.  Fall back to legacy enqueue for noop.test and any
-        # future kinds not yet in the registry (e.g. during a gradual rollout).
+        # Dispatch via procrastinate task registry.
         task = KIND_TO_TASK.get(body.kind)
-        if task is not None:
-            payload = dict(body.payload or {})
-            if "job_id" in payload or "user_id" in payload:
-                raise HTTPException(
-                    status_code=400,
-                    detail="payload may not contain reserved keys 'job_id' or 'user_id'",
-                )
-            jarvis_job_id = str(_uuid.uuid4())
-            await task.defer_async(
-                job_id=jarvis_job_id,
-                user_id=user_id,
-                **payload,
+        if task is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown kind {body.kind!r}",
             )
-            return JobCreateResponse(job_id=jarvis_job_id, status="queued")
-
-        # Legacy path (noop.test and any kind not yet registered in task_registry).
-        job_id = await jobs_lib.enqueue(
-            db_pool,
-            body.kind,
-            body.payload,
-            user_id=str(user_id) if user_id is not None else None,
+        payload = dict(body.payload or {})
+        if "job_id" in payload or "user_id" in payload:
+            raise HTTPException(
+                status_code=400,
+                detail="payload may not contain reserved keys 'job_id' or 'user_id'",
+            )
+        jarvis_job_id = str(_uuid.uuid4())
+        await task.defer_async(
+            job_id=jarvis_job_id,
+            user_id=user_id,
+            **payload,
         )
-        return JobCreateResponse(job_id=str(job_id), status="queued")
+        return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
     # ------------------------------------------------------------------
     # GET /api/jobs/{job_id}

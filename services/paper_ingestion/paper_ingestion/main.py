@@ -203,35 +203,13 @@ async def _start_scheduler_hook(app: FastAPI) -> None:
     app.state.scheduler = await start_scheduler(app, interval_hours=interval)
 
 
-async def _register_job_handlers(app: FastAPI) -> None:
-    """Import modules whose ``@job_handler`` decorators must run before the worker.
-
-    importlib avoids the shadowing conflict between the local FastAPI ``app``
-    parameter and the ``paper_ingestion`` package namespace.
-    """
-    import importlib  # noqa: PLC0415
-
-    importlib.import_module("paper_ingestion.paper_jobs")
-    importlib.import_module("paper_ingestion.extraction.jobs")
-    importlib.import_module("paper_ingestion.contradiction_jobs")
-    importlib.import_module("paper_ingestion.citations_jobs")
-    importlib.import_module("paper_ingestion.pulse.job")
-    importlib.import_module("paper_ingestion.pulse.training")
-    importlib.import_module("paper_ingestion.integrations.zotero_service")
-
-
 async def _start_procrastinate_worker(app: FastAPI) -> None:
-    """Step 2 of B.4 cutover — spawn the procrastinate worker alongside the legacy one.
-
-    The legacy ``jarvis_common.jobs.worker_loop`` (started by
-    :func:`jarvis_common.app_factory.start_jobs_worker`) is left untouched so
-    both runners poll their respective queues in parallel during dual-write.
-    Once a producer-side cutover lands (B.3+), the legacy worker can be retired.
+    """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
 
     Wires the procrastinate ``App`` connector with ``DATABASE_URL`` (the same
     DSN backing ``app.state.db_pool``), opens the connector, threads
-    ``(pool, http_client)`` into ``task_registry`` so legacy handler dispatch
-    resolves at task-runtime, then starts the worker as a background asyncio
+    ``(pool, http_client)`` into ``task_registry`` so task wrappers can access
+    the shared singletons, then starts the worker as a background asyncio
     task. Stored on ``app.state`` for the symmetric teardown.
     """
     from jarvis_common.task_registry import (  # noqa: PLC0415
@@ -291,28 +269,6 @@ async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
             await procrastinate_app.close_async()
 
 
-_PAPER_INGESTION_JOB_KINDS: set[str] = {
-    "pulse.generate",
-    "pulse.train_classifier",
-    "paper.download",
-    "paper.process",
-    "paper.analyze",
-    "paper.summarize",
-    "papers.batch_summarize",
-    "papers.batch_process",
-    "papers.scan_local",
-    "extraction.single",
-    "extraction.batch",
-    "citations.batch_fetch",
-    "contradictions.scan",
-    "digest.weekly",
-    "zotero.push",
-    "zotero.resync",
-    "zotero.sync_from_zotero",
-    "zotero.sync_annotations",
-}
-
-
 # ---------------------------------------------------------------------------
 # App creation + middleware + error handlers
 # ---------------------------------------------------------------------------
@@ -324,7 +280,6 @@ _lifespan_config = ServiceLifespanConfig(
         # default (120s) because PDF downloads + extraction can run long.
         "timeout": httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
     },
-    jobs_worker_kinds=_PAPER_INGESTION_JOB_KINDS,
     custom_init_tasks=[
         _init_langfuse_hook,
         _warn_multitenant_stub,
@@ -334,7 +289,6 @@ _lifespan_config = ServiceLifespanConfig(
         _init_source_singletons,
         _refresh_telegram_username,
         _start_scheduler_hook,
-        _register_job_handlers,
         _start_procrastinate_worker,
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
@@ -347,7 +301,6 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _init_source_singletons
         None,  # _refresh_telegram_username
         _shutdown_scheduler,  # _start_scheduler_hook
-        None,  # _register_job_handlers
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
     ],
 )

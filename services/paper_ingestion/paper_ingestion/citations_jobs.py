@@ -1,7 +1,6 @@
 """Job handler for citations.batch_fetch.
 
-Registered with the jarvis_common jobs backbone; imported at startup (see
-main.py) so the ``@job_handler`` decorator populates ``_HANDLERS``.
+Procrastinate task wrappers for citation jobs; called via task_registry.py.
 
 Handler signature: async (pool, http_client, payload, ctx) -> dict
 """
@@ -13,7 +12,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 
 from paper_ingestion._state import svc
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
@@ -25,7 +24,6 @@ __all__ = [
 ]
 
 
-@job_handler("citations.batch_fetch")
 async def _citations_batch_fetch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

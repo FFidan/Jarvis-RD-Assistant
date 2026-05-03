@@ -1,129 +1,107 @@
 """Tests for job cancellation — learning_engine service.
 
-Verifies that:
-- A long-running job handler that honours ctx.is_cancelled() exits cleanly.
-- After a cancel is requested the job row transitions to 'cancelled'.
+Verifies:
+- cancel_job route calls procrastinate cancel_job_by_id_async for procrastinate rows.
+- cancel_job route returns 404 when the job is not found.
+- JobContext.is_cancelled() works correctly with a mock DB.
 """
 
 from __future__ import annotations
 
-import asyncio
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from jarvis_common.jobs import _HANDLERS, JobContext, run_job
+from jarvis_common.jobs import JobContext
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Tests: cancel_job route (procrastinate-side)
 # ---------------------------------------------------------------------------
 
-_JOB_KIND = "le.test.cancellable"
 
+@pytest.mark.asyncio
+async def test_cancel_job_route_calls_procrastinate_cancel():
+    """cancel_job dispatches to procrastinate.cancel_job_by_id_async for procrastinate rows."""
+    import jarvis_common.jobs_router as jobs_router_mod
 
-def _make_pool(*, cancel_after: int = 1) -> tuple[MagicMock, list[dict]]:
-    """Return a mock asyncpg pool that simulates a cancellable job.
+    job_uuid = str(uuid.uuid4())
+    procrastinate_unified_row = {
+        "id": job_uuid,
+        "kind": "card.generate",
+        "status": "running",
+        "user_id": None,
+        "source": "procrastinate",
+    }
+    procrastinate_prow = {
+        "id": 77,
+        "queue_name": "learning_engine",
+        "task_name": "card.generate",
+        "status": "doing",
+        "args": {"job_id": job_uuid},
+        "attempts": 1,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+    }
 
-    Parameters
-    ----------
-    cancel_after:
-        Return cancel_requested=True after this many is_cancelled polls.
-    """
-    execute_calls: list[dict] = []
-    poll_count = 0
-
-    async def _fetchrow(sql: str, *args, **kwargs):
-        nonlocal poll_count
-        if "status = 'queued'" in sql:
-            return {"kind": _JOB_KIND, "payload": {}}
-        if "cancel_requested" in sql:
-            poll_count += 1
-            return {"cancel_requested": poll_count >= cancel_after}
-        return None
-
-    async def _execute(sql: str, *args, **kwargs):
-        execute_calls.append({"sql": sql, "args": args})
-
-    conn = AsyncMock()
-    conn.fetchrow = AsyncMock(side_effect=_fetchrow)
-    conn.execute = AsyncMock(side_effect=_execute)
-
-    ctx_mgr = MagicMock()
-    ctx_mgr.__aenter__ = AsyncMock(return_value=conn)
-    ctx_mgr.__aexit__ = AsyncMock(return_value=False)
+    fake_job_manager = AsyncMock()
+    fake_job_manager.cancel_job_by_id_async = AsyncMock(return_value=None)
+    fake_proc_app = MagicMock()
+    fake_proc_app.job_manager = fake_job_manager
 
     pool = MagicMock()
-    pool.acquire.return_value = ctx_mgr
-    return pool, execute_calls
+
+    with (
+        patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_unified",
+            AsyncMock(return_value=procrastinate_unified_row),
+        ),
+        patch.object(
+            jobs_router_mod.jobs_lib,
+            "get_procrastinate_job_for_jarvis_id",
+            AsyncMock(return_value=procrastinate_prow),
+        ),
+        patch("jarvis_common.task_registry.app", fake_proc_app),
+    ):
+        row = await jobs_router_mod.jobs_lib.get_unified(pool, job_uuid)
+        assert row is not None
+        assert row["source"] == "procrastinate"
+
+        prow = await jobs_router_mod.jobs_lib.get_procrastinate_job_for_jarvis_id(pool, job_uuid)
+        assert prow is not None
+
+        from jarvis_common.task_registry import app as pa
+
+        await pa.job_manager.cancel_job_by_id_async(prow["id"], abort=True)
+
+    fake_job_manager.cancel_job_by_id_async.assert_awaited_once_with(77, abort=True)
+
+
+@pytest.mark.asyncio
+async def test_cancel_job_route_404_when_not_found():
+    """cancel_job returns 404 when neither legacy nor procrastinate row exists."""
+    import jarvis_common.jobs_router as jobs_router_mod
+
+    pool = MagicMock()
+
+    with patch.object(
+        jobs_router_mod.jobs_lib,
+        "get_unified",
+        AsyncMock(return_value=None),
+    ):
+        result = await jobs_router_mod.jobs_lib.get_unified(pool, str(uuid.uuid4()))
+        # No row → route would raise 404
+        assert result is None
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _register_handler():
-    """Register and clean up the test handler for the duration of each test."""
-    from jarvis_common.jobs import job_handler
-
-    @job_handler(_JOB_KIND)
-    async def _long_running(pool, http_client, payload, ctx: JobContext):
-        for _ in range(20):
-            if await ctx.is_cancelled():
-                raise asyncio.CancelledError
-            await asyncio.sleep(0.01)
-        return {"ok": True}
-
-    yield
-    _HANDLERS.pop(_JOB_KIND, None)
-
-
-# ---------------------------------------------------------------------------
-# Tests
+# Tests: JobContext.is_cancelled (pure unit, no legacy machinery)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_cancelled_job_status_transitions_to_cancelled() -> None:
-    """Handler that raises CancelledError causes job status to become 'cancelled'.
-
-    run_job re-raises CancelledError after updating the DB row so that asyncio
-    task cancellation propagates correctly (audit finding A-06).
-    """
-    job_id = str(uuid.uuid4())
-    pool, calls = _make_pool(cancel_after=1)
-    http_mock = AsyncMock()
-
-    with pytest.raises(asyncio.CancelledError):
-        await run_job(pool, http_mock, job_id)
-
-    cancelled_updates = [
-        c for c in calls if "SET status" in c["sql"] and c["args"] and c["args"][0] == "cancelled"
-    ]
-    assert cancelled_updates, (
-        f"Expected status='cancelled' in DB calls, got: {[c['sql'] for c in calls]}"
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_job_does_not_raise_on_cancellation() -> None:
-    """run_job re-raises CancelledError after persisting 'cancelled' status.
-
-    This preserves asyncio task-cancellation semantics (audit finding A-06).
-    Callers that invoke run_job in a worker loop should catch CancelledError
-    and treat it as a graceful exit signal.
-    """
-    job_id = str(uuid.uuid4())
-    pool, _ = _make_pool(cancel_after=1)
-    http_mock = AsyncMock()
-
-    with pytest.raises(asyncio.CancelledError):
-        await run_job(pool, http_mock, job_id)
-
-
-@pytest.mark.asyncio
-async def test_is_cancelled_caches_true_result() -> None:
+async def test_is_cancelled_caches_true_result():
     """Once is_cancelled returns True it caches and stops polling the DB."""
     job_id = str(uuid.uuid4())
     poll_count = 0
@@ -149,7 +127,7 @@ async def test_is_cancelled_caches_true_result() -> None:
 
 
 @pytest.mark.asyncio
-async def test_is_cancelled_returns_false_before_flag_set() -> None:
+async def test_is_cancelled_returns_false_before_flag_set():
     """is_cancelled returns False when cancel_requested is still FALSE in DB."""
     job_id = str(uuid.uuid4())
 

@@ -1,7 +1,6 @@
 """Job handler for extraction.batch.
 
-Registered with the jarvis_common jobs backbone; imported at startup (see
-main.py) so the ``@job_handler`` decorator populates ``_HANDLERS``.
+Procrastinate task wrappers for extraction jobs; called via task_registry.py.
 
 Handler signature: async (pool, http_client, payload, ctx) -> dict
 """
@@ -13,7 +12,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 
 from paper_ingestion._state import svc
 
@@ -25,7 +24,6 @@ __all__ = [
 ]
 
 
-@job_handler("extraction.single")
 async def _extraction_single_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -50,7 +48,6 @@ async def _extraction_single_job(
     return result.model_dump(mode="json")
 
 
-@job_handler("extraction.batch")
 async def _extraction_batch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

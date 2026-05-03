@@ -6,7 +6,7 @@ from typing import Any
 
 import asyncpg
 import httpx
-from jarvis_common.jobs import JobContext, job_handler
+from jarvis_common.jobs import JobContext
 
 from paper_ingestion._state import svc
 from paper_ingestion.services.contradictions import scan_contradictions
@@ -14,7 +14,6 @@ from paper_ingestion.services.contradictions import scan_contradictions
 __all__ = ["_contradictions_scan_job"]
 
 
-@job_handler("contradictions.scan")
 async def _contradictions_scan_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,

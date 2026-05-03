@@ -13,7 +13,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
-from jarvis_common.jobs import JobContext, JobError, job_handler
+from jarvis_common.jobs import JobContext, JobError
 from jarvis_common.task_registry import card_generate, card_generate_batch
 
 from learning_engine.card_generator import CardGenerator
@@ -182,7 +182,6 @@ async def generate_cards_core(
 # ---------------------------------------------------------------------------
 
 
-@job_handler("card.generate")
 async def _card_generate_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
@@ -200,7 +199,6 @@ async def _card_generate_job(
     )
 
 
-@job_handler("card.generate_batch")
 async def _card_generate_batch_job(
     pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
