@@ -165,15 +165,27 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
 
 
 async def run_weekly_digest_wrapper(app: Any) -> None:
-    """APScheduler entrypoint for weekly digest regeneration."""
-    db_pool = app.state.db_pool
-    try:
-        from jarvis_common import jobs as jobs_lib  # noqa: PLC0415
+    """APScheduler entrypoint for weekly digest regeneration.
 
-        await jobs_lib.enqueue(db_pool, "digest.weekly", {"days": 7})
-        logger.info("digest: enqueued digest.weekly job")
+    B.4 Step 3 canary (spec ``docs/specs/2026-05-03-b4-job-broker.md``):
+    enqueues via the procrastinate ``digest.weekly`` task instead of the
+    legacy ``jobs`` table. The legacy ``@job_handler("digest.weekly")``
+    decorator on ``_digest_weekly_job`` remains in place — procrastinate
+    dispatches into it via the registry shim. The JARVIS UUID is generated
+    upfront and passed as the ``job_id`` kwarg so the SSE bridge can locate
+    the procrastinate row via ``args->>'job_id'``.
+    """
+    import uuid  # noqa: PLC0415
+
+    _ = app.state.db_pool  # touch to surface AttributeError early in tests
+    try:
+        from jarvis_common.task_registry import digest_weekly  # noqa: PLC0415
+
+        jarvis_job_id = str(uuid.uuid4())
+        await digest_weekly.defer_async(job_id=jarvis_job_id, days=7)
+        logger.info("digest: deferred digest.weekly job %s via procrastinate", jarvis_job_id)
     except Exception:
-        logger.exception("digest: failed to enqueue weekly digest job")
+        logger.exception("digest: failed to defer weekly digest job")
 
 
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:

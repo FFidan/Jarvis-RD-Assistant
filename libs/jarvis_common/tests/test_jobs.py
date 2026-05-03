@@ -1100,3 +1100,332 @@ async def test_reap_stale_jobs_all_kinds_mode():
 
     # The function must report the row count from conn.fetch.
     assert reaped == 1, f"Expected 1 reaped job (from mock), got {reaped}"
+
+
+# ---------------------------------------------------------------------------
+# B.4 Step 2 — procrastinate SSE bridge
+# ---------------------------------------------------------------------------
+
+
+def test_procrastinate_status_to_jarvis_maps_all_known_statuses():
+    """B.4 SSE bridge: every procrastinate enum value maps to a legacy status."""
+    from jarvis_common.jobs import (
+        PROCRASTINATE_STATUS_MAP,
+        procrastinate_status_to_jarvis,
+    )
+
+    # Every key in the map must round-trip through the helper.
+    expected = {
+        "todo": "queued",
+        "doing": "running",
+        "succeeded": "succeeded",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "aborting": "running",
+        "aborted": "cancelled",
+    }
+    assert PROCRASTINATE_STATUS_MAP == expected
+    for proc, jarvis in expected.items():
+        assert procrastinate_status_to_jarvis(proc) == jarvis
+
+    # Unknown statuses fall through to "running" so the SSE stream stays open.
+    assert procrastinate_status_to_jarvis("totally_unknown") == "running"
+
+
+def test_job_sse_payload_includes_source_discriminator():
+    """B.4 SSE bridge: payload now carries a ``source`` discriminator."""
+    from jarvis_common.jobs import job_sse_payload
+
+    legacy = job_sse_payload({"status": "running", "progress": 0.3, "progress_message": "..."})
+    procrastinate = job_sse_payload(
+        {"status": "running", "progress": None, "progress_message": None},
+        source="procrastinate",
+    )
+
+    assert legacy["source"] == "legacy"
+    assert procrastinate["source"] == "procrastinate"
+
+
+def test_procrastinate_row_to_jarvis_row_normalises_shape():
+    """B.4 SSE bridge: procrastinate row shape adapts to the legacy SSE shape."""
+    from jarvis_common.jobs import procrastinate_row_to_jarvis_row
+
+    prow = {
+        "id": 42,
+        "queue_name": "paper_ingestion",
+        "task_name": "paper.process",
+        "status": "succeeded",
+        "args": {"job_id": "abc-123", "paper_id": 7},
+    }
+
+    out = procrastinate_row_to_jarvis_row(prow)
+
+    assert out["status"] == "succeeded"  # legacy enum
+    assert out["payload"] == {"job_id": "abc-123", "paper_id": 7}  # args surfaced
+    assert out["progress"] is None
+    assert out["progress_message"] is None
+    assert out["result"] is None
+    assert out["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_job_notification_subscribes_to_procrastinate_channel(monkeypatch):
+    """B.4 SSE bridge: the listen-set must include both legacy and procrastinate channels."""
+    from jarvis_common import jobs
+
+    observed_channels: list[str] = []
+
+    class FakeListener:
+        def __init__(self, connect, reconnect_delay=5):
+            pass
+
+        async def run(self, handler_per_channel, *, policy, notification_timeout):
+            observed_channels.extend(handler_per_channel.keys())
+            # Trigger the procrastinate handler to confirm it sets `matched`.
+            handler = handler_per_channel[jobs.PROCRASTINATE_NOTIFY_CHANNEL]
+            await handler(
+                jobs.asyncpg_listen.Notification(
+                    jobs.PROCRASTINATE_NOTIFY_CHANNEL,
+                    '{"type": "job_inserted", "job_id": 99}',
+                )
+            )
+            await asyncio.sleep(60)
+
+    monkeypatch.setattr(jobs.asyncpg_listen, "NotificationListener", FakeListener)
+
+    # Procrastinate notify alone should wake the waiter (returns True).
+    assert await jobs._wait_for_job_notification(MagicMock(), "job-1", 0.01) is True
+    assert jobs.JOB_NOTIFY_CHANNEL in observed_channels
+    assert jobs.PROCRASTINATE_NOTIFY_CHANNEL in observed_channels
+
+
+@pytest.mark.asyncio
+async def test_get_procrastinate_job_returns_none_when_table_missing():
+    """B.4 SSE bridge: graceful degrade when migration 052 hasn't been applied."""
+    import asyncpg as _asyncpg
+    from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=_asyncpg.UndefinedTableError("relation does not exist"))
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    result = await get_procrastinate_job_for_jarvis_id(pool, "abc-123")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_get_procrastinate_job_returns_dict_when_present():
+    """B.4 SSE bridge: lookup by ``args->>'job_id'`` returns row as a dict."""
+    from jarvis_common.jobs import get_procrastinate_job_for_jarvis_id
+
+    fake_row = {
+        "id": 42,
+        "queue_name": "paper_ingestion",
+        "task_name": "paper.process",
+        "status": "doing",
+        "args": {"job_id": "abc-123"},
+    }
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=fake_row)
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    result = await get_procrastinate_job_for_jarvis_id(pool, "abc-123")
+    assert result == fake_row
+
+    # The query must filter by the JARVIS job_id stored in args.
+    sql, *params = conn.fetchrow.await_args.args
+    assert "args->>'job_id'" in sql
+    assert params == ["abc-123"]
+
+
+@pytest.mark.asyncio
+async def test_stream_job_events_emits_procrastinate_only_payload(monkeypatch):
+    """B.4-(a): a procrastinate-only job produces an SSE event in the legacy shape.
+
+    Setup: ``get`` returns None (no legacy row), ``get_procrastinate_job_for_jarvis_id``
+    returns a procrastinate row that immediately reports status='succeeded'. The
+    stream must yield exactly one payload with ``source='procrastinate'``,
+    ``status='succeeded'``, and the legacy payload shape.
+    """
+    import json as _json
+
+    from jarvis_common import jobs
+
+    procrastinate_rows = [
+        {
+            "id": 7,
+            "queue_name": "paper_ingestion",
+            "task_name": "paper.process",
+            "status": "succeeded",
+            "args": {"job_id": "p-1", "paper_id": 42},
+        },
+    ]
+
+    async def _fake_legacy_get(_pool, _job_id):
+        return None
+
+    async def _fake_procrastinate_get(_pool, _job_id):
+        return procrastinate_rows[0]
+
+    async def _no_wait(_pool, _job_id, _timeout):
+        return False
+
+    async def _never_disconnected():
+        return False
+
+    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
+    monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
+    monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
+
+    pool_marker = MagicMock(name="db_pool")
+    frames: list[str] = []
+    async for frame in jobs.stream_job_events(
+        pool_marker, "p-1", is_disconnected=_never_disconnected
+    ):
+        frames.append(frame)
+
+    # Filter out keepalive comments.
+    data_frames = [f for f in frames if f.startswith("data:")]
+    assert len(data_frames) == 1, f"expected 1 SSE data frame, got {data_frames!r}"
+
+    body = data_frames[0].removeprefix("data: ").rstrip("\n")
+    payload = _json.loads(body)
+    assert payload["source"] == "procrastinate"
+    assert payload["status"] == "succeeded"
+    assert payload["payload"] == {"job_id": "p-1", "paper_id": 42}
+
+
+@pytest.mark.asyncio
+async def test_stream_job_events_mixed_legacy_and_procrastinate(monkeypatch):
+    """B.4-(b): a job that exists in BOTH tables emits one frame per source on first cycle.
+
+    The legacy row reports ``running`` while the procrastinate row reports
+    ``succeeded``. The stream should:
+      1. yield the legacy ``running`` frame (source=legacy),
+      2. yield the procrastinate ``succeeded`` frame (source=procrastinate),
+      3. terminate because procrastinate has reached a terminal state.
+    """
+    import json as _json
+
+    from jarvis_common import jobs
+
+    legacy_row = {
+        "id": "uuid-mixed",
+        "kind": "paper.process",
+        "status": "running",
+        "progress": 0.4,
+        "progress_message": "halfway",
+        "payload": {"foo": "bar"},
+        "result": None,
+        "error": None,
+    }
+    procrastinate_row = {
+        "id": 99,
+        "queue_name": "paper_ingestion",
+        "task_name": "paper.process",
+        "status": "succeeded",
+        "args": {"job_id": "uuid-mixed"},
+    }
+
+    async def _fake_legacy_get(_pool, _job_id):
+        return legacy_row
+
+    async def _fake_procrastinate_get(_pool, _job_id):
+        return procrastinate_row
+
+    async def _no_wait(_pool, _job_id, _timeout):
+        return False
+
+    async def _never_disconnected():
+        return False
+
+    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
+    monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
+    monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
+
+    pool_marker = MagicMock(name="db_pool")
+    frames: list[str] = []
+    async for frame in jobs.stream_job_events(
+        pool_marker, "uuid-mixed", is_disconnected=_never_disconnected
+    ):
+        frames.append(frame)
+
+    data_frames = [f for f in frames if f.startswith("data:")]
+    payloads = [_json.loads(f.removeprefix("data: ").rstrip("\n")) for f in data_frames]
+
+    sources = [p["source"] for p in payloads]
+    statuses = [p["status"] for p in payloads]
+
+    # Both sources must produce a frame, in order: legacy first then procrastinate.
+    assert sources == ["legacy", "procrastinate"], (
+        f"expected ['legacy', 'procrastinate'], got {sources!r}"
+    )
+    assert statuses == ["running", "succeeded"]
+
+    # Stream must terminate as soon as procrastinate reaches a terminal status.
+    # (No infinite loop — verified by the fact that this test returns at all.)
+
+
+@pytest.mark.asyncio
+async def test_stream_job_events_legacy_only_unchanged(monkeypatch):
+    """B.4 regression: legacy-only path still terminates at legacy terminal status.
+
+    When the procrastinate table doesn't have a matching row,
+    stream_job_events must behave exactly like the pre-bridge implementation.
+    """
+    import json as _json
+
+    from jarvis_common import jobs
+
+    legacy_row = {
+        "id": "uuid-legacy",
+        "kind": "paper.process",
+        "status": "succeeded",
+        "progress": 1.0,
+        "progress_message": "done",
+        "payload": {"x": 1},
+        "result": {"ok": True},
+        "error": None,
+    }
+
+    async def _fake_legacy_get(_pool, _job_id):
+        return legacy_row
+
+    async def _fake_procrastinate_get(_pool, _job_id):
+        return None  # no procrastinate row
+
+    async def _no_wait(_pool, _job_id, _timeout):
+        return False
+
+    async def _never_disconnected():
+        return False
+
+    monkeypatch.setattr(jobs, "get", _fake_legacy_get)
+    monkeypatch.setattr(jobs, "get_procrastinate_job_for_jarvis_id", _fake_procrastinate_get)
+    monkeypatch.setattr(jobs, "_wait_for_job_notification", _no_wait)
+
+    pool_marker = MagicMock(name="db_pool")
+    frames: list[str] = []
+    async for frame in jobs.stream_job_events(
+        pool_marker, "uuid-legacy", is_disconnected=_never_disconnected
+    ):
+        frames.append(frame)
+
+    data_frames = [f for f in frames if f.startswith("data:")]
+    assert len(data_frames) == 1
+    payload = _json.loads(data_frames[0].removeprefix("data: ").rstrip("\n"))
+    assert payload["source"] == "legacy"
+    assert payload["status"] == "succeeded"
+    assert payload["result"] == {"ok": True}

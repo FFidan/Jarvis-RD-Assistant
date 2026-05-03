@@ -23,7 +23,16 @@ vi.mock('@/lib/api', () => ({
   updateTask: vi.fn(),
 }));
 
+vi.mock('sonner', () => ({
+  toast: {
+    success: vi.fn(),
+    error: vi.fn(),
+    info: vi.fn(),
+  },
+}));
+
 const { fetchMyDay, updateTask } = await import('@/lib/api');
+const { toast } = await import('sonner');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -161,6 +170,104 @@ describe('IntentSection', () => {
       // The title span should carry text-meta (the faded style class)
       const titleEl = screen.getByText(COMPLETED_TASK.title);
       expect(titleEl.className).toContain('text-meta');
+    });
+  });
+
+  describe('CompletedRow reopen toast notifications', () => {
+    it('shows success toast when reopen mutation succeeds', async () => {
+      const user = userEvent.setup();
+      vi.mocked(fetchMyDay).mockResolvedValue({
+        ...BASE_MY_DAY,
+        tasks: [COMPLETED_TASK],
+      });
+      vi.mocked(updateTask).mockResolvedValue(undefined as any);
+
+      renderWithProviders();
+
+      // Expand the completed section
+      const toggleBtn = await screen.findByText(/1 done today/);
+      await user.click(toggleBtn);
+
+      // Click the reopen button
+      const reopenBtn = screen.getByRole('button', { name: 'Reopen task' });
+      await user.click(reopenBtn);
+
+      // updateTask should have been called with the correct args
+      expect(vi.mocked(updateTask)).toHaveBeenCalledWith(COMPLETED_TASK.id, { status: 'todo' });
+
+      // Toast success should have fired
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Task reopened');
+    });
+
+    it('shows error toast when reopen mutation fails', async () => {
+      const user = userEvent.setup();
+      vi.mocked(fetchMyDay).mockResolvedValue({
+        ...BASE_MY_DAY,
+        tasks: [COMPLETED_TASK],
+      });
+      vi.mocked(updateTask).mockRejectedValue(new Error('Network error'));
+
+      renderWithProviders();
+
+      // Expand the completed section
+      const toggleBtn = await screen.findByText(/1 done today/);
+      await user.click(toggleBtn);
+
+      // Click the reopen button
+      const reopenBtn = screen.getByRole('button', { name: 'Reopen task' });
+      await user.click(reopenBtn);
+
+      // Toast error should have fired with the error message
+      expect(vi.mocked(toast.error)).toHaveBeenCalledWith(
+        'Failed to reopen: Network error',
+      );
+    });
+  });
+
+  describe('IntentSection auto-collapse when no completed tasks remain', () => {
+    it('hides the completed footer when completedToday drops to zero after refetch', async () => {
+      const user = userEvent.setup();
+
+      // First fetch: 1 completed task (so the toggle appears)
+      vi.mocked(fetchMyDay).mockResolvedValue({
+        ...BASE_MY_DAY,
+        tasks: [COMPLETED_TASK],
+      });
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const { rerender } = render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <IntentSection />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+
+      // Expand the completed section
+      const toggleBtn = await screen.findByText(/1 done today/);
+      await user.click(toggleBtn);
+
+      // "Hide completed" should now be visible (showCompleted=true)
+      expect(screen.getByText(/Hide completed/)).toBeInTheDocument();
+
+      // Now simulate refetch returning 0 completed tasks
+      vi.mocked(fetchMyDay).mockResolvedValue({
+        ...BASE_MY_DAY,
+        tasks: [],
+      });
+
+      // Invalidate queries to trigger a refetch
+      await queryClient.invalidateQueries({ queryKey: ['my-day'] });
+
+      // After the useEffect fires (completedToday.length === 0 → setShowCompleted(false)),
+      // the entire completed footer is gone (guarded by completedToday.length > 0)
+      await screen.findByText(/No tasks for today/);
+      expect(screen.queryByText(/Hide completed/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/done today/)).not.toBeInTheDocument();
+
+      rerender(<></>);
     });
   });
 });

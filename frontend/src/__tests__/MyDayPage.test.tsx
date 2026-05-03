@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { MyDayPage } from '@/pages/MyDayPage';
 import * as api from '@/lib/api';
 import type { MyDayResponse, RetentionStats, PulseDeck, PulseCardItem } from '@/types';
@@ -298,5 +298,51 @@ describe('HeroPulse behaviour', () => {
     expect(
       await screen.findByText(/All caught up/i),
     ).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Hash-scroll behaviour (Phase 1e Task A1)
+// ---------------------------------------------------------------------------
+
+describe('MyDayPage hash-scroll', () => {
+  beforeEach(() => {
+    vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
+    vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
+    vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
+    vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
+    vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
+  });
+
+  it('scrolls to #now section via rAF retry loop when element appears after mount', async () => {
+    // jsdom does not implement scrollIntoView — stub it so we can assert it was called.
+    const scrollIntoViewMock = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoViewMock;
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/my-day#now']}>
+          <MyDayPage />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    // HeroNow renders <section id="now"> — wait for it to be present in the DOM.
+    // The §Now marker text is rendered inside the section by SectionHeader.
+    await screen.findByText(/§ Now/i);
+
+    // The rAF retry loop should find #now and call scrollIntoView with the
+    // smooth options specified in MyDayPage's useEffect.
+    await vi.waitFor(() => {
+      expect(scrollIntoViewMock).toHaveBeenCalledWith({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    });
   });
 });

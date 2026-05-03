@@ -9,6 +9,17 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
   No behavioral change — worker is not yet wired up. Foundation for the
   procrastinate cutover spec'd at `docs/specs/2026-05-03-b4-job-broker.md`.
 
+### Changed
+- **B.4 Step 3 canary:** `digest.weekly` migrated to procrastinate. Legacy
+  `@job_handler("digest.weekly")` body retained — procrastinate task dispatches
+  into it via the registry shim. Soak target: ≥48 hours organic usage before
+  Group D batch migrations.
+
+## [1.6.1] — 2026-05-03
+
+### Added (B.3 — mxbai-rerank in production)
+- **B.3** mxbai-rerank-base-v2 default reranker verified in production since 2026-05-02. No retrieval-quality regressions observed in manual smoke testing (Pulse run + cross-paper RAG). Formal BEIR benchmark evaluation deferred to Phase C re-embedding sprint.
+
 ## [1.6.0] — 2026-05-03
 
 ### Added (B.1 + B.2 — Instructor + Langfuse)
@@ -20,11 +31,6 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 
 ### Removed (BREAKING — internal API)
 - `call_llm` and `call_llm_json_value` deleted from `jarvis_common.llm_client` and `jarvis_common.__init__`. Replace all callers with `call_llm_structured` (structured) or `request_chat_completion_content` (raw string).
-
-## [1.6.1] — 2026-05-03
-
-### Added (B.3 — mxbai-rerank in production)
-- **B.3** mxbai-rerank-base-v2 default reranker verified in production since 2026-05-02. No retrieval-quality regressions observed in manual smoke testing (Pulse run + cross-paper RAG). Formal BEIR benchmark evaluation deferred to Phase C re-embedding sprint.
 
 ## [1.5.1] — 2026-05-02
 

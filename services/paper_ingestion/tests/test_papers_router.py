@@ -1807,6 +1807,7 @@ async def test_process_batch_happy_path_returns_job_id():
 
     assert result == {"job_id": fake_job_id, "status": "queued"}
     mock_enqueue.assert_awaited_once()
+    assert mock_enqueue.await_args is not None
     call_kwargs = mock_enqueue.await_args.kwargs
     assert call_kwargs.get("payload") == {"paper_ids": [1, 2, 3]}
 

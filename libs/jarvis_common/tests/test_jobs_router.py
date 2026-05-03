@@ -378,3 +378,138 @@ async def test_create_job_skips_acquire_when_extractor_returns_none():
     assert result.job_id == "j-2"
     pool.acquire.assert_not_called()
     conn.fetchrow.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# B.4 Step 2 — SSE stream surfaces both legacy and procrastinate sources
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_job_route_returns_legacy_sse_payload():
+    """B.4 SSE bridge: GET /api/jobs/{id}/stream still emits legacy SSE frames.
+
+    This guards against a regression where adding the procrastinate listen path
+    silently broke the existing legacy SSE behavior. The endpoint must:
+      1. 404 on owner mismatch (unchanged — see WS-6B-α tests above)
+      2. emit a legacy ``data:`` frame whose JSON has ``source='legacy'``
+    """
+    import json
+    from collections.abc import AsyncIterator
+
+    _router, _rm, pool, handlers = _build_factory()
+
+    legacy_row = {
+        "id": "uuid-stream-1",
+        "kind": "foo.bar",
+        "status": "succeeded",
+        "progress": 1.0,
+        "progress_message": "done",
+        "payload": {"x": 1},
+        "result": {"ok": True},
+        "error": None,
+        "user_id": None,
+    }
+
+    async def _fake_stream(_pool, _job_id, *, is_disconnected) -> AsyncIterator[str]:
+        # Mirror the real shape — a single legacy frame then EOF.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "progress": 1.0,
+                    "progress_message": "done",
+                    "status": "succeeded",
+                    "source": "legacy",
+                    "result": {"ok": True},
+                    "payload": {"x": 1},
+                }
+            )
+            + "\n\n"
+        )
+
+    with (
+        patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=legacy_row)),
+        patch.object(jobs_router_mod.jobs_lib, "stream_job_events", _fake_stream),
+    ):
+        request = MagicMock()
+        request.is_disconnected = AsyncMock(return_value=False)
+        response = await handlers["stream_job"](
+            request=request,
+            job_id="uuid-stream-1",
+            db_pool=pool,
+            user_id=None,
+        )
+
+    # Drain the StreamingResponse body iterator.
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk if isinstance(chunk, str) else chunk.decode())
+    assert chunks, "stream must emit at least one frame"
+    body = "".join(chunks)
+    assert "data:" in body
+    payload_line = body.strip().splitlines()[0].removeprefix("data: ")
+    parsed = json.loads(payload_line)
+    assert parsed["source"] == "legacy"
+    assert parsed["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_stream_job_route_surfaces_procrastinate_source():
+    """B.4 SSE bridge (router-level): a procrastinate-sourced frame propagates through StreamingResponse."""
+    import json
+    from collections.abc import AsyncIterator
+
+    _router, _rm, pool, handlers = _build_factory()
+
+    legacy_row = {
+        "id": "uuid-stream-2",
+        "kind": "foo.bar",
+        "status": "queued",
+        "progress": None,
+        "progress_message": None,
+        "payload": None,
+        "result": None,
+        "error": None,
+        "user_id": None,
+    }
+
+    async def _fake_stream(_pool, _job_id, *, is_disconnected) -> AsyncIterator[str]:
+        # Emit a procrastinate-tagged frame for a job not yet in the legacy table.
+        yield (
+            "data: "
+            + json.dumps(
+                {
+                    "progress": None,
+                    "progress_message": None,
+                    "status": "succeeded",
+                    "source": "procrastinate",
+                    "payload": {"job_id": "uuid-stream-2", "paper_id": 7},
+                }
+            )
+            + "\n\n"
+        )
+
+    with (
+        patch.object(jobs_router_mod.jobs_lib, "get", AsyncMock(return_value=legacy_row)),
+        patch.object(jobs_router_mod.jobs_lib, "stream_job_events", _fake_stream),
+    ):
+        request = MagicMock()
+        request.is_disconnected = AsyncMock(return_value=False)
+        response = await handlers["stream_job"](
+            request=request,
+            job_id="uuid-stream-2",
+            db_pool=pool,
+            user_id=None,
+        )
+
+    chunks: list[str] = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk if isinstance(chunk, str) else chunk.decode())
+    body = "".join(chunks)
+    assert '"source": "procrastinate"' in body
+    payload_line = body.strip().splitlines()[0].removeprefix("data: ")
+    parsed = json.loads(payload_line)
+    assert parsed["source"] == "procrastinate"
+    assert parsed["status"] == "succeeded"
+    assert parsed["payload"]["paper_id"] == 7

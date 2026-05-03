@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -24,11 +24,26 @@ export function HeroPulse() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [currentIndex, setCurrentIndex] = useState(0);
+  const lastDeckIdRef = useRef<number | null>(null);
 
   const { data: deck, isLoading, isError, error } = useQuery<PulseDeck | null>({
     queryKey: ['pulse-today'],
     queryFn: fetchPulseToday,
   });
+
+  useEffect(() => {
+    if (!deck) return;
+    // Reset on regenerate (new deck_id)
+    if (deck.deck_id !== lastDeckIdRef.current) {
+      lastDeckIdRef.current = deck.deck_id;
+      setCurrentIndex(0);
+      return;
+    }
+    // Clamp if currentIndex exceeds available cards (e.g. deck shrunk from refetch)
+    if (currentIndex > deck.cards.length) {
+      setCurrentIndex(deck.cards.length);
+    }
+  }, [deck?.deck_id, deck?.cards.length, currentIndex]);
 
   const rateMutation = useMutation({
     mutationFn: ({ paperId, rating }: { paperId: number; rating: PulseRating }) =>

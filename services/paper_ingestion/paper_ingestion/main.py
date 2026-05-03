@@ -220,6 +220,47 @@ async def _register_job_handlers(app: FastAPI) -> None:
     importlib.import_module("paper_ingestion.integrations.zotero_service")
 
 
+async def _start_procrastinate_worker(app: FastAPI) -> None:
+    """Step 2 of B.4 cutover — spawn the procrastinate worker alongside the legacy one.
+
+    The legacy ``jarvis_common.jobs.worker_loop`` (started by
+    :func:`jarvis_common.app_factory.start_jobs_worker`) is left untouched so
+    both runners poll their respective queues in parallel during dual-write.
+    Once a producer-side cutover lands (B.3+), the legacy worker can be retired.
+
+    Wires the procrastinate ``App`` connector with ``DATABASE_URL`` (the same
+    DSN backing ``app.state.db_pool``), opens the connector, threads
+    ``(pool, http_client)`` into ``task_registry`` so legacy handler dispatch
+    resolves at task-runtime, then starts the worker as a background asyncio
+    task. Stored on ``app.state`` for the symmetric teardown.
+    """
+    from jarvis_common.task_registry import (  # noqa: PLC0415
+        app as procrastinate_app,
+    )
+    from jarvis_common.task_registry import (
+        set_dependencies,
+    )
+    from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
+
+    # The connector built at task_registry import time has no DSN — replace it
+    # with one bound to DATABASE_URL so the worker connects to the same DB the
+    # service already talks to.
+    procrastinate_app.connector = AiopgConnector(dsn=os.environ["DATABASE_URL"])
+    procrastinate_app.job_manager.connector = procrastinate_app.connector
+    await procrastinate_app.open_async()
+
+    set_dependencies(app.state.db_pool, app.state.http_client)
+
+    app.state.procrastinate_app = procrastinate_app
+    app.state.procrastinate_worker_task = asyncio.create_task(
+        procrastinate_app.run_worker_async(
+            queues=["paper_ingestion", "builtin"],
+            install_signal_handlers=False,
+        ),
+        name="procrastinate_worker",
+    )
+
+
 async def _shutdown_qdrant(app: FastAPI) -> None:
     """Close the Qdrant client before the http client tears down."""
     qdrant_client = getattr(app.state, "qdrant_client", None)
@@ -232,6 +273,22 @@ async def _shutdown_scheduler(app: FastAPI) -> None:
     scheduler = getattr(app.state, "scheduler", None)
     if scheduler is not None:
         scheduler.shutdown(wait=False)
+
+
+async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
+    """Cancel the procrastinate worker task and close the connector."""
+    import contextlib  # noqa: PLC0415
+
+    task = getattr(app.state, "procrastinate_worker_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    procrastinate_app = getattr(app.state, "procrastinate_app", None)
+    if procrastinate_app is not None:
+        with contextlib.suppress(Exception):
+            await procrastinate_app.close_async()
 
 
 _PAPER_INGESTION_JOB_KINDS: set[str] = {
@@ -278,6 +335,7 @@ _lifespan_config = ServiceLifespanConfig(
         _refresh_telegram_username,
         _start_scheduler_hook,
         _register_job_handlers,
+        _start_procrastinate_worker,
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
@@ -290,6 +348,7 @@ _lifespan_config = ServiceLifespanConfig(
         None,  # _refresh_telegram_username
         _shutdown_scheduler,  # _start_scheduler_hook
         None,  # _register_job_handlers
+        _shutdown_procrastinate_worker,  # _start_procrastinate_worker
     ],
 )
 

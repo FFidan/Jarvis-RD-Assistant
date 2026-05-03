@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
@@ -12,6 +12,8 @@ function CompletedRow({ task }: { task: MyDayTask }) {
   const queryClient = useQueryClient();
   const reopenMutation = useMutation({
     mutationFn: () => updateTask(task.id, { status: 'todo' }),
+    onSuccess: () => toast.success('Task reopened'),
+    onError: (err: Error) => toast.error(`Failed to reopen: ${err.message}`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
   });
 
@@ -73,6 +75,10 @@ export function IntentSection() {
 
   const pendingTasks = data?.tasks.filter((t) => t.status !== 'done') ?? [];
   const completedToday = data?.tasks.filter((t) => t.status === 'done') ?? [];
+
+  useEffect(() => {
+    if (completedToday.length === 0) setShowCompleted(false);
+  }, [completedToday.length]);
 
   return (
     <section id="intent">

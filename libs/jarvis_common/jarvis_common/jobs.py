@@ -94,6 +94,25 @@ MAX_STREAM_SECONDS = 750  # hard ceiling; yields streaming_timeout and exits
 JOB_NOTIFY_CHANNEL = "jarvis_jobs"
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 
+# B.4 Step 2: procrastinate broker bridge.
+# The procrastinate schema (migration 052) emits NOTIFY on this channel for
+# job inserts and abort_requested events. There is NO procrastinate trigger
+# for status transitions (todo→doing→succeeded/failed) — those are observed
+# via polling the procrastinate_jobs table on each stream cycle.
+PROCRASTINATE_NOTIFY_CHANNEL = "procrastinate_any_queue_v1"
+
+# Map procrastinate's status enum → JARVIS legacy status strings.
+# Source: db/migrations/052_procrastinate_schema.sql:27-35.
+PROCRASTINATE_STATUS_MAP: dict[str, str] = {
+    "todo": "queued",
+    "doing": "running",
+    "succeeded": "succeeded",
+    "failed": "failed",
+    "cancelled": "cancelled",
+    "aborting": "running",  # legacy, not used since procrastinate v3.0.0
+    "aborted": "cancelled",
+}
+
 # Backward-compatible aliases (deprecated — import the public names instead)
 _KEEPALIVE_INTERVAL = KEEPALIVE_INTERVAL
 _MAX_STREAM_SECONDS = MAX_STREAM_SECONDS
@@ -161,12 +180,24 @@ async def notify_job_update(
         logger.debug("jobs.notify failed for job %s", job_id, exc_info=True)
 
 
-def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
-    """Return the public SSE payload for a job row."""
+def job_sse_payload(
+    row: dict[str, Any],
+    *,
+    source: Literal["legacy", "procrastinate"] = "legacy",
+) -> dict[str, Any]:
+    """Return the public SSE payload for a job row.
+
+    ``source`` is a debugging discriminator that tags whether the row came
+    from the legacy ``jobs`` table or from ``procrastinate_jobs`` (B.4 Step 2
+    bridge). The frontend currently ignores this field — it exists so
+    operators can correlate SSE events with the originating broker during
+    the dual-write period.
+    """
     event_data: dict[str, Any] = {
         "progress": row.get("progress"),
         "progress_message": row.get("progress_message"),
         "status": row["status"],
+        "source": source,
     }
     if row["status"] in TERMINAL_STATUSES:
         if row.get("result") is not None:
@@ -178,14 +209,91 @@ def job_sse_payload(row: dict[str, Any]) -> dict[str, Any]:
     return event_data
 
 
+def procrastinate_status_to_jarvis(procrastinate_status: str) -> str:
+    """Map a procrastinate status enum value to the legacy JARVIS status string.
+
+    Unknown statuses (e.g. future procrastinate enum additions) fall through
+    to ``"running"`` so the SSE stream stays open and a future poll can
+    discover the terminal state. Use ``PROCRASTINATE_STATUS_MAP`` directly
+    for tests that need to detect unknown values.
+    """
+    return PROCRASTINATE_STATUS_MAP.get(procrastinate_status, "running")
+
+
+def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
+    """Adapt a ``procrastinate_jobs`` row into the legacy ``jobs``-row shape.
+
+    The legacy shape is what ``job_sse_payload`` expects: a dict with
+    ``status`` (legacy enum), ``progress``, ``progress_message``, optional
+    ``result`` / ``error`` / ``payload`` keys. procrastinate's row has
+    ``status`` (procrastinate enum), ``args`` (kwargs JSONB), and no native
+    progress columns — the bridge surfaces ``args`` as ``payload`` so the
+    terminal-event payload dump stays consistent.
+    """
+    return {
+        "status": procrastinate_status_to_jarvis(prow["status"]),
+        "progress": prow.get("progress"),
+        "progress_message": prow.get("progress_message"),
+        "result": prow.get("result"),
+        "error": prow.get("error"),
+        "payload": prow.get("args"),
+    }
+
+
+async def get_procrastinate_job_for_jarvis_id(
+    pool: asyncpg.Pool, jarvis_job_id: str
+) -> dict[str, Any] | None:
+    """Fetch the matching ``procrastinate_jobs`` row by ``args->>'job_id'``.
+
+    Returns ``None`` when:
+      * no procrastinate row carries this JARVIS job_id, or
+      * the ``procrastinate_jobs`` table does not exist (migration 052 not
+        applied — graceful degradation so legacy-only DBs still work).
+
+    Mirrors :func:`get` for the legacy table.
+    """
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, queue_name, task_name, status, args
+                FROM procrastinate_jobs
+                WHERE args->>'job_id' = $1
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                str(jarvis_job_id),
+            )
+    except asyncpg.UndefinedTableError:
+        return None
+    except Exception:
+        logger.debug("procrastinate row lookup failed for job %s", jarvis_job_id, exc_info=True)
+        return None
+    if row is None:
+        return None
+    return dict(row)
+
+
 async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: float) -> bool:
-    """Wait for a job-specific NOTIFY payload, returning False on fallback timeout."""
+    """Wait for a job-specific NOTIFY payload, returning False on fallback timeout.
+
+    Subscribes to BOTH ``JOB_NOTIFY_CHANNEL`` (legacy ``jarvis_jobs``, payload
+    is the job UUID) AND ``PROCRASTINATE_NOTIFY_CHANNEL`` (B.4 bridge,
+    payload is a procrastinate JSON envelope ``{"type": ..., "job_id": ...}``).
+
+    For the legacy channel: payload-equality check on the job UUID.
+    For the procrastinate channel: any notify is treated as a wake-up so the
+    polling loop re-queries ``procrastinate_jobs`` — the procrastinate
+    triggers don't carry the JARVIS job_id, only the procrastinate bigint id,
+    so a precise filter would require an extra DB lookup. A wake-up false
+    positive just means an extra poll, which is cheap.
+    """
     matched = asyncio.Event()
 
     async def _connect() -> _PoolListenConnection:
         return await _PoolListenConnection.create(pool)
 
-    async def _handle_notification(
+    async def _handle_legacy(
         notification: asyncpg_listen.Notification | asyncpg_listen.Timeout,
     ) -> None:
         if isinstance(notification, asyncpg_listen.Notification) and notification.payload == str(
@@ -193,10 +301,20 @@ async def _wait_for_job_notification(pool: asyncpg.Pool, job_id: str, timeout: f
         ):
             matched.set()
 
+    async def _handle_procrastinate(
+        notification: asyncpg_listen.Notification | asyncpg_listen.Timeout,
+    ) -> None:
+        # Any procrastinate notify is a wake-up — caller will re-poll the row.
+        if isinstance(notification, asyncpg_listen.Notification):
+            matched.set()
+
     listener = asyncpg_listen.NotificationListener(_connect, reconnect_delay=timeout)  # type: ignore[arg-type]
     listen_task = asyncio.create_task(
         listener.run(
-            {JOB_NOTIFY_CHANNEL: _handle_notification},
+            {
+                JOB_NOTIFY_CHANNEL: _handle_legacy,
+                PROCRASTINATE_NOTIFY_CHANNEL: _handle_procrastinate,
+            },
             policy=asyncpg_listen.ListenPolicy.ALL,
             notification_timeout=timeout,
         )
@@ -237,8 +355,25 @@ async def stream_job_events(
     *,
     is_disconnected: Callable[[], Awaitable[bool]],
 ) -> AsyncIterator[str]:
-    """Yield SSE frames for a job, using LISTEN/NOTIFY with polling fallback."""
-    last_key: tuple[Any, Any, Any] | None = None
+    """Yield SSE frames for a job, using LISTEN/NOTIFY with polling fallback.
+
+    Subscribes to both the legacy ``jarvis_jobs`` channel and the procrastinate
+    ``procrastinate_any_queue_v1`` channel (B.4 Step 2). On each cycle we poll
+    BOTH the legacy ``jobs`` table and the ``procrastinate_jobs`` table; either
+    path can yield a frame. The procrastinate row is normalised to the legacy
+    SSE payload shape via :func:`procrastinate_row_to_jarvis_row` and tagged
+    with ``source: "procrastinate"`` for debugging.
+
+    The stream terminates when EITHER source reaches a JARVIS-terminal status
+    (``succeeded`` / ``failed`` / ``cancelled``) — this preserves the legacy
+    contract that the SSE response closes once the job is done. During the
+    dual-write period (Step 2) only the legacy path drives terminal events
+    in production; the procrastinate branch is exercised by tests today and
+    becomes the primary signal once the actual enqueue path migrates in
+    Group C.
+    """
+    last_legacy_key: tuple[Any, Any, Any] | None = None
+    last_procrastinate_key: tuple[Any, Any, Any] | None = None
     loop = asyncio.get_running_loop()
     loop_start = loop.time()
     last_keepalive = loop_start
@@ -264,11 +399,52 @@ async def stream_job_events(
             yield ": keepalive\n\n"
             last_keepalive = now
 
-        row = await get(pool, job_id)
-        if row is None:
+        legacy_row = await get(pool, job_id)
+        procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
+
+        # Emit legacy frame if changed.
+        if legacy_row is not None:
+            legacy_key = (
+                legacy_row.get("progress"),
+                legacy_row.get("progress_message"),
+                legacy_row["status"],
+            )
+            if legacy_key != last_legacy_key:
+                last_legacy_key = legacy_key
+                yield f"data: {json.dumps(job_sse_payload(legacy_row, source='legacy'))}\n\n"
+
+        # Emit procrastinate frame if changed.
+        procrastinate_row: dict[str, Any] | None = None
+        if procrastinate_raw is not None:
+            procrastinate_row = procrastinate_row_to_jarvis_row(procrastinate_raw)
+            procrastinate_key = (
+                procrastinate_row.get("progress"),
+                procrastinate_row.get("progress_message"),
+                procrastinate_row["status"],
+            )
+            if procrastinate_key != last_procrastinate_key:
+                last_procrastinate_key = procrastinate_key
+                yield (
+                    "data: "
+                    + json.dumps(job_sse_payload(procrastinate_row, source="procrastinate"))
+                    + "\n\n"
+                )
+
+        # If the legacy row vanished AND no procrastinate row exists, the job
+        # is unknown — terminate (matches pre-bridge behavior).
+        if legacy_row is None and procrastinate_row is None:
             break
 
-        current_state = (row.get("progress"), row.get("progress_message"), row["status"])
+        # Adaptive poll throttling keys off the legacy row's state when it
+        # exists; otherwise the procrastinate row drives the cadence so a
+        # procrastinate-only stream still backs off when idle.
+        active_row = legacy_row if legacy_row is not None else procrastinate_row
+        assert active_row is not None  # narrowing — unreachable when both None (handled above)
+        current_state = (
+            active_row.get("progress"),
+            active_row.get("progress_message"),
+            active_row["status"],
+        )
         if current_state != last_state:
             last_state = current_state
             idle_ticks = 0
@@ -278,12 +454,12 @@ async def stream_job_events(
             if idle_ticks * poll_interval > 30:
                 poll_interval = min(poll_interval + 1.0, 5.0)
 
-        key = (row.get("progress"), row.get("progress_message"), row["status"])
-        if key != last_key:
-            last_key = key
-            yield f"data: {json.dumps(job_sse_payload(row))}\n\n"
-
-        if row["status"] in TERMINAL_STATUSES:
+        # Terminate as soon as EITHER source has reached a terminal state.
+        legacy_terminal = legacy_row is not None and legacy_row["status"] in TERMINAL_STATUSES
+        procrastinate_terminal = (
+            procrastinate_row is not None and procrastinate_row["status"] in TERMINAL_STATUSES
+        )
+        if legacy_terminal or procrastinate_terminal:
             break
 
         await _wait_for_job_notification(pool, job_id, poll_interval)

@@ -486,6 +486,18 @@ async def enqueue_weekly_digest(
     days: int = Query(default=7, ge=1, le=30),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
-    """Enqueue weekly digest regeneration while keeping GET synchronous."""
-    job_id = await jobs_lib.enqueue(db_pool, "digest.weekly", {"days": days})
-    return JobCreateResponse(job_id=job_id, status="queued")
+    """Enqueue weekly digest regeneration while keeping GET synchronous.
+
+    B.4 Step 3 canary: defers via procrastinate (``digest.weekly`` task) rather
+    than the legacy ``jobs`` table. The JARVIS UUID we return is the same one
+    embedded in the procrastinate row's ``args->>'job_id'`` so the SSE bridge
+    can correlate.
+    """
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import digest_weekly  # noqa: PLC0415
+
+    _ = db_pool  # retained for future use; procrastinate uses its own connector
+    jarvis_job_id = str(uuid.uuid4())
+    await digest_weekly.defer_async(job_id=jarvis_job_id, days=days)
+    return JobCreateResponse(job_id=jarvis_job_id, status="queued")

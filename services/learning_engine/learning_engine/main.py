@@ -109,6 +109,56 @@ async def _register_le_job_handlers(app: FastAPI) -> None:
     importlib.import_module("learning_engine.routers.generation")
 
 
+async def _start_procrastinate_worker(app: FastAPI) -> None:
+    """Step 2 of B.4 cutover — spawn the procrastinate worker alongside the legacy one.
+
+    Mirrors the paper_ingestion lifespan: the legacy
+    ``jarvis_common.jobs.worker_loop`` keeps polling the legacy job queue while
+    procrastinate polls its own ``learning_engine`` + ``builtin`` queues. Both
+    workers run concurrently during dual-write (B.3+ flips the producer side).
+    """
+    from jarvis_common.task_registry import (  # noqa: PLC0415
+        app as procrastinate_app,
+    )
+    from jarvis_common.task_registry import (
+        set_dependencies,
+    )
+    from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
+
+    # Bind the connector to the same DSN backing app.state.db_pool — the
+    # task_registry-time connector has no DSN.
+    procrastinate_app.connector = AiopgConnector(dsn=os.environ["DATABASE_URL"])
+    procrastinate_app.job_manager.connector = procrastinate_app.connector
+    await procrastinate_app.open_async()
+
+    set_dependencies(app.state.db_pool, app.state.http_client)
+
+    app.state.procrastinate_app = procrastinate_app
+    app.state.procrastinate_worker_task = asyncio.create_task(
+        procrastinate_app.run_worker_async(
+            queues=["learning_engine", "builtin"],
+            install_signal_handlers=False,
+        ),
+        name="procrastinate_worker",
+    )
+
+
+async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
+    """Cancel the procrastinate worker task and close the connector."""
+    import contextlib  # noqa: PLC0415
+
+    task = getattr(app.state, "procrastinate_worker_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    procrastinate_app = getattr(app.state, "procrastinate_app", None)
+    if procrastinate_app is not None:
+        with contextlib.suppress(Exception):
+            await procrastinate_app.close_async()
+
+
 async def _log_le_started(app: FastAPI) -> None:
     """Log service startup confirmation."""
     logger.info("Learning Engine init complete")
@@ -132,11 +182,19 @@ _lifespan_config = ServiceLifespanConfig(
         _warn_multitenant_stub,
         _init_fsrs_and_generators,
         _register_le_job_handlers,
+        _start_procrastinate_worker,
         _log_le_started,
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
-    custom_teardown_tasks=[None, None, None, None, None],
+    custom_teardown_tasks=[
+        None,  # _init_langfuse_hook
+        None,  # _warn_multitenant_stub
+        None,  # _init_fsrs_and_generators
+        None,  # _register_le_job_handlers
+        _shutdown_procrastinate_worker,  # _start_procrastinate_worker
+        None,  # _log_le_started
+    ],
 )
 
 app = FastAPI(

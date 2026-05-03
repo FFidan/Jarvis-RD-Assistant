@@ -991,6 +991,7 @@ async def process_batch(
 
     Returns ``{"job_id": "<uuid>", "status": "queued"}``.
     """
+    _ = request  # required by @limiter.limit; not used in body
     job_id = await jobs_lib.enqueue(
         db_pool,
         "papers.batch_process",

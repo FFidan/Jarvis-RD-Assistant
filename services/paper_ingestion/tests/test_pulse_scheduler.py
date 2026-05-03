@@ -162,14 +162,32 @@ async def test_run_pulse_classifier_training_wrapper_enqueues_when_enabled(sched
 
 @pytest.mark.asyncio
 async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module):
+    """B.4 Step 3 canary: digest.weekly now defers via procrastinate.
+
+    Asserts the in-memory connector recorded a deferred job whose args carry
+    the JARVIS UUID under ``job_id`` (the SSE bridge keys on this) and the
+    ``days=7`` payload from the scheduler wrapper.
+    """
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
     pool, _conn = _make_pool_and_conn()
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    with patch("jarvis_common.jobs.enqueue", new_callable=AsyncMock) as enqueue:
-        enqueue.return_value = "job-digest"
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
         await scheduler_module.run_weekly_digest_wrapper(app)
 
-    enqueue.assert_awaited_once_with(pool, "digest.weekly", {"days": 7})
+    jobs = in_memory.jobs
+    assert len(jobs) == 1
+    deferred = next(iter(jobs.values()))
+    assert deferred["task_name"] == "digest.weekly"
+    assert deferred["queue_name"] == "paper_ingestion"
+    args = deferred["args"]
+    assert args["days"] == 7
+    # Critical SSE-bridge contract: JARVIS UUID must travel as args.job_id.
+    assert isinstance(args["job_id"], str)
+    assert len(args["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio
