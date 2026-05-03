@@ -160,8 +160,6 @@ N8N_JWT_SECRET="$(openssl rand -hex 32)"
 # Fernet requires a urlsafe-base64-encoded 32-byte key. openssl rand -base64 32
 # produces exactly that (44 chars with a trailing = pad — Fernet accepts it).
 JARVIS_CONFIG_KEY="$(openssl rand -base64 32)"
-# LiteLLM master_key gates all admin endpoints (/config/update etc.)
-LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
 ok "Secrets generated."
 
 # Write secret files used by Docker Secrets mounts.
@@ -364,7 +362,6 @@ sub_value() {
     JARVIS_CONFIG_KEY)        printf '%s' "$JARVIS_CONFIG_KEY" ;;
     N8N_ENCRYPTION_KEY)       printf '%s' "$N8N_ENCRYPTION_KEY" ;;
     N8N_JWT_SECRET)           printf '%s' "$N8N_JWT_SECRET" ;;
-    LITELLM_MASTER_KEY)        printf '%s' "$LITELLM_MASTER_KEY" ;;
     CLOUDFLARE_TUNNEL_TOKEN)  printf '%s' "$CLOUDFLARE_TUNNEL_TOKEN" ;;
     TELEGRAM_BOT_TOKEN)       printf '%s' "$TELEGRAM_BOT_TOKEN" ;;
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;

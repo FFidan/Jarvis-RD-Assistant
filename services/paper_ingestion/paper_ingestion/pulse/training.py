@@ -25,7 +25,12 @@ def _feature_vector(signals: dict[str, Any]) -> list[float]:
     return [float(signals.get(name, 0.0) or 0.0) for name in FEATURE_NAMES]
 
 
-async def train_classifier_model(db_pool: Any, *, min_ratings: int = MIN_RATINGS) -> dict[str, Any]:
+async def train_classifier_model(
+    db_pool: Any,
+    *,
+    min_ratings: int = MIN_RATINGS,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     """Train and persist an active logistic classifier when enough ratings exist."""
     try:
         from sklearn.linear_model import LogisticRegression
@@ -45,9 +50,11 @@ async def train_classifier_model(db_pool: Any, *, min_ratings: int = MIN_RATINGS
             FROM recommendation_feedback rf
             JOIN pulse_cards pc ON pc.paper_id = rf.paper_id
             WHERE rf.source IN ('pulse_thumbs', 'dismiss_combined')
+              AND rf.user_id IS NOT DISTINCT FROM $1
             ORDER BY rf.created_at DESC
             LIMIT 1000
-            """
+            """,
+            user_id,
         )
     if len(rows) < min_ratings:
         return {
@@ -100,8 +107,9 @@ async def train_classifier_model(db_pool: Any, *, min_ratings: int = MIN_RATINGS
                 """
                 INSERT INTO pulse_models
                     (user_id, model_version, model_blob, feature_names, metrics, is_active)
-                VALUES (NULL, 'v1', $1, $2::jsonb, $3::jsonb, TRUE)
+                VALUES ($1, 'v1', $2, $3::jsonb, $4::jsonb, TRUE)
                 """,
+                user_id,
                 blob,
                 FEATURE_NAMES,
                 metrics,
@@ -159,7 +167,8 @@ async def _pulse_train_classifier_job(
     ctx: JobContext,
 ) -> dict[str, Any]:
     """Background job handler for Pulse classifier retraining."""
+    user_id = payload.get("user_id")
     await ctx.update_progress(0.1, "Training Pulse classifier")
-    result = await train_classifier_model(pool)
+    result = await train_classifier_model(pool, user_id=user_id)
     await ctx.update_progress(1.0, "Done")
     return result

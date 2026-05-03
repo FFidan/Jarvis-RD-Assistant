@@ -31,10 +31,18 @@ async def _extraction_single_job(
     ctx: JobContext,
 ) -> dict[str, Any]:
     """Extract structured fields for one paper/template pair."""
-    from paper_ingestion.extraction import extract_fields_for_paper
+    from jarvis_common.db_helpers import assert_paper_ownership  # noqa: PLC0415
+
+    from paper_ingestion.extraction import extract_fields_for_paper  # noqa: PLC0415
 
     paper_id = int(payload["paper_id"])
     template_id = int(payload["template_id"])
+    user_id = payload.get("user_id")
+
+    # Re-validate ownership at job execution time to prevent IDOR via queued jobs.
+    async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+
     await ctx.update_progress(0.1, "Extracting fields")
     result = await extract_fields_for_paper(
         http_client,
@@ -59,11 +67,20 @@ async def _extraction_batch_job(
     Payload keys:
         paper_ids (list[int]): DB paper IDs to extract.
         template_id (int): Extraction template to apply.
+        user_id (int | None): Caller user ID for ownership check.
     """
-    from paper_ingestion.extraction import batch_extract
+    from jarvis_common.db_helpers import assert_paper_ownership  # noqa: PLC0415
+
+    from paper_ingestion.extraction import batch_extract  # noqa: PLC0415
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     template_id: int = int(payload["template_id"])
+    user_id = payload.get("user_id")
+
+    # Re-validate ownership for each paper at job execution time.
+    async with pool.acquire() as conn:
+        for paper_id in paper_ids:
+            await assert_paper_ownership(conn, paper_id, user_id)
 
     embedder = svc.embedder
     verifier = svc.verifier
