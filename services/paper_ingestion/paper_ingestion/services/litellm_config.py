@@ -156,6 +156,10 @@ async def update_litellm_model(
     # Detect cloud-provider prefix.  gemini/ maps to the "google" provider name.
     # -------------------------------------------------------------------------
     cloud_provider: str | None = None
+    # Normalize: strip :latest — Ollama's default implicit tag is never stored in
+    # config.yaml, so "mistral-nemo:latest" and "mistral-nemo" must be treated as equal.
+    if model_name.endswith(":latest"):
+        model_name = model_name[:-7]
     model_suffix = model_name  # the part after provider/ (or full name for Ollama)
 
     if "/" in model_name:
