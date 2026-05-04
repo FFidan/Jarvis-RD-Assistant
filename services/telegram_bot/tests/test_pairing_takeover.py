@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands.system_commands import _handle_pairing  # noqa: E402
 from telegram_bot.handlers.rate_limit import _timestamps  # noqa: E402
@@ -26,7 +27,7 @@ def _make_config(telegram_chat_id: int | None = None) -> BotConfig:
         database_url="postgres://test",
         paper_ingestion_url="http://paper:8000",
         learning_engine_url="http://learn:8001",
-        jarvis_api_key="test-key",
+        jarvis_api_key=SecretStr("test-key"),
     )
 
 

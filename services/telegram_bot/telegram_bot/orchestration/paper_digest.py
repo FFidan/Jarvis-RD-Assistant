@@ -38,7 +38,7 @@ async def _fetch_digest_from_api(
     """
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http_client.get(
             f"{config.paper_ingestion_url}/api/digest/weekly",
@@ -124,7 +124,7 @@ async def _send_chunked(bot: Bot, chat_id: int, lines: list[str]) -> None:
 async def _simple_digest(
     db_pool: asyncpg.Pool,
     bot: Bot,
-    config: BotConfig,
+    _config: BotConfig,
     owner: int,
     *,
     db_user_id: int | None = None,
@@ -137,8 +137,9 @@ async def _simple_digest(
         Database connection pool.
     bot : Bot
         Telegram bot instance.
-    config : BotConfig
-        Bot configuration.
+    _config : BotConfig
+        Bot configuration (reserved for future use — not yet needed by the
+        fallback query path).
     owner : int
         Resolved owner chat ID for Bot.send_message (Telegram chat ID, NOT a DB user PK).
     db_user_id : int | None, keyword-only

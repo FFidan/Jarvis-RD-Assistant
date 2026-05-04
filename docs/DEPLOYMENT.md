@@ -6,6 +6,55 @@ Most content here is also summarised in the [README](../README.md); this documen
 
 ---
 
+## Solo deployment (recommended for single-user)
+
+The minimal path to a healthy stack on your own PC:
+
+    bash scripts/init-secrets.sh   # idempotent; generates JARVIS_API_KEY,
+                                   # JARVIS_CONFIG_KEY, LITELLM_MASTER_KEY if absent
+    docker compose up -d           # waits for postgres → init-migrations →
+                                   # paper_ingestion + learning_engine + telegram_bot
+
+Required `.env` vars (init-secrets generates if blank):
+- `JARVIS_API_KEY`          — 32-byte hex; gates the REST API + dashboard login
+- `JARVIS_CONFIG_KEY`       — Fernet key; encrypts user_config secrets at rest
+- `LITELLM_MASTER_KEY`      — 32-byte hex; gates LiteLLM admin endpoints
+
+Optional:
+- `JARVIS_CONFIG_KEY_OLD`   — enables zero-downtime crypto rotation via MultiFernet
+
+Health checks:
+
+    curl http://127.0.0.1:8000/health/readiness   # paper_ingestion
+    curl http://127.0.0.1:8001/health/readiness   # learning_engine
+
+---
+
+## Remote access via Tailscale
+
+Reach the webapp + Telegram bot from outside your LAN with zero inbound
+ports opened. Encrypted at the WireGuard layer, no DNS / cert provisioning.
+
+    # 1. Install Tailscale on the PC running JARVIS:
+    curl -fsSL https://tailscale.com/install.sh | sh
+    sudo tailscale up
+
+    # 2. Install Tailscale on phone / laptop / etc.
+
+    # 3. Reach the webapp on tailnet:
+    #    http://<jarvis-pc-tailnet-name>:3000
+    #    or with HTTPS via tailscale serve:
+    sudo tailscale serve --https=443 http://localhost:3000
+
+Telegram remote works without any setup change — the bot polls Telegram
+outbound (no inbound exposure required).
+
+Self-signed HTTPS still works inside the tailnet; browser warnings are
+tolerable for solo use. For real DNS+cert, `tailscale serve` covers it
+without leaving Tailscale's network.
+
+---
+
 ## Deployment Modes
 
 | Mode | Setup time | Inbound ports | TLS story | Rate-limit trust | Prerequisites |
@@ -140,66 +189,7 @@ docker compose up -d paper_ingestion learning_engine   # triggers re-read on nex
 
 ---
 
-## Mode 3 — Cloudflare Tunnel
-
-Access JARVIS from anywhere without opening any inbound ports. Traffic enters Cloudflare's edge and exits to your host via an outbound WebSocket.
-
-### Prerequisites
-
-1. A Cloudflare account with a domain on it.
-2. A Zero-Trust tenant at <https://one.dash.cloudflare.com/>.
-3. A Zero-Trust **Access Application** covering the public hostname you intend to use. Without it, the tunnel publishes your services to the open internet.
-
-### Configure Cloudflare Zero Trust Access — REQUIRED before going live
-
-> **Security gate:** The tunnel publishes your JARVIS instance to the public internet. Without a Zero Trust Access policy, anyone who discovers the tunnel hostname can reach the login page and attempt to brute-force your API key.
-
-Before running `setup.sh` option 3, configure an Access Application in the Cloudflare dashboard:
-
-1. Go to <https://one.dash.cloudflare.com/> → **Access → Applications → Add an Application → Self-hosted**.
-2. Set the **Application domain** to the public hostname you intend to use (e.g. `jarvis.example.com`).
-3. In **Policies**, add at least one rule. Recommended options:
-   - **Email OTP** — require a one-time code to the allow-listed address(es) before the browser sees JARVIS. Easy to set up; no IdP required.
-   - **SSO (Google / GitHub / Azure AD)** — requires an identity provider configured under **Settings → Authentication**.
-4. Under **CORS Settings**, leave the default (Cloudflare will pass through after identity check).
-5. Click **Save**. The policy is live immediately — Cloudflare will redirect unauthenticated browsers to the Access login page before proxying to your tunnel.
-
-Only after the Access policy is verified working should you set `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1`.
-
-### Setup
-
-```bash
-# Acknowledge the ZT gate first (setup.sh refuses to proceed without this).
-echo 'JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1' >> .env
-./setup.sh   # pick option 3; paste the tunnel token when prompted
-```
-
-`setup.sh` will:
-- Enforce the `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` gate at `setup.sh:231-236`.
-- Prompt for your tunnel token and public hostname.
-- Set `CORS_ORIGINS=https://<tunnel-hostname>,https://localhost:3001`.
-- Set `JARVIS_CERT_SAN=DNS:localhost,IP:127.0.0.1,DNS:<tunnel-hostname>`.
-- Activate `docker compose --profile tunnel` so the `cloudflared` service starts.
-- Set `JARVIS_TRUST_CF_CONNECTING_IP=true` automatically (mode 3 only).
-
-### Cloudflare-specific trust header
-
-Cloudflare strips and replaces `X-Forwarded-For` with `CF-Connecting-IP`. JARVIS's rate limiter needs to know this to avoid rate-limiting every request as "Cloudflare":
-
-```
-# Set only in Cloudflare Tunnel mode (mode 3):
-JARVIS_TRUST_CF_CONNECTING_IP=true
-```
-
-This flag is read by `libs/jarvis_common/jarvis_common/http_rate_limiter.py:50` and already wired as a compose placeholder (`docker-compose.yml:27`). `setup.sh` sets it automatically when you pick option 3.
-
-> **Warning:** Do **not** set `JARVIS_TRUST_CF_CONNECTING_IP=true` in LAN mode (mode 2). In LAN mode, the `CF-Connecting-IP` header is not injected by any trusted intermediary — any client can forge it, bypassing rate-limit enforcement. Only enable this flag when your traffic arrives exclusively via Cloudflare's edge network.
-
-### How the rate-limiter walks XFF
-
-The IP-extraction walk is **right-to-left** (rightmost-trusted hop, Werkzeug-style — `http_rate_limiter.py:59-61`) — a left-to-right walk would let an attacker prepend a fake IP and bypass rate limits (SEC-001). If you add any other proxy in front of JARVIS, add its public egress CIDRs to `TRUSTED_PROXY_CIDRS` in `.env`.
-
----
+> **Alternatives:** Cloudflare Tunnel and DIY port-forward+ACME are possible but out of scope for this single-user stack; setup is on the operator if pursued.
 
 ## Mode 4 — Tailscale Funnel (alternative tunnel)
 

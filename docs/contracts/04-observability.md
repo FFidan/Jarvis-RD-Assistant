@@ -77,8 +77,8 @@ calls automatically nest as child spans of the active trace.
 | Trace | Outer function | File:line (target) | One trace produced when |
 |---|---|---|---|
 | **Pulse run** | `run_pulse` | [pulse/job.py:68](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L68) | Cron fires OR `pulse.generate` job dispatched |
-| **RAG question (single-paper)** | `prepare_single_paper_rag` + `stream_rag_events` | [rag/streaming.py:83, 306](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L83) | User asks a question on a paper |
-| **RAG question (cross-paper)** | `prepare_cross_paper_rag` + `stream_rag_events` | [rag/streaming.py:145, 306](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L145) | User asks a cross-paper question; includes `decompose_query` child span |
+| **RAG question (single-paper)** | `prepare_single_paper_rag` | [rag/streaming.py:83](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L83) | User asks a question on a paper |
+| **RAG question (cross-paper)** | `prepare_cross_paper_rag` | [rag/streaming.py:145](../../services/paper_ingestion/paper_ingestion/rag/streaming.py#L145) | User asks a cross-paper question; includes `decompose_query` child span |
 | **Extraction batch** | `batch_extract` | [extraction/core.py:276](../../services/paper_ingestion/paper_ingestion/extraction/core.py#L276) | User triggers batch extraction over N papers |
 | **Single-paper extraction** | `extract_fields_for_paper` | [extraction/core.py:86](../../services/paper_ingestion/paper_ingestion/extraction/core.py#L86) | User triggers single-paper extraction OR is invoked from `batch_extract` (in which case it's a child span of the batch trace) |
 | **KG entity extraction** | `extract_entities_for_paper` | [extraction/entities.py:255](../../services/paper_ingestion/paper_ingestion/extraction/entities.py#L255) | User triggers entity extraction |

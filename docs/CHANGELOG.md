@@ -2,28 +2,44 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
-## [1.7.0-dev]
+## [1.7.0] — 2026-05-04
+
+Audit fix sweep — 8 groups (A-H), 47 findings closed, 3 new migrations.
 
 ### Added
-- **B.4 Step 1:** procrastinate broker dependency + migration 052 (schema apply).
-  No behavioral change — worker is not yet wired up. Foundation for the
-  procrastinate cutover spec'd at `docs/specs/2026-05-03-b4-job-broker.md`.
-- **B.4 Step 5:** migration 053 drops the legacy `jobs` table
-  (`DROP TABLE jobs CASCADE` + `trg_jobs_notify_update` trigger and
-  `notify_jobs_update` function). Idempotent.
+- Migration 054 `job_progress` — sidecar table for procrastinate ctx-shim progress / cancel signals.
+- Migration 055 `recommendation_feedback_userid` — type + partial index.
+- Migration 056 `pulse_stage2_topk` — canonicalises `pulse.stage2_top_k` to 40 across DB seed + code default + frontend.
+- Group A: SSE progress field carries non-zero values; `ctx.is_cancelled()` works (was hardcoded False).
+- Group C: LiteLLM admin endpoints gated by `LITELLM_MASTER_KEY` (defence-in-depth atop loopback binding). Reverses round-15 W1.1 drop.
+- Group E: canonical `observe` shim at `jarvis_common.llm_client` with three-tier import fallback. Closes the langfuse 4.x silent observability outage.
+- Group H.1: MultiFernet rotation via `JARVIS_CONFIG_KEY_OLD`.
+- Group H.2: startup migration of plaintext `_ENCRYPTED_KEYS` rows in `user_config`.
+- Group H.7: Zotero client wraps requests with 429 / Retry-After handling.
+- Group H.10: Telegram pairing token entropy 64-bit (16 hex chars) + per-instance global 5s cooldown.
 
-### Changed
-- **B.4 cutover complete (Steps 3-5):** all 19 job kinds run on procrastinate;
-  legacy `jobs` table dropped (migration 053). `jobs_lib.enqueue`,
-  `worker_loop`, `_HANDLERS` registry, `@job_handler` decorator, `request_cancel`,
-  `get(pool, job_id)`, and `noop.test` self-test all removed. `get_unified`
-  and `list_jobs` collapsed to procrastinate-only paths. `cancel_job` route
-  dispatches via `procrastinate_app.job_manager.cancel_job_by_id_async`.
-  POST `/api/jobs` dispatches via `KIND_TO_TASK[kind].defer_async`. Net delta:
-  ~-2200 LoC across `jobs.py`, handler files, and tests.
-- **Bug 2 fix:** procrastinate-only jobs now correctly resolve through
-  `GET /api/jobs/{id}`, `GET /api/jobs/{id}/stream`, `GET /api/jobs/`, and
-  `POST /api/jobs/{id}/cancel` (route prechecks now use `get_unified`).
+### Fixed
+- Group B: 7 multi-tenant IDOR gaps closed across paper_ingestion routers/handlers. Dormant safety net while `current_user_id_or_none()` returns None.
+- Group D.1/D.3: migration 053 stripped erroneous BEGIN/COMMIT; migration 051 catches `duplicate_object` (was `duplicate_table`).
+- Group D.2: `db/init.sql` bootstrap aligned to `generate_series(1, 56)`.
+- Group D.5: `scripts/check-migrations-no-tx.sh` extended.
+- Group E.1: `call_llm_structured` now passes `timeout` correctly to Instructor.
+- Group E.2: `summarization.py` migrated to `call_llm_structured` + Pydantic `SummarizationOutput` (was the seventh untracked LLM call site).
+- Group E.4–E.7: `@observe()` added on `_classify_candidate`, `run_pulse`, `batch_extract`, `prepare_single_paper_rag`, `prepare_cross_paper_rag`.
+- Group G: `ARCHITECTURE.md` "Unified Jobs" rewritten to procrastinate-only; `scheduler.py` `run_pulse_wrapper` defers via procrastinate; BIDI U+200E/U+200F sanitised.
+- Group H.3–H.5: audit metadata 4 KB cap; X-Request-ID truncation + CRLF strip; UTC-based streak computation.
+- Group H.6: `CoreSettings.jarvis_api_key` / `jarvis_config_key` → `SecretStr | None`.
+- Telegram-bot follow-up: `BotConfig.jarvis_api_key` → `SecretStr | None`.
+- Multiple broken doc-link fixes (ARCHITECTURE.md, AGENTIC_WORKFLOW.md, known-residual-risks.md) post-archive.
+
+### Removed
+- Group G: dead `_sanitize_error_message` in `jobs.py`; reverse-shim file `ingestion/pdf_processor.py`.
+- DEPLOYMENT.md "Mode 3 Cloudflare Tunnel" section (out of scope for solo deploy; see Tailscale instead).
+
+### Notes
+- Audit reviewer flagged `s2_tldr` at `summarization.py:227` as dead; verification confirmed it is live (read at L285, used at L286 as fallback). Closed without action.
+- `known-residual-risks.md` DOCKER-002 updated: `LITELLM_MASTER_KEY` re-introduced 2026-05-04 (Group C) as defence-in-depth.
+- Plan canonical at `docs/plans/2026-05-04-audit-fix-sweep.md`. Source audit archived at `docs/plans/archive/2026-05-03-deep-audit-and-security-review.md`.
 
 ## [1.6.1] — 2026-05-03
 

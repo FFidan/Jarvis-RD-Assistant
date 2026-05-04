@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import asyncpg
 from jarvis_common import init_pg_connection
 from jarvis_common.secrets import read_secret
+from pydantic import SecretStr
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ class BotConfig:
     database_url: str
     paper_ingestion_url: str
     learning_engine_url: str
-    jarvis_api_key: str
+    jarvis_api_key: SecretStr | None
 
     @classmethod
     def from_env(cls) -> "BotConfig":
@@ -58,9 +59,10 @@ class BotConfig:
             logger.critical("DATABASE_URL is not set — Telegram bot cannot connect to database")
             raise SystemExit(1)
 
-        jarvis_api_key = read_secret("JARVIS_API_KEY")
-        if not jarvis_api_key:
+        _raw_api_key = read_secret("JARVIS_API_KEY")
+        if not _raw_api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
+        jarvis_api_key: SecretStr | None = SecretStr(_raw_api_key) if _raw_api_key else None
 
         return cls(
             telegram_token=token,

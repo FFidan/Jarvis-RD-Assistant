@@ -95,7 +95,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}",
@@ -147,7 +147,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.request(
             method,
@@ -195,7 +195,7 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
     http = get_http(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.post(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}/feedback",

@@ -145,15 +145,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/help`` — display available commands.
 
     Parameters
     ----------
     update : Update
         Incoming Telegram update.
-    context : ContextTypes.DEFAULT_TYPE
-        Bot context.
+    _context : ContextTypes.DEFAULT_TYPE
+        Bot context (unused — ``/help`` only formats static text).
     """
     if update.message is None:
         return
@@ -178,7 +178,7 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     config = get_config(context)
     headers = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.post(
             f"{config.paper_ingestion_url}/api/pulse/generate",

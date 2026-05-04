@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.owner import resolve_owner_chat_id
 
@@ -16,7 +17,7 @@ def _make_config(chat_id: int | None) -> BotConfig:
         database_url="postgres://localhost/test",
         paper_ingestion_url="http://paper_ingestion:8000",
         learning_engine_url="http://learning_engine:8001",
-        jarvis_api_key="key",
+        jarvis_api_key=SecretStr("key"),
     )
 
 

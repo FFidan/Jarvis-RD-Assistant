@@ -132,7 +132,7 @@ scope.
 
 Durable behavioral contracts for cross-cutting workflows live in `docs/specs/`:
 
-- [specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md) — authoritative spec for paper lifecycle states, transitions, action contracts, feed information architecture, recommendation feedback loop (L1+L2+L3), Zotero interplay, and Telegram parity. Replaces the legacy paper-lifecycle-contract.md and feed-information-architecture.md, which were deleted as part of the Phase A atomic cutover.
+- [specs/archive/2026-04-29-paper-lifecycle-redesign.md](specs/archive/2026-04-29-paper-lifecycle-redesign.md) — authoritative spec for paper lifecycle states, transitions, action contracts, feed information architecture, recommendation feedback loop (L1+L2+L3), Zotero interplay, and Telegram parity. Replaces the legacy paper-lifecycle-contract.md and feed-information-architecture.md, which were deleted as part of the Phase A atomic cutover.
 
 When changing paper status logic, lifecycle transitions, feed filtering, or the
 recommender feedback loop, verify the implementation against this spec before

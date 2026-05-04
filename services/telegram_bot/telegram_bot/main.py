@@ -41,7 +41,9 @@ async def post_init(application: Application) -> None:
     application.bot_data["db_pool"] = await create_db_pool(config.database_url)
     application.bot_data["http_client"] = httpx.AsyncClient(
         timeout=30.0,
-        headers={"X-API-Key": config.jarvis_api_key} if config.jarvis_api_key else {},
+        headers=(
+            {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
+        ),
     )
 
     # Start scheduler

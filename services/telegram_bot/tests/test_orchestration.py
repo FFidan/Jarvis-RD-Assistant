@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import author_alerts as author_alerts_mod
 from telegram_bot.orchestration import daily_briefing as daily_briefing_mod
@@ -32,7 +33,7 @@ def _make_config() -> BotConfig:
         database_url="postgres://example",
         paper_ingestion_url="http://paper-ingestion:8000",
         learning_engine_url="http://learning-engine:8001",
-        jarvis_api_key="secret",
+        jarvis_api_key=SecretStr("secret"),
     )
 
 
@@ -67,7 +68,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     paper_id = 42
     tracked_name = "Alice Smith"
     author_row = MagicMock()
-    author_row.__getitem__ = lambda self, k: {
+    author_row.__getitem__ = lambda _self, k: {
         "id": 1,
         "author_name": tracked_name,
         "s2_author_id": None,
@@ -81,7 +82,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     }.get(k, d)
 
     paper_row = MagicMock()
-    paper_row.__getitem__ = lambda self, k: {
+    paper_row.__getitem__ = lambda _self, k: {
         "id": paper_id,
         "title": "Paper by Alice",
         "authors": [tracked_name],
@@ -113,7 +114,7 @@ async def test_author_alerts_sends_message_when_new_paper_found():
     conn_write = AsyncMock()
     # INSERT … ON CONFLICT … RETURNING → returns a row (new alert)
     insert_row = MagicMock()
-    insert_row.__getitem__ = lambda self, k: {"tracked_author_id": 1}[k]
+    insert_row.__getitem__ = lambda _self, k: {"tracked_author_id": 1}[k]
     conn_write.fetchrow.return_value = insert_row
     conn_write.execute.return_value = None
 
@@ -167,14 +168,14 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     conn = AsyncMock()
     # new_papers_count query
     count_row = MagicMock()
-    count_row.__getitem__ = lambda self, k: {"count": 2}[k]
+    count_row.__getitem__ = lambda _self, k: {"count": 2}[k]
 
     task_row = MagicMock()
-    task_row.__getitem__ = lambda self, k: {"title": "Write paper", "project_name": "ResearchX"}[k]
+    task_row.__getitem__ = lambda _self, k: {"title": "Write paper", "project_name": "ResearchX"}[k]
     task_row.get = lambda k, d=None: {"title": "Write paper", "project_name": "ResearchX"}.get(k, d)
 
     milestone_row = MagicMock()
-    milestone_row.__getitem__ = lambda self, k: {
+    milestone_row.__getitem__ = lambda _self, k: {
         "name": "Submit draft",
         "deadline": now + timedelta(days=3),
         "project_name": "ResearchX",
@@ -240,7 +241,7 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
 
     now = datetime.now(UTC)
     milestone_row = MagicMock()
-    milestone_row.__getitem__ = lambda self, k: {
+    milestone_row.__getitem__ = lambda _self, k: {
         "name": "Grant submission",
         "deadline": now + timedelta(days=1),
         "project_name": "FundingProject",

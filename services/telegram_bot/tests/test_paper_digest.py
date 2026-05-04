@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import paper_digest
 
 
-def _make_config(api_key: str = "secret") -> BotConfig:
+def _make_config(api_key: str | None = "secret") -> BotConfig:
     """Create a minimal bot config for digest tests."""
     return BotConfig(
         telegram_token="token",
@@ -18,7 +19,7 @@ def _make_config(api_key: str = "secret") -> BotConfig:
         database_url="postgres://example",
         paper_ingestion_url="http://paper-ingestion:8000",
         learning_engine_url="http://learning-engine:8001",
-        jarvis_api_key=api_key,
+        jarvis_api_key=SecretStr(api_key) if api_key else None,
     )
 
 
@@ -58,7 +59,7 @@ async def test_fetch_digest_from_api_omits_auth_header_without_api_key():
     response.json.return_value = {"topics": []}
     http_client.get.return_value = response
 
-    result = await paper_digest._fetch_digest_from_api(http_client, _make_config(api_key=""))
+    result = await paper_digest._fetch_digest_from_api(http_client, _make_config(api_key=None))
 
     assert result == {"topics": []}
     _, kwargs = http_client.get.await_args

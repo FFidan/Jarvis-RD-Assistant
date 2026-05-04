@@ -72,7 +72,9 @@ async def run_research_pulse(
         logger.info("Skipping research pulse: no telegram owner paired")
         return
 
-    headers = {"X-API-Key": config.jarvis_api_key} if config.jarvis_api_key else {}
+    headers = (
+        {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
+    )
     try:
         resp = await http_client.get(
             f"{config.paper_ingestion_url}/api/pulse/today",

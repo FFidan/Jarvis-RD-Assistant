@@ -68,7 +68,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     config = get_config(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
 
     if query:
         # Search via paper_ingestion API
@@ -212,7 +212,7 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     config = get_config(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
 
     try:
         resp = await http.get(
@@ -285,7 +285,7 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     config = get_config(context)
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/feed",

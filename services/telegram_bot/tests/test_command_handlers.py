@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
@@ -36,7 +37,7 @@ def _make_config() -> BotConfig:
         database_url="postgres://test",
         paper_ingestion_url="http://paper:8000",
         learning_engine_url="http://learn:8001",
-        jarvis_api_key="test-key",
+        jarvis_api_key=SecretStr("test-key"),
     )
 
 
@@ -342,7 +343,7 @@ async def test_done_no_args_prompts():
 @pytest.mark.asyncio
 async def test_done_nonexistent_error():
     """/done with nonexistent task_id sends error."""
-    update, context, mock_db, _ = _make_update_and_context(args=["999"])
+    update, context, _mock_db, _ = _make_update_and_context(args=["999"])
 
     with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()
@@ -358,7 +359,7 @@ async def test_done_nonexistent_error():
 @pytest.mark.asyncio
 async def test_done_success():
     """/done <task_id> marks a task as done."""
-    update, context, mock_db, _ = _make_update_and_context(args=["5"])
+    update, context, _mock_db, _ = _make_update_and_context(args=["5"])
 
     with patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm:
         pm_instance = AsyncMock()

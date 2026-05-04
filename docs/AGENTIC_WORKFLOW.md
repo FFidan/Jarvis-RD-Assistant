@@ -93,7 +93,7 @@ Before claiming completion:
 - summarize files changed and residual risks
 - keep stale-plan or tool-validation caveats explicit
 - if paper lifecycle or feed filtering was touched, verify against
-  [docs/specs/2026-04-29-paper-lifecycle-redesign.md](specs/2026-04-29-paper-lifecycle-redesign.md)
+  [docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](specs/archive/2026-04-29-paper-lifecycle-redesign.md)
   (the authoritative spec post-2026-04-29; supersedes the legacy
   `paper-lifecycle-contract.md` + `feed-information-architecture.md` which
   are scheduled for deletion in Phase A implementation)

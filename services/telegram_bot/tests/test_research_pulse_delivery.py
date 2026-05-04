@@ -15,18 +15,19 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import research_pulse
 
 
-def _make_config(api_key: str = "secret") -> BotConfig:
+def _make_config(api_key: str | None = "secret") -> BotConfig:
     return BotConfig(
         telegram_token="token",
         telegram_chat_id=1234,
         database_url="postgres://example",
         paper_ingestion_url="http://paper-ingestion:8000",
         learning_engine_url="http://learning-engine:8001",
-        jarvis_api_key=api_key,
+        jarvis_api_key=SecretStr(api_key) if api_key else None,
     )
 
 

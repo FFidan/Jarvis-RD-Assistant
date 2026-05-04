@@ -9,6 +9,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.review_handler import (  # noqa: E402
     SHOWING_BACK,
@@ -37,7 +38,7 @@ def _make_config() -> BotConfig:
         database_url="postgres://test",
         paper_ingestion_url="http://paper:8000",
         learning_engine_url="http://learn:8001",
-        jarvis_api_key="test-key",
+        jarvis_api_key=SecretStr("test-key"),
     )
 
 
@@ -260,7 +261,7 @@ async def test_rate_card_api_failure():
 async def test_rate_card_expired_session():
     """Rating with no current card ends the session."""
     user_data = {}  # no current_card
-    update, context, mock_http = _make_callback_update_and_context("rate_3", user_data=user_data)
+    update, context, _mock_http = _make_callback_update_and_context("rate_3", user_data=user_data)
 
     result = await rate_card(update, context)
 

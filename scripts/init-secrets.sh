@@ -39,6 +39,16 @@ else
   info "JARVIS_API_KEY already set — skipping."
 fi
 
+# Reconcile secrets file if it exists
+if [ -f "secrets/jarvis_api_key.txt" ]; then
+  env_key=$(grep '^JARVIS_API_KEY=' .env 2>/dev/null | cut -d'=' -f2)
+  file_key=$(cat secrets/jarvis_api_key.txt 2>/dev/null | tr -d '\n')
+  if [ -n "$env_key" ] && [ "$env_key" != "$file_key" ]; then
+    echo -n "$env_key" > secrets/jarvis_api_key.txt
+    ok "secrets/jarvis_api_key.txt synced to match JARVIS_API_KEY in .env"
+  fi
+fi
+
 # ---------------------------------------------------------------------------
 # LITELLM_MASTER_KEY — 32-byte hex key for LiteLLM admin endpoints
 # ---------------------------------------------------------------------------
@@ -47,6 +57,16 @@ if [ -z "${LITELLM_MASTER_KEY:-}" ] && ! grep -q '^LITELLM_MASTER_KEY=' .env 2>/
   ok "LITELLM_MASTER_KEY generated and appended to .env."
 else
   info "LITELLM_MASTER_KEY already set — skipping."
+fi
+
+# Reconcile secrets file if it exists
+if [ -f "secrets/litellm_master_key.txt" ]; then
+  env_key=$(grep '^LITELLM_MASTER_KEY=' .env 2>/dev/null | cut -d'=' -f2)
+  file_key=$(cat secrets/litellm_master_key.txt 2>/dev/null | tr -d '\n')
+  if [ -n "$env_key" ] && [ "$env_key" != "$file_key" ]; then
+    echo -n "$env_key" > secrets/litellm_master_key.txt
+    ok "secrets/litellm_master_key.txt synced to match LITELLM_MASTER_KEY in .env"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

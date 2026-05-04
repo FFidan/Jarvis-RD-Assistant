@@ -3,7 +3,7 @@
 **Date:** 2026-05-02
 **Reviewers must update this contract in the same patch as any change to:**
 - The public surface of [libs/jarvis_common/jarvis_common/llm_client.py](../../libs/jarvis_common/jarvis_common/llm_client.py)
-- Any of the 6 LLM call sites enumerated in §2
+- Any of the 7 LLM call sites enumerated in §2
 - The Pydantic response models in §4
 - The retry / fallback policy
 
@@ -87,7 +87,7 @@ JSON-mode internally) — it remains for `request_chat_completion_content`.
 
 ## 2. Per-site catalog
 
-Six LLM call sites. Each site has its own row below; details in §4.
+Seven LLM call sites. Each site has its own row below; details in §4.
 
 | # | Site | File:line | Model alias | Output Pydantic | QuoteVerifier? |
 |---|---|---|---|---|---|
@@ -97,6 +97,7 @@ Six LLM call sites. Each site has its own row below; details in §4.
 | 4 | Flashcard generation | [learning_engine/card_generator.py:119](../../services/learning_engine/learning_engine/card_generator.py#L119) | `validated_model(model)` (default `"smart"`) | `CardGenerationOutput` | Yes (per-card `evidence_quote`) |
 | 5 | Contradiction classifier | [services/contradictions.py:516](../../services/paper_ingestion/paper_ingestion/services/contradictions.py#L516) | `get_smart_model()` | `ContradictionClassification` | Yes (post-LLM, on `quote_a` and `quote_b`) |
 | 6 | Weekly digest | [weekly_summary.py:178](../../services/paper_ingestion/paper_ingestion/weekly_summary.py#L178) | `get_smart_model()` | `WeeklyDigestOutput` | Optional (per-theme cheap fuzzy match against title+brief corpus) |
+| 7 | Paper summarization | [services/summarization.py:241](../../services/paper_ingestion/paper_ingestion/services/summarization.py#L241) | `get_smart_model()` | `SummarizationOutput` | Yes (per-finding quote verified against chunk text) |
 
 There is also a non-call-site streaming path and a non-structured scalar
 path; both stay outside Instructor — see §6.
@@ -337,6 +338,17 @@ This kills `call_llm_json_value` cleanly. **Until Wave 3 lands,
 
 The contract for `embed_texts` is unchanged by B.1. It remains a separate
 function family.
+
+### 6.4 Canonical `@observe` import path
+
+All services MUST import `@observe` from `jarvis_common.llm_client`, not from
+`langfuse` or `langfuse.decorators` directly. The `jarvis_common.llm_client`
+module owns the three-tier import fallback (langfuse.decorators → langfuse →
+no-op `functools.wraps`). Importing directly from langfuse re-introduces the
+silent-no-op outage on langfuse 4.x. The unit test at
+`libs/jarvis_common/tests/test_llm_client.py::test_observe_decorators_present`
+asserts `__wrapped__` on every boundary function in §3 of contract 04
+(observability), which would catch a regression.
 
 ---
 
