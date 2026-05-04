@@ -142,17 +142,18 @@ async def run_pulse_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping nightly run")
         return
     try:
-        # Local import to keep heavy paper_ingestion.pulse.* off the scheduler import path
-        from paper_ingestion.pulse.job import run_pulse
+        import uuid  # noqa: PLC0415
 
-        await run_pulse(
-            db_pool=db_pool,
-            http_client=app.state.http_client,
-            embedder=app.state.embedder,
-            source_cache=getattr(app.state, "sources", None),
+        from jarvis_common.task_registry import pulse_generate  # noqa: PLC0415
+
+        jarvis_job_id = str(uuid.uuid4())
+        await pulse_generate.defer_async(job_id=jarvis_job_id, user_id=None)
+        logger.info(
+            "pulse: deferred pulse.generate job %s via procrastinate",
+            jarvis_job_id,
         )
     except Exception:
-        logger.exception("pulse_overnight job failed")
+        logger.exception("pulse: failed to defer pulse.generate job")
 
 
 async def run_pulse_classifier_training_wrapper(app: Any) -> None:

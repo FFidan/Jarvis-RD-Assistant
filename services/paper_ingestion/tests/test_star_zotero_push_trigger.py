@@ -64,15 +64,20 @@ async def test_star_no_project_links_does_not_enqueue():
     """COUNT(*) from project_papers returns 0 → jobs_lib.enqueue is never awaited.
 
     auto_push_on_star=True but project_link_count=0 → still no enqueue.
+    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
+    fetchrow call 1 = paper existence; call 2 = CTE RETURNING (is_new_row, prev_starred).
+    fetchval call 1 = COUNT(*) project_papers; call 2 = auto_push_on_star config.
     """
     pool, conn = _make_pool_and_conn()
 
-    # fetchrow: SELECT id FROM papers → paper exists
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = paper_user_state.starred prior → None (no row yet)
-    #           call 2 = COUNT(*) project_papers → 0 links
-    #           call 3 = user_config zotero.auto_push_on_star → True
-    conn.fetchval.side_effect = [None, 0, True]
+    # fetchrow[0]: SELECT id FROM papers → paper exists
+    # fetchrow[1]: CTE RETURNING → new star (off→on transition)
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": True, "prev_starred": False},
+    ]
+    # fetchval[0] = COUNT(*) project_papers → 0 links; fetchval[1] = auto_push_on_star → True
+    conn.fetchval.side_effect = [0, True]
 
     with (
         patch(
@@ -82,10 +87,6 @@ async def test_star_no_project_links_does_not_enqueue():
         ),
         patch(
             "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
             new_callable=AsyncMock,
         ),
         patch(
@@ -106,12 +107,19 @@ async def test_star_no_project_links_does_not_enqueue():
 
 @pytest.mark.asyncio
 async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
-    """COUNT(*) returns 2 AND auto_push_on_star=True → jobs_lib.enqueue awaited once."""
+    """COUNT(*) returns 2 AND auto_push_on_star=True → jobs_lib.enqueue awaited once.
+
+    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
+    """
     pool, conn = _make_pool_and_conn()
 
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = prior starred → None, call 2 = COUNT(*) → 2, call 3 = auto_push_on_star → True
-    conn.fetchval.side_effect = [None, 2, True]
+    # fetchrow[0]: paper exists; fetchrow[1]: CTE RETURNING (new off→on star)
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": True, "prev_starred": False},
+    ]
+    # fetchval[0] = COUNT(*) → 2 links; fetchval[1] = auto_push_on_star → True
+    conn.fetchval.side_effect = [2, True]
 
     with (
         patch(
@@ -124,10 +132,6 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
             new_callable=AsyncMock,
         ),
         patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
-            new_callable=AsyncMock,
-        ),
-        patch(
             "jarvis_common.task_registry.zotero_push.defer_async",
             new_callable=AsyncMock,
         ) as mock_enqueue,
@@ -136,6 +140,7 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
 
     assert result == {"status": "ok", "paper_id": 10}
     mock_enqueue.assert_awaited_once()
+    assert mock_enqueue.await_args is not None
     call_kwargs = mock_enqueue.await_args.kwargs
     assert call_kwargs.get("paper_id") == 10
     assert "job_id" in call_kwargs
@@ -148,12 +153,19 @@ async def test_star_with_project_links_and_toggle_on_enqueues_zotero_push():
 
 @pytest.mark.asyncio
 async def test_star_with_project_links_toggle_off_does_not_enqueue():
-    """COUNT(*) returns 1 but auto_push_on_star=False → jobs_lib.enqueue NOT awaited."""
+    """COUNT(*) returns 1 but auto_push_on_star=False → jobs_lib.enqueue NOT awaited.
+
+    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
+    """
     pool, conn = _make_pool_and_conn()
 
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = prior starred → None, call 2 = COUNT(*) → 1, call 3 = auto_push_on_star → False
-    conn.fetchval.side_effect = [None, 1, False]
+    # fetchrow[0]: paper exists; fetchrow[1]: CTE RETURNING
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": True, "prev_starred": False},
+    ]
+    # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → False
+    conn.fetchval.side_effect = [1, False]
 
     with (
         patch(
@@ -163,10 +175,6 @@ async def test_star_with_project_links_toggle_off_does_not_enqueue():
         ),
         patch(
             "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
             new_callable=AsyncMock,
         ),
         patch(
@@ -190,12 +198,17 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
     """COUNT(*) returns 1 but auto_push_on_star key absent (None) → no enqueue.
 
     Default-off: if the key is missing from user_config the feature is disabled.
+    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
     """
     pool, conn = _make_pool_and_conn()
 
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = prior starred → None, call 2 = COUNT(*) → 1, call 3 = auto_push_on_star → None (key absent)
-    conn.fetchval.side_effect = [None, 1, None]
+    # fetchrow[0]: paper exists; fetchrow[1]: CTE RETURNING
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": True, "prev_starred": False},
+    ]
+    # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → None (key absent)
+    conn.fetchval.side_effect = [1, None]
 
     with (
         patch(
@@ -205,10 +218,6 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
         ),
         patch(
             "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
             new_callable=AsyncMock,
         ),
         patch(
@@ -230,12 +239,19 @@ async def test_star_with_project_links_toggle_not_set_does_not_enqueue():
 
 @pytest.mark.asyncio
 async def test_star_enqueue_failure_is_best_effort():
-    """If jobs_lib.enqueue raises, star_paper must return 200 and log via logger.exception."""
+    """If jobs_lib.enqueue raises, star_paper must return 200 and log via logger.exception.
+
+    Group B: star_paper uses CTE+RETURNING fetchrow (not _upsert_state_and_starred).
+    """
     pool, conn = _make_pool_and_conn()
 
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = prior starred → None, call 2 = COUNT(*) → 1, call 3 = auto_push_on_star → True
-    conn.fetchval.side_effect = [None, 1, True]
+    # fetchrow[0]: paper exists; fetchrow[1]: CTE RETURNING (new star → triggers enqueue)
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": True, "prev_starred": False},
+    ]
+    # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → True
+    conn.fetchval.side_effect = [1, True]
 
     with (
         patch(
@@ -245,10 +261,6 @@ async def test_star_enqueue_failure_is_best_effort():
         ),
         patch(
             "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
             new_callable=AsyncMock,
         ),
         patch(
@@ -275,14 +287,19 @@ async def test_star_already_starred_does_not_double_enqueue():
     """Repeat /star call on a paper already starred → enqueue NOT awaited.
 
     Even with project_link_count>0 and auto_push_on_star=True, the off→on
-    transition guard (was_unstarred=False) skips the enqueue. This prevents
-    duplicate Zotero pushes from client retries or double-tapped UI.
+    transition guard (is_new_row=False AND prev_starred=True) skips the enqueue.
+    This prevents duplicate Zotero pushes from client retries or double-tapped UI.
+    Group B: transition is now detected via CTE RETURNING (is_new_row + prev_starred).
     """
     pool, conn = _make_pool_and_conn()
 
-    conn.fetchrow.return_value = {"id": 10}
-    # fetchval: call 1 = prior starred → True (already starred), call 2 = COUNT(*) → 1, call 3 = auto_push_on_star → True
-    conn.fetchval.side_effect = [True, 1, True]
+    # fetchrow[0]: paper exists; fetchrow[1]: CTE RETURNING (already starred: no transition)
+    conn.fetchrow.side_effect = [
+        {"id": 10},
+        {"is_new_row": False, "prev_starred": True},  # existing row, was already starred
+    ]
+    # fetchval[0] = COUNT(*) → 1 link; fetchval[1] = auto_push_on_star → True
+    conn.fetchval.side_effect = [1, True]
 
     with (
         patch(
@@ -292,10 +309,6 @@ async def test_star_already_starred_does_not_double_enqueue():
         ),
         patch(
             "paper_ingestion.routers.papers.assert_paper_ownership",
-            new_callable=AsyncMock,
-        ),
-        patch(
-            "paper_ingestion.routers.papers._upsert_state_and_starred",
             new_callable=AsyncMock,
         ),
         patch(

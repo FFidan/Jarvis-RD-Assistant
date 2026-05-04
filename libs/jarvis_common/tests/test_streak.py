@@ -1,13 +1,13 @@
 """Tests for jarvis_common.streak.compute_streak."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from jarvis_common.streak import compute_streak
 
 
 def _dt(days_ago: int = 0) -> datetime:
     """Return a datetime that is `days_ago` days before today (midnight UTC)."""
-    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     return today - timedelta(days=days_ago)
 
 

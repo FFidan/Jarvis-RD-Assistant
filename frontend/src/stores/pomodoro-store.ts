@@ -80,7 +80,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           totalPausedMs: 0,
           phaseDurationMs: durationMs,
           secondsRemaining: state.workMinutes * 60,
-          attachedItem: item ?? state.attachedItem,
+          attachedItem: item ?? null,
         });
       },
 

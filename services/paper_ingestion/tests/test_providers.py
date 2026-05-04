@@ -171,10 +171,10 @@ async def test_get_encrypted_key_returns_masked(_app):
     body = resp.json()
     assert body["key"] == "llm.anthropic.api_key"
     assert plaintext not in resp.text
-    # Should be masked (starts with first 4 chars + ****)
+    # H.1: masked form is "****" + last 4 chars (no prefix leak)
     masked = body["value"]
     assert "****" in masked
-    assert masked == plaintext[:4] + "****"
+    assert masked == "****" + plaintext[-4:]
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,8 @@ async def test_legacy_plaintext_row_masks_on_read(_app):
     # Must be masked
     assert "legacytoken12345" not in resp.text
     assert "****" in body["value"]
-    assert body["value"] == "lega****"
+    # H.1: mask shows last 4 chars; "legacytoken12345" → "****2345"
+    assert body["value"] == "****2345"
 
 
 # ---------------------------------------------------------------------------

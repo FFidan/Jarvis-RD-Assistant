@@ -176,8 +176,9 @@ def test_source_response_redacts_api_key():
     assert resp.config["api_key"] != "REAL_SECRET_VALUE", (
         "api_key must not be returned in plaintext"
     )
-    # mask_secret keeps first 4 chars + '****' for values longer than 4
-    assert resp.config["api_key"] == "REAL****"
+    # H.1: mask_secret returns "****" + last 4 chars (was first 4 + "****")
+    # "REAL_SECRET_VALUE" → "****ALUE"
+    assert resp.config["api_key"] == "****ALUE"
     # Non-secret keys are unaffected
     assert resp.config["other_setting"] == "visible"
 

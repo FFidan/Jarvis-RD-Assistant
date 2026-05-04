@@ -28,6 +28,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
+from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import pulse_train_classifier
 
 from paper_ingestion._state import svc
@@ -66,6 +67,7 @@ def _fallback_stage2(stage1_out: list[ScoredCandidate]) -> list[ScoredCandidate]
     return fallback
 
 
+@observe()
 async def run_pulse(
     db_pool: Any,
     http_client: httpx.AsyncClient,

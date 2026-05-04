@@ -10,15 +10,7 @@ import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchPulseToday, ratePulseCard } from '@/lib/api';
 import type { PulseDeck, PulseCardItem, PulseRating } from '@/types';
 
-/** Extract 4-stop score parts from the flat signals map. */
-function toScoreParts(signals: Record<string, number>) {
-  return {
-    emb: signals['embedding'] ?? signals['emb'] ?? 0,
-    llm: signals['llm'] ?? signals['llm_relevance'] ?? 0,
-    rec: signals['rec'] ?? signals['recommendation'] ?? 0,
-    graph: signals['graph'] ?? signals['graph_boost'] ?? 0,
-  };
-}
+import { toScoreParts } from '@/lib/score-utils';
 
 export function HeroPulse() {
   const navigate = useNavigate();
@@ -39,8 +31,8 @@ export function HeroPulse() {
       setCurrentIndex(0);
       return;
     }
-    // Clamp if currentIndex exceeds available cards (e.g. deck shrunk from refetch)
-    if (currentIndex > deck.cards.length) {
+    // Clamp if currentIndex meets or exceeds available cards (e.g. deck shrunk from refetch)
+    if (currentIndex >= deck.cards.length) {
       setCurrentIndex(deck.cards.length);
     }
   }, [deck?.deck_id, deck?.cards.length, currentIndex]);

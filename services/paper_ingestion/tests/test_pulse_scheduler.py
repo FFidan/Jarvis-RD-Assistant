@@ -85,30 +85,32 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module, monkeypatch):
+async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
+    """Group G (W2-7): run_pulse_wrapper defers via procrastinate, not direct call.
+
+    Asserts the in-memory connector recorded a deferred job whose args carry
+    a JARVIS UUID under ``job_id`` and ``user_id=None`` (system call).
+    """
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    app = SimpleNamespace(
-        state=SimpleNamespace(
-            db_pool=pool,
-            http_client=MagicMock(),
-            embedder=MagicMock(),
-        )
-    )
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
+        await scheduler_module.run_pulse_wrapper(app)
 
-    called = {"n": 0}
-
-    async def fake_run_pulse(**kwargs):
-        called["n"] += 1
-        return {"duration_s": 1.0}
-
-    import paper_ingestion.pulse.job as job_mod
-
-    monkeypatch.setattr(job_mod, "run_pulse", fake_run_pulse)
-
-    await scheduler_module.run_pulse_wrapper(app)
-    assert called["n"] == 1
+    jobs = in_memory.jobs
+    assert len(jobs) == 1
+    deferred = next(iter(jobs.values()))
+    assert deferred["task_name"] == "pulse.generate"
+    assert deferred["queue_name"] == "paper_ingestion"
+    args = deferred["args"]
+    assert args["user_id"] is None
+    assert isinstance(args["job_id"], str)
+    assert len(args["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio

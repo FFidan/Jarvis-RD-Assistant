@@ -144,10 +144,10 @@ async def test_bulk_action_mixed_validity():
     # Make _apply_bulk_action raise for paper_id=999 only
     original_apply = papers._apply_bulk_action
 
-    async def _selective_fail(c, paper_id, user_id, action):
+    async def _selective_fail(c, paper_id, user_id, action, **_kwargs):
         if paper_id == 999:
             raise ValueError("paper 999 not found")
-        return await original_apply(c, paper_id, user_id, action)
+        return await original_apply(c, paper_id, user_id, action, **_kwargs)
 
     with patch.object(papers, "_apply_bulk_action", side_effect=_selective_fail):
         result = await papers.bulk_action_papers.__wrapped__(
@@ -173,8 +173,8 @@ async def test_bulk_action_savepoint_isolation():
 
     failing_id = 200
 
-    async def _fail_at_200(c, paper_id, user_id, action):
-        del c, user_id, action  # signature matches _apply_bulk_action; only paper_id used
+    async def _fail_at_200(c, paper_id, user_id, action, **_kwargs):
+        del c, user_id, action, _kwargs  # signature matches _apply_bulk_action; only paper_id used
         if paper_id == failing_id:
             raise RuntimeError("forced savepoint test failure")
         # Success for others — just pass

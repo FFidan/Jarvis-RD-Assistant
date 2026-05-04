@@ -52,7 +52,7 @@ export function HeroNow() {
   const [mode, setMode] = useState<HeroMode>('pulse');
   const attachedItem = usePomodoroStore((s) => s.attachedItem);
   const phase = usePomodoroStore((s) => s.phase);
-  const hasTask = phase !== 'idle' && attachedItem !== null;
+  const hasTask = phase !== 'idle';
 
   const { data: readingData } = useQuery<FeedResponse>({
     queryKey: ['feed', 'reading', 'hero'],

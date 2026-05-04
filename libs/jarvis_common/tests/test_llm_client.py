@@ -26,11 +26,22 @@ def test_get_litellm_config_uses_default_url(monkeypatch):
     assert config.base_url == llm_client.DEFAULT_LITELLM_BASE_URL
 
 
-def test_build_litellm_headers_always_returns_empty_dict():
-    """build_litellm_headers must return {} — transparent proxy, no auth."""
+def test_build_litellm_headers_returns_empty_when_key_unset(monkeypatch):
+    """build_litellm_headers returns {} when LITELLM_MASTER_KEY is not set."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
     config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     assert llm_client.build_litellm_headers(config) == {}
+
+
+def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
+    """build_litellm_headers returns Authorization: Bearer <key> when LITELLM_MASTER_KEY is set."""
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-secret-key-abc123")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
+
+    assert llm_client.build_litellm_headers(config) == {
+        "Authorization": "Bearer test-secret-key-abc123"
+    }
 
 
 def test_strip_think_blocks_removes_multiple_sections():
@@ -72,8 +83,9 @@ async def test_request_chat_completion_content_requires_prompt_or_messages():
 
 
 @pytest.mark.asyncio
-async def test_request_chat_completion_content_forwards_response_format():
+async def test_request_chat_completion_content_forwards_response_format(monkeypatch):
     """The lower-level request helper should pass through response_format unchanged."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
     response = MagicMock()
     response.raise_for_status = MagicMock()
     response.json.return_value = {
@@ -131,3 +143,189 @@ async def test_embed_texts_sorts_embeddings_by_index():
     )
 
     assert result == [[1.0], [2.0]]
+
+
+# ---------------------------------------------------------------------------
+# call_llm_structured guards (timeout passthrough, model fallback, validation)
+# ---------------------------------------------------------------------------
+
+
+def _make_instructor_recorder(monkeypatch, recorded: dict):
+    """Patch instructor.from_openai so call_llm_structured calls our recorder."""
+
+    async def _create(**kwargs):
+        recorded.update(kwargs)
+        return _DummyResponse()
+
+    class _DummyResponse:
+        pass
+
+    class _Completions:
+        create = staticmethod(_create)
+
+    class _Chat:
+        completions = _Completions()
+
+    class _PatchedClient:
+        chat = _Chat()
+
+    import instructor  # noqa: PLC0415
+
+    monkeypatch.setattr(instructor, "from_openai", lambda client, mode=None: _PatchedClient())
+    return _DummyResponse
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_passes_timeout_through(monkeypatch):
+    """call_llm_structured must forward options.timeout to the OpenAI SDK call."""
+    recorded: dict = {}
+    _make_instructor_recorder(monkeypatch, recorded)
+
+    class _Out:
+        pass
+
+    await llm_client.call_llm_structured(
+        MagicMock(),  # openai_client (any non-None object)
+        response_model=_Out,
+        prompt="hi",
+        options=llm_client.ChatCompletionOptions(model="smart", timeout=42.0),
+    )
+
+    assert recorded.get("timeout") == 42.0
+    assert recorded.get("model") == "smart"
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_raises_when_client_is_none():
+    """A clear RuntimeError is preferable to a downstream Instructor crash."""
+    with pytest.raises(RuntimeError, match="openai_client is required"):
+        await llm_client.call_llm_structured(
+            None,  # type: ignore[arg-type]
+            response_model=type("_X", (), {}),
+            prompt="hi",
+            options=llm_client.ChatCompletionOptions(model="smart"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_raises_without_prompt_or_messages():
+    """The structured helper must reject empty invocations before any LLM call."""
+    with pytest.raises(ValueError, match="Either prompt or messages must be provided"):
+        await llm_client.call_llm_structured(
+            MagicMock(),
+            response_model=type("_X", (), {}),
+            options=llm_client.ChatCompletionOptions(model="smart"),
+        )
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_accepts_prompt_only(monkeypatch):
+    """A prompt-only call should produce a single user message and proceed."""
+    recorded: dict = {}
+    _make_instructor_recorder(monkeypatch, recorded)
+
+    await llm_client.call_llm_structured(
+        MagicMock(),
+        response_model=type("_X", (), {}),
+        prompt="hello",
+        options=llm_client.ChatCompletionOptions(model="smart"),
+    )
+
+    assert recorded.get("messages") == [{"role": "user", "content": "hello"}]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_accepts_messages_only(monkeypatch):
+    """A messages-only call should pass them through unchanged."""
+    recorded: dict = {}
+    _make_instructor_recorder(monkeypatch, recorded)
+
+    await llm_client.call_llm_structured(
+        MagicMock(),
+        response_model=type("_X", (), {}),
+        messages=[{"role": "system", "content": "be brief"}],
+        options=llm_client.ChatCompletionOptions(model="smart"),
+    )
+
+    assert recorded.get("messages") == [{"role": "system", "content": "be brief"}]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_appends_prompt_to_messages(monkeypatch):
+    """Per docstring, prompt is appended as a user message when both are given."""
+    recorded: dict = {}
+    _make_instructor_recorder(monkeypatch, recorded)
+
+    await llm_client.call_llm_structured(
+        MagicMock(),
+        response_model=type("_X", (), {}),
+        messages=[{"role": "system", "content": "be brief"}],
+        prompt="hi there",
+        options=llm_client.ChatCompletionOptions(model="smart"),
+    )
+
+    assert recorded.get("messages") == [
+        {"role": "system", "content": "be brief"},
+        {"role": "user", "content": "hi there"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_call_llm_structured_rejects_empty_model():
+    """Empty model alias must raise ValueError, never silently fall back to a URL."""
+    with pytest.raises(ValueError, match="model must be a non-empty"):
+        await llm_client.call_llm_structured(
+            MagicMock(),
+            response_model=type("_X", (), {}),
+            prompt="hi",
+            options=llm_client.ChatCompletionOptions(model=""),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Observability decorator coverage (D.6)
+# ---------------------------------------------------------------------------
+#
+# Per docs/contracts/04-observability.md §3, exactly nine functions are
+# trace-boundary roots. Each MUST be wrapped by ``@observe()``.  When the
+# decorator is removed, ``__wrapped__`` disappears — this test is the
+# canary.
+
+_BOUNDARY_FUNCTIONS: list[tuple[str, str]] = [
+    # (module path, attribute path within module)
+    ("paper_ingestion.pulse.job", "run_pulse"),
+    ("paper_ingestion.rag.streaming", "prepare_single_paper_rag"),
+    ("paper_ingestion.rag.streaming", "prepare_cross_paper_rag"),
+    ("paper_ingestion.extraction.core", "batch_extract"),
+    ("paper_ingestion.extraction.core", "extract_fields_for_paper"),
+    ("paper_ingestion.extraction.entities", "extract_entities_for_paper"),
+    ("learning_engine.card_generator", "CardGenerator.generate_cards"),
+    ("paper_ingestion.weekly_summary", "generate_weekly_summary"),
+    ("paper_ingestion.services.contradictions", "scan_contradictions"),
+]
+
+
+def _resolve(module_path: str, attr_path: str):
+    import importlib  # noqa: PLC0415
+
+    obj = importlib.import_module(module_path)
+    for part in attr_path.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def test_boundary_functions_are_observed():
+    """Every trace-boundary function in 04-observability.md §3 must carry @observe()."""
+    pytest.importorskip("paper_ingestion", reason="paper_ingestion service not installed")
+    missing: list[str] = []
+    for module_path, attr_path in _BOUNDARY_FUNCTIONS:
+        try:
+            fn = _resolve(module_path, attr_path)
+        except (ImportError, AttributeError) as exc:
+            pytest.skip(f"Could not import {module_path}.{attr_path}: {exc}")
+        if not hasattr(fn, "__wrapped__"):
+            missing.append(f"{module_path}.{attr_path}")
+    assert not missing, (
+        "Trace-boundary functions missing @observe() (per docs/contracts/04-observability.md §3): "
+        + ", ".join(missing)
+    )

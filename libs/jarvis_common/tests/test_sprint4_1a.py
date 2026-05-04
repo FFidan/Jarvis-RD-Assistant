@@ -223,4 +223,6 @@ class TestCryptoReexports:
 
         assert mask_secret("") == ""
         assert mask_secret("abc") == "****"
-        assert mask_secret("abcde") == "abcd****"
+        # H.1: mask_secret now masks the prefix and shows last 4 chars
+        # (was first 4 + "****" — leaked provider prefixes like "sk-ant-")
+        assert mask_secret("abcde") == "****bcde"

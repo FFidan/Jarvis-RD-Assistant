@@ -28,6 +28,7 @@ from jarvis_common.llm_client import (
     LiteLLMConfig,
     call_llm_structured,
     get_litellm_config,
+    observe,
 )
 from jarvis_common.prompt_safety import escape_llm_text
 from jarvis_common.time_utils import utc_now_iso
@@ -37,16 +38,6 @@ from paper_ingestion.weekly_summary_models import WeeklyDigestOutput
 
 if TYPE_CHECKING:
     import openai
-
-try:
-    from langfuse.decorators import observe
-except ImportError:  # pragma: no cover — langfuse optional in test env
-
-    def observe(**kwargs):  # type: ignore[misc]
-        def _decorator(fn):  # type: ignore[misc]
-            return fn
-
-        return _decorator
 
 
 logger = logging.getLogger(__name__)
@@ -113,6 +104,12 @@ async def generate_weekly_summary(
         When provided, ``call_llm_structured`` is used.  Pass
         ``app.state.openai_client`` from the service lifespan.
     """
+    if openai_client is None:
+        raise RuntimeError(
+            "openai_client is required for weekly summary generation; "
+            "pass app.state.openai_client (set by the service lifespan)"
+        )
+
     litellm_config = get_litellm_config()
     if litellm_url is not None:
         litellm_config = LiteLLMConfig(base_url=litellm_url)

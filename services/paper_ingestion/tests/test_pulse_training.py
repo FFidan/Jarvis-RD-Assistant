@@ -147,9 +147,10 @@ async def test_train_classifier_persists_active_fake_model(monkeypatch: pytest.M
     deactivate_call, insert_call = conn.execute.await_args_list
     assert "UPDATE pulse_models SET is_active = FALSE" in deactivate_call.args[0]
     assert "INSERT INTO pulse_models" in insert_call.args[0]
-    model_blob = insert_call.args[1]
-    stored_feature_names = insert_call.args[2]
-    metrics = insert_call.args[3]
+    # args[1] = user_id (new param from Group B user_id threading)
+    model_blob = insert_call.args[2]
+    stored_feature_names = insert_call.args[3]
+    metrics = insert_call.args[4]
 
     model = pickle.loads(model_blob)
     assert isinstance(model, FakeLogisticRegression)
@@ -173,7 +174,7 @@ async def test_train_classifier_records_auc_when_validation_has_both_classes(
 
     assert result["auc"] == 0.75
     assert result["auc_degradation_reason"] is None
-    metrics = conn.execute.await_args_list[1].args[3]
+    metrics = conn.execute.await_args_list[1].args[4]
     assert metrics["auc"] == 0.75
 
 
@@ -279,7 +280,8 @@ async def test_train_classifier_binary_signal_label_mapping(
     assert result["trained"] is True
     # Verify the stored model blob contains correctly mapped labels.
     insert_call = conn.execute.await_args_list[1]
-    model_blob = insert_call.args[1]
+    # args[1] = user_id (new param from Group B user_id threading)
+    model_blob = insert_call.args[2]
     model = pickle.loads(model_blob)
     assert isinstance(model, FakeLogisticRegression)
     assert set(model.labels) == {0, 1}, (

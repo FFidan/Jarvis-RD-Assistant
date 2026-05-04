@@ -18,15 +18,7 @@ import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
 import { ScoreStack } from '@/components/my-day/sections/ScoreStack';
 
-/** Extract 4-stop score parts from the flat signals map. */
-function toScoreParts(signals: Record<string, number>) {
-  return {
-    emb: signals['embedding'] ?? signals['emb'] ?? 0,
-    llm: signals['llm'] ?? signals['llm_relevance'] ?? 0,
-    rec: signals['rec'] ?? signals['recommendation'] ?? 0,
-    graph: signals['graph'] ?? signals['graph_boost'] ?? 0,
-  };
-}
+import { toScoreParts } from '@/lib/score-utils';
 
 export interface PulseCardProps {
   card: PulseCardItem;

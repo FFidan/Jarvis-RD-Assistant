@@ -96,7 +96,8 @@ async def test_zotero_api_key_valid(_app):
     body = resp.json()
     assert body["key"] == "zotero.api_key"
     # zotero.api_key is now an encrypted key — response returns masked preview
-    assert "abc1****" == body["value"]
+    # H.1: mask_secret now returns "****" + last 4 chars (was prefix + "****")
+    assert body["value"] == "****c123"
     conn.execute.assert_awaited_once()
 
 
@@ -253,7 +254,7 @@ async def test_get_zotero_api_key_returns_masked(_app):
 
     zotero.api_key is in _ENCRYPTED_KEYS. When the row has only a legacy plaintext
     value (encrypted_value = NULL), _resolve_config_value falls back to masking the
-    plaintext via mask_secret(), which yields first-4-chars + '****'.
+    plaintext via mask_secret(), which yields '****' + last-4-chars (H.1).
     """
     app, conn = _app
     # Simulate a legacy plaintext row (encrypted_value = NULL)
@@ -266,8 +267,8 @@ async def test_get_zotero_api_key_returns_masked(_app):
     assert resp.status_code == 200
     body = resp.json()
     assert body["key"] == "zotero.api_key"
-    # mask_secret("supersecret123") → "supe****"
-    assert body["value"] == "supe****"
+    # mask_secret("supersecret123") → "****t123" (H.1)
+    assert body["value"] == "****t123"
     assert "supersecret123" not in resp.text
 
 

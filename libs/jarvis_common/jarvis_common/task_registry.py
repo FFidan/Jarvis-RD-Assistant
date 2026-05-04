@@ -141,7 +141,7 @@ async def paper_process(context: procrastinate.JobContext, **payload: Any) -> di
     from paper_ingestion.paper_jobs import _paper_process_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _paper_process_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -150,7 +150,7 @@ async def paper_analyze(context: procrastinate.JobContext, **payload: Any) -> di
     from paper_ingestion.paper_jobs import _paper_analyze_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _paper_analyze_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -159,7 +159,7 @@ async def paper_summarize(context: procrastinate.JobContext, **payload: Any) -> 
     from paper_ingestion.paper_jobs import _paper_summarize_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _paper_summarize_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -168,7 +168,7 @@ async def papers_batch_process(context: procrastinate.JobContext, **payload: Any
     from paper_ingestion.paper_jobs import _papers_batch_process_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _papers_batch_process_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -179,7 +179,7 @@ async def papers_batch_summarize(
     from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _papers_batch_summarize_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -188,7 +188,7 @@ async def papers_scan_local(context: procrastinate.JobContext, **payload: Any) -
     from paper_ingestion.paper_jobs import _papers_scan_local_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _papers_scan_local_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -199,7 +199,7 @@ async def citations_batch_fetch(
     from paper_ingestion.citations_jobs import _citations_batch_fetch_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _citations_batch_fetch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -208,7 +208,7 @@ async def digest_weekly(context: procrastinate.JobContext, **payload: Any) -> di
     from paper_ingestion.paper_jobs import _digest_weekly_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _digest_weekly_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -217,7 +217,7 @@ async def extraction_single(context: procrastinate.JobContext, **payload: Any) -
     from paper_ingestion.extraction.jobs import _extraction_single_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _extraction_single_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -226,7 +226,7 @@ async def extraction_batch(context: procrastinate.JobContext, **payload: Any) ->
     from paper_ingestion.extraction.jobs import _extraction_batch_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _extraction_batch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -235,7 +235,7 @@ async def contradictions_scan(context: procrastinate.JobContext, **payload: Any)
     from paper_ingestion.contradiction_jobs import _contradictions_scan_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _contradictions_scan_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -244,7 +244,7 @@ async def pulse_generate(context: procrastinate.JobContext, **payload: Any) -> d
     from paper_ingestion.pulse.job import _pulse_generate_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _pulse_generate_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -255,7 +255,7 @@ async def pulse_train_classifier(
     from paper_ingestion.pulse.training import _pulse_train_classifier_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _pulse_train_classifier_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -264,7 +264,7 @@ async def zotero_push(context: procrastinate.JobContext, **payload: Any) -> dict
     from paper_ingestion.integrations.zotero_service import _zotero_push_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _zotero_push_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -273,7 +273,7 @@ async def zotero_resync(context: procrastinate.JobContext, **payload: Any) -> di
     from paper_ingestion.integrations.zotero_service import _zotero_resync_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _zotero_resync_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -284,7 +284,7 @@ async def zotero_sync_from_zotero(
     from paper_ingestion.integrations.zotero_service import _zotero_sync_from_zotero_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _zotero_sync_from_zotero_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -295,7 +295,7 @@ async def zotero_sync_annotations(
     from paper_ingestion.integrations.zotero_service import _zotero_sync_annotations_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _zotero_sync_annotations_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -304,7 +304,7 @@ async def card_generate(context: procrastinate.JobContext, **payload: Any) -> di
     from learning_engine.routers.generation import _card_generate_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _card_generate_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
@@ -313,7 +313,7 @@ async def card_generate_batch(context: procrastinate.JobContext, **payload: Any)
     from learning_engine.routers.generation import _card_generate_batch_job
 
     pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context)
+    ctx = make_ctx_shim(context, pool=pool)
     return await _card_generate_batch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 

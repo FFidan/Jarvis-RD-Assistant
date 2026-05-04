@@ -22,6 +22,17 @@ export function JournalSection() {
     }).catch(console.error);
   }, [today]);
 
+  // Cleanup: clear any pending save timer on unmount to prevent state updates on
+  // an unmounted component and avoid network requests after navigation.
+  useEffect(() => {
+    return () => {
+      if (saveTimer.current) {
+        clearTimeout(saveTimer.current);
+        saveTimer.current = null;
+      }
+    };
+  }, []);
+
   const scheduleSave = useCallback(
     (next: JournalPrompts) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);

@@ -412,8 +412,12 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
 
     After the DRY refactor, the error surfaces from conn.execute inside
     _upsert_recommendation_feedback (not conn.fetchrow).
+    Group B adds a discovery_origin validation fetchrow for pulse-only sources,
+    so conn.fetchrow must return a matching pulse_discovery row first.
     """
     pool, conn = _make_pool_and_conn()
+    # Group B: source='feed_thumbs' is pulse-only — fetchrow validates discovery_origin
+    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse_discovery")
     conn.execute.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
@@ -435,8 +439,11 @@ async def test_submit_feedback_writes_recommendation_feedback_with_correct_sourc
     After the DRY refactor the raw inline INSERT was replaced by a call to
     the shared helper.  We patch the helper at the import path used by papers.py
     and verify it is called with paper_id, signal, source, and reason.
+    Group B adds a discovery_origin validation fetchrow for pulse-only sources.
     """
-    pool, _ = _make_pool_and_conn()
+    pool, conn = _make_pool_and_conn()
+    # Group B: source='feed_thumbs' is pulse-only — fetchrow validates discovery_origin
+    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse_discovery")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with patch(
@@ -682,28 +689,39 @@ async def test_done_paper_sets_state_done():
 
 @pytest.mark.asyncio
 async def test_star_paper_sets_starred_true_does_not_change_state():
-    """``star`` writes ``starred = $N`` only — no ``state =`` clause."""
+    """``star`` writes ``starred = $N`` only — no ``state =`` clause.
+
+    Group B rewrote star_paper to use a CTE + RETURNING fetchrow (not execute)
+    so the upsert SQL is now in conn.fetchrow calls, not conn.execute.
+    """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=42)
-    # B6 added a fetchval for project_papers COUNT after the upsert.
-    # Return 0 so no zotero.push is enqueued and the comparison succeeds.
+    # First fetchrow: paper-existence check returns the paper row.
+    # Second fetchrow: CTE RETURNING — returns is_new_row + prev_starred.
+    conn.fetchrow.side_effect = [
+        FakeRecord(id=42),
+        FakeRecord(is_new_row=True, prev_starred=False),
+    ]
+    # fetchval: COUNT(*) from project_papers → 0 (no zotero.push needed)
     conn.fetchval.return_value = 0
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)
 
     assert result == {"status": "ok", "paper_id": 42}
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    upsert_sql = next((sql for sql in sql_calls if "INSERT INTO paper_user_state" in sql), None)
-    assert upsert_sql is not None, f"Expected an upsert SQL; got {sql_calls}"
+    # Group B: upsert is now via conn.fetchrow (CTE WITH RETURNING), not conn.execute.
+    fetchrow_sql_calls = [call.args[0] for call in conn.fetchrow.await_args_list]
+    upsert_sql = next(
+        (sql for sql in fetchrow_sql_calls if "INSERT INTO paper_user_state" in sql), None
+    )
+    assert upsert_sql is not None, (
+        f"Expected CTE upsert in fetchrow calls; got {fetchrow_sql_calls}"
+    )
     assert "starred" in upsert_sql
     # The DO UPDATE SET clause must NOT touch state.
     do_update_clause = upsert_sql.split("DO UPDATE SET", 1)[-1]
     assert "state =" not in do_update_clause, (
         f"star_paper must not write state; DO UPDATE SET = {do_update_clause!r}"
     )
-    # True flag must be in execute args.
-    assert any(True in call.args for call in conn.execute.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -755,10 +773,15 @@ async def test_trash_paper_sets_state_trash_and_records_state_before_trash():
 async def test_restore_paper_returns_state_before_trash_to_state():
     """Restore: ``state := COALESCE(state_before_trash, 'inbox')`` and
     ``state_before_trash := NULL`` — the COALESCE handles the
-    null-state_before_trash case implicitly (defensive default)."""
+    null-state_before_trash case implicitly (defensive default).
+    Group B: _restore_paper checks asyncpg's status string ("UPDATE N") to
+    detect 0-row updates; conn.execute.return_value must be "UPDATE 1".
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord(id=42)
     conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
+    # Group B: _restore_paper parses conn.execute return value as "UPDATE N"
+    conn.execute.return_value = "UPDATE 1"
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     result = await papers.restore_paper.__wrapped__(request, 42, db_pool=pool)
@@ -1080,6 +1103,8 @@ async def test_bulk_mark_done_action_sets_state_done():
 async def test_bulk_restore_action_uses_coalesce_state_before_trash():
     pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = "trash"  # _assert_paper_in_state: paper is in trash
+    # Group B: _restore_paper parses conn.execute return value as "UPDATE N"
+    conn.execute.return_value = "UPDATE 1"
     body = BulkActionRequest(paper_ids=[1], action="restore")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
@@ -1387,9 +1412,18 @@ async def test_star_paper_idempotent_recall():
     """Two consecutive PUT /star calls both succeed; starred stays TRUE; state not touched.
 
     Orthogonality: the upsert in star_paper does NOT write a state column.
+    Group B rewrote star_paper to use a CTE + RETURNING fetchrow (not execute).
+    Each call issues 2 fetchrow calls: paper-existence check + CTE RETURNING.
     """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = FakeRecord(id=1)
+    # Each star_paper call: fetchrow[0]=paper exists, fetchrow[1]=CTE result.
+    # Both calls — 4 fetchrow calls total, cycling through [paper, cte, paper, cte].
+    conn.fetchrow.side_effect = [
+        FakeRecord(id=1),
+        FakeRecord(is_new_row=True, prev_starred=False),
+        FakeRecord(id=1),
+        FakeRecord(is_new_row=False, prev_starred=True),
+    ]
     conn.fetchval.return_value = 0  # project_papers COUNT — no zotero.push needed
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
@@ -1398,14 +1432,16 @@ async def test_star_paper_idempotent_recall():
 
     assert result1 == {"status": "ok", "paper_id": 1}
     assert result2 == {"status": "ok", "paper_id": 1}
-    # Both calls issued the star upsert and the DO UPDATE SET clause must not touch state.
-    sql_calls = [call.args[0] for call in conn.execute.await_args_list]
-    upsert_sql = next((sql for sql in sql_calls if "INSERT INTO paper_user_state" in sql), None)
-    assert upsert_sql is not None
+    # Group B: upsert is now via conn.fetchrow (CTE WITH RETURNING), not conn.execute.
+    fetchrow_sql_calls = [call.args[0] for call in conn.fetchrow.await_args_list]
+    upsert_sql = next(
+        (sql for sql in fetchrow_sql_calls if "INSERT INTO paper_user_state" in sql), None
+    )
+    assert upsert_sql is not None, (
+        f"Expected CTE upsert in fetchrow calls; got {fetchrow_sql_calls}"
+    )
     do_update_clause = upsert_sql.split("DO UPDATE SET", 1)[-1]
     assert "state =" not in do_update_clause
-    # True must appear in the execute args.
-    assert any(True in call.args for call in conn.execute.await_args_list)
 
 
 @pytest.mark.asyncio

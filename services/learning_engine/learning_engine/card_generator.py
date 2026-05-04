@@ -24,6 +24,7 @@ from jarvis_common.llm_client import (
     ChatCompletionOptions,
     LiteLLMConfig,
     call_llm_structured,
+    observe,
 )
 from jarvis_common.prompt_safety import wrap_delimited
 
@@ -32,17 +33,14 @@ from learning_engine.card_models import CardGenerationOutput, CardOutput
 if TYPE_CHECKING:
     import openai
 
+
 try:
-    from langfuse.decorators import observe  # type: ignore[import-untyped]
-except ImportError:  # pragma: no cover — optional observability dep
-
-    def observe(*args, **kwargs):  # type: ignore[misc]
-        """No-op shim when langfuse is not installed."""
-
-        def decorator(fn):  # type: ignore[misc]
-            return fn
-
-        return decorator if args and callable(args[0]) else decorator
+    from instructor.core import InstructorRetryException
+except ImportError:
+    try:
+        from instructor.exceptions import InstructorRetryException  # type: ignore[no-redef]
+    except ImportError:
+        InstructorRetryException = Exception  # type: ignore[misc,assignment]
 
 
 logger = logging.getLogger(__name__)
@@ -149,16 +147,9 @@ class CardGenerator:
         except (RuntimeError, pydantic.ValidationError) as exc:
             logger.error("LLM call failed during card generation: %s", exc)
             return None
-        except Exception as exc:  # noqa: BLE001
-            try:
-                from instructor.core import InstructorRetryException  # noqa: PLC0415
-
-                if isinstance(exc, InstructorRetryException):
-                    logger.error("LLM card generation retry limit exceeded: %s", exc)
-                    return None
-            except ImportError:
-                pass
-            raise
+        except InstructorRetryException as exc:
+            logger.error("LLM card generation retry limit exceeded: %s", exc)
+            return None
 
     def _verify_raw_cards(
         self,

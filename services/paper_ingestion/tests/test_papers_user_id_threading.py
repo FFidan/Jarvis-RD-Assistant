@@ -44,9 +44,12 @@ async def test_submit_feedback_threads_user_id_to_insert():
     Writes to recommendation_feedback with binds ($1=paper_id, $2=user_id,
     $3=signal, $4=source, $5=reason, $6=topic_id). In single-user mode
     ``user_id=None`` and ``assert_paper_ownership`` short-circuits, so the only
-    DB calls observed are ``fetchval`` (topic lookup) + ``execute`` (INSERT).
+    DB calls observed are ``fetchrow`` (discovery_origin check for pulse-only
+    sources, Group B) + ``fetchval`` (topic lookup) + ``execute`` (INSERT).
     """
     pool, conn = _make_pool_and_conn()
+    # Group B: source='feed_thumbs' is pulse-only; fetchrow validates discovery_origin.
+    conn.fetchrow.return_value = {"discovery_origin": "pulse_discovery"}
     # fetchval returns topic_id from paper_topics lookup; None means no topic
     conn.fetchval.return_value = None
 
@@ -60,8 +63,9 @@ async def test_submit_feedback_threads_user_id_to_insert():
     assert result.paper_id == 7
     assert result.signal == "positive"
 
-    # In single-user mode (user_id=None) there is no ownership fetchrow.
-    assert conn.fetchrow.await_count == 0
+    # In single-user mode (user_id=None), assert_paper_ownership short-circuits (no fetchrow).
+    # Group B adds exactly 1 fetchrow for the discovery_origin validation.
+    assert conn.fetchrow.await_count == 1
     # INSERT goes through conn.execute (no RETURNING) after a topic_id fetchval.
     assert conn.execute.await_count == 1
     execute_args = conn.execute.await_args.args
@@ -94,8 +98,11 @@ async def test_submit_feedback_threads_user_id_to_select():
     by different users never overwrite each other.  In single-user mode user_id=None
     is bound at $2 — the ON CONFLICT predicate still matches NULL rows correctly
     (PostgreSQL NULL IS NOT DISTINCT FROM NULL).
+    Group B: source='pulse_thumbs' is pulse-only, so fetchrow validates discovery_origin.
     """
     pool, conn = _make_pool_and_conn()
+    # Group B: source='pulse_thumbs' is pulse-only; fetchrow validates discovery_origin.
+    conn.fetchrow.return_value = {"discovery_origin": "pulse_discovery"}
     conn.fetchval.return_value = None  # no topic mapping
 
     await papers.submit_feedback.__wrapped__(

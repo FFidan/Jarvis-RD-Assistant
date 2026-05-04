@@ -33,6 +33,17 @@ def _make_pool_and_conn():
     return pool, conn
 
 
+@pytest.fixture(autouse=True)
+def _reset_pairing_cooldown():
+    """H.10: reset the module-level cooldown between tests so the 5s global
+    cooldown does not bleed across test cases (which run < 5s apart)."""
+    import paper_ingestion.routers.telegram as t
+
+    t._last_pairing_request_monotonic = 0.0
+    yield
+    t._last_pairing_request_monotonic = 0.0
+
+
 @pytest.fixture()
 def app_fixture():
     from jarvis_common import verify_api_key
@@ -57,7 +68,7 @@ def app_fixture():
 
 
 @pytest.mark.asyncio
-async def test_create_pairing_code_returns_12_hex_chars(app_fixture):
+async def test_create_pairing_code_returns_16_hex_chars(app_fixture):
     app, conn = app_fixture
     conn.fetchrow.return_value = FakeRecord(
         value={"username": "jarvis_bot", "set_at": "2026-04-13T00:00:00+00:00"}
@@ -70,7 +81,7 @@ async def test_create_pairing_code_returns_12_hex_chars(app_fixture):
 
     assert resp.status_code == 200
     body = resp.json()
-    assert re.fullmatch(r"[0-9a-f]{12}", body["code"])
+    assert re.fullmatch(r"[0-9a-f]{16}", body["code"])
     assert body["deep_link"] == f"https://t.me/jarvis_bot?start=PAIR_{body['code']}"
     assert body["bot_username_missing"] is False
     assert "expires_at" in body
@@ -233,6 +244,13 @@ async def test_create_pairing_rate_limited():
     fresh_limiter.enabled = True
     app.state.limiter = fresh_limiter
 
+    # H.10: this test exercises the slowapi per-IP limiter; bypass the global
+    # cooldown so 11 sequential requests aren't all 429ed by the 5s gate.
+    import paper_ingestion.routers.telegram as t
+
+    original_cooldown = t._GLOBAL_PAIRING_COOLDOWN_SECONDS
+    t._GLOBAL_PAIRING_COOLDOWN_SECONDS = 0.0
+
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
     try:
@@ -249,6 +267,7 @@ async def test_create_pairing_rate_limited():
         )
         assert statuses[10] == 429, f"Expected 429 on request 11, got {statuses[10]}"
     finally:
+        t._GLOBAL_PAIRING_COOLDOWN_SECONDS = original_cooldown
         app.state.limiter = original_limiter
         app.dependency_overrides.clear()
 

@@ -19,6 +19,7 @@ import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { SetupWizard } from '@/pages/SetupWizard';
 import { getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
+import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 
 // Heavy pages lazy-loaded to reduce initial bundle size
 const KnowledgeGraphPage = lazy(() =>
@@ -85,6 +86,7 @@ export function App() {
   return (
     <ErrorBoundary>
       <SetupGate>
+        <PomodoroAutoLogger />
         <Routes>
           <Route path="/setup" element={<RouteErrorBoundary><SetupWizard /></RouteErrorBoundary>} />
           <Route
