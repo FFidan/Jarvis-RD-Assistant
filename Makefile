@@ -71,4 +71,5 @@ logs:
 	docker compose logs -f
 
 rebuild:
-	docker compose up -d --build
+	docker compose build --build-arg CACHE_BUST=$(shell date +%s) dashboard
+	docker compose up -d

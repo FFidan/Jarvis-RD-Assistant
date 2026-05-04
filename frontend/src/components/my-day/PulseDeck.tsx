@@ -144,6 +144,17 @@ export function PulseDeck() {
         <h2 className="text-lg font-semibold">
           Your Pulse — {deck.card_count} papers
         </h2>
+        {deck.card_count === 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto"
+            onClick={() => void startJob('pulse.generate', {})}
+            disabled={isGenerating}
+          >
+            {isGenerating ? 'Generating...' : 'Regenerate'}
+          </Button>
+        )}
       </div>
       <p className="text-sm text-muted-foreground -mt-1">
         Your daily AI-curated paper recommendations, personalised to your reading history and research interests.

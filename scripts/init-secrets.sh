@@ -1,21 +1,19 @@
 #!/usr/bin/env bash
 # scripts/init-secrets.sh — Idempotent secret bootstrapper.
 #
-# Generates missing secrets and appends them to .env without clobbering
-# values that are already set.  Intended for CI, re-runs, and partial
-# upgrades where only a subset of secrets is absent.
+# Generates missing secrets, appends them to .env, and creates the
+# secrets/ files that docker-compose.yml bind-mounts into containers.
+# Safe to run multiple times on any machine — existing values and files
+# are never clobbered, only created or synced when stale.
 #
 # Usage: bash scripts/init-secrets.sh
 #
-# This script MUST be run from the repo root (the directory that contains .env
-# or .env.example).  It is safe to run multiple times — each block is guarded
-# by a "not already set" check.
+# Must be run from the repo root (the directory that contains .env).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/.."
 
-# Colour helpers (same palette as setup.sh, gracefully degrades in CI).
 if [ -t 1 ]; then
   C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RESET=$'\033[0m'
 else
@@ -29,52 +27,70 @@ warn() { printf '%s[WARN]%s  %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
 command -v openssl >/dev/null 2>&1 \
   || { warn "openssl not found — cannot generate secrets."; exit 1; }
 
-# ---------------------------------------------------------------------------
-# JARVIS_API_KEY — 32-byte hex master API key
-# ---------------------------------------------------------------------------
-if [ -z "${JARVIS_API_KEY:-}" ] && ! grep -q '^JARVIS_API_KEY=.\+' .env 2>/dev/null; then
-  echo "JARVIS_API_KEY=$(openssl rand -hex 32)" >> .env
-  ok "JARVIS_API_KEY generated and appended to .env."
-else
-  info "JARVIS_API_KEY already set — skipping."
-fi
+mkdir -p secrets
 
-# Reconcile secrets file if it exists
-if [ -f "secrets/jarvis_api_key.txt" ]; then
-  env_key=$(grep '^JARVIS_API_KEY=' .env 2>/dev/null | cut -d'=' -f2)
-  file_key=$(cat secrets/jarvis_api_key.txt 2>/dev/null | tr -d '\n')
-  if [ -n "$env_key" ] && [ "$env_key" != "$file_key" ]; then
-    echo -n "$env_key" > secrets/jarvis_api_key.txt
-    ok "secrets/jarvis_api_key.txt synced to match JARVIS_API_KEY in .env"
+# ---------------------------------------------------------------------------
+# sync_secret KEY FILENAME [GENERATOR]
+#
+#   1. If KEY is absent from .env:
+#        - GENERATOR given  → generate value, append to .env
+#        - No generator     → warn and skip (requires manual input)
+#   2. If secrets/FILENAME does not exist → create from .env value
+#   3. If secrets/FILENAME exists but content differs from .env → sync
+# ---------------------------------------------------------------------------
+sync_secret() {
+  local key="$1" file="secrets/$2" generator="${3:-}"
+
+  # Step 1 — ensure value exists in .env
+  if ! grep -q "^${key}=.\+" .env 2>/dev/null; then
+    if [ -n "$generator" ]; then
+      echo "${key}=$(eval "$generator")" >> .env
+      ok "${key} generated and appended to .env."
+    else
+      warn "${key} not in .env and cannot be auto-generated — set it manually then re-run."
+      return
+    fi
+  else
+    info "${key} already in .env — skipping generation."
   fi
-fi
 
-# ---------------------------------------------------------------------------
-# LITELLM_MASTER_KEY — 32-byte hex key for LiteLLM admin endpoints
-# ---------------------------------------------------------------------------
-if [ -z "${LITELLM_MASTER_KEY:-}" ] && ! grep -q '^LITELLM_MASTER_KEY=' .env 2>/dev/null; then
-  echo "LITELLM_MASTER_KEY=$(openssl rand -hex 32)" >> .env
-  ok "LITELLM_MASTER_KEY generated and appended to .env."
-else
-  info "LITELLM_MASTER_KEY already set — skipping."
-fi
-
-# Reconcile secrets file if it exists
-if [ -f "secrets/litellm_master_key.txt" ]; then
-  env_key=$(grep '^LITELLM_MASTER_KEY=' .env 2>/dev/null | cut -d'=' -f2)
-  file_key=$(cat secrets/litellm_master_key.txt 2>/dev/null | tr -d '\n')
-  if [ -n "$env_key" ] && [ "$env_key" != "$file_key" ]; then
-    echo -n "$env_key" > secrets/litellm_master_key.txt
-    ok "secrets/litellm_master_key.txt synced to match LITELLM_MASTER_KEY in .env"
+  # Step 2+3 — create or sync the secrets file
+  local val
+  val=$(grep "^${key}=" .env | cut -d'=' -f2- | tr -d '\n')
+  if [ -z "$val" ]; then
+    warn "Could not read ${key} from .env — skipping ${file}."
+    return
   fi
-fi
+
+  if [ ! -f "$file" ]; then
+    printf '%s' "$val" > "$file"
+    chmod 600 "$file"
+    ok "${file} created."
+  elif [ "$(tr -d '\n' < "$file")" != "$val" ]; then
+    printf '%s' "$val" > "$file"
+    ok "${file} synced to match ${key} in .env."
+  else
+    info "${file} already in sync."
+  fi
+}
 
 # ---------------------------------------------------------------------------
-# JARVIS_CONFIG_KEY — Fernet base64 key for at-rest secret encryption
+# Auto-generated secrets
 # ---------------------------------------------------------------------------
-if [ -z "${JARVIS_CONFIG_KEY:-}" ] && ! grep -q '^JARVIS_CONFIG_KEY=.\+' .env 2>/dev/null; then
+sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
+sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
+sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
+sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
+
+# JARVIS_CONFIG_KEY is a Fernet key passed as a plain env var — no secrets file needed.
+if ! grep -q '^JARVIS_CONFIG_KEY=.\+' .env 2>/dev/null; then
   echo "JARVIS_CONFIG_KEY=$(openssl rand -base64 32)" >> .env
   ok "JARVIS_CONFIG_KEY generated and appended to .env."
 else
-  info "JARVIS_CONFIG_KEY already set — skipping."
+  info "JARVIS_CONFIG_KEY already in .env — skipping."
 fi
+
+# ---------------------------------------------------------------------------
+# Manual secrets (cannot be auto-generated)
+# ---------------------------------------------------------------------------
+sync_secret TELEGRAM_BOT_TOKEN telegram_bot_token.txt
