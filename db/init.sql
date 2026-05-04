@@ -930,5 +930,5 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 
 INSERT INTO schema_migrations (version)
-SELECT generate_series(1, 56)
+SELECT generate_series(1, 57)
 ON CONFLICT (version) DO NOTHING;
