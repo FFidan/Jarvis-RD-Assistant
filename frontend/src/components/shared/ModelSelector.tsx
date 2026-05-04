@@ -145,7 +145,7 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     .filter((group) => group.models.length > 0);
 
   return (
-    <Select value={effectiveValue} onValueChange={onChange}>
+    <Select value={effectiveValue} onValueChange={(v) => onChange(normalize(v))}>
       <SelectTrigger>
         <SelectValue placeholder="Select a model" />
       </SelectTrigger>

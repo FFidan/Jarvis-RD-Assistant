@@ -30,6 +30,27 @@ Health checks:
 
 ---
 
+## Fresh install on a second machine
+
+Clone and bootstrap exactly like the primary machine:
+
+    git clone <your-remote>/JARVIS_RD_Assistant.git
+    cd JARVIS_RD_Assistant
+    cp .env.example .env
+    bash scripts/init-secrets.sh         # generates JARVIS_API_KEY, POSTGRES_PASSWORD, etc.
+    $EDITOR .env                         # set TELEGRAM_BOT_TOKEN to a FRESH bot token
+    docker compose up -d
+
+**⚠ Telegram:** Two machines must NEVER share a bot token. Telegram routes
+long-poll updates to whichever client polled last; sharing causes random message
+loss. Create a separate bot via @BotFather for the second machine.
+
+After the stack is healthy, open the dashboard. The setup wizard runs
+automatically on first visit (`setup.completed = false` in DB). Complete the
+wizard to configure your timezone, Pulse schedule, and Telegram pairing.
+
+---
+
 ## Remote access via Tailscale
 
 Reach the webapp + Telegram bot from outside your LAN with zero inbound
@@ -52,6 +73,18 @@ outbound (no inbound exposure required).
 Self-signed HTTPS still works inside the tailnet; browser warnings are
 tolerable for solo use. For real DNS+cert, `tailscale serve` covers it
 without leaving Tailscale's network.
+
+### Browser-trusted HTTPS from a phone (Safari / iOS)
+
+Safari requires a trusted certificate. Tailscale can terminate TLS with a
+Let's Encrypt cert it issues for your tailnet, then proxy to the dashboard
+backend without validating its self-signed cert:
+
+    # Run once on the host PC — persists across reboots:
+    sudo tailscale serve --https=443 https+insecure://localhost:3001 --bg
+
+Access the dashboard at `https://<host-tailnet-name>` from your phone. No
+certificate warning, no port 3001 in the URL.
 
 ---
 
@@ -348,6 +381,8 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | `setup.sh` option 3 exits immediately with a ZT warning | `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` not set | Configure your Zero-Trust access policy first, then add `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` to `.env`. |
 | `update.sh` says "not running" for a service you're not using | The service is profile-gated (n8n / telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |
 | Pre-existing `docker-compose.override.yml` causes port conflicts after running `setup.sh` mode 2 | `setup.sh` now backs it up automatically, but old installs may still have one | `setup.sh` moves it to `docker-compose.override.yml.bak.<ts>`. Delete the backup once you're sure you don't need it. |
+| Settings → "Models & Preferences" shows "No config entries" | DB was initialized before migration 057 seeded default config rows | Restart paper_ingestion to trigger the migration runner: `docker compose restart paper_ingestion`. Verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — should return 3 rows. |
+| Selecting a model returns HTTP 400 "LiteLLM config is read-only" | `:latest` suffix mismatch between Ollama model names and the LiteLLM config.yaml entries | Fixed in build ≥ 2026-05-05. On older builds, enter the model name without `:latest` suffix (e.g., `mistral-nemo` not `mistral-nemo:latest`) via the API directly. |
 
 ---
 
