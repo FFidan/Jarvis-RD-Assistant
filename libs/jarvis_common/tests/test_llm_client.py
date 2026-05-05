@@ -150,8 +150,12 @@ async def test_embed_texts_sorts_embeddings_by_index():
 # ---------------------------------------------------------------------------
 
 
-def _make_instructor_recorder(monkeypatch, recorded: dict):
-    """Patch instructor.from_openai so call_llm_structured calls our recorder."""
+def _make_instructor_recorder(recorded: dict):
+    """Return a fake already-patched openai client for call_llm_structured tests.
+
+    call_llm_structured uses the passed client directly (no double-wrapping),
+    so tests need a client whose .chat.completions.create() records kwargs.
+    """
 
     async def _create(**kwargs):
         recorded.update(kwargs)
@@ -166,26 +170,25 @@ def _make_instructor_recorder(monkeypatch, recorded: dict):
     class _Chat:
         completions = _Completions()
 
-    class _PatchedClient:
+    class _FakeClient:
         chat = _Chat()
 
-    import instructor  # noqa: PLC0415
-
-    monkeypatch.setattr(instructor, "from_openai", lambda client, mode=None: _PatchedClient())
-    return _DummyResponse
+    return _FakeClient(), _DummyResponse
 
 
 @pytest.mark.asyncio
-async def test_call_llm_structured_passes_timeout_through(monkeypatch):
+async def test_call_llm_structured_passes_timeout_through():
     """call_llm_structured must forward options.timeout to the OpenAI SDK call."""
-    recorded: dict = {}
-    _make_instructor_recorder(monkeypatch, recorded)
+    from pydantic import BaseModel
 
-    class _Out:
+    recorded: dict = {}
+    fake_client, _ = _make_instructor_recorder(recorded)
+
+    class _Out(BaseModel):
         pass
 
     await llm_client.call_llm_structured(
-        MagicMock(),  # openai_client (any non-None object)
+        fake_client,
         response_model=_Out,
         prompt="hi",
         options=llm_client.ChatCompletionOptions(model="smart", timeout=42.0),
@@ -219,14 +222,14 @@ async def test_call_llm_structured_raises_without_prompt_or_messages():
 
 
 @pytest.mark.asyncio
-async def test_call_llm_structured_accepts_prompt_only(monkeypatch):
+async def test_call_llm_structured_accepts_prompt_only():
     """A prompt-only call should produce a single user message and proceed."""
     recorded: dict = {}
-    _make_instructor_recorder(monkeypatch, recorded)
+    fake_client, _ = _make_instructor_recorder(recorded)
 
     await llm_client.call_llm_structured(
-        MagicMock(),
-        response_model=type("_X", (), {}),
+        fake_client,  # type: ignore[arg-type]
+        response_model=type("_X", (), {}),  # type: ignore[arg-type]
         prompt="hello",
         options=llm_client.ChatCompletionOptions(model="smart"),
     )
@@ -235,14 +238,14 @@ async def test_call_llm_structured_accepts_prompt_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_llm_structured_accepts_messages_only(monkeypatch):
+async def test_call_llm_structured_accepts_messages_only():
     """A messages-only call should pass them through unchanged."""
     recorded: dict = {}
-    _make_instructor_recorder(monkeypatch, recorded)
+    fake_client, _ = _make_instructor_recorder(recorded)
 
     await llm_client.call_llm_structured(
-        MagicMock(),
-        response_model=type("_X", (), {}),
+        fake_client,  # type: ignore[arg-type]
+        response_model=type("_X", (), {}),  # type: ignore[arg-type]
         messages=[{"role": "system", "content": "be brief"}],
         options=llm_client.ChatCompletionOptions(model="smart"),
     )
@@ -251,14 +254,14 @@ async def test_call_llm_structured_accepts_messages_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_call_llm_structured_appends_prompt_to_messages(monkeypatch):
+async def test_call_llm_structured_appends_prompt_to_messages():
     """Per docstring, prompt is appended as a user message when both are given."""
     recorded: dict = {}
-    _make_instructor_recorder(monkeypatch, recorded)
+    fake_client, _ = _make_instructor_recorder(recorded)
 
     await llm_client.call_llm_structured(
-        MagicMock(),
-        response_model=type("_X", (), {}),
+        fake_client,  # type: ignore[arg-type]
+        response_model=type("_X", (), {}),  # type: ignore[arg-type]
         messages=[{"role": "system", "content": "be brief"}],
         prompt="hi there",
         options=llm_client.ChatCompletionOptions(model="smart"),

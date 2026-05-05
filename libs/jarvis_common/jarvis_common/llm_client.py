@@ -205,9 +205,6 @@ async def call_llm_structured(
     max_retries:
         Instructor retry budget (default 2).
     """
-    import instructor  # noqa: PLC0415
-    from instructor import Mode  # noqa: PLC0415
-
     _options = options or ChatCompletionOptions()
     _config = config or get_litellm_config()
     _messages: list[dict[str, str]] = list(messages) if messages else []
@@ -229,8 +226,10 @@ async def call_llm_structured(
             "(e.g. 'smart' / 'fast'); got an empty value"
         )
 
-    client = instructor.from_openai(openai_client, mode=Mode.JSON)
-    return await client.chat.completions.create(
+    # openai_client is already instructor-patched (wrapped in the service lifespan).
+    # Do NOT call instructor.from_openai() again — double-wrapping returns None on
+    # some instructor versions, causing 'NoneType has no attribute chat'.
+    return await openai_client.chat.completions.create(
         model=_options.model,
         response_model=response_model,
         messages=_messages,  # type: ignore[arg-type]
