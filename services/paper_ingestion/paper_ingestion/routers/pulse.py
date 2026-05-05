@@ -247,8 +247,7 @@ async def get_stats(
                 (
                     SELECT stats->>'last_error'
                     FROM pulse_decks
-                    WHERE stats->>'last_error' IS NOT NULL
-                      AND generated_at >= NOW() - make_interval(days => $1)
+                    WHERE generated_at >= NOW() - make_interval(days => $1)
                       AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
@@ -256,8 +255,7 @@ async def get_stats(
                 (
                     SELECT degraded_reason
                     FROM pulse_decks
-                    WHERE degraded_reason IS NOT NULL
-                      AND generated_at >= NOW() - make_interval(days => $1)
+                    WHERE generated_at >= NOW() - make_interval(days => $1)
                       AND user_id IS NOT DISTINCT FROM $2
                     ORDER BY generated_at DESC
                     LIMIT 1
