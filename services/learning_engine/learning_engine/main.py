@@ -71,7 +71,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
     openai_client = instructor.from_openai(
         openai.AsyncOpenAI(
             base_url=f"{litellm_config.base_url}/v1",
-            api_key="dummy",
+            api_key=os.environ.get("LITELLM_MASTER_KEY") or "dummy",
         ),
         mode=instructor.Mode.JSON,
     )
