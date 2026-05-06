@@ -120,7 +120,7 @@ export function TopicSection() {
       ) : (
         <div className="space-y-2">
           {topics.map((topic) => (
-            <Card key={topic.id}>
+            <Card key={topic.id} className="rounded-md border-hair shadow-none">
               <CardContent className="flex items-center gap-4 p-4">
                 {editingId === topic.id ? (
                   <div className="flex flex-1 flex-col gap-2">
@@ -225,7 +225,7 @@ export function TopicSection() {
       )}
 
       {showAdd ? (
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardContent className="space-y-3 p-4">
             <div className="grid gap-2 sm:grid-cols-3">
               <div>

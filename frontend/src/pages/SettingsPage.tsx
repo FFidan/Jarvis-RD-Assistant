@@ -1,5 +1,6 @@
 import { useSearchParams } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import { TopicSection } from '@/components/settings/TopicSection';
 import { SourcesList } from '@/components/settings/SourcesList';
 import { AuthorSection } from '@/components/settings/AuthorSection';
@@ -48,53 +49,62 @@ export function SettingsPage() {
       <h1 className="text-3xl font-bold">Settings</h1>
 
       <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="overflow-x-auto scrollbar-thin flex-nowrap">
-          <TabsTrigger value="topics">Topics</TabsTrigger>
-          <TabsTrigger value="sources">Sources</TabsTrigger>
-          <TabsTrigger value="authors">Authors</TabsTrigger>
-          <TabsTrigger value="ingestion">Models & Preferences</TabsTrigger>
-          <TabsTrigger value="automation">Automation</TabsTrigger>
-          <TabsTrigger value="extraction">Extraction Templates</TabsTrigger>
-          <TabsTrigger value="pulse">Pulse</TabsTrigger>
-          <TabsTrigger value="timer">Timer</TabsTrigger>
-          <TabsTrigger value="providers">Providers</TabsTrigger>
-          <TabsTrigger value="integrations">Integrations</TabsTrigger>
-          <TabsTrigger value="appearance">Appearance</TabsTrigger>
+        <TabsList className="bg-transparent border-b border-hair p-0 gap-2 overflow-x-auto scrollbar-thin flex-nowrap">
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="topics">Topics</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="sources">Sources</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="authors">Authors</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="ingestion">Models & Preferences</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="automation">Automation</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="extraction">Extraction Templates</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="pulse">Pulse</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="timer">Timer</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="providers">Providers</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="integrations">Integrations</TabsTrigger>
+          <TabsTrigger className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none" value="appearance">Appearance</TabsTrigger>
         </TabsList>
 
         <TabsContent value="topics">
+          <SectionHeader marker="TOPICS" />
           <TopicSection />
         </TabsContent>
 
         <TabsContent value="sources">
+          <SectionHeader marker="SOURCES" />
           <SourcesList />
         </TabsContent>
 
         <TabsContent value="authors">
+          <SectionHeader marker="AUTHORS" />
           <AuthorSection />
         </TabsContent>
 
         <TabsContent value="ingestion">
+          <SectionHeader marker="INGESTION" />
           <IngestionSection />
         </TabsContent>
 
         <TabsContent value="automation">
+          <SectionHeader marker="AUTOMATION" />
           <AutomationSection />
         </TabsContent>
 
         <TabsContent value="extraction">
+          <SectionHeader marker="EXTRACTION TEMPLATES" />
           <ExtractionTemplateSection />
         </TabsContent>
 
         <TabsContent value="pulse">
+          <SectionHeader marker="PULSE" />
           <PulseSection />
         </TabsContent>
 
         <TabsContent value="timer">
+          <SectionHeader marker="TIMER" />
           <TimerSection />
         </TabsContent>
 
         <TabsContent value="providers">
+          <SectionHeader marker="PROVIDERS" />
           <div className="space-y-6">
             <ProvidersSection />
             <LangfuseLinkCard />
@@ -106,6 +116,7 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="integrations">
+          <SectionHeader marker="INTEGRATIONS" />
           <div className="space-y-8">
             <div className="space-y-4">
               <div>
@@ -116,6 +127,7 @@ export function SettingsPage() {
               </div>
               <PairTelegram />
             </div>
+            <SectionHeader marker="ZOTERO" />
             <ZoteroSection />
           </div>
         </TabsContent>

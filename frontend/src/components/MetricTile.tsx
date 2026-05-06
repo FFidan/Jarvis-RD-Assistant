@@ -14,7 +14,7 @@ interface MetricTileProps {
 
 export function MetricTile({ title, value, subtitle, icon: Icon, className, tooltip }: MetricTileProps) {
   return (
-    <Card className={cn(className)}>
+    <Card className={cn('rounded-md border-hair shadow-none', className)}>
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <CardTitle className="flex items-center gap-1 text-sm font-medium">
           {title}

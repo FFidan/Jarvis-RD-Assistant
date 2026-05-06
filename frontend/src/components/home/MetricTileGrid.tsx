@@ -20,7 +20,7 @@ const SKELETON_COUNT = 5;
 
 function SkeletonTile() {
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
         <Skeleton className="h-4 w-24" />
         <Skeleton className="h-4 w-4" />

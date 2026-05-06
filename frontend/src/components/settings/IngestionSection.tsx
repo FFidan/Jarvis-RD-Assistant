@@ -176,7 +176,7 @@ export function IngestionSection() {
     // Boolean entries get a Switch toggle (no edit-mode needed)
     if (meta?.type === 'boolean') {
       return (
-        <Card key={entry.key}>
+        <Card key={entry.key} className="rounded-md border-hair shadow-none">
           <CardContent className="flex items-center justify-between p-4">
             <div>
               <Label className="text-sm font-medium">{meta.label}</Label>
@@ -200,7 +200,7 @@ export function IngestionSection() {
       // Strip wrapping quotes from JSONB-encoded string values (e.g. '"qwen3:4b"' → 'qwen3:4b')
       const currentValue = rawValue.replace(/^"|"$/g, '');
       return (
-        <Card key={entry.key}>
+        <Card key={entry.key} className="rounded-md border-hair shadow-none">
           <CardContent className="flex items-center gap-4 p-4">
             <div className="flex-1 min-w-0 space-y-2">
               <div className="font-medium text-sm">

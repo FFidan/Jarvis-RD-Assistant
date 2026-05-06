@@ -79,7 +79,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
 
   return (
     <div ref={setNodeRef} style={style}>
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardContent className="flex flex-col gap-3 p-4">
           {/* Header row */}
           <div className="flex items-center gap-3">
@@ -134,11 +134,11 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                   <div className="flex items-center gap-2">
                     <Key className="h-4 w-4 text-muted-foreground" />
                     {source.config?.api_key ? (
-                      <span className="text-xs text-green-600">API key: configured</span>
+                      <span className="text-xs text-[var(--status-ok)]">API key: configured</span>
                     ) : !requiresKey ? (
                       <span className="text-xs text-muted-foreground">API key: optional</span>
                     ) : source.enabled ? (
-                      <span className="text-xs text-amber-500">API key: not set</span>
+                      <span className="text-xs text-[var(--status-warn)]">API key: not set</span>
                     ) : (
                       <span className="text-xs text-muted-foreground">API key: not set</span>
                     )}

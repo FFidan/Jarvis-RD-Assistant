@@ -153,7 +153,7 @@ export function ExtractionTemplateSection() {
       ) : (
         <div className="space-y-2">
           {templates.map((tmpl) => (
-            <Card key={tmpl.id}>
+            <Card key={tmpl.id} className="rounded-md border-hair shadow-none">
               <CardContent className="flex items-center gap-4 p-4">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
@@ -189,7 +189,7 @@ export function ExtractionTemplateSection() {
       )}
 
       {showAdd ? (
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardContent className="space-y-3 p-4">
             <div className="grid gap-2 sm:grid-cols-2">
               <div>
@@ -249,7 +249,7 @@ export function ExtractionTemplateSection() {
       )}
 
       {editTemplate && (
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardContent className="space-y-3 p-4">
             <h4 className="text-sm font-semibold">Edit Template</h4>
             <div className="grid gap-2 sm:grid-cols-2">

@@ -60,7 +60,7 @@ function FavoriteTopicsPanel() {
         {data.top_positive.slice(0, 5).map((item) => (
           <li key={item.paper_id} className="flex items-center justify-between text-sm">
             <span className="truncate text-muted-foreground">{item.title}</span>
-            <span className="ml-2 tabular-nums text-green-600">+{item.count}</span>
+            <span className="ml-2 tabular-nums text-[var(--status-ok)]">+{item.count}</span>
           </li>
         ))}
       </ul>
@@ -246,7 +246,7 @@ function DiagnosticsPanel() {
                 <div className="text-xs font-semibold text-muted-foreground mb-1">
                   Deck: {data.deck_date} — {data.card_count} cards
                   {data.degraded_reason && (
-                    <Badge variant="outline" className="ml-2 text-amber-600 border-amber-400">
+                    <Badge variant="outline" className="ml-2 text-[var(--status-warn)] border-[var(--status-warn)]">
                       {data.degraded_reason}
                     </Badge>
                   )}
@@ -280,9 +280,9 @@ function DiagnosticsPanel() {
                             variant="outline"
                             className={
                               diagnostic.status === 'ok'
-                                ? 'border-green-500 text-green-600'
+                                ? 'border-[var(--status-ok)] text-[var(--status-ok)]'
                                 : diagnostic.status === 'rate_limit'
-                                  ? 'border-amber-500 text-amber-600'
+                                  ? 'border-[var(--status-warn)] text-[var(--status-warn)]'
                                   : 'border-muted-foreground text-muted-foreground'
                             }
                           >
@@ -300,7 +300,7 @@ function DiagnosticsPanel() {
                           </p>
                         )}
                         {diagnostic.settings_hint && (
-                          <p className="mt-1 break-words text-amber-600">
+                          <p className="mt-1 break-words text-[var(--status-warn)]">
                             {diagnostic.settings_hint}
                           </p>
                         )}
@@ -513,7 +513,7 @@ export function PulseSection() {
         <TooltipProvider delayDuration={150}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Badge variant="outline" className="text-amber-600 border-amber-400 cursor-default">
+              <Badge variant="outline" className="text-[var(--status-warn)] border-[var(--status-warn)] cursor-default">
                 Degraded
               </Badge>
             </TooltipTrigger>
@@ -528,7 +528,7 @@ export function PulseSection() {
         <TooltipProvider delayDuration={150}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Badge variant="outline" className="text-green-600 border-green-400 cursor-default">
+              <Badge variant="outline" className="text-[var(--status-ok)] border-[var(--status-ok)] cursor-default">
                 OK
               </Badge>
             </TooltipTrigger>
@@ -546,7 +546,7 @@ export function PulseSection() {
   return (
     <div className="space-y-6">
       {/* ── Schedule card ── */}
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle>Pulse</CardTitle>
           <CardDescription>
@@ -647,7 +647,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Advanced tuning card ── */}
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader className="pb-3">
           <button
             type="button"
@@ -725,7 +725,7 @@ export function PulseSection() {
               <div className="flex items-center">
                 <p
                   className={`text-xs ${
-                    pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
+                    pulseWeightSumOutOfRange ? 'text-[var(--status-warn)]' : 'text-muted-foreground'
                   }`}
                 >
                   Sum: {pulseWeightSum.toFixed(2)}
@@ -841,7 +841,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Favorite papers card ── */}
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Papers you&apos;ve liked</CardTitle>
           <CardDescription>
@@ -855,7 +855,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Rejected topics card ── */}
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Topics you&apos;ve rejected</CardTitle>
           <CardDescription>
@@ -869,7 +869,7 @@ export function PulseSection() {
       </Card>
 
       {/* ── Last Pulse run status card ── */}
-      <Card>
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             Last Pulse run

@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { SetupBanner } from '@/components/setup/SetupBanner';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 interface BatchButtonProps<T> {
   label: string;
@@ -53,12 +54,12 @@ function BatchButton<T>({
         {label}
       </Button>
       {mutation.isSuccess && (
-        <span className="text-xs text-green-600">
+        <span className="text-xs text-[var(--status-ok)]">
           {formatResult(mutation.data)}
         </span>
       )}
       {mutation.isError && (
-        <span className="text-xs text-red-600">
+        <span className="text-xs text-[var(--status-bad)]">
           Failed: {(mutation.error as Error).message}
         </span>
       )}
@@ -115,49 +116,54 @@ export function HomePage() {
       <SetupBanner />
 
       {showChecklist && (
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between">
-            <CardTitle className="text-xl">Welcome to JARVIS Research Assistant</CardTitle>
-            <Button variant="ghost" size="icon" onClick={dismissChecklist} aria-label="Dismiss checklist">
-              <X className="h-4 w-4" />
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <p className="mb-4 text-sm text-muted-foreground">Get started in 3 steps:</p>
-            <div className="space-y-4">
-              {steps.map((step) => {
-                const StepIcon = step.done ? CheckCircle2 : Circle;
-                return (
-                  <div key={step.label} className="flex items-start gap-3">
-                    <StepIcon className={`mt-0.5 h-5 w-5 shrink-0 ${step.done ? 'text-green-500' : 'text-muted-foreground'}`} />
-                    <div className="flex-1">
-                      <p className={`font-medium ${step.done ? 'line-through text-muted-foreground' : ''}`}>
-                        {step.label}
-                      </p>
-                      <p className="text-sm text-muted-foreground">{step.description}</p>
+        <>
+          <SectionHeader marker="GET STARTED" />
+          <Card className="rounded-md border-hair shadow-none">
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle className="text-xl">Welcome to JARVIS Research Assistant</CardTitle>
+              <Button variant="ghost" size="icon" onClick={dismissChecklist} aria-label="Dismiss checklist">
+                <X className="h-4 w-4" />
+              </Button>
+            </CardHeader>
+            <CardContent>
+              <p className="mb-4 text-sm text-muted-foreground">Get started in 3 steps:</p>
+              <div className="space-y-4">
+                {steps.map((step) => {
+                  const StepIcon = step.done ? CheckCircle2 : Circle;
+                  return (
+                    <div key={step.label} className="flex items-start gap-3">
+                      <StepIcon className={`mt-0.5 h-5 w-5 shrink-0 ${step.done ? 'text-[var(--status-ok)]' : 'text-muted-foreground'}`} />
+                      <div className="flex-1">
+                        <p className={`font-medium ${step.done ? 'line-through text-muted-foreground' : ''}`}>
+                          {step.label}
+                        </p>
+                        <p className="text-sm text-muted-foreground">{step.description}</p>
+                      </div>
+                      {!step.done && !step.disabled && (
+                        <Button variant="outline" size="sm" asChild>
+                          <Link to={step.actionHref}>
+                            {step.actionLabel} <ArrowRight className="ml-1 h-3 w-3" />
+                          </Link>
+                        </Button>
+                      )}
                     </div>
-                    {!step.done && !step.disabled && (
-                      <Button variant="outline" size="sm" asChild>
-                        <Link to={step.actionHref}>
-                          {step.actionLabel} <ArrowRight className="ml-1 h-3 w-3" />
-                        </Link>
-                      </Button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <p className="mt-6 text-xs text-muted-foreground">
-              Once you have papers, you can ask questions across your library, build citation
-              and knowledge graphs, generate flashcards, and extract structured data.
-            </p>
-          </CardContent>
-        </Card>
+                  );
+                })}
+              </div>
+              <p className="mt-6 text-xs text-muted-foreground">
+                Once you have papers, you can ask questions across your library, build citation
+                and knowledge graphs, generate flashcards, and extract structured data.
+              </p>
+            </CardContent>
+          </Card>
+        </>
       )}
 
+      <SectionHeader marker="QUICK STATS" />
       <MetricTileGrid metrics={metrics} isLoading={isLoading} />
 
-      <Card>
+      <SectionHeader marker="BATCH OPS" />
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-lg">Batch Operations</CardTitle>
         </CardHeader>

@@ -63,7 +63,7 @@ export function RejectedTopicsPanel() {
   }
   if (isError) {
     return (
-      <div className="text-sm text-red-600 py-2">
+      <div className="text-sm text-[var(--status-bad)] py-2">
         Failed to load rejected topics.
       </div>
     );

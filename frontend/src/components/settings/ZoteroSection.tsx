@@ -231,7 +231,7 @@ export function ZoteroSection() {
             {isTesting ? 'Testing…' : 'Test connection'}
           </Button>
           {testResult !== null && (
-            <span className={`flex items-center gap-1 text-sm ${testResult.success ? 'text-green-600 dark:text-green-400' : 'text-destructive'}`}>
+            <span className={`flex items-center gap-1 text-sm ${testResult.success ? 'text-[var(--status-ok)]' : 'text-destructive'}`}>
               {testResult.success ? (
                 <CheckCircle className="h-4 w-4" />
               ) : (

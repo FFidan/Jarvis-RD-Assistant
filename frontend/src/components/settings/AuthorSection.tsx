@@ -128,12 +128,12 @@ export function AuthorSection() {
       </div>
 
       {autoDetectMut.isSuccess && (
-        <p className="text-sm text-green-600">
+        <p className="text-sm text-[var(--status-ok)]">
           Added {autoDetectMut.data.added} authors ({autoDetectMut.data.already_tracked} already tracked).
         </p>
       )}
       {checkMut.isSuccess && (
-        <p className="text-sm text-green-600">
+        <p className="text-sm text-[var(--status-ok)]">
           Checked {checkMut.data.authors_checked} authors, found {checkMut.data.new_papers} new papers.
         </p>
       )}

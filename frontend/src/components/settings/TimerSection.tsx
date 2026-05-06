@@ -12,7 +12,7 @@ export function TimerSection() {
   const isActive = phase !== 'idle';
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <CardTitle>Pomodoro Timer</CardTitle>
         <p className="text-sm text-muted-foreground">

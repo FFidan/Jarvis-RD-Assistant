@@ -8,7 +8,7 @@ export function LangfuseLinkCard() {
   if (!dashboardUrl) return null;
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <CardTitle>Observability</CardTitle>
       </CardHeader>

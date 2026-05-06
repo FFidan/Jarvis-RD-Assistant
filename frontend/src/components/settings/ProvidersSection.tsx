@@ -39,7 +39,7 @@ function providerStatus(maskedValue: string, result: TestState) {
     return {
       icon: CheckCircle,
       label: maskedValue ? 'Configured and tested' : 'Tested',
-      className: 'text-green-600 dark:text-green-400',
+      className: 'text-[var(--status-ok)]',
     };
   }
   if (result && !result.ok) {
@@ -59,7 +59,7 @@ function providerStatus(maskedValue: string, result: TestState) {
   return {
     icon: CircleDashed,
     label: 'Configured, not tested',
-    className: 'text-amber-700 dark:text-amber-400',
+    className: 'text-[var(--status-warn)]',
   };
 }
 
@@ -125,7 +125,7 @@ export function ProvidersSection() {
   }
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
         <CardTitle>LLM Providers</CardTitle>
         <p className="text-sm text-muted-foreground">
@@ -178,7 +178,7 @@ export function ProvidersSection() {
               </div>
               {result !== null && result.ok && (
                 <span
-                  className="flex items-center gap-1 text-xs text-green-600 dark:text-green-400"
+                  className="flex items-center gap-1 text-xs text-[var(--status-ok)]"
                 >
                   <CheckCircle className="h-3 w-3" />
                   Connected

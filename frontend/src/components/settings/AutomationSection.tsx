@@ -60,7 +60,7 @@ function NudgeRow({
   };
 
   return (
-    <Card>
+    <Card className="rounded-md border-hair shadow-none">
       <CardContent className="flex items-center gap-4 p-4">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -185,7 +185,7 @@ export function AutomationSection() {
             <h3 className="text-base font-semibold mt-0 mb-2">Notification Schedules</h3>
 
             {/* Timezone combobox */}
-            <Card className="mb-3">
+            <Card className="rounded-md border-hair shadow-none mb-3">
               <CardContent className="flex items-center gap-4 p-4">
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm">Timezone</div>
