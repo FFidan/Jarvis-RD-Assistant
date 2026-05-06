@@ -10,6 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import {
   Dialog,
   DialogContent,
@@ -108,9 +109,7 @@ export function MilestonesTab({ projectId }: MilestonesTabProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-medium text-muted-foreground">
-          {milestones.length} milestone{milestones.length !== 1 ? 's' : ''}
-        </h3>
+        <SectionHeader marker="MILESTONES" meta={`${milestones.length} milestone${milestones.length !== 1 ? 's' : ''}`} />
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="mr-1 h-4 w-4" /> Add Milestone
         </Button>

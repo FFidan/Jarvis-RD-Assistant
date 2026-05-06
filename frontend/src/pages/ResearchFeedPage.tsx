@@ -32,6 +32,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 // ─── surface definitions ────────────────────────────────────────────────────
 
@@ -314,7 +315,7 @@ export function ResearchFeedPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="flex items-center gap-2 text-3xl font-bold">
+      <h1 className="flex items-center gap-2 text-[32px] leading-tight tracking-tight text-strong">
         <BookOpen className="h-8 w-8" />
         Research Feed
       </h1>
@@ -323,7 +324,7 @@ export function ResearchFeedPage() {
       </p>
 
       {/* ── Surface chips ─────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap gap-2" role="tablist" aria-label="Surface navigation">
+      <div className="border-b border-hair flex flex-wrap gap-2" role="tablist" aria-label="Surface navigation">
         {SURFACES.map(({ value, label, countsKey }) => (
           <button
             key={value}
@@ -331,10 +332,10 @@ export function ResearchFeedPage() {
             aria-selected={surface === value}
             onClick={() => setSurface(value)}
             className={cn(
-              'inline-flex h-9 items-center gap-2 rounded-md border px-4 text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+              'inline-flex h-9 -mb-px items-center gap-2 px-4 text-sm font-medium border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
               surface === value
-                ? 'border-primary bg-primary text-primary-foreground hover:bg-primary/90'
-                : 'border-input bg-background text-foreground hover:bg-accent hover:text-accent-foreground',
+                ? 'border-[hsl(var(--ring))] text-strong'
+                : 'border-transparent text-muted-foreground hover:text-strong',
             )}
           >
             {label}
@@ -348,7 +349,7 @@ export function ResearchFeedPage() {
       {/* ── Library sub-chips (spec §5.4 — 5 items: All + 4 filters) ────── */}
       {surface === 'library' && (
         <TooltipProvider delayDuration={300}>
-          <div className="flex flex-wrap gap-2" role="tablist" aria-label="Library filter">
+          <div className="border-b border-hair flex flex-wrap gap-2" role="tablist" aria-label="Library filter">
             {LIBRARY_SUB_CHIPS.map(({ value, label, icon, tooltip }) => {
               const chipButton = (
                 <button
@@ -356,10 +357,10 @@ export function ResearchFeedPage() {
                   aria-selected={filter === (value ?? null)}
                   onClick={() => setLibraryFilter(value)}
                   className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                    'inline-flex h-8 -mb-px items-center gap-1.5 px-3 text-xs font-medium border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
                     filter === (value ?? null)
-                      ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
-                      : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                      ? 'border-[hsl(var(--ring))] text-strong'
+                      : 'border-transparent text-muted-foreground hover:text-strong',
                   )}
                 >
                   {icon}
@@ -385,7 +386,7 @@ export function ResearchFeedPage() {
 
       {/* ── Inbox source-type sub-chips ─────────────────────────────────── */}
       {surface === 'inbox' && (
-        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter by source">
+        <div className="border-b border-hair flex flex-wrap gap-2" role="tablist" aria-label="Filter by source">
           {INBOX_SOURCE_CHIPS.map(({ value, label }) => (
             <button
               key={value ?? 'all'}
@@ -393,10 +394,10 @@ export function ResearchFeedPage() {
               aria-selected={(inboxSource ?? undefined) === value}
               onClick={() => setInboxSource(value)}
               className={cn(
-                'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-xs font-medium transition-colors',
+                'inline-flex h-8 -mb-px items-center gap-1.5 px-3 text-xs font-medium border-b-2 transition-colors',
                 (inboxSource ?? undefined) === value
-                  ? 'border-secondary bg-secondary text-secondary-foreground hover:bg-secondary/80'
-                  : 'border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  ? 'border-[hsl(var(--ring))] text-strong'
+                  : 'border-transparent text-muted-foreground hover:text-strong',
               )}
             >
               {label}
@@ -410,6 +411,7 @@ export function ResearchFeedPage() {
       {/* Inbox */}
       {surface === 'inbox' && (
         <div>
+          <SectionHeader marker="INBOX" />
           <SectionInfo>Unread papers from your configured sources — mark as read, view, or filter.</SectionInfo>
           <FeedView surface="inbox" filter={filter} sourceTypes={inboxSource ?? null} />
         </div>
@@ -418,6 +420,7 @@ export function ResearchFeedPage() {
       {/* Library */}
       {surface === 'library' && (
         <div>
+          <SectionHeader marker="LIBRARY" />
           <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
           <FeedView surface="library" filter={filter} />
         </div>
@@ -426,10 +429,15 @@ export function ResearchFeedPage() {
       {/* Trash */}
       {surface === 'trash' && (
         <div>
+          <SectionHeader marker="TRASH" />
           <SectionInfo>Papers you have archived or removed from your active library.</SectionInfo>
-          {/* Amber banner — inlined from TrashView.tsx (deleted in T3.7) */}
           <div
-            className="rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100 mb-3"
+            className="rounded border p-3 text-sm mb-3"
+            style={{
+              borderColor: 'hsl(var(--cta-warn-border))',
+              backgroundColor: 'hsl(var(--cta-warn-bg))',
+              color: 'hsl(var(--cta-warn-fg))',
+            }}
             role="alert"
           >
             Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.
@@ -441,6 +449,7 @@ export function ResearchFeedPage() {
       {/* Search */}
       {surface === 'search' && (
         <div className="space-y-4">
+          <SectionHeader marker="DISCOVER" />
           <SectionInfo>Search external databases live and save new papers to your library.</SectionInfo>
           <div>
             <h2 className="text-sm font-medium">Discover New Papers</h2>
@@ -505,6 +514,7 @@ export function ResearchFeedPage() {
       {/* Ask */}
       {surface === 'ask' && (
         <div className="flex flex-col">
+          <SectionHeader marker="ASK" />
           <SectionInfo>Ask AI questions answered from your indexed paper library.</SectionInfo>
           <div className="mb-3">
             <h2 className="text-sm font-medium">Ask Questions</h2>

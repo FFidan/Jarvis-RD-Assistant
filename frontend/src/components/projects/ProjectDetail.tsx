@@ -64,11 +64,11 @@ export function ProjectDetail({ project, onDeleted }: ProjectDetailProps) {
 
       <div className="flex-1 overflow-auto p-4">
         <Tabs defaultValue="overview">
-          <TabsList>
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="milestones">Milestones</TabsTrigger>
-            <TabsTrigger value="tasks">Tasks</TabsTrigger>
-            <TabsTrigger value="papers">Papers</TabsTrigger>
+          <TabsList className="bg-transparent border-b border-hair p-0 gap-2">
+            <TabsTrigger value="overview" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Overview</TabsTrigger>
+            <TabsTrigger value="milestones" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Milestones</TabsTrigger>
+            <TabsTrigger value="tasks" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Tasks</TabsTrigger>
+            <TabsTrigger value="papers" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Papers</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="mt-4">
             <OverviewTab project={project} />

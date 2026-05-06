@@ -18,6 +18,7 @@ import {
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { EmptyState } from '@/components/EmptyState';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   active: 'default',
@@ -70,6 +71,9 @@ export function ProjectList({ projects, selectedId, onSelect }: ProjectListProps
         </Button>
       </div>
 
+      <div className="px-4 pt-2">
+        <SectionHeader marker="PROJECTS" meta={`${projects.length} project${projects.length !== 1 ? 's' : ''}`} />
+      </div>
       <ScrollArea className="flex-1 px-2">
         {filtered.length === 0 ? (
           <EmptyState

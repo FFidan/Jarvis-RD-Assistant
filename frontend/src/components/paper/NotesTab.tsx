@@ -87,7 +87,7 @@ export function NotesTab({ paperId }: NotesTabProps) {
   const verificationLabel = (note: Note) => {
     if (note.verification_status === 'verified') {
       return {
-        className: 'text-green-700 dark:text-green-400',
+        className: 'text-[var(--status-ok)]',
         icon: CheckCircle,
         text: note.verified_page_number
           ? `Verified evidence, page ${note.verified_page_number}`
@@ -177,7 +177,7 @@ export function NotesTab({ paperId }: NotesTabProps) {
         ) : (
           <div className="space-y-3">
             {notes.map((note: Note) => (
-              <Card key={note.id}>
+              <Card key={note.id} className="rounded-md border-hair shadow-none">
                 <CardContent className="pt-4">
                   <p className="text-sm">{note.user_note}</p>
                   <div className="mt-2 flex items-center justify-between">
@@ -255,7 +255,7 @@ export function NotesTab({ paperId }: NotesTabProps) {
         ) : (
           <div className="space-y-3">
             {zoteroNotes.map((note: Note) => (
-              <Card key={note.id}>
+              <Card key={note.id} className="rounded-md border-hair shadow-none">
                 <CardContent className="pt-4">
                   {note.highlight_text && (
                     <blockquote className="border-l-2 pl-3 text-sm text-muted-foreground">

@@ -66,7 +66,7 @@ export function ReviewMode() {
         className="relative cursor-pointer perspective-1000"
         onClick={() => !revealed && setRevealed(true)}
       >
-        <Card className="min-h-[280px] transition-all duration-300">
+        <Card className="rounded-md border-hair shadow-none min-h-[280px] transition-all duration-300">
           <CardContent className="flex flex-col items-center justify-center p-8 min-h-[280px]">
             {!revealed ? (
               <>

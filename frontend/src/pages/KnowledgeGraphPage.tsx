@@ -14,6 +14,7 @@ import { Network, Sparkles, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 const TYPE_COLORS: Record<string, string> = {
   method: '#1f77b4',
@@ -80,10 +81,13 @@ export function KnowledgeGraphPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-2xl font-bold">Knowledge Graph</h1>
-      <p className="text-muted-foreground text-sm">Explore entities and relationships extracted from your papers</p>
+      <h1 className="text-[28px] leading-tight tracking-tight text-strong">Knowledge Graph</h1>
+      <p className="text-muted-foreground text-sm">
+        Explore entities and relationships extracted from your papers
+      </p>
 
-      <Card>
+      <SectionHeader marker="Filters" />
+      <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Filters</CardTitle>
         </CardHeader>
@@ -111,11 +115,10 @@ export function KnowledgeGraphPage() {
         </CardContent>
       </Card>
 
+      <SectionHeader marker="Query" />
       <KGQueryInput />
 
-      {isLoading && (
-        <Skeleton className="h-[500px] w-full rounded-md" />
-      )}
+      {isLoading && <Skeleton className="h-[500px] w-full rounded-md" />}
 
       {isError && (
         <p className="text-sm text-destructive">
@@ -128,10 +131,11 @@ export function KnowledgeGraphPage() {
           <Network className="mb-4 h-12 w-12 text-muted-foreground/50" />
           <h3 className="text-lg font-medium">No entities extracted yet</h3>
           <p className="mt-1 max-w-md text-sm text-muted-foreground">
-            Extract entities from your processed papers to build the knowledge graph. Open a paper and click &apos;Extract Entities&apos;, or use batch extraction.
+            Extract entities from your processed papers to build the knowledge graph. Open a paper
+            and click &apos;Extract Entities&apos;, or use batch extraction.
           </p>
           {extractMut.isSuccess && (
-            <p className="mt-2 text-sm text-green-600">
+            <p className="mt-2 text-sm text-[var(--status-ok)]">
               Extracted entities from {extractMut.data.extracted} papers
             </p>
           )}
@@ -163,6 +167,7 @@ export function KnowledgeGraphPage() {
 
       {entities.length > 0 && (
         <>
+          <SectionHeader marker="Graph" />
           <CytoscapeGraph
             nodes={nodes}
             edges={edges}

@@ -55,7 +55,7 @@ export function ProjectsPage() {
 
       <div className="grid h-[calc(100vh-12rem)] grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Left column: project list */}
-        <div className="rounded-lg border bg-card overflow-hidden">
+        <div className="rounded-md border border-hair bg-card overflow-hidden shadow-none">
           <ProjectList
             projects={projects}
             selectedId={selectedId}
@@ -64,7 +64,7 @@ export function ProjectsPage() {
         </div>
 
         {/* Right column: project detail */}
-        <div className="rounded-lg border bg-card overflow-hidden lg:col-span-2">
+        <div className="rounded-md border border-hair bg-card overflow-hidden shadow-none lg:col-span-2">
           <ProjectDetail
             project={selectedProject}
             onDeleted={() => setSelectedId(null)}

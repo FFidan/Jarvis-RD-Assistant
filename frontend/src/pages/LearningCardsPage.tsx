@@ -7,6 +7,7 @@ import { ReviewMode } from '@/components/cards/ReviewMode';
 import { DeckBrowser } from '@/components/cards/DeckBrowser';
 import { CardList } from '@/components/cards/CardList';
 import { CreateCardForm, GenerateCardsDialog } from '@/components/cards/CreateCardForm';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 export function LearningCardsPage() {
   const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
@@ -33,23 +34,25 @@ export function LearningCardsPage() {
       <StatsHeader />
 
       <Tabs defaultValue="review">
-        <TabsList>
-          <TabsTrigger value="review">Review</TabsTrigger>
-          <TabsTrigger value="browse">Browse</TabsTrigger>
+        <TabsList className="bg-transparent border-b border-hair p-0 gap-2">
+          <TabsTrigger value="review" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Review</TabsTrigger>
+          <TabsTrigger value="browse" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Browse</TabsTrigger>
         </TabsList>
 
         <TabsContent value="review" className="mt-4">
+          <SectionHeader marker="REVIEW" />
           <ReviewMode />
         </TabsContent>
 
         <TabsContent value="browse" className="mt-4 space-y-6">
+          <SectionHeader marker="QUEUE" />
           <DeckBrowser
             selectedDeckId={selectedDeckId}
             onSelectDeck={setSelectedDeckId}
           />
           {selectedDeckId && (
             <div className="space-y-3">
-              <h3 className="text-lg font-medium">Cards</h3>
+              <SectionHeader marker="CARDS" />
               <CardList deckId={selectedDeckId} />
             </div>
           )}

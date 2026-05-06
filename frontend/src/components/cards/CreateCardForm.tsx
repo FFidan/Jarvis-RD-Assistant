@@ -301,7 +301,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
 
           {/* Success */}
           {successMsg && (
-            <p className="text-sm text-green-600">{successMsg}</p>
+            <p className="text-sm text-[var(--status-ok)]">{successMsg}</p>
           )}
 
           {/* Error with optional action_link */}

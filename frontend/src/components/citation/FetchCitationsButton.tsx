@@ -32,7 +32,7 @@ export function FetchCitationsButton() {
       </Button>
 
       {statusMessage && (
-        <p className="text-xs text-green-600">{statusMessage}</p>
+        <p className="text-xs [color:var(--status-ok)]">{statusMessage}</p>
       )}
 
       {mutation.isError && (

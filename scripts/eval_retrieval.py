@@ -73,6 +73,19 @@ from jarvis_common.llm_client import (
     get_litellm_config,
 )
 
+# Reranker factories are imported at module level so tests can patch them on
+# `scripts.eval_retrieval`. They are tolerant of import errors so the script
+# still runs when paper_ingestion / transformers is unavailable and
+# EVAL_RERANKER=none.
+try:
+    from paper_ingestion.ingestion.reranker import get_reranker
+except ImportError:  # pragma: no cover - paper_ingestion unavailable
+    get_reranker = None  # type: ignore[assignment]
+try:
+    from paper_ingestion.ingestion.qwen3_reranker import get_qwen3_reranker
+except ImportError:  # pragma: no cover - transformers/torch unavailable
+    get_qwen3_reranker = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -283,21 +296,21 @@ async def main() -> None:
     if EVAL_RERANKER == "mxbai":
         os.environ.setdefault("RERANKER_ENABLED", "1")
         os.environ.setdefault("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
-        from paper_ingestion.ingestion.reranker import get_reranker
-
+        if get_reranker is None:
+            raise ScriptError(
+                "paper_ingestion.ingestion.reranker.get_reranker is unavailable; "
+                "is paper_ingestion importable?"
+            )
         reranker = get_reranker()
         reranker_model_name = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
     elif EVAL_RERANKER == "qwen3-reranker":
-        try:
-            from paper_ingestion.ingestion.qwen3_reranker import get_qwen3_reranker
-
-            reranker = get_qwen3_reranker()
-            reranker_model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
-        except ImportError as exc:
+        if get_qwen3_reranker is None:
             raise ScriptError(
-                "qwen3_reranker module not found; "
-                "implement paper_ingestion.ingestion.qwen3_reranker first"
-            ) from exc
+                "paper_ingestion.ingestion.qwen3_reranker.get_qwen3_reranker is unavailable; "
+                "is transformers installed?"
+            )
+        reranker = get_qwen3_reranker()
+        reranker_model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
     elif EVAL_RERANKER != "none":
         raise ScriptError(
             f"Unknown EVAL_RERANKER value: {EVAL_RERANKER!r}. Must be none|mxbai|qwen3-reranker"
@@ -402,12 +415,10 @@ async def main() -> None:
         from datetime import UTC, datetime
 
         # Determine the accurate reranker model string for the output
-        if EVAL_RERANKER == "none" or reranker is None:
+        if reranker is None:
             _reranker_out = "none"
         else:
-            _reranker_out = reranker_model_name or os.environ.get(
-                "RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2"
-            )
+            _reranker_out = reranker_model_name
 
         output = {
             "run_at": datetime.now(UTC).isoformat(),

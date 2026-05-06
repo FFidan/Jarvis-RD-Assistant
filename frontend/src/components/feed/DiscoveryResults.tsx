@@ -15,7 +15,7 @@ export function DiscoveryResults({ results, onClear }: DiscoveryResultsProps) {
   if (results.length === 0) return null;
 
   return (
-    <Card className="border-primary/20">
+    <Card className="rounded-md shadow-none border-primary/20">
       <CardHeader className="pb-3">
         <div className="flex items-center justify-between">
           <CardTitle className="flex items-center gap-2 text-base">

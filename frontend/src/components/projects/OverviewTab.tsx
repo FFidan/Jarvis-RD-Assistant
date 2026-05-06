@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import {
   Select,
   SelectContent,
@@ -49,7 +50,7 @@ export function OverviewTab({ project }: OverviewTabProps) {
 
   const deadlineColor = deadlineDays === null ? 'text-muted-foreground'
     : deadlineDays < 0 ? 'text-destructive'
-    : deadlineDays <= 7 ? 'text-amber-500'
+    : deadlineDays <= 7 ? 'text-[hsl(var(--status-warn))]'
     : '';
 
   const deadlineLabel = deadlineDays === null ? 'No deadline'
@@ -65,11 +66,12 @@ export function OverviewTab({ project }: OverviewTabProps) {
 
   return (
     <div className="space-y-6">
+      <SectionHeader marker="OVERVIEW" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricTile title="Total Tasks" value={totalTasks} icon={ListTodo} />
         <MetricTile title="Done" value={doneTasks} icon={CheckCircle2} />
         <MetricTile title="Progress" value={`${progress}%`} icon={Target} />
-        <Card className={deadlineDays !== null && deadlineDays < 0 ? 'border-destructive/30' : ''}>
+        <Card className={`rounded-md border-hair shadow-none ${deadlineDays !== null && deadlineDays < 0 ? 'border-destructive/30' : ''}`}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Deadline</CardTitle>
             <div className="flex items-center gap-1">

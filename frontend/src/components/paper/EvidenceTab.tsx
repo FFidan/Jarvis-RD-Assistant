@@ -39,7 +39,7 @@ export function EvidenceTab({ summary, paperId }: EvidenceTabProps) {
       <h3 className="text-lg font-semibold">Verified Findings</h3>
       <div className="space-y-3">
         {findings.map((kf) => (
-          <Card key={kf.finding}>
+          <Card key={kf.finding} className="rounded-md border-hair shadow-none">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between gap-2">
                 <CardTitle className="text-sm font-medium">

@@ -327,7 +327,7 @@ export function ActionsSidebar({
             return (
               <div key={step.key} className="flex items-center gap-2 text-sm">
                 {Icon ? (
-                  <Icon className={`h-4 w-4 ${isFailed ? 'text-destructive' : isDone ? 'text-green-500' : 'animate-spin text-blue-500'}`} />
+                  <Icon className={`h-4 w-4 ${isFailed ? 'text-destructive' : isDone ? 'text-[var(--status-ok)]' : 'animate-spin text-blue-500'}`} />
                 ) : (
                   <div className="h-4 w-4 rounded-full border" />
                 )}
@@ -420,7 +420,7 @@ export function ActionsSidebar({
       </div>
 
       {actionResult && (
-        <div className={`text-sm rounded-md border p-2 ${actionResult.type === 'error' ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-green-500/30 bg-green-500/10 text-green-700'}`}>
+        <div className={`text-sm rounded-md border p-2 ${actionResult.type === 'error' ? 'border-destructive/30 bg-destructive/10 text-destructive' : 'border-green-500/30 bg-green-500/10 text-[var(--status-ok)]'}`}>
           <p className="font-medium">{actionResult.message}</p>
           {actionResult.action_link && (
             <Link

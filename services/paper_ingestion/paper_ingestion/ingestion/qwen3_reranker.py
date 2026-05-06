@@ -16,13 +16,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-
-if TYPE_CHECKING:
-    pass
+from transformers import (
+    AutoModelForCausalLM,  # pyright: ignore[reportPrivateImportUsage]
+    AutoTokenizer,  # pyright: ignore[reportPrivateImportUsage]
+)
 
 logger = logging.getLogger(__name__)
 
@@ -78,8 +77,8 @@ class Qwen3Reranker:
         # Cache token IDs for "yes" and "no" once at construction time.
         # If the tokenizer produces multiple sub-tokens, we take the first
         # (per task spec).
-        self._yes_id: int = self._tokenizer("yes", add_special_tokens=False).input_ids[0]
-        self._no_id: int = self._tokenizer("no", add_special_tokens=False).input_ids[0]
+        self._yes_id: int = self._tokenizer.encode("yes", add_special_tokens=False)[0]
+        self._no_id: int = self._tokenizer.encode("no", add_special_tokens=False)[0]
 
         logger.debug(
             "Qwen3Reranker token ids — yes: %d, no: %d",
@@ -149,48 +148,10 @@ class Qwen3Reranker:
 
 
 # ---------------------------------------------------------------------------
-# Singleton state (mirrors _RerankerState pattern from reranker.py)
+# Singleton (lazy)
 # ---------------------------------------------------------------------------
 
-
-class _Qwen3RerankerState:
-    """Module-level state holder for the singleton Qwen3 reranker.
-
-    Mirrors ``_RerankerState`` semantics: attempt once per process; do not
-    permanently cache ``None`` so a restart can retry on transient failures.
-    """
-
-    def __init__(self) -> None:
-        self.instance: Qwen3Reranker | None = None
-        self.attempted: bool = False
-
-    def get(self) -> Qwen3Reranker | None:
-        """Return the reranker, loading it on the first call."""
-        if self.instance is not None:
-            return self.instance
-        if self.attempted:
-            return None
-        self.attempted = True
-        try:
-            model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
-            reranker = Qwen3Reranker(model_name=model_name)
-            self.instance = reranker
-            return reranker
-        except Exception:
-            logger.warning(
-                "Qwen3Reranker unavailable; using retrieval scores only",
-                exc_info=True,
-            )
-            return None
-
-    def reset(self) -> None:
-        """Clear the singleton so the next get() re-initialises (useful in tests/eval)."""
-        self.instance = None
-        self.attempted = False
-
-
 _instance: Qwen3Reranker | None = None
-_state = _Qwen3RerankerState()
 
 
 def get_qwen3_reranker() -> Qwen3Reranker | None:
@@ -200,7 +161,18 @@ def get_qwen3_reranker() -> Qwen3Reranker | None:
     not installed, download failure).  Uses the ``QWEN3_RERANKER_MODEL`` env
     var to override the default ``"Qwen/Qwen3-Reranker-0.6B"``.
 
-    Unlike ``@lru_cache``, this does not permanently cache ``None`` on
-    transient failures; a process restart will retry model loading.
+    Tests can reset by setting ``qwen3_reranker._instance = None``.
     """
-    return _state.get()
+    global _instance
+    if _instance is not None:
+        return _instance
+    try:
+        model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+        _instance = Qwen3Reranker(model_name=model_name)
+        return _instance
+    except Exception:
+        logger.warning(
+            "Qwen3Reranker unavailable; using retrieval scores only",
+            exc_info=True,
+        )
+        return None

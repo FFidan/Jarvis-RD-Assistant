@@ -155,6 +155,7 @@ class EmbeddingBackend(Protocol):
         self, client: httpx.AsyncClient | None, texts: list[str]
     ) -> list[list[float]]:
         """Embed texts while preserving input order."""
+        ...
 
 
 class LiteLLMEmbeddingBackend:
@@ -237,8 +238,9 @@ class SentenceTransformerEmbeddingBackend:
         return self._model
 
     async def embed_texts(
-        self, _client: httpx.AsyncClient | None, texts: list[str]
+        self, client: httpx.AsyncClient | None, texts: list[str]
     ) -> list[list[float]]:
+        del client  # unused; signature must match EmbeddingBackend protocol
         model = self._load_model_if_needed()
 
         def _encode() -> list[list[float]]:

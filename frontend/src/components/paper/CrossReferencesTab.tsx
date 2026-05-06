@@ -33,7 +33,7 @@ export function CrossReferencesTab({ summary }: CrossReferencesTabProps) {
   return (
     <div className="space-y-3">
       {refs.map((ref) => (
-        <Card key={`${ref.related_paper_id}-${ref.relationship}`}>
+        <Card key={`${ref.related_paper_id}-${ref.relationship}`} className="rounded-md border-hair shadow-none">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm font-medium">
               Related Paper #{ref.related_paper_id}

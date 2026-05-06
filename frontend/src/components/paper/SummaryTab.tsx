@@ -47,7 +47,7 @@ export function SummaryTab({ summary }: SummaryTabProps) {
         {summary.key_findings && summary.key_findings.length > 0 ? (
           <div className="space-y-3">
             {summary.key_findings.map((kf) => (
-              <Card key={kf.finding}>
+              <Card key={kf.finding} className="rounded-md border-hair shadow-none">
                 <CardHeader className="pb-2">
                   <CardTitle className="text-sm font-medium">
                     <MarkdownContent className="prose prose-sm dark:prose-invert max-w-none">{kf.finding}</MarkdownContent>
@@ -89,7 +89,7 @@ export function SummaryTab({ summary }: SummaryTabProps) {
       )}
 
       {!summary.summary_verified && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+        <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-[var(--status-warn)] dark:border-amber-900 dark:bg-amber-950">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             Summary text is LLM-generated prose. Only key findings with quotes are independently

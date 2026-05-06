@@ -46,7 +46,7 @@ export function KGQueryInput() {
       )}
 
       {mutation.data && mutation.data.results.length > 0 && (
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Query Results</CardTitle>
           </CardHeader>

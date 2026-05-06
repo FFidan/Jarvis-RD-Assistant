@@ -13,9 +13,9 @@ import {
   batchExtract,
   downloadExtractionCsv,
 } from '@/lib/api';
-// ExtractionField type used via template.fields from ExtractionTemplate
 import { Download, Loader2, TableProperties } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 export function ExtractionTablePage() {
   const queryClient = useQueryClient();
@@ -74,7 +74,7 @@ export function ExtractionTablePage() {
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Extraction Table</h1>
+        <h1 className="text-[28px] leading-tight tracking-tight text-strong">Extraction Table</h1>
       </div>
       <p className="text-muted-foreground text-sm">Structured data extracted from papers using templates</p>
 
@@ -93,9 +93,9 @@ export function ExtractionTablePage() {
         </div>
       )}
 
-      {/* Template + Paper Selection */}
+      <SectionHeader marker="FILTERS" />
       <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+        <Card className="border-0 bg-transparent shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-1 text-lg">
               Extraction Template
@@ -128,7 +128,7 @@ export function ExtractionTablePage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="border-0 bg-transparent shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-1 text-lg">
               Paper Selection
@@ -145,7 +145,7 @@ export function ExtractionTablePage() {
         </Card>
       </div>
 
-      {/* Actions */}
+      <SectionHeader marker="ACTIONS" />
       <div className="flex items-center gap-3">
         <div>
           <Button
@@ -176,7 +176,7 @@ export function ExtractionTablePage() {
         )}
 
         {extractMutation.isSuccess && (
-          <span className="text-sm text-green-600">
+          <span className="text-sm text-[var(--status-ok)]">
             Queued {extractMutation.data.total} papers (job {extractMutation.data.job_id.slice(0, 8)})
           </span>
         )}
@@ -188,8 +188,8 @@ export function ExtractionTablePage() {
         )}
       </div>
 
-      {/* Results Table */}
-      <Card>
+      <SectionHeader marker="TABLE" />
+      <Card className="border-0 bg-transparent shadow-none">
         <CardHeader>
           <CardTitle className="text-lg">Comparison Table</CardTitle>
         </CardHeader>

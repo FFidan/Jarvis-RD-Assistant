@@ -77,7 +77,7 @@ export function ContradictionsPanel({ paperId }: ContradictionsPanelProps) {
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-          <AlertTriangle className="h-4 w-4 text-amber-500" />
+          <AlertTriangle className="h-4 w-4 text-[var(--status-warn)]" />
           Contradictions
           <InfoTooltip
             content="Compares this paper's verified findings against the rest of your library, then shows only verified conflicts."
