@@ -10,6 +10,7 @@ returns ``None`` and callers fall back to retrieval-score ordering.
 """
 
 import logging
+import os
 from typing import Any
 
 try:
@@ -163,13 +164,19 @@ class _RerankerState:
             return None
         self.attempted = True
         try:
-            reranker = Reranker()
+            model = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+            reranker = Reranker(model_name=model)
             reranker._load_model_if_needed()
             self.instance = reranker
             return reranker
         except Exception:
             logger.warning("Reranker unavailable; using retrieval scores only", exc_info=True)
             return None
+
+    def reset(self) -> None:
+        """Clear the singleton so the next get() re-initialises (useful in tests/eval)."""
+        self.instance = None
+        self.attempted = False
 
 
 _reranker_state = _RerankerState()

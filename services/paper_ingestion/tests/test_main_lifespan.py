@@ -180,3 +180,101 @@ class TestProcrastinateWorkerLifespan:
             assert worker_cancelled.is_set()
             assert app.state.procrastinate_worker_task.done()
             fake_proc_app.close_async.assert_awaited()
+
+
+# ---------------------------------------------------------------------------
+# _autoconfigure_models_hook structural + unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_lifespan_config_includes_autoconfigure_hook() -> None:
+    """_autoconfigure_models_hook must be registered and have a None teardown counterpart."""
+    from paper_ingestion.main import _autoconfigure_models_hook, _lifespan_config
+
+    assert _autoconfigure_models_hook in _lifespan_config.custom_init_tasks
+    idx = _lifespan_config.custom_init_tasks.index(_autoconfigure_models_hook)
+    assert _lifespan_config.custom_teardown_tasks[idx] is None
+
+
+@pytest.mark.asyncio
+async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> None:
+    """On first boot, the hook detects tier and writes llm.* + autoconfigured flag."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import FastAPI
+    from paper_ingestion.main import _autoconfigure_models_hook
+    from paper_ingestion.services.model_lifecycle import HardwareInfo
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # No user_config rows exist yet (first boot) — all fetchrow calls return None.
+    conn.fetchrow.return_value = None
+
+    tier1_hw = HardwareInfo(
+        vram_gb=8.0, vram_source="nvidia-smi", tier=1, detected_at="2026-05-06T00:00:00+00:00"
+    )
+
+    app = FastAPI()
+    app.state.db_pool = pool
+
+    with (
+        patch(
+            "paper_ingestion.services.model_lifecycle.detect_hardware",
+            return_value=tier1_hw,
+        ),
+        patch(
+            "paper_ingestion.services.model_lifecycle.recommendations_for_role",
+            return_value=[{"id": "qwen3:4b", "status": "downloadable", "tier": 1}],
+        ),
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await _autoconfigure_models_hook(app)
+
+    # At least 3 INSERT calls: one per role (smart, fast, embed) + flag.
+    execute_calls = [str(call) for call in conn.execute.await_args_list]
+    insert_calls = [c for c in execute_calls if "INSERT INTO user_config" in c]
+    assert len(insert_calls) >= 4  # 3 roles + autoconfigured flag
+
+
+@pytest.mark.asyncio
+async def test_autoconfigure_models_hook_is_idempotent() -> None:
+    """When flag is already set, the hook returns early without writing anything."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import FastAPI
+    from paper_ingestion.main import _autoconfigure_models_hook
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # _rehydrate returns None (no stored prefs), but autoconfigured flag IS present.
+    conn.fetchrow.side_effect = [
+        None,  # llm.smart_model in _rehydrate
+        None,  # llm.fast_model in _rehydrate
+        None,  # llm.embed_model in _rehydrate
+        {"value": "true"},  # system.models_autoconfigured → already set
+    ]
+
+    app = FastAPI()
+    app.state.db_pool = pool
+
+    with patch(
+        "paper_ingestion.services.litellm_config.update_litellm_model",
+        new=AsyncMock(return_value=True),
+    ):
+        await _autoconfigure_models_hook(app)
+
+    # No INSERT should have been executed (idempotent early-return).
+    conn.execute.assert_not_awaited()

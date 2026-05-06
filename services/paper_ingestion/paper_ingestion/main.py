@@ -19,6 +19,7 @@ while letting paper_ingestion express its rich init pipeline as
 """
 
 import asyncio
+import json
 import logging
 import os
 from typing import Any
@@ -214,6 +215,86 @@ async def _refresh_telegram_username(app: FastAPI) -> None:
     await refresh_telegram_bot_username(app.state.db_pool, app.state.http_client)
 
 
+async def _rehydrate_litellm_aliases(pool: Any) -> None:
+    """Push user_config LLM model choices into LiteLLM on every boot.
+
+    On restart LiteLLM reloads its :ro YAML which may not match what the user
+    selected in Settings.  This re-applies any stored llm.* keys so the proxy
+    reflects the user's choices without requiring a docker restart.
+    """
+    from paper_ingestion.services.litellm_config import update_litellm_model  # noqa: PLC0415
+
+    for config_key in ("llm.smart_model", "llm.fast_model", "llm.embed_model"):
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = $1", config_key)
+        if row is None:
+            continue
+        model_id: str = row["value"]
+        await update_litellm_model(config_key, model_id)
+
+
+async def _autoconfigure_models_hook(app: FastAPI) -> None:
+    """On first boot: detect hardware tier and write best-fit models to user_config."""
+    from paper_ingestion.services.litellm_config import ROLE_TO_ALIAS  # noqa: PLC0415
+    from paper_ingestion.services.model_lifecycle import (  # noqa: PLC0415
+        detect_hardware,
+        recommendations_for_role,
+    )
+
+    pool = app.state.db_pool
+    await _rehydrate_litellm_aliases(pool)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value FROM user_config WHERE key = 'system.models_autoconfigured'"
+        )
+    if row is not None:
+        return  # Already ran; rehydrate above is all we need
+
+    hardware = detect_hardware()
+    logger.info(
+        "First-boot auto-configure: hardware tier=%d vram=%.1f GB",
+        hardware.tier,
+        hardware.vram_gb,
+    )
+    role_key_pairs = [
+        ("smart", "llm.smart_model"),
+        ("fast", "llm.fast_model"),
+        ("embed", "llm.embed_model"),
+    ]
+    for role, config_key in role_key_pairs:
+        if config_key not in ROLE_TO_ALIAS:
+            continue
+        recs = recommendations_for_role(
+            role,
+            installed=[],
+            current={},
+            embedding_model_name="",
+            hardware=hardware,
+            cloud_api_keys={},
+        )
+        best = next((r for r in recs if r["status"] not in ("unfit",)), None)
+        if best is None:
+            continue
+        model_id: str = best["id"]
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
+                "ON CONFLICT (key) DO NOTHING",
+                config_key,
+                json.dumps(model_id),
+            )
+        logger.info("Auto-configured %s → %s (tier %d)", config_key, model_id, best["tier"])
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO user_config (key, value) "
+            "VALUES ('system.models_autoconfigured', 'true'::jsonb) "
+            "ON CONFLICT (key) DO NOTHING"
+        )
+    await _rehydrate_litellm_aliases(pool)
+
+
 async def _start_scheduler_hook(app: FastAPI) -> None:
     """Always start the scheduler so live toggles take effect without restart."""
     interval = float(os.environ.get("AUTO_FETCH_INTERVAL_HOURS", "0"))
@@ -308,6 +389,7 @@ _lifespan_config = ServiceLifespanConfig(
         _init_qdrant_and_pdf_pipeline,
         _init_source_singletons,
         _refresh_telegram_username,
+        _autoconfigure_models_hook,
         _start_scheduler_hook,
         _start_procrastinate_worker,
     ],
@@ -321,6 +403,7 @@ _lifespan_config = ServiceLifespanConfig(
         _shutdown_qdrant,  # _init_qdrant_and_pdf_pipeline
         None,  # _init_source_singletons
         None,  # _refresh_telegram_username
+        None,  # _autoconfigure_models_hook
         _shutdown_scheduler,  # _start_scheduler_hook
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
     ],

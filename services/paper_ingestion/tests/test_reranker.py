@@ -272,3 +272,36 @@ def test_onnx_smoke_skips_cleanly_without_optimum():  # pragma: no cover
     # If we reach here, the marker didn't skip — verify basic import integrity.
     import onnxruntime  # noqa: F401
     import optimum  # noqa: F401
+
+
+def test_reranker_state_uses_env_model():
+    """RERANKER_MODEL env-var controls which model _RerankerState.get() initialises."""
+    import paper_ingestion.ingestion.reranker as reranker_mod
+
+    state = reranker_mod._RerankerState()
+    with (
+        patch.dict("os.environ", {"RERANKER_MODEL": "custom/my-reranker"}),
+        patch.object(
+            reranker_mod.Reranker,
+            "_load_model_if_needed",
+            return_value=None,
+        ),
+    ):
+        result = state.get()
+
+    assert result is not None
+    assert result._model_name == "custom/my-reranker"
+
+
+def test_reranker_state_reset_clears_singleton():
+    """_RerankerState.reset() lets a subsequent get() re-initialise."""
+    import paper_ingestion.ingestion.reranker as reranker_mod
+
+    state = reranker_mod._RerankerState()
+    state.attempted = True
+    state.instance = MagicMock()
+
+    state.reset()
+
+    assert state.instance is None
+    assert state.attempted is False
