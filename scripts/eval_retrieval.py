@@ -19,6 +19,8 @@ Environment variables:
     LITELLM_BASE_URL    - LiteLLM proxy URL (default: http://localhost:4000)
     EMBEDDING_MODEL     - LiteLLM model alias (default: embed)
     EMBEDDING_DIMENSION - Vector dimension (default: 1024)
+    EVAL_RERANKER       - Reranker to use: none|mxbai|qwen3-reranker (default: none)
+    EVAL_RERANK_K       - Number of Qdrant candidates before reranking (default: 10)
 """
 
 from __future__ import annotations
@@ -85,6 +87,8 @@ QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
 COLLECTION_NAME = os.environ.get("EVAL_COLLECTION", "paper_chunks")
 EVAL_OUTPUT_FILE = os.environ.get("EVAL_OUTPUT_FILE")
+EVAL_RERANKER = os.environ.get("EVAL_RERANKER", "none")  # none | mxbai | qwen3-reranker
+EVAL_RERANK_K = int(os.environ.get("EVAL_RERANK_K", "10"))
 
 
 class EvalCase(NamedTuple):
@@ -125,7 +129,7 @@ async def search_qdrant(
             "paper_id": hit.payload.get("paper_id"),
             "chunk_index": hit.payload.get("chunk_index"),
             "score": hit.score,
-            "content": (hit.payload.get("content") or "")[:100],
+            "content": hit.payload.get("content") or "",
         }
         for hit in response.points
     ]
@@ -271,14 +275,47 @@ async def main() -> None:
 
     logger.info("Evaluating %d retrieval queries from %s", len(cases), source_label)
 
+    # ------------------------------------------------------------------
+    # Reranker construction
+    # ------------------------------------------------------------------
+    reranker = None
+    reranker_model_name: str | None = None
+    if EVAL_RERANKER == "mxbai":
+        os.environ.setdefault("RERANKER_ENABLED", "1")
+        os.environ.setdefault("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+        from paper_ingestion.ingestion.reranker import get_reranker
+
+        reranker = get_reranker()
+        reranker_model_name = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+    elif EVAL_RERANKER == "qwen3-reranker":
+        try:
+            from paper_ingestion.ingestion.qwen3_reranker import get_qwen3_reranker
+
+            reranker = get_qwen3_reranker()
+            reranker_model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+        except ImportError as exc:
+            raise ScriptError(
+                "qwen3_reranker module not found; "
+                "implement paper_ingestion.ingestion.qwen3_reranker first"
+            ) from exc
+    elif EVAL_RERANKER != "none":
+        raise ScriptError(
+            f"Unknown EVAL_RERANKER value: {EVAL_RERANKER!r}. Must be none|mxbai|qwen3-reranker"
+        )
+
     qdrant = AsyncQdrantClient(host=QDRANT_HOST, port=QDRANT_PORT, api_key=QDRANT_API_KEY)
     p_at_1_hits = 0
     r_at_3_hits = 0
     ndcg_at_3_sum = 0.0
     total_latency_ms = 0.0
+    total_embed_ms = 0.0
+    total_rerank_ms = 0.0
     total = len(cases)
     failed_queries = 0
     per_case_results: list[dict] = []
+
+    # Retrieval limit: wider when reranking, narrow (3) when no reranker
+    retrieval_limit = EVAL_RERANK_K if reranker is not None else 3
 
     # Table header
     print()
@@ -291,8 +328,20 @@ async def main() -> None:
             expected = set(case.expected_paper_ids)
             started = time.perf_counter()
             try:
+                embed_started = time.perf_counter()
                 query_emb = await embed_text(http_client, case.query)
-                results = await search_qdrant(qdrant, query_emb, limit=3)
+                embed_ms = (time.perf_counter() - embed_started) * 1000
+
+                results = await search_qdrant(qdrant, query_emb, limit=retrieval_limit)
+
+                rerank_started = time.perf_counter()
+                if reranker is not None:
+                    passages = [r["content"] for r in results]
+                    ranked = reranker.rerank(case.query, passages, top_k=3)
+                    results = [results[idx] for idx, _ in ranked]
+                else:
+                    results = results[:3]
+                rerank_ms = (time.perf_counter() - rerank_started) * 1000
 
                 p1 = precision_at_1(results, expected)
                 p_at_1_hits += int(p1)
@@ -307,6 +356,8 @@ async def main() -> None:
                 ok3 = f"{r3:.0%}" if 0.0 < r3 < 1.0 else ("Y" if r3 else "N")
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 total_latency_ms += elapsed_ms
+                total_embed_ms += embed_ms
+                total_rerank_ms += rerank_ms
                 per_case_results.append(
                     {
                         "query": case.query,
@@ -315,6 +366,8 @@ async def main() -> None:
                         "r3": r3,
                         "ndcg3": ndcg3,
                         "latency_ms": elapsed_ms,
+                        "embed_ms": embed_ms,
+                        "rerank_ms": rerank_ms,
                         "top_result_paper_id": results[0]["paper_id"] if results else None,
                     }
                 )
@@ -348,11 +401,20 @@ async def main() -> None:
     if EVAL_OUTPUT_FILE:
         from datetime import UTC, datetime
 
-        _reranker = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+        # Determine the accurate reranker model string for the output
+        if EVAL_RERANKER == "none" or reranker is None:
+            _reranker_out = "none"
+        else:
+            _reranker_out = reranker_model_name or os.environ.get(
+                "RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2"
+            )
+
         output = {
             "run_at": datetime.now(UTC).isoformat(),
             "collection": COLLECTION_NAME,
-            "reranker_model": _reranker,
+            "reranker": EVAL_RERANKER,
+            "rerank_k": EVAL_RERANK_K if reranker is not None else 3,
+            "reranker_model": _reranker_out,
             "eval_source": source_label,
             "total_cases": total,
             "failed_queries": failed_queries,
