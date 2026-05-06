@@ -83,7 +83,8 @@ EVAL_RETRIEVAL_SET = os.environ.get("EVAL_RETRIEVAL_SET")
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None
-COLLECTION_NAME = "paper_chunks"
+COLLECTION_NAME = os.environ.get("EVAL_COLLECTION", "paper_chunks")
+EVAL_OUTPUT_FILE = os.environ.get("EVAL_OUTPUT_FILE")
 
 
 class EvalCase(NamedTuple):
@@ -277,6 +278,7 @@ async def main() -> None:
     total_latency_ms = 0.0
     total = len(cases)
     failed_queries = 0
+    per_case_results: list[dict] = []
 
     # Table header
     print()
@@ -305,6 +307,17 @@ async def main() -> None:
                 ok3 = f"{r3:.0%}" if 0.0 < r3 < 1.0 else ("Y" if r3 else "N")
                 elapsed_ms = (time.perf_counter() - started) * 1000
                 total_latency_ms += elapsed_ms
+                per_case_results.append(
+                    {
+                        "query": case.query,
+                        "expected_paper_ids": list(case.expected_paper_ids),
+                        "p1": p1,
+                        "r3": r3,
+                        "ndcg3": ndcg3,
+                        "latency_ms": elapsed_ms,
+                        "top_result_paper_id": results[0]["paper_id"] if results else None,
+                    }
+                )
                 print(  # noqa: E501
                     f"{i:4d}  {','.join(str(pid) for pid in case.expected_paper_ids):>12}"
                     f"  {ok1:>4}  {ok3:>4}  {ndcg3:5.2f}  {elapsed_ms:7.1f}  "
@@ -331,6 +344,26 @@ async def main() -> None:
     print(f"Total queries: {denominator}")
     print(f"Failed queries: {failed_queries}")
     print("=" * 80)
+
+    if EVAL_OUTPUT_FILE:
+        from datetime import UTC, datetime
+
+        _reranker = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+        output = {
+            "run_at": datetime.now(UTC).isoformat(),
+            "collection": COLLECTION_NAME,
+            "reranker_model": _reranker,
+            "eval_source": source_label,
+            "total_cases": total,
+            "failed_queries": failed_queries,
+            "p_at_1": p_at_1,
+            "r_at_3": r_at_3,
+            "ndcg_at_3": ndcg_at_3,
+            "mean_latency_ms": avg_latency_ms,
+            "per_case": per_case_results,
+        }
+        Path(EVAL_OUTPUT_FILE).write_text(json.dumps(output, indent=2))
+        print(f"Results written to {EVAL_OUTPUT_FILE}")
 
     if pool is not None:
         await pool.close()

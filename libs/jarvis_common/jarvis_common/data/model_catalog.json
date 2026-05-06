@@ -68,6 +68,23 @@
     "assignable": true
   },
   {
+    "id": "qwen3:72b",
+    "name": "Qwen3 72B",
+    "provider": "ollama",
+    "ollama_tag": "qwen3:72b",
+    "roles": ["smart"],
+    "vram_gb": 46.0,
+    "disk_gb": 46.0,
+    "context_tokens": 40960,
+    "license": "Apache 2.0",
+    "tier": 4,
+    "description": "Qwen3 72B — top-tier local model for 48 GB VRAM machines.",
+    "notes": "Full 72B parameter model. Requires 48 GB VRAM.",
+    "last_reviewed": "2026-05-06",
+    "phase": "advanced",
+    "assignable": true
+  },
+  {
     "id": "gemma3:12b",
     "name": "Gemma 3 12B",
     "provider": "ollama",

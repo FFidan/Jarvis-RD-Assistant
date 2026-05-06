@@ -241,14 +241,9 @@ async def update_litellm_model(
             LITELLM_CONFIG_PATH.write_text(
                 yaml.dump(config, default_flow_style=False, sort_keys=False)
             )
-        except OSError as exc:
-            # SEC-002: mount is :ro in production — surface a clear error so
-            # the router can return HTTP 400 instead of a confusing 500.
-            raise RuntimeError(
-                "LiteLLM config is read-only; model alias updates are disabled "
-                "in this deployment. Restart LiteLLM with an updated config file "
-                "to change model assignments."
-            ) from exc
+        except OSError:
+            logger.warning("LiteLLM config is :ro; falling back to in-memory /config/update")
+            return await _post_ollama_alias_update(alias, new_model)
 
     return updated
 
@@ -295,6 +290,39 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
         if isinstance(exc, RuntimeError):
             raise
         raise RuntimeError(f"Could not push cloud alias {alias!r} to LiteLLM: {exc}") from exc
+
+
+async def _post_ollama_alias_update(alias: str, litellm_model_string: str) -> bool:
+    """Push an Ollama alias update to LiteLLM /config/update in-memory (no api_key needed)."""
+    payload: dict[str, Any] = {
+        "model_list": [
+            {
+                "model_name": alias,
+                "litellm_params": {
+                    "model": litellm_model_string,
+                    "api_base": "http://ollama:11434",
+                },
+            }
+        ]
+    }
+    litellm_cfg = get_litellm_config()
+    async with httpx.AsyncClient(timeout=5.0) as client:
+        resp = await client.post(
+            f"{litellm_cfg.base_url}/config/update",
+            json=payload,
+            headers=build_litellm_headers(litellm_cfg),
+        )
+    if resp.status_code < 400:
+        logger.info(
+            "Ollama alias %r → %s pushed via /config/update (YAML is :ro)",
+            alias,
+            litellm_model_string,
+        )
+        return True
+    text = resp.text[:300]
+    raise RuntimeError(
+        f"LiteLLM /config/update failed for alias {alias!r}: HTTP {resp.status_code} {text}"
+    )
 
 
 async def reload_litellm() -> bool:

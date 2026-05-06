@@ -231,3 +231,57 @@ async def test_fetch_and_process_missing_or_non_stub_row_returns_404(app_with_po
     conn.execute.assert_not_awaited()
     defer_process.assert_not_awaited()
     defer_analyze.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_feedback_summary_returns_correct_shape(app_with_pool):
+    """GET /api/analytics/feedback-summary returns top_positive and top_negative lists."""
+    app, _pool, conn = app_with_pool
+    conn.fetch.return_value = [
+        {"id": 1, "title": "Paper A", "positive_count": 5, "negative_count": 1},
+        {"id": 2, "title": "Paper B", "positive_count": 0, "negative_count": 3},
+        {"id": 3, "title": "Paper C", "positive_count": 2, "negative_count": 0},
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/analytics/feedback-summary")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "top_positive" in data
+    assert "top_negative" in data
+    # Paper A and C have positive_count > 0
+    positive_ids = {item["paper_id"] for item in data["top_positive"]}
+    assert 1 in positive_ids
+    assert 3 in positive_ids
+    assert 2 not in positive_ids  # positive_count == 0 excluded
+    # Paper A and B have negative_count > 0
+    negative_ids = {item["paper_id"] for item in data["top_negative"]}
+    assert 1 in negative_ids
+    assert 2 in negative_ids
+    assert 3 not in negative_ids  # negative_count == 0 excluded
+    # Item shape
+    for item in data["top_positive"]:
+        assert "paper_id" in item
+        assert "title" in item
+        assert "count" in item
+        assert item["count"] > 0
+
+
+@pytest.mark.asyncio
+async def test_feedback_summary_empty_table(app_with_pool):
+    """Empty recommendation_feedback returns empty lists."""
+    app, _pool, conn = app_with_pool
+    conn.fetch.return_value = []
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/analytics/feedback-summary")
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["top_positive"] == []
+    assert data["top_negative"] == []

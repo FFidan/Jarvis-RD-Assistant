@@ -126,3 +126,39 @@ async def fetch_and_process_foundational(
         status="no_pdf",
         message="No PDF URL is available for this citation stub.",
     )
+
+
+@router.get("/feedback-summary")
+@limiter.limit("30/minute")
+async def feedback_summary(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict:
+    """Return per-paper positive and negative recommendation feedback counts."""
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT
+                p.id,
+                p.title,
+                COUNT(*) FILTER (WHERE rf.signal = 'positive') AS positive_count,
+                COUNT(*) FILTER (WHERE rf.signal = 'negative') AS negative_count
+            FROM recommendation_feedback rf
+            JOIN papers p ON p.id = rf.paper_id
+            GROUP BY p.id, p.title
+            ORDER BY positive_count DESC
+            LIMIT 30
+            """
+        )
+    return {
+        "top_positive": [
+            {"paper_id": r["id"], "title": r["title"], "count": r["positive_count"]}
+            for r in rows
+            if r["positive_count"] > 0
+        ],
+        "top_negative": [
+            {"paper_id": r["id"], "title": r["title"], "count": r["negative_count"]}
+            for r in rows
+            if r["negative_count"] > 0
+        ],
+    }

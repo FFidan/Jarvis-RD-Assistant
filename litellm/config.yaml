@@ -72,6 +72,9 @@ router_settings:
   timeout: 300
   allowed_fails: 2
   retry_after: 5
+  fallbacks:
+    - {"smart": ["ollama/qwen3:8b", "ollama/qwen3:4b"]}
+    - {"fast": ["ollama/qwen3:4b"]}
 
 general_settings:
   # master_key gates all LiteLLM admin endpoints (/config/update, /model/*, etc.).

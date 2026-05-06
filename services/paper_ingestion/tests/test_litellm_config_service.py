@@ -169,3 +169,35 @@ async def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
     # smart and embed should be unchanged
     assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/mistral-nemo"
     assert updated["model_list"][2]["litellm_params"]["model"] == "ollama/qwen3-embedding:0.6b"
+
+
+@pytest.mark.asyncio
+async def test_update_litellm_model_falls_back_to_in_memory_on_ro_config(tmp_path, monkeypatch):
+    """When YAML write raises OSError (:ro mount), falls back to /config/update."""
+    import httpx as _httpx
+    import respx
+
+    config_path = tmp_path / "config.yaml"
+    _write_config(
+        config_path,
+        [{"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}}],
+    )
+    monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
+
+    write_calls = {"n": 0}
+
+    def _fail_write(self, content, **kwargs):
+        write_calls["n"] += 1
+        raise OSError("Read-only file system")
+
+    monkeypatch.setattr(config_path.__class__, "write_text", _fail_write)
+
+    with respx.mock:
+        respx.post("http://litellm:4000/config/update").mock(
+            return_value=_httpx.Response(200, json={"message": "ok"})
+        )
+        result = await update_litellm_model("llm.smart_model", "qwen3:4b")
+
+        assert result is True
+        assert write_calls["n"] == 1  # write was attempted once
+        assert respx.calls.call_count == 1  # fallback was invoked

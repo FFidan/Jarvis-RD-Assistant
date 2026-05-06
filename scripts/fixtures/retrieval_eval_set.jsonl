@@ -1,0 +1,27 @@
+{"query": "Dirac structure energy-preserving port-Hamiltonian system", "expected_paper_ids": [39, 84], "tags": ["math", "ph"]}
+{"query": "Hamiltonian neural network conservation laws energy", "expected_paper_ids": [93], "tags": ["math", "hnn"]}
+{"query": "port-Hamiltonian formulation interconnected systems bond graph", "expected_paper_ids": [39], "tags": ["math", "ph"]}
+{"query": "adjoint sensitivity method neural ODE gradient backpropagation", "expected_paper_ids": [73], "tags": ["math", "node"]}
+{"query": "collocation loss residual boundary conditions PINN training", "expected_paper_ids": [90], "tags": ["math", "pinn"]}
+{"query": "neural tangent kernel lazy training deep neural network", "expected_paper_ids": [58], "tags": ["math", "ntk"]}
+{"query": "sparse identification nonlinear dynamics SINDy library", "expected_paper_ids": [50], "tags": ["math", "sindy"]}
+{"query": "graph ordinary differential equation continuous-depth GNN", "expected_paper_ids": [36], "tags": ["math", "gnn"]}
+{"query": "Hamiltonian graph network symplectic integrator leapfrog", "expected_paper_ids": [102], "tags": ["math", "hgn"]}
+{"query": "port-Hamiltonian versus Hamiltonian neural network energy conservation comparison", "expected_paper_ids": [39, 84, 93], "tags": ["cross", "ph", "hnn"]}
+{"query": "neural ODE vs physics-informed neural network dynamical system learning", "expected_paper_ids": [73, 90], "tags": ["cross", "node", "pinn"]}
+{"query": "PINN power systems electric grid stability", "expected_paper_ids": [52], "tags": ["cross", "pinn"]}
+{"query": "collocation loss failure NTK spectral bias PINN", "expected_paper_ids": [58, 90], "tags": ["cross", "pinn", "ntk"]}
+{"query": "Hamiltonian graph network ODE integrator molecular dynamics", "expected_paper_ids": [102, 36], "tags": ["cross", "hgn"]}
+{"query": "data-driven dynamical system identification from time series", "expected_paper_ids": [50, 73], "tags": ["cross", "sindy", "node"]}
+{"query": "port-Hamiltonian learning passivity mechanical system", "expected_paper_ids": [84, 39], "tags": ["cross", "ph"]}
+{"query": "physics-informed machine learning energy dissipation structure", "expected_paper_ids": [84, 90, 52], "tags": ["cross", "pinn", "ph"]}
+{"query": "Desai port Hamiltonian 2021", "expected_paper_ids": [84], "tags": ["author"]}
+{"query": "Chen neural ODE continuous normalizing flow", "expected_paper_ids": [73], "tags": ["author"]}
+{"query": "Greydanus Hamiltonian neural network separable potential", "expected_paper_ids": [93], "tags": ["author"]}
+{"query": "Raissi physics-informed neural networks Navier-Stokes", "expected_paper_ids": [90], "tags": ["author"]}
+{"query": "Brunton SINDy sparse regression", "expected_paper_ids": [50], "tags": ["author"]}
+{"query": "energy shaping passivity-based control", "expected_paper_ids": [39, 84], "tags": ["short"]}
+{"query": "symplectic integrator Hamiltonian mechanics", "expected_paper_ids": [93, 102], "tags": ["short"]}
+{"query": "PINN spectral bias high-frequency failure", "expected_paper_ids": [58], "tags": ["short"]}
+{"query": "graph neural ODE coupled oscillators", "expected_paper_ids": [36, 102], "tags": ["short"]}
+{"query": "variational autoencoders latent ODE trajectory", "expected_paper_ids": [73], "tags": ["short"]}

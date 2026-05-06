@@ -120,6 +120,18 @@ class _HTTPClient:
         return _StreamResponse()
 
 
+def test_tier4_entry_unfit_on_tier1_hardware() -> None:
+    statuses = build_model_statuses(
+        installed=[],
+        current={},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hardware(tier=1),
+        cloud_api_keys={},
+    )
+    by_id = {item["id"]: item for item in statuses}
+    assert by_id["qwen3:72b"]["status"] == "unfit"
+
+
 async def test_model_pull_job_stops_when_cancelled_mid_stream() -> None:
     ctx = _CancelledCtx()
 
