@@ -62,10 +62,10 @@ LLM_TIMEOUT_LONG = 300.0
 class LiteLLMConfig:
     """Resolved LiteLLM connection settings.
 
-    litellm runs as a transparent loopback proxy (127.0.0.1:4000) fronting
-    Ollama only; no auth is required.  Cloud LLM keys flow direct
-    app→provider via encrypted user_config rows, bypassing litellm entirely.
-    Reintroduce api_key here only if port 4000 is ever exposed beyond loopback.
+    LiteLLM remains loopback-bound in local deployments.  When
+    ``LITELLM_MASTER_KEY`` is configured, callers send it as a bearer token via
+    :func:`build_litellm_headers`; when unset, callers use the loopback-only
+    fallback with no Authorization header.
     """
 
     base_url: str
@@ -95,8 +95,9 @@ def get_litellm_config(
 ) -> LiteLLMConfig:
     """Resolve LiteLLM base URL from the environment.
 
-    No auth is wired: litellm runs as a transparent loopback proxy and needs
-    no master_key.  See LiteLLMConfig docstring for the rationale.
+    Authentication headers are resolved separately by
+    :func:`build_litellm_headers` so tests and call sites can share the same
+    base-url config object.
     """
     return LiteLLMConfig(
         base_url=os.environ.get("LITELLM_BASE_URL", base_url_default),

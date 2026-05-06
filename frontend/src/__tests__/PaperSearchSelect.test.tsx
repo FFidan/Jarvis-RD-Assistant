@@ -80,7 +80,7 @@ describe('PaperSearchSelect', () => {
   });
 
   it('debounces search — calls searchPapersBrief only after 300ms', async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.useFakeTimers();
     const { searchPapersBrief } = await import('@/lib/api');
 
     renderComponent();

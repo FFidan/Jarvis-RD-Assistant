@@ -18,7 +18,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       card_count: 5,
       degraded_reason: null,
       source_counts: { arxiv: 12, pubmed: 8 },
-      topic_embeddings: [{ key: 'topic.1.embedding', dim: 768, ok: true, non_null: true }],
+      topic_embeddings: [{ key: 'topic.1.embedding', dim: 1024, ok: true, non_null: true }],
       top_cards: [],
       classifier_available: false,
       classifier_sample_count: null,
@@ -32,7 +32,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
-const { fetchConfig, fetchPulseStats, setConfig } = await import('@/lib/api');
+const { fetchConfig, fetchPulseStats, setConfig, createJob } = await import('@/lib/api');
 
 function renderSection() {
   const queryClient = new QueryClient({
@@ -45,6 +45,13 @@ function renderSection() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+async function openAdvancedTuning(user = userEvent.setup()) {
+  const button = await screen.findByRole('button', { name: /advanced tuning/i });
+  expect(button).toHaveAttribute('aria-expanded', 'false');
+  await user.click(button);
+  expect(button).toHaveAttribute('aria-expanded', 'true');
 }
 
 describe('PulseSection', () => {
@@ -162,6 +169,7 @@ describe('PulseSection', () => {
 
   it('renders gate-tooltip trigger wrapper for the classifier slider', async () => {
     renderSection();
+    await openAdvancedTuning();
     await waitFor(() => {
       expect(
         screen.getByTestId('gate-tooltip-trigger-classifier'),
@@ -171,6 +179,7 @@ describe('PulseSection', () => {
 
   it('renders gate-tooltip trigger wrapper for citation_pagerank slider', async () => {
     renderSection();
+    await openAdvancedTuning();
     await waitFor(() => {
       expect(
         screen.getByTestId('gate-tooltip-trigger-citation_pagerank'),
@@ -181,6 +190,7 @@ describe('PulseSection', () => {
   it('gate tooltip for classifier contains sklearn + ratings requirement text', async () => {
     const user = userEvent.setup();
     renderSection();
+    await openAdvancedTuning(user);
     const trigger = await screen.findByTestId('gate-tooltip-trigger-classifier');
     await user.hover(trigger);
     // Radix may render tooltip text in multiple nodes (visible + hidden aria span)
@@ -193,6 +203,7 @@ describe('PulseSection', () => {
   it('gate tooltip for citation_pagerank contains networkx + paper_citations requirement text', async () => {
     const user = userEvent.setup();
     renderSection();
+    await openAdvancedTuning(user);
     const trigger = await screen.findByTestId('gate-tooltip-trigger-citation_pagerank');
     await user.hover(trigger);
     await waitFor(() => {
@@ -201,13 +212,22 @@ describe('PulseSection', () => {
     expect(screen.getAllByText(/paper_citations/i).length).toBeGreaterThan(0);
   });
 
-  it('renders scoring weight sliders', async () => {
+  it('hides scoring weight sliders until Advanced tuning is expanded', async () => {
     renderSection();
     await waitFor(() => {
-      expect(screen.getByLabelText(/embedding similarity weight/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/topic match weight/i)).toBeInTheDocument();
-      expect(screen.getByLabelText(/llm relevance weight/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /advanced tuning/i })).toBeInTheDocument();
     });
+    expect(screen.queryByLabelText(/embedding similarity weight/i)).not.toBeInTheDocument();
+  });
+
+  it('renders scoring weight sliders after Advanced tuning is expanded', async () => {
+    renderSection();
+    await openAdvancedTuning();
+    expect(screen.getByLabelText(/embedding similarity weight/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/topic match weight/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/llm relevance weight/i)).toBeInTheDocument();
+    expect(screen.getAllByLabelText(/liked papers weight/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/l2 negative-feedback penalty/i)).toBeInTheDocument();
   });
 
   it('renders Generate Pulse now button', async () => {
@@ -215,5 +235,35 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /generate pulse now/i })).toBeInTheDocument();
     });
+  });
+
+  it('renders config failures explicitly and disables settings mutations', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchConfig).mockRejectedValue(new Error('config unavailable'));
+
+    renderSection();
+
+    const toggle = await screen.findByRole('switch', { name: /pulse/i });
+    await waitFor(() => {
+      expect(screen.getByText(/pulse settings unavailable/i)).toBeInTheDocument();
+    });
+    expect(toggle).toBeDisabled();
+    await user.click(toggle);
+    expect(vi.mocked(setConfig)).not.toHaveBeenCalled();
+  });
+
+  it('renders stats failures explicitly and disables manual Pulse generation', async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetchPulseStats).mockRejectedValue(new Error('stats unavailable'));
+
+    renderSection();
+
+    const generateButton = await screen.findByRole('button', { name: /generate pulse now/i });
+    await waitFor(() => {
+      expect(screen.getByText(/pulse stats unavailable/i)).toBeInTheDocument();
+    });
+    expect(generateButton).toBeDisabled();
+    await user.click(generateButton);
+    expect(vi.mocked(createJob)).not.toHaveBeenCalled();
   });
 });

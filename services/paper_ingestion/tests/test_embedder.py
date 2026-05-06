@@ -60,7 +60,7 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
 
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 768}]}
+    response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 1024}]}
     mock_http = AsyncMock()
     mock_http.post.return_value = response
     mock_qdrant = AsyncMock()
@@ -68,7 +68,7 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
 
     result = await embedder.embed_texts(["test text"])
 
-    assert result == [[0.1] * 768]
+    assert result == [[0.1] * 1024]
     mock_http.post.assert_awaited_once_with(
         "http://litellm.test:4000/v1/embeddings",
         json={"model": "embed", "input": ["test text"]},

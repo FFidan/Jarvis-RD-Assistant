@@ -269,8 +269,8 @@ def _inbox_keyboard(
     secondary = [InlineKeyboardButton("📖 Read more", callback_data=f"paper_detail_{paper_id}")]
     if discovery_origin != "user_initiated":
         secondary = [
-            InlineKeyboardButton("👍", callback_data=f"paper:feedback_pos:{paper_id}:pulse_thumbs"),
-            InlineKeyboardButton("👎", callback_data=f"paper:feedback_neg:{paper_id}:pulse_thumbs"),
+            InlineKeyboardButton("👍", callback_data=f"paper:feedback_pos:{paper_id}:feed_thumbs"),
+            InlineKeyboardButton("👎", callback_data=f"paper:feedback_neg:{paper_id}:feed_thumbs"),
         ] + secondary
     return InlineKeyboardMarkup([primary, secondary])
 

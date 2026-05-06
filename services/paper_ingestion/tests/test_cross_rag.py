@@ -45,7 +45,7 @@ async def test_search_chunks_global_no_filter():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # Stub embed_texts to return a dummy vector
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
 
     hits = [
         _make_hit(paper_id=1, chunk_index=0, content="chunk A", page_number=1, score=0.9),
@@ -161,7 +161,7 @@ async def test_ask_cross_paper_endpoint_structure():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # Stub embed_texts
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
 
     # Stub search_chunks_global
     embedder.search_chunks_global = AsyncMock(

@@ -409,6 +409,8 @@ class SystemModelsResponse(BaseModel):
     hardware: dict[str, Any]
     current: dict[str, Any]
     issues: dict[str, str]
+    catalog: list[dict[str, Any]] = Field(default_factory=list)
+    recommendations: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
 
 
 class ProcessPdfResponse(BaseModel):

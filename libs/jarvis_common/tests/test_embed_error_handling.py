@@ -118,6 +118,21 @@ async def test_embed_texts_sends_correct_payload(mock_client, config):
     )
 
 
+async def test_embed_texts_sends_master_key_header(mock_client, config, monkeypatch):
+    """embed_texts should send Authorization when LITELLM_MASTER_KEY is configured."""
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "shared-master-key")
+    mock_client.post.return_value = _mock_response({"data": [{"index": 0, "embedding": [1.0]}]})
+
+    await embed_texts(mock_client, ["hello"], model="embed", config=config)
+
+    mock_client.post.assert_awaited_once_with(
+        "http://test:4000/v1/embeddings",
+        json={"model": "embed", "input": ["hello"]},
+        headers={"Authorization": "Bearer shared-master-key"},
+        timeout=60.0,
+    )
+
+
 async def test_embed_texts_http_401(mock_client, config):
     """HTTP 401 should raise RuntimeError with status info."""
     mock_client.post.return_value = _mock_response({}, status_code=401)

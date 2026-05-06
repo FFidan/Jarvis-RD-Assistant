@@ -3,6 +3,7 @@
 import sys
 import types
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -28,6 +29,18 @@ def _make_pool(conn: AsyncMock):
     pool = MagicMock()
     pool.acquire.return_value = ctx
     return pool
+
+
+class _FakeVectorParams:
+    def __init__(self, *, size: int, distance: str):
+        self.size = size
+        self.distance = distance
+
+
+def _collection_info(dim: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(params=SimpleNamespace(vectors=SimpleNamespace(size=dim)))
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +276,74 @@ async def test_embed_entity_text_returns_none_on_failure():
 
 
 @pytest.mark.asyncio
+async def test_ensure_kg_collection_creates_missing_collection(monkeypatch):
+    """Missing kg_entities collection is created with the configured embedding dimension."""
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    qdrant = AsyncMock()
+    qdrant.get_collections.return_value = SimpleNamespace(collections=[])
+
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
+    fake_models.Distance = SimpleNamespace(COSINE="cosine")
+    fake_models.VectorParams = _FakeVectorParams
+
+    with patch.dict(sys.modules, {"qdrant_client.models": fake_models}):
+        await _ensure_kg_collection(qdrant)
+
+    qdrant.create_collection.assert_awaited_once()
+    assert qdrant.create_collection.await_args.kwargs["collection_name"] == KG_COLLECTION
+    vector_config = qdrant.create_collection.await_args.kwargs["vectors_config"]
+    assert vector_config.size == 1024
+
+
+@pytest.mark.asyncio
+async def test_ensure_kg_collection_accepts_matching_existing_dimension(monkeypatch):
+    """Existing kg_entities collection is usable when its dimension matches."""
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    qdrant = AsyncMock()
+    qdrant.get_collections.return_value = SimpleNamespace(
+        collections=[SimpleNamespace(name=KG_COLLECTION)]
+    )
+    qdrant.get_collection.return_value = _collection_info(1024)
+
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
+    fake_models.Distance = SimpleNamespace(COSINE="cosine")
+    fake_models.VectorParams = _FakeVectorParams
+
+    with patch.dict(sys.modules, {"qdrant_client.models": fake_models}):
+        await _ensure_kg_collection(qdrant)
+
+    qdrant.get_collection.assert_awaited_once_with(collection_name=KG_COLLECTION)
+    qdrant.create_collection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ensure_kg_collection_rejects_wrong_dimension(monkeypatch):
+    """Wrong-dimension kg_entities collection is a clear degraded path."""
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _ensure_kg_collection
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    qdrant = AsyncMock()
+    qdrant.get_collections.return_value = SimpleNamespace(
+        collections=[SimpleNamespace(name=KG_COLLECTION)]
+    )
+    qdrant.get_collection.return_value = _collection_info(768)
+
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
+    fake_models.Distance = SimpleNamespace(COSINE="cosine")
+    fake_models.VectorParams = _FakeVectorParams
+
+    with patch.dict(sys.modules, {"qdrant_client.models": fake_models}):
+        with pytest.raises(RuntimeError, match="Qdrant collection 'kg_entities' has dimension 768"):
+            await _ensure_kg_collection(qdrant)
+
+    qdrant.create_collection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_find_similar_entity_returns_matched_id():
     """_find_similar_entity returns entity_id from Qdrant match."""
     from paper_ingestion.extraction.entities import _find_similar_entity
@@ -306,6 +387,57 @@ async def test_find_similar_entity_returns_none_on_failure():
         result = await _find_similar_entity(qdrant, "method", [0.1, 0.2, 0.3])
 
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_find_similar_entity_degrades_on_wrong_collection_dimension(monkeypatch):
+    """KG semantic dedup falls back instead of querying a wrong-dimension collection."""
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _find_similar_entity
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    qdrant = AsyncMock()
+    qdrant.get_collections.return_value = SimpleNamespace(
+        collections=[SimpleNamespace(name=KG_COLLECTION)]
+    )
+    qdrant.get_collection.return_value = _collection_info(768)
+
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
+    fake_models.FieldCondition = MagicMock()
+    fake_models.Filter = MagicMock()
+    fake_models.MatchValue = MagicMock()
+    fake_models.Distance = SimpleNamespace(COSINE="cosine")
+    fake_models.VectorParams = _FakeVectorParams
+
+    with patch.dict(sys.modules, {"qdrant_client.models": fake_models}):
+        result = await _find_similar_entity(qdrant, "method", [0.1, 0.2, 0.3])
+
+    assert result is None
+    qdrant.query_points.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_store_entity_embedding_skips_wrong_collection_dimension(monkeypatch):
+    """KG embedding upsert is skipped when collection dimension is wrong."""
+    from paper_ingestion.extraction.entities import KG_COLLECTION, _store_entity_embedding
+
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "1024")
+    conn = AsyncMock()
+    qdrant = AsyncMock()
+    qdrant.get_collections.return_value = SimpleNamespace(
+        collections=[SimpleNamespace(name=KG_COLLECTION)]
+    )
+    qdrant.get_collection.return_value = _collection_info(768)
+
+    fake_models = cast(Any, types.ModuleType("qdrant_client.models"))
+    fake_models.Distance = SimpleNamespace(COSINE="cosine")
+    fake_models.VectorParams = _FakeVectorParams
+    fake_models.PointStruct = MagicMock()
+
+    with patch.dict(sys.modules, {"qdrant_client.models": fake_models}):
+        await _store_entity_embedding(conn, qdrant, 1, "BERT", "method", [0.1, 0.2])
+
+    qdrant.upsert.assert_not_awaited()
+    conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

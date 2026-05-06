@@ -186,7 +186,7 @@ async def test_search_chunks_qdrant_failure_returns_empty():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # embed_texts succeeds
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
 
     # Qdrant query_points fails with a connection error
     mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
@@ -207,7 +207,7 @@ async def test_search_chunks_global_qdrant_failure_returns_empty():
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
 
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
     mock_qdrant.query_points.side_effect = ConnectionError("Qdrant connection lost")
 
     result = await embedder.search_chunks_global(

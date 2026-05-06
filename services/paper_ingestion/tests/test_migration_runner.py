@@ -6,7 +6,7 @@ fragile monkeypatching of Path internals.
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import asyncpg
 
@@ -31,6 +31,7 @@ def _make_pool_and_conn():
     ctx.__aexit__ = AsyncMock(return_value=False)
     pool = MagicMock()
     pool.acquire.return_value = ctx
+    conn.fetchval.return_value = True
     return pool, conn
 
 
@@ -47,8 +48,8 @@ def _count_real_migrations() -> int:
 
 
 def _import_run_migrations():
-    """Lazy import to avoid module-level import chain issues with Docker deps."""
-    from paper_ingestion.main import run_migrations
+    """Lazy import to avoid module-level import chain issues in test collection."""
+    from paper_ingestion.migrations_runner import run_migrations
 
     return run_migrations
 
@@ -136,7 +137,11 @@ async def test_schema_migrations_select_called():
 
     await run_migrations(pool)
 
-    conn.fetch.assert_awaited_once_with("SELECT version FROM schema_migrations")
+    conn.fetch.assert_any_await(
+        "SELECT version FROM schema_migrations WHERE version = ANY($1::int[])",
+        ANY,
+    )
+    conn.fetch.assert_any_await("SELECT version FROM schema_migrations")
 
 
 async def test_migration_uses_xact_lock():

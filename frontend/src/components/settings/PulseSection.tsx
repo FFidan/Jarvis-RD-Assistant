@@ -54,6 +54,8 @@ const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
   classifier: 0,
 };
 
+const EMPTY_CONFIGS: ConfigEntry[] = [];
+
 type PulseWeightKey =
   | 'embedding'
   | 'topic'
@@ -308,12 +310,21 @@ export function PulseSection() {
     [],
   );
 
-  const { data: configs = [] } = useQuery({
+  const {
+    data: configs,
+    isLoading: configLoading,
+    isError: configError,
+  } = useQuery<ConfigEntry[]>({
     queryKey: ['config'],
     queryFn: fetchConfig,
   });
+  const safeConfigs = configs ?? EMPTY_CONFIGS;
 
-  const { data: stats } = useQuery<PulseStats>({
+  const {
+    data: stats,
+    isLoading: statsLoading,
+    isError: statsError,
+  } = useQuery<PulseStats>({
     queryKey: ['pulse-stats'],
     queryFn: () => fetchPulseStats(),
     refetchInterval: 60_000,
@@ -325,17 +336,17 @@ export function PulseSection() {
   });
 
   // --- Config values ---
-  const enabled = getConfigValue<boolean>(configs, 'pulse.enabled', false);
-  const cron = getConfigValue<string>(configs, 'pulse.cron', '0 4 * * *');
-  const deckSize = getConfigValue<number>(configs, 'pulse.deck_size', 10);
-  const stage2TopK = getConfigValue<number>(configs, 'pulse.stage2_top_k', 40);
-  const likedWeight = Number(getConfigValue(configs, 'recommendation.liked_weight', 0.6));
-  const projectWeight = Number(getConfigValue(configs, 'recommendation.project_weight', 0.4));
-  const l2LambdaConfig = Number(getConfigValue(configs, 'pulse.l2_lambda', 0.5));
+  const enabled = getConfigValue<boolean>(safeConfigs, 'pulse.enabled', false);
+  const cron = getConfigValue<string>(safeConfigs, 'pulse.cron', '0 4 * * *');
+  const deckSize = getConfigValue<number>(safeConfigs, 'pulse.deck_size', 10);
+  const stage2TopK = getConfigValue<number>(safeConfigs, 'pulse.stage2_top_k', 40);
+  const likedWeight = Number(getConfigValue(safeConfigs, 'recommendation.liked_weight', 0.6));
+  const projectWeight = Number(getConfigValue(safeConfigs, 'recommendation.project_weight', 0.4));
+  const l2LambdaConfig = Number(getConfigValue(safeConfigs, 'pulse.l2_lambda', 0.5));
   const pulseWeights = useMemo(
-    () => coerceWeights(getConfigValue(configs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS)),
+    () => coerceWeights(getConfigValue(safeConfigs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [configs],
+    [safeConfigs],
   );
 
   const [localCron, setLocalCron] = useState(cron);
@@ -344,6 +355,7 @@ export function PulseSection() {
   const [l2Lambda, setL2Lambda] = useState(l2LambdaConfig);
   const [localPulseWeights, setLocalPulseWeights] =
     useState<Record<PulseWeightKey, number>>(pulseWeights);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => { setLocalCron(cron); }, [cron]);
   useEffect(() => { setLocalLikedWeight(likedWeight); }, [likedWeight]);
@@ -365,11 +377,17 @@ export function PulseSection() {
     pulseWeights.classifier,
   ]);
 
+  const settingsUnavailable = configLoading || configError || configs === undefined;
+  const statsUnavailable = statsLoading || statsError || stats === undefined;
+  const settingsControlsDisabled = settingsUnavailable || setMut.isPending;
+
   const handleToggle = () => {
+    if (settingsControlsDisabled) return;
     setMut.mutate({ key: 'pulse.enabled', value: !enabled });
   };
 
   const handleCronChange = (value: string) => {
+    if (settingsControlsDisabled) return;
     setLocalCron(value);
     if (cronTimeoutRef.current) clearTimeout(cronTimeoutRef.current);
     if (!isValidCron(value)) return;
@@ -379,6 +397,7 @@ export function PulseSection() {
   };
 
   const updatePulseWeight = (key: PulseWeightKey, value: number) => {
+    if (settingsControlsDisabled) return;
     const next = { ...localPulseWeights, [key]: value };
     setLocalPulseWeights(next);
     if (weightsDebounceRef.current !== null) clearTimeout(weightsDebounceRef.current);
@@ -391,6 +410,7 @@ export function PulseSection() {
   const pulseWeightSumOutOfRange = pulseWeightSum < 0.8 || pulseWeightSum > 1.2;
 
   const handleNormalize = () => {
+    if (settingsControlsDisabled) return;
     const scale = 1 / pulseWeightSum;
     const next = { ...localPulseWeights };
     PULSE_WEIGHT_KEYS.forEach((k) => {
@@ -465,7 +485,7 @@ export function PulseSection() {
               aria-label="Enable Pulse"
               aria-checked={!!enabled}
               onClick={handleToggle}
-              disabled={setMut.isPending}
+              disabled={settingsControlsDisabled}
               className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 ${
                 enabled ? 'bg-primary' : 'bg-input'
               }`}
@@ -487,6 +507,7 @@ export function PulseSection() {
             <TimeSelect
               value={cronToTime(localCron)}
               onChange={(v) => handleCronChange(timeToCron(v, localCron))}
+              disabled={settingsControlsDisabled}
             />
             <p className="text-xs text-muted-foreground">{cronToHumanReadable(localCron)}</p>
           </div>
@@ -507,7 +528,7 @@ export function PulseSection() {
               onChange={(e) =>
                 setMut.mutate({ key: 'pulse.deck_size', value: parseInt(e.target.value, 10) })
               }
-              disabled={setMut.isPending}
+              disabled={settingsControlsDisabled}
               className="w-full accent-primary"
             />
             <p className="text-xs text-muted-foreground">
@@ -531,174 +552,213 @@ export function PulseSection() {
               onChange={(e) =>
                 setMut.mutate({ key: 'pulse.stage2_top_k', value: parseInt(e.target.value, 10) })
               }
-              disabled={setMut.isPending}
+              disabled={settingsControlsDisabled}
               className="w-full accent-primary"
             />
             <p className="text-xs text-muted-foreground">
               Candidates the LLM reranker evaluates. Higher = better ranking quality but slower.
             </p>
           </div>
+          {settingsUnavailable && (
+            <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              Pulse settings unavailable. Settings controls are disabled until configuration loads.
+            </p>
+          )}
         </CardContent>
       </Card>
 
-      {/* ── Scoring weights card ── */}
+      {/* ── Advanced tuning card ── */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Scoring weights</CardTitle>
-          <CardDescription>
-            Weights applied to each signal when ranking Pulse candidate papers.
-            Values should roughly sum to 1.0.
-          </CardDescription>
+        <CardHeader className="pb-3">
+          <button
+            type="button"
+            className="flex w-full items-start gap-2 text-left"
+            onClick={() => setAdvancedOpen((v) => !v)}
+            aria-expanded={advancedOpen}
+            aria-controls="pulse-advanced-tuning"
+          >
+            {advancedOpen ? (
+              <ChevronDown className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <ChevronRight className="mt-0.5 h-4 w-4 shrink-0" />
+            )}
+            <div className="space-y-1">
+              <CardTitle className="text-base">Advanced tuning</CardTitle>
+              <CardDescription>
+                Signal weights, recommender seed balance, and negative-feedback penalty.
+              </CardDescription>
+            </div>
+          </button>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* Weight sliders — conditional signals include an extra gate tooltip */}
-          {PULSE_WEIGHT_KEYS.map((key) => {
-            const gateTooltip = CONDITIONAL_SIGNAL_GATE_TOOLTIPS[key];
-            const sliderDiv = (
-              <div key={key} className="space-y-1">
+        {advancedOpen && (
+          <CardContent id="pulse-advanced-tuning" className="space-y-5 border-t pt-4">
+            <div className="space-y-4">
+              <div>
+                <h4 className="text-sm font-medium">Scoring weights</h4>
+                <p className="text-xs text-muted-foreground">
+                  Weights applied to each signal when ranking Pulse candidate papers.
+                  Values should roughly sum to 1.0.
+                </p>
+              </div>
+
+              {/* Weight sliders — conditional signals include an extra gate tooltip */}
+              {PULSE_WEIGHT_KEYS.map((key) => {
+                const gateTooltip = CONDITIONAL_SIGNAL_GATE_TOOLTIPS[key];
+                const sliderDiv = (
+                  <div key={key} className="space-y-1">
+                    <Label className="flex items-center justify-between text-xs">
+                      <span className="flex items-center gap-1">
+                        {PULSE_WEIGHT_LABELS[key]}
+                        <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
+                      </span>
+                      <span className="font-mono text-muted-foreground">
+                        {localPulseWeights[key].toFixed(2)}
+                      </span>
+                    </Label>
+                    <input
+                      type="range"
+                      aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={localPulseWeights[key]}
+                      onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
+                      disabled={settingsControlsDisabled}
+                      className="w-full accent-primary"
+                    />
+                  </div>
+                );
+                if (!gateTooltip) return sliderDiv;
+                return (
+                  <TooltipProvider key={key} delayDuration={150}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        {/* div wrapper required — input cannot be a TooltipTrigger directly */}
+                        <div data-testid={`gate-tooltip-trigger-${key}`}>{sliderDiv}</div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="max-w-xs text-xs">
+                        {gateTooltip}
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                );
+              })}
+              <div className="flex items-center">
+                <p
+                  className={`text-xs ${
+                    pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
+                  }`}
+                >
+                  Sum: {pulseWeightSum.toFixed(2)}
+                  {pulseWeightSumOutOfRange && ' (target ~1.0)'}
+                </p>
+                {pulseWeightSumOutOfRange && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleNormalize}
+                    disabled={settingsControlsDisabled}
+                    className="ml-2 h-6 px-2 text-xs"
+                  >
+                    Normalize to 1.0
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-4 border-t pt-4">
+              <h4 className="text-sm font-medium">Discovery seed balance</h4>
+
+              <div className="space-y-1">
                 <Label className="flex items-center justify-between text-xs">
                   <span className="flex items-center gap-1">
-                    {PULSE_WEIGHT_LABELS[key]}
-                    <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
+                    Liked papers weight
+                    <InfoTooltip content="How much to weight similarity to papers you've starred when seeding Pulse discovery." />
                   </span>
                   <span className="font-mono text-muted-foreground">
-                    {localPulseWeights[key].toFixed(2)}
+                    {Math.round(localLikedWeight * 100)}%
                   </span>
                 </Label>
                 <input
                   type="range"
-                  aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
+                  aria-label="Liked papers weight"
                   min={0}
                   max={1}
                   step={0.05}
-                  value={localPulseWeights[key]}
-                  onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
+                  value={localLikedWeight}
+                  onChange={(e) => setLocalLikedWeight(Number(e.target.value))}
+                  onPointerUp={() =>
+                    setMut.mutate({ key: 'recommendation.liked_weight', value: localLikedWeight })
+                  }
+                  disabled={settingsControlsDisabled}
                   className="w-full accent-primary"
                 />
               </div>
-            );
-            if (!gateTooltip) return sliderDiv;
-            return (
-              <TooltipProvider key={key} delayDuration={150}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {/* div wrapper required — input cannot be a TooltipTrigger directly */}
-                    <div data-testid={`gate-tooltip-trigger-${key}`}>{sliderDiv}</div>
-                  </TooltipTrigger>
-                  <TooltipContent side="top" className="max-w-xs text-xs">
-                    {gateTooltip}
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            );
-          })}
-          <div className="flex items-center">
-            <p
-              className={`text-xs ${
-                pulseWeightSumOutOfRange ? 'text-amber-600' : 'text-muted-foreground'
-              }`}
-            >
-              Sum: {pulseWeightSum.toFixed(2)}
-              {pulseWeightSumOutOfRange && ' (target ~1.0)'}
-            </p>
-            {pulseWeightSumOutOfRange && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleNormalize}
-                className="ml-2 h-6 px-2 text-xs"
-              >
-                Normalize to 1.0
-              </Button>
-            )}
-          </div>
 
-          {/* Liked-papers weight */}
-          <div className="space-y-1 border-t pt-4">
-            <Label className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1">
-                Liked papers weight
-                <InfoTooltip content="How much to weight similarity to papers you've starred when seeding Pulse discovery." />
-              </span>
-              <span className="font-mono text-muted-foreground">
-                {Math.round(localLikedWeight * 100)}%
-              </span>
-            </Label>
-            <input
-              type="range"
-              aria-label="Liked papers weight"
-              min={0}
-              max={1}
-              step={0.05}
-              value={localLikedWeight}
-              onChange={(e) => setLocalLikedWeight(Number(e.target.value))}
-              onPointerUp={() => setMut.mutate({ key: 'recommendation.liked_weight', value: localLikedWeight })}
-              className="w-full accent-primary"
-            />
-          </div>
+              <div className="space-y-1">
+                <Label className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1">
+                    Project context weight
+                    <InfoTooltip content="How much to weight relevance to your active projects when seeding Pulse discovery." />
+                  </span>
+                  <span className="font-mono text-muted-foreground">
+                    {Math.round(localProjectWeight * 100)}%
+                  </span>
+                </Label>
+                <input
+                  type="range"
+                  aria-label="Project context weight"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={localProjectWeight}
+                  onChange={(e) => setLocalProjectWeight(Number(e.target.value))}
+                  onPointerUp={() =>
+                    setMut.mutate({
+                      key: 'recommendation.project_weight',
+                      value: localProjectWeight,
+                    })
+                  }
+                  disabled={settingsControlsDisabled}
+                  className="w-full accent-primary"
+                />
+              </div>
+            </div>
 
-          {/* Project-context weight */}
-          <div className="space-y-1">
-            <Label className="flex items-center justify-between text-xs">
-              <span className="flex items-center gap-1">
-                Project context weight
-                <InfoTooltip content="How much to weight relevance to your active projects when seeding Pulse discovery." />
-              </span>
-              <span className="font-mono text-muted-foreground">
-                {Math.round(localProjectWeight * 100)}%
-              </span>
-            </Label>
-            <input
-              type="range"
-              aria-label="Project context weight"
-              min={0}
-              max={1}
-              step={0.05}
-              value={localProjectWeight}
-              onChange={(e) => setLocalProjectWeight(Number(e.target.value))}
-              onPointerUp={() =>
-                setMut.mutate({ key: 'recommendation.project_weight', value: localProjectWeight })
-              }
-              className="w-full accent-primary"
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* ── L2 negative-feedback penalty card ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">L2 negative-feedback penalty</CardTitle>
-          <CardDescription>
-            Strength of the cosine penalty applied to candidates similar to papers
-            you&apos;ve thumbed-down. 0 disables the penalty; 1 = equal weight to positive
-            examples; 2 = double weight. Default 0.5.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-4">
-            <Slider
-              min={0}
-              max={2}
-              step={0.05}
-              value={[l2Lambda]}
-              onValueChange={([v]) => setL2Lambda(v)}
-              onValueCommit={([v]) =>
-                setMut.mutate(
-                  { key: 'pulse.l2_lambda', value: v },
-                  {
-                    onError: (err) =>
-                      toast.error('Failed to update L2 lambda', {
-                        description: err instanceof Error ? err.message : 'Unknown error',
-                      }),
-                  },
-                )
-              }
-              className="flex-1"
-            />
-            <span className="font-mono text-sm w-12 text-right">{l2Lambda.toFixed(2)}</span>
-          </div>
-        </CardContent>
+            <div className="space-y-3 border-t pt-4">
+              <div>
+                <h4 className="text-sm font-medium">L2 negative-feedback penalty</h4>
+                <p className="text-xs text-muted-foreground">
+                  Strength of the cosine penalty applied to candidates similar to papers
+                  you&apos;ve thumbed-down. Default 0.5.
+                </p>
+              </div>
+              <div className="flex items-center gap-4">
+                <Slider
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={[l2Lambda]}
+                  onValueChange={([v]) => setL2Lambda(v)}
+                  onValueCommit={([v]) =>
+                    setMut.mutate(
+                      { key: 'pulse.l2_lambda', value: v },
+                      {
+                        onError: (err) =>
+                          toast.error('Failed to update L2 lambda', {
+                            description: err instanceof Error ? err.message : 'Unknown error',
+                          }),
+                      },
+                    )
+                  }
+                  disabled={settingsControlsDisabled}
+                  className="flex-1"
+                />
+                <span className="font-mono text-sm w-12 text-right">{l2Lambda.toFixed(2)}</span>
+              </div>
+            </div>
+          </CardContent>
+        )}
       </Card>
 
       {/* ── Rejected topics card ── */}
@@ -744,6 +804,10 @@ export function PulseSection() {
                 </div>
               )}
             </div>
+          ) : statsError ? (
+            <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              Pulse stats unavailable. Generation is disabled until stats load.
+            </p>
           ) : (
             <p className="text-sm text-muted-foreground">Loading stats…</p>
           )}
@@ -758,7 +822,7 @@ export function PulseSection() {
                 }
               });
             }}
-            disabled={isPulseRunning}
+            disabled={isPulseRunning || statsUnavailable || settingsUnavailable}
             className="w-full"
           >
             {isPulseRunning ? (

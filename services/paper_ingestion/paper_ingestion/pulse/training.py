@@ -25,6 +25,10 @@ def _feature_vector(signals: dict[str, Any]) -> list[float]:
     return [float(signals.get(name, 0.0) or 0.0) for name in FEATURE_NAMES]
 
 
+def _has_feature_signals(signals: Any) -> bool:
+    return isinstance(signals, dict) and bool(signals)
+
+
 async def train_classifier_model(
     db_pool: Any,
     *,
@@ -44,34 +48,54 @@ async def train_classifier_model(
         }
 
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
+        fetched_rows = await conn.fetch(
             """
-            SELECT pc.signals, rf.signal AS rating
+            SELECT pc.signals AS signals, rf.signal AS rating
             FROM recommendation_feedback rf
-            JOIN pulse_cards pc ON pc.paper_id = rf.paper_id
-            WHERE rf.source IN ('pulse_thumbs', 'dismiss_combined')
+            JOIN pulse_cards pc
+              ON pc.paper_id = rf.paper_id
+             AND pc.user_id IS NOT DISTINCT FROM $1
+            WHERE rf.source IN (
+                'pulse_thumbs',
+                'feed_thumbs',
+                'paper_detail_thumbs',
+                'dismiss_combined'
+            )
               AND rf.user_id IS NOT DISTINCT FROM $1
+              AND pc.signals <> '{}'::jsonb
             ORDER BY rf.created_at DESC
             LIMIT 1000
             """,
             user_id,
         )
+    rows = [row for row in fetched_rows if _has_feature_signals(row["signals"])]
+    excluded_missing_signal_count = len(fetched_rows) - len(rows)
+
+    def _with_excluded_count(result: dict[str, Any]) -> dict[str, Any]:
+        if excluded_missing_signal_count:
+            result["excluded_missing_signal_count"] = excluded_missing_signal_count
+        return result
+
     if len(rows) < min_ratings:
-        return {
-            "trained": False,
-            "available": True,
-            "sample_count": len(rows),
-            "degradation_reason": f"need at least {min_ratings} ratings",
-        }
+        return _with_excluded_count(
+            {
+                "trained": False,
+                "available": True,
+                "sample_count": len(rows),
+                "degradation_reason": f"need at least {min_ratings} ratings",
+            }
+        )
 
     labels = [1 if row["rating"] == "positive" else 0 for row in rows]
     if len(set(labels)) < 2:
-        return {
-            "trained": False,
-            "available": True,
-            "sample_count": len(rows),
-            "degradation_reason": "need both positive and negative ratings",
-        }
+        return _with_excluded_count(
+            {
+                "trained": False,
+                "available": True,
+                "sample_count": len(rows),
+                "degradation_reason": "need both positive and negative ratings",
+            }
+        )
 
     x = [_feature_vector(row["signals"] or {}) for row in rows]
     positives = [idx for idx, label in enumerate(labels) if label == 1]
@@ -91,6 +115,8 @@ async def train_classifier_model(
     model.fit(train_x, train_y)
     accuracy = float(model.score(train_x, train_y))
     metrics: dict[str, Any] = {"sample_count": len(rows), "train_accuracy": accuracy}
+    if excluded_missing_signal_count:
+        metrics["excluded_missing_signal_count"] = excluded_missing_signal_count
     if val_y and len(set(val_y)) == 2:
         val_probabilities = model.predict_proba(val_x)
         metrics["auc"] = float(roc_auc_score(val_y, [row[1] for row in val_probabilities]))
@@ -102,7 +128,15 @@ async def train_classifier_model(
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            await conn.execute("UPDATE pulse_models SET is_active = FALSE WHERE is_active = TRUE")
+            await conn.execute(
+                """
+                UPDATE pulse_models
+                   SET is_active = FALSE
+                 WHERE is_active = TRUE
+                   AND user_id IS NOT DISTINCT FROM $1
+                """,
+                user_id,
+            )
             await conn.execute(
                 """
                 INSERT INTO pulse_models
@@ -117,7 +151,11 @@ async def train_classifier_model(
     return {"trained": True, "available": True, **metrics}
 
 
-async def load_active_classifier(db_pool: Any) -> tuple[Any | None, dict[str, Any]]:
+async def load_active_classifier(
+    db_pool: Any,
+    *,
+    user_id: int | None = None,
+) -> tuple[Any | None, dict[str, Any]]:
     """Load the active classifier and metadata, if present and dependencies exist."""
     try:
         import sklearn  # noqa: F401
@@ -130,9 +168,11 @@ async def load_active_classifier(db_pool: Any) -> tuple[Any | None, dict[str, An
             SELECT model_blob, feature_names, metrics, trained_at
             FROM pulse_models
             WHERE is_active = TRUE
+              AND user_id IS NOT DISTINCT FROM $1
             ORDER BY trained_at DESC
             LIMIT 1
-            """
+            """,
+            user_id,
         )
     if row is None:
         return None, {"available": False, "degradation_reason": "no active model"}
@@ -151,9 +191,11 @@ async def load_active_classifier(db_pool: Any) -> tuple[Any | None, dict[str, An
 async def classifier_scores(
     db_pool: Any,
     signal_dicts: list[dict[str, Any]],
+    *,
+    user_id: int | None = None,
 ) -> tuple[list[float], dict[str, Any]]:
     """Score signal dicts with the active classifier, returning zeros on fallback."""
-    model, meta = await load_active_classifier(db_pool)
+    model, meta = await load_active_classifier(db_pool, user_id=user_id)
     if model is None:
         return [0.0 for _ in signal_dicts], meta
     probabilities = model.predict_proba([_feature_vector(s) for s in signal_dicts])

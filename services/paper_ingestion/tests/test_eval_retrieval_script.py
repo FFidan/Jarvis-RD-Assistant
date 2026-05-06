@@ -60,6 +60,15 @@ def _async_client_cm(client):
     return ctx
 
 
+def test_default_embedding_dimension_matches_phase_c(monkeypatch):
+    """eval_retrieval defaults to the Phase C embedding vector dimension."""
+    monkeypatch.delenv("EMBEDDING_DIMENSION", raising=False)
+
+    module = _load_eval_retrieval(monkeypatch)
+
+    assert module.EMBEDDING_DIMENSION == 1024
+
+
 @pytest.mark.asyncio
 async def test_embed_text_calls_litellm_with_configured_url(monkeypatch):
     """embed_text sends the request to the configured LiteLLM endpoint (no auth headers)."""

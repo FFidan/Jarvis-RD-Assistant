@@ -135,8 +135,10 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     flows through as $2 in the INSERT.
     """
     pool, conn = _make_pool_and_conn()
-    # fetchrow #1: ownership check — user_id=42 owns the paper
-    conn.fetchrow.return_value = {"user_id": 42}
+    conn.fetchrow.side_effect = [
+        {"user_id": 42},  # ownership check: user_id=42 owns the paper
+        {"discovery_origin": "pulse"},  # feedback gate: system-discovered paper
+    ]
     conn.fetchval.return_value = None  # no topic mapping
 
     async def _user_42(_request):
@@ -159,8 +161,8 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     assert result.signal == "positive"
     assert result.paper_id == 10
 
-    # Ownership check uses fetchrow once; INSERT uses execute once.
-    assert conn.fetchrow.await_count == 1
+    # Ownership check and discovery-origin validation each use fetchrow.
+    assert conn.fetchrow.await_count == 2
     assert conn.execute.await_count == 1
     insert_args = conn.execute.await_args.args
     insert_binds = insert_args[1:]

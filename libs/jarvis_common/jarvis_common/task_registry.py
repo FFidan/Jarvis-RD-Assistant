@@ -1,4 +1,4 @@
-"""Procrastinate task registry — all 19 JARVIS job kinds.
+"""Procrastinate task registry — all JARVIS job kinds.
 
 Step 2 of the B.4 cutover (spec: ``docs/specs/2026-05-03-b4-job-broker.md``).
 The procrastinate worker is not yet wired into any service lifespan and no
@@ -20,8 +20,7 @@ handler signature is::
 
 so each task forwards exactly that.
 
-Verified handler symbols (master b24a563, ``rg "^@job_handler\\(" services``)
-matching the 19 keys of ``JOB_HANDLER_OWNER`` (jobs.py:46):
+Verified handler symbols matching the keys of ``JOB_HANDLER_OWNER``:
 
     paper.process              -> paper_ingestion.paper_jobs._paper_process_job
     paper.analyze              -> paper_ingestion.paper_jobs._paper_analyze_job
@@ -36,6 +35,7 @@ matching the 19 keys of ``JOB_HANDLER_OWNER`` (jobs.py:46):
     contradictions.scan        -> paper_ingestion.contradiction_jobs._contradictions_scan_job
     pulse.generate             -> paper_ingestion.pulse.job._pulse_generate_job
     pulse.train_classifier     -> paper_ingestion.pulse.training._pulse_train_classifier_job
+    model.pull                 -> paper_ingestion.services.model_lifecycle._model_pull_job
     zotero.push                -> paper_ingestion.integrations.zotero_service._zotero_push_job
     zotero.resync              -> paper_ingestion.integrations.zotero_service._zotero_resync_job
     zotero.sync_from_zotero    -> paper_ingestion.integrations.zotero_service
@@ -123,7 +123,7 @@ def _require_dependencies() -> tuple[asyncpg.Pool, httpx.AsyncClient]:
 
 
 # ---------------------------------------------------------------------------
-# 19 task definitions
+# Task definitions
 # ---------------------------------------------------------------------------
 #
 # Each task:
@@ -259,6 +259,15 @@ async def pulse_train_classifier(
     return await _pulse_train_classifier_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
 
 
+@app.task(name="model.pull", queue="paper_ingestion", pass_context=True)
+async def model_pull(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
+    from paper_ingestion.services.model_lifecycle import _model_pull_job
+
+    pool, http_client = _require_dependencies()
+    ctx = make_ctx_shim(context, pool=pool)
+    return await _model_pull_job(pool, http_client, payload, ctx)
+
+
 @app.task(name="zotero.push", queue="paper_ingestion", pass_context=True)
 async def zotero_push(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.integrations.zotero_service import _zotero_push_job
@@ -343,6 +352,7 @@ KIND_TO_TASK: dict[str, Any] = {
     "contradictions.scan": contradictions_scan,
     "pulse.generate": pulse_generate,
     "pulse.train_classifier": pulse_train_classifier,
+    "model.pull": model_pull,
     "zotero.push": zotero_push,
     "zotero.resync": zotero_resync,
     "zotero.sync_from_zotero": zotero_sync_from_zotero,

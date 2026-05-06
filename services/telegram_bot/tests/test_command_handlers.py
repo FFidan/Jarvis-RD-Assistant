@@ -22,6 +22,7 @@ from telegram_bot.handlers.commands import (  # noqa: E402
     stats_command,
     tasks_command,
 )
+from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,6 +101,26 @@ async def test_help_command_sends_help():
 # ---------------------------------------------------------------------------
 # Tests: /papers
 # ---------------------------------------------------------------------------
+
+
+def test_inbox_keyboard_uses_feed_thumbs_for_system_discovered_papers():
+    """Telegram /inbox feedback buttons should write feed_thumbs, not pulse_thumbs."""
+    markup = _inbox_keyboard(42, discovery_origin="recommender")
+    callback_data = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "paper:feedback_pos:42:feed_thumbs" in callback_data
+    assert "paper:feedback_neg:42:feed_thumbs" in callback_data
+    assert all("pulse_thumbs" not in value for value in callback_data if value)
+
+
+def test_inbox_keyboard_hides_feedback_for_user_initiated_papers():
+    """User-initiated inbox papers do not render recommendation-feedback buttons."""
+    markup = _inbox_keyboard(42, discovery_origin="user_initiated")
+    callback_data = [button.callback_data for row in markup.inline_keyboard for button in row]
+
+    assert "paper:save:42" in callback_data
+    assert "paper:trash:42" in callback_data
+    assert not any("feedback_" in value for value in callback_data if value)
 
 
 @pytest.mark.asyncio

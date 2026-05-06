@@ -32,13 +32,87 @@ from paper_ingestion.models import ChunkForEmbedding
 logger = logging.getLogger(__name__)
 
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "nomic-embed-text")
-EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "768"))
+EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "qwen3-embedding:0.6b")
+EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
 QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
 
 COLLECTION_NAME = "paper_chunks"
 CHUNK_TOKEN_LIMIT = 512
 CHUNK_OVERLAP_TOKENS = 50
+
+_KNOWN_EMBEDDING_DIMENSIONS: dict[str, int] = {
+    "nomic-embed-text": 768,
+    "qwen3-embedding:0.6b": 1024,
+}
+
+_SENSITIVE_ERROR_RE = re.compile(
+    r"(Bearer\s+)[A-Za-z0-9._~+/=-]+|"
+    r"(sk-[A-Za-z0-9._-]+)|"
+    r"(Authorization:\s*)[^\s,;]+",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_embedding_error_detail(text: str, *, max_chars: int = 200) -> str:
+    """Return a compact provider-error preview without secrets or noisy whitespace."""
+    compact = " ".join(text.split())
+    redacted = _SENSITIVE_ERROR_RE.sub(
+        lambda match: f"{match.group(1) or match.group(3) or ''}<redacted>",
+        compact,
+    )
+    return redacted[:max_chars]
+
+
+def validate_embedding_configuration(
+    *,
+    model_name: str | None = None,
+    dimension: int | None = None,
+) -> None:
+    """Fail clearly when a known fixed-dimension embedding model is misconfigured."""
+    model_name = model_name or EMBEDDING_MODEL_NAME
+    dimension = EMBEDDING_DIMENSION if dimension is None else dimension
+    normalized_model_name = model_name.lower()
+    for known_model, expected_dimension in _KNOWN_EMBEDDING_DIMENSIONS.items():
+        if known_model in normalized_model_name and dimension != expected_dimension:
+            raise RuntimeError(
+                f"Embedding configuration mismatch: {model_name} outputs "
+                f"{expected_dimension} dimensions, but EMBEDDING_DIMENSION={dimension}. "
+                "Update EMBEDDING_DIMENSION or finish the Phase C Qdrant re-embed checkpoint."
+            )
+
+
+def extract_qdrant_collection_dimension(collection_info: object) -> int | None:
+    """Return the single-vector collection size from Qdrant collection metadata."""
+    config = getattr(collection_info, "config", None)
+    params = getattr(config, "params", None)
+    vectors = getattr(params, "vectors", None)
+    if vectors is None and isinstance(params, dict):
+        vectors = params.get("vectors")
+    if isinstance(vectors, dict):
+        vector_config = vectors.get("") or next(iter(vectors.values()), None)
+        if isinstance(vector_config, dict):
+            return vector_config.get("size")
+        return getattr(vector_config, "size", None)
+    return getattr(vectors, "size", None)
+
+
+def raise_for_collection_dimension_mismatch(
+    collection_name: str,
+    current_dimension: int | None,
+    *,
+    expected_dimension: int | None = None,
+    model_name: str | None = None,
+) -> None:
+    """Raise when an existing Qdrant collection does not match the active embed config."""
+    expected_dimension = EMBEDDING_DIMENSION if expected_dimension is None else expected_dimension
+    model_name = model_name or EMBEDDING_MODEL_NAME
+    if current_dimension == expected_dimension:
+        return
+    raise RuntimeError(
+        f"Qdrant collection {collection_name!r} has dimension {current_dimension}; "
+        f"expected {expected_dimension} for {model_name}. "
+        "Run the documented Phase C Qdrant checkpoint/re-embed flow before restarting."
+    )
 
 
 def _point_payload(hit) -> dict | None:
@@ -80,6 +154,7 @@ class Embedder:
         async with self._collection_lock:
             if self._collection_ensured:
                 return
+            validate_embedding_configuration()
             collections = await self.qdrant.get_collections()
             existing = {c.name for c in collections.collections}
             if COLLECTION_NAME not in existing:
@@ -93,6 +168,10 @@ class Embedder:
                 logger.info(
                     "Created Qdrant collection '%s' (dim=%d)", COLLECTION_NAME, EMBEDDING_DIMENSION
                 )
+            else:
+                collection_info = await self.qdrant.get_collection(collection_name=COLLECTION_NAME)
+                current_dimension = extract_qdrant_collection_dimension(collection_info)
+                raise_for_collection_dimension_mismatch(COLLECTION_NAME, current_dimension)
             self._collection_ensured = True
 
     def chunk_text(
@@ -305,9 +384,12 @@ class Embedder:
             logger.error("Embedding service unavailable: %r", e, exc_info=True)
             raise RuntimeError("Embedding service unavailable") from e
         except httpx.HTTPStatusError as e:
-            body_preview = (e.response.text or "")[:200]
+            body_preview = _sanitize_embedding_error_detail(e.response.text or "")
             logger.error("Embedding service HTTP %d: %s", e.response.status_code, body_preview)
-            raise RuntimeError(f"Embedding service error (HTTP {e.response.status_code})") from e
+            detail = f"Embedding service error (HTTP {e.response.status_code})"
+            if body_preview:
+                detail = f"{detail}: {body_preview}"
+            raise RuntimeError(detail) from e
         data = response.json()
 
         # Sort by index to maintain order

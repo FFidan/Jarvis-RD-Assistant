@@ -19,6 +19,10 @@ from jarvis_common.prompt_safety import wrap_delimited
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.extraction.kg_models import KGExtractionOutput
 from paper_ingestion.extraction.verify import QuoteVerifier
+from paper_ingestion.ingestion.embedder import (
+    extract_qdrant_collection_dimension,
+    raise_for_collection_dimension_mismatch,
+)
 from paper_ingestion.models import EntityExtractionResponse
 
 logger = logging.getLogger(__name__)
@@ -86,7 +90,7 @@ async def _ensure_kg_collection(qdrant_client: Any) -> None:
     """Ensure the kg_entities Qdrant collection exists."""
     from qdrant_client.models import Distance, VectorParams
 
-    embedding_dim = int(os.environ.get("EMBEDDING_DIMENSION", "768"))
+    embedding_dim = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
 
     collections = await qdrant_client.get_collections()
     existing = {c.name for c in collections.collections}
@@ -96,6 +100,15 @@ async def _ensure_kg_collection(qdrant_client: Any) -> None:
             vectors_config=VectorParams(size=embedding_dim, distance=Distance.COSINE),
         )
         logger.info("Created Qdrant collection: %s", KG_COLLECTION)
+        return
+
+    collection_info = await qdrant_client.get_collection(collection_name=KG_COLLECTION)
+    current_dimension = extract_qdrant_collection_dimension(collection_info)
+    raise_for_collection_dimension_mismatch(
+        KG_COLLECTION,
+        current_dimension,
+        expected_dimension=embedding_dim,
+    )
 
 
 async def _embed_entity_text(
@@ -160,6 +173,7 @@ async def _store_entity_embedding(
 ) -> None:
     """Persist an entity embedding in Qdrant and record the point id in Postgres."""
     try:
+        await _ensure_kg_collection(qdrant_client)
         from qdrant_client.models import PointStruct
 
         point_id = str(uuid.uuid4())

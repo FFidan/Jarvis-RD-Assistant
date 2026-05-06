@@ -248,7 +248,7 @@ def make_pdf_resolution_row(
     )
 
 
-def fake_embedding_vector(dim: int = 768) -> list[float]:
+def fake_embedding_vector(dim: int = 1024) -> list[float]:
     """Return a deterministic unit-ish embedding vector of length ``dim``.
 
     Values cycle through a simple pattern so tests are reproducible without

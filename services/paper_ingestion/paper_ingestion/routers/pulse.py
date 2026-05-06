@@ -21,6 +21,7 @@ from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
 from jarvis_common.task_registry import pulse_generate
 
 from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
 from paper_ingestion.models import (
     PulseDebugResponse,
     PulseDebugTopCard,
@@ -361,7 +362,7 @@ async def debug_pulse(
     classifier_metrics = model_row["metrics"] if has_model else {}
 
     # Topic embedding sanity
-    embed_dim_expected = 768
+    embed_dim_expected = EMBEDDING_DIMENSION
     topic_embeddings: list[PulseDebugTopicEmbedding] = []
     for er in embed_rows:
         val = er["value"]

@@ -356,33 +356,29 @@ async def submit_feedback(
     ``(paper_id, user_id, source)`` triple — repeat submissions overwrite
     the prior row).
 
-    ``source`` values that are Pulse-specific (``pulse_thumbs``,
-    ``feed_thumbs``, ``dismiss_combined``) are only accepted when the paper's
-    ``discovery_origin`` is ``'pulse_discovery'``.  Mismatches return 400.
+    Recommendation feedback is only accepted for papers discovered by the
+    system (``pulse``, ``recommender``, or ``citation_batch``).  User-initiated
+    papers are kept out of recommendation training; use ``trash_and_reject`` for
+    the atomic trash plus negative feedback path.
     """
-    # Sources that are only valid for Pulse-discovered papers
-    pulse_only_sources = frozenset({"pulse_thumbs", "feed_thumbs", "dismiss_combined"})
-
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
-        # Validate source vs discovery_origin
-        if body.source in pulse_only_sources:
-            origin_row = await conn.fetchrow(
-                "SELECT discovery_origin FROM papers WHERE id = $1",
-                paper_id,
+        origin_row = await conn.fetchrow(
+            "SELECT discovery_origin FROM papers WHERE id = $1",
+            paper_id,
+        )
+        if origin_row is None:
+            raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
+        if origin_row["discovery_origin"] == "user_initiated":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "recommendation feedback is only valid for system-discovered papers; "
+                    "user_initiated papers are excluded from recommendation training"
+                ),
             )
-            if origin_row is None:
-                raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
-            if origin_row["discovery_origin"] != "pulse_discovery":
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"source '{body.source}' is only valid for Pulse-discovered papers; "
-                        f"this paper has discovery_origin='{origin_row['discovery_origin']}'"
-                    ),
-                )
 
         try:
             await _upsert_recommendation_feedback(

@@ -412,12 +412,10 @@ async def test_submit_feedback_maps_foreign_key_violation_to_404():
 
     After the DRY refactor, the error surfaces from conn.execute inside
     _upsert_recommendation_feedback (not conn.fetchrow).
-    Group B adds a discovery_origin validation fetchrow for pulse-only sources,
-    so conn.fetchrow must return a matching pulse_discovery row first.
+    Feedback validation checks the live discovery_origin enum before the insert.
     """
     pool, conn = _make_pool_and_conn()
-    # Group B: source='feed_thumbs' is pulse-only — fetchrow validates discovery_origin
-    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse_discovery")
+    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse")
     conn.execute.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
@@ -439,11 +437,10 @@ async def test_submit_feedback_writes_recommendation_feedback_with_correct_sourc
     After the DRY refactor the raw inline INSERT was replaced by a call to
     the shared helper.  We patch the helper at the import path used by papers.py
     and verify it is called with paper_id, signal, source, and reason.
-    Group B adds a discovery_origin validation fetchrow for pulse-only sources.
+    Feedback validation checks the live discovery_origin enum before the insert.
     """
     pool, conn = _make_pool_and_conn()
-    # Group B: source='feed_thumbs' is pulse-only — fetchrow validates discovery_origin
-    conn.fetchrow.return_value = FakeRecord(discovery_origin="pulse_discovery")
+    conn.fetchrow.return_value = FakeRecord(discovery_origin="recommender")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with patch(
@@ -468,6 +465,49 @@ async def test_submit_feedback_writes_recommendation_feedback_with_correct_sourc
     assert reason_arg == "off-topic"
     assert result.signal == "negative"
     assert result.source == "feed_thumbs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["pulse", "recommender", "citation_batch"])
+async def test_submit_feedback_accepts_system_discovered_origins(origin: str):
+    """Explicit thumbs are allowed for all current system-discovered origins."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(discovery_origin=origin)
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with patch(
+        "paper_ingestion.routers.papers._upsert_recommendation_feedback",
+        new_callable=AsyncMock,
+    ) as mock_helper:
+        result = await papers.submit_feedback.__wrapped__(
+            request,
+            paper_id=7,
+            body=FeedbackRequest(signal="positive", source="feed_thumbs"),
+            db_pool=pool,
+        )
+
+    mock_helper.assert_awaited_once()
+    assert result.source == "feed_thumbs"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_rejects_user_initiated_papers():
+    """User-initiated papers are excluded from recommendation feedback/training."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(discovery_origin="user_initiated")
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await papers.submit_feedback.__wrapped__(
+            request,
+            paper_id=7,
+            body=FeedbackRequest(signal="positive", source="paper_detail_thumbs"),
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "user_initiated" in exc_info.value.detail
+    conn.execute.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

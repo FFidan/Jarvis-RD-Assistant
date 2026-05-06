@@ -226,13 +226,13 @@ async def test_setup_status_telegram_paired_false_when_null(_app, monkeypatch):
 def test_models_match_true_when_all_prefixes_present():
     from paper_ingestion.routers.system import _models_match
 
-    assert _models_match(["mistral-nemo:latest", "qwen3.5:4b", "nomic-embed-text:latest"]) is True
+    assert _models_match(["qwen3:14b", "qwen3:4b", "qwen3-embedding:0.6b"]) is True
 
 
 def test_models_match_false_when_missing_prefix():
     from paper_ingestion.routers.system import _models_match
 
-    assert _models_match(["mistral-nemo:latest"]) is False
+    assert _models_match(["qwen3:4b"]) is False
 
 
 def test_models_match_false_on_empty():

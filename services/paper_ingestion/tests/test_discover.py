@@ -235,7 +235,7 @@ async def test_discover_fallback_embeds_title_abstract():
     embedder.qdrant.scroll = AsyncMock(return_value=([], None))
 
     # Mock embed_texts to return a fake vector
-    fake_vector = [0.1] * 768
+    fake_vector = [0.1] * 1024
     embedder.embed_texts = AsyncMock(return_value=[fake_vector])
 
     qp_response = MagicMock()

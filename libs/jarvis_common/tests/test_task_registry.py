@@ -1,7 +1,7 @@
 """Unit tests for jarvis_common.task_registry (B.4 Step 2 part 1).
 
 These tests assert structural properties only:
-  - All 19 ``JOB_HANDLER_OWNER`` kinds register as procrastinate tasks.
+  - All ``JOB_HANDLER_OWNER`` kinds register as procrastinate tasks.
   - Each task's ``queue`` matches the owning service from the same map.
   - The JobContext shim exposes the legacy contract (``update_progress``,
     ``is_cancelled``, ``job_id``).
@@ -18,12 +18,12 @@ import inspect
 import pytest
 
 # ---------------------------------------------------------------------------
-# All 19 tasks registered under the dotted kind names
+# All tasks registered under the dotted kind names
 # ---------------------------------------------------------------------------
 
 
-def test_all_19_tasks_registered() -> None:
-    """``app.tasks`` should contain exactly the 19 ``JOB_HANDLER_OWNER`` keys
+def test_all_tasks_registered() -> None:
+    """``app.tasks`` should contain exactly the ``JOB_HANDLER_OWNER`` keys
     (filtering out procrastinate's two builtin ``remove_old_jobs`` aliases)."""
     from jarvis_common.jobs import JOB_HANDLER_OWNER
     from jarvis_common.task_registry import app
@@ -34,7 +34,8 @@ def test_all_19_tasks_registered() -> None:
     assert user_task_names == expected, (
         f"missing: {expected - user_task_names}, unexpected: {user_task_names - expected}"
     )
-    assert len(user_task_names) == 19
+    assert len(user_task_names) == len(JOB_HANDLER_OWNER)
+    assert "model.pull" in user_task_names
 
 
 # ---------------------------------------------------------------------------

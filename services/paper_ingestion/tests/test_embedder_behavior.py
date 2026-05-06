@@ -12,7 +12,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from paper_ingestion.embedder import COLLECTION_NAME, EMBEDDING_DIMENSION, Embedder
+from paper_ingestion.embedder import (
+    COLLECTION_NAME,
+    EMBEDDING_DIMENSION,
+    Embedder,
+    validate_embedding_configuration,
+)
 from paper_ingestion.models import ChunkForEmbedding
 
 # ---------------------------------------------------------------------------
@@ -68,6 +73,12 @@ def _qdrant_hit(paper_id: int = 1, score: float = 0.9) -> SimpleNamespace:
     )
 
 
+def _collection_info(dim: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(params=SimpleNamespace(vectors=SimpleNamespace(size=dim)))
+    )
+
+
 # ---------------------------------------------------------------------------
 # embed_texts
 # ---------------------------------------------------------------------------
@@ -95,11 +106,29 @@ async def test_embed_texts_returns_embeddings(monkeypatch):
     e.http_client.post.assert_awaited_once()
 
 
+async def test_embed_texts_sends_litellm_master_key_header(monkeypatch):
+    """embed_texts forwards the LiteLLM master-key bearer header when configured."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "test-master-key")
+
+    e = _make_embedder()
+    e.http_client.post.return_value = _embed_response(1)
+
+    await e.embed_texts(["text"])
+
+    e.http_client.post.assert_awaited_once_with(
+        "http://litellm.test:4000/v1/embeddings",
+        json={"model": "embed", "input": ["text"]},
+        headers={"Authorization": "Bearer test-master-key"},
+        timeout=60.0,
+    )
+
+
 async def test_embed_texts_dimension_mismatch_raises(monkeypatch):
     """embed_texts raises ValueError when returned embedding dim doesn't match config."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
     e = _make_embedder()
-    # Return dim=5, but EMBEDDING_DIMENSION is 768
+    # Return dim=5, but EMBEDDING_DIMENSION is larger for the configured provider.
     resp = MagicMock()
     resp.raise_for_status = MagicMock()
     resp.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 5}]}
@@ -131,6 +160,34 @@ async def test_embed_texts_connect_error_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="unavailable"):
         await e.embed_texts(["text"])
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 500])
+async def test_embed_texts_http_errors_include_sanitized_status_and_body(
+    monkeypatch,
+    status_code: int,
+):
+    """HTTP embedding failures keep status/body context without leaking auth tokens."""
+    import httpx
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+    request = httpx.Request("POST", "http://litellm.test:4000/v1/embeddings")
+    response = httpx.Response(
+        status_code,
+        request=request,
+        text=f"provider failed Authorization: secret-token Bearer other-secret status {status_code}",
+    )
+    e.http_client.post.return_value = response
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await e.embed_texts(["text"])
+
+    message = str(exc_info.value)
+    assert f"HTTP {status_code}" in message
+    assert "provider failed" in message
+    assert "secret-token" not in message
+    assert "other-secret" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -653,8 +710,36 @@ async def test_ensure_collection_skips_create_if_exists():
     e._collection_ensured = False
     existing = SimpleNamespace(name=COLLECTION_NAME)
     e.qdrant.get_collections.return_value = SimpleNamespace(collections=[existing])
+    e.qdrant.get_collection.return_value = _collection_info(EMBEDDING_DIMENSION)
 
     await e.ensure_collection()
 
+    e.qdrant.get_collection.assert_awaited_once_with(collection_name=COLLECTION_NAME)
     e.qdrant.create_collection.assert_not_awaited()
     assert e._collection_ensured is True
+
+
+async def test_ensure_collection_fails_on_existing_dimension_mismatch():
+    """Existing wrong-dimension paper_chunks collection fails startup clearly."""
+    e = _make_embedder()
+    e._collection_ensured = False
+    existing = SimpleNamespace(name=COLLECTION_NAME)
+    e.qdrant.get_collections.return_value = SimpleNamespace(collections=[existing])
+    e.qdrant.get_collection.return_value = _collection_info(EMBEDDING_DIMENSION - 1)
+
+    with pytest.raises(RuntimeError, match="Qdrant collection 'paper_chunks' has dimension"):
+        await e.ensure_collection()
+
+    e.qdrant.create_collection.assert_not_awaited()
+    assert e._collection_ensured is False
+
+
+def test_validate_embedding_configuration_rejects_known_model_dimension_mismatch():
+    """Known fixed-dimension embedding models cannot be paired with stale env dimensions."""
+    with pytest.raises(RuntimeError, match="qwen3-embedding:0.6b outputs 1024 dimensions"):
+        validate_embedding_configuration(model_name="qwen3-embedding:0.6b", dimension=768)
+
+
+def test_validate_embedding_configuration_allows_unknown_model_dimension():
+    """Custom/cloud providers remain configurable when the model dimension is not fixed here."""
+    validate_embedding_configuration(model_name="custom/embedder", dimension=1536)

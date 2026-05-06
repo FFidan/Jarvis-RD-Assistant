@@ -2,6 +2,97 @@
 
 All notable changes to JARVIS RD Assistant will be documented in this file.
 
+## [1.7.2-dev] — 2026-05-06
+
+### Fixed
+- Model deletion is now catalog-bound and fail-closed when active assignments
+  cannot be verified; arbitrary Ollama tags are no longer deleted through the
+  system API.
+- LLM model assignment updates are atomic: LiteLLM must accept/reload the alias
+  update before `user_config` is persisted.
+- LiteLLM admin config updates now include `LITELLM_MASTER_KEY` bearer auth.
+- Model pull jobs now check cancellation while streaming and surface failure
+  progress before raising.
+- `GET /api/jobs` now carries Procrastinate `job_progress` snapshots instead of
+  losing progress/status text on list views.
+- `scripts/reembed.py` now fails closed on per-paper failures, stale Qdrant
+  cleanup failures, and PG/Qdrant count mismatches unless an explicit debug
+  continue flag is set.
+- Migration 049 false-applied repair now treats a state with both
+  `recommendation_feedback` and legacy `pulse_ratings` as incomplete.
+- Pulse classifier training excludes feedback rows that lack real feature
+  signals and scopes active classifier loading/scoring by `user_id`.
+- Settings Pulse controls now show config/stats error states and disable unsafe
+  actions while required data is unavailable.
+- `python -m scripts.eval_retrieval` now bootstraps repo package paths itself,
+  so the documented live retrieval-eval command no longer requires a manual
+  `PYTHONPATH`.
+- The `PaperSearchSelect` debounce test now uses deterministic fake timers and
+  no longer races Vitest's auto-advancing timer mode.
+
+### Changed
+- Default local smart model is now `qwen3:14b`; first-boot Ollama pulls are
+  `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:0.6b`.
+- `/api/system/models` catalog rows now expose `can_assign` and
+  `assign_blocker` so the Settings UI can show downloadable/unfit models without
+  allowing invalid assignment.
+- The static model catalog tracks `qwen3-embedding:4b` as a Phase D advanced
+  candidate, but advanced/future embedding entries are non-assignable until a
+  deliberate dimension/rebuild policy ships.
+- Added Phase D scientific retrieval planning for Qwen3 reranker and
+  Qwen3-Embedding-4B evaluation against the current mxbai reranker baseline.
+- Phase C live backfill is complete on the local stack: Qdrant `paper_chunks`
+  is 1024d with 4,888 vectors, PostgreSQL has 4,888/4,888 chunks marked
+  `qwen3-embedding:0.6b`, and `smart`/`fast`/`embed` assignments are
+  `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:0.6b`.
+- Live Model Lifecycle proof pulled `qwen3:14b` through a `model.pull`
+  Procrastinate job, then assigned it through the Settings API and verified
+  active catalog status through `/api/system/models`.
+
+## [1.7.1-dev] — 2026-05-05
+
+### Fixed
+- OI-1 migration bootstrap: `db/init.sql` no longer blanket-seeds
+  `schema_migrations` with `generate_series`; runtime replay is kept for
+  migrations 033 and 049-057.
+- Migration runner now repairs known false-applied rows only when schema/data
+  evidence is missing, allowing old second-machine databases to self-heal on
+  startup instead of requiring manual `ALTER TABLE` repair.
+- Migration 052 Procrastinate schema is replay-safe for types, tables, indexes,
+  functions, and triggers.
+- Embedding failure diagnostics now preserve sanitized LiteLLM HTTP status/body
+  context for 400/401/500 failures while keeping CUDA/GPU OOM classification
+  distinct.
+- Recommendation feedback accepts explicit thumbs for live non-user-initiated
+  origins (`pulse`, `recommender`, `citation_batch`) and continues to reject
+  recommendation feedback for `user_initiated` papers.
+- Telegram inbox thumbs now write `feed_thumbs`; Research Pulse delivery keeps
+  `pulse_thumbs`.
+
+### Changed
+- Classifier training now consumes explicit feedback from `pulse_thumbs`,
+  `feed_thumbs`, `paper_detail_thumbs`, and `dismiss_combined`; implicit
+  Save/Open positives remain a future product decision.
+- Default local embeddings move to `qwen3-embedding:0.6b` at 1024 dimensions in
+  config/code. Live re-embedding still requires pulling the model, taking a
+  Qdrant checkpoint, and running `scripts/reembed.py`.
+- `scripts/reembed.py` now supports a read-only benchmark mode plus LiteLLM,
+  local SentenceTransformers, and ONNX backend selection for the one-time Phase
+  C migration; runtime application embeddings still go through LiteLLM.
+- Re-embed point IDs are deterministic per paper/chunk/model, so interrupted
+  Phase C runs can be resumed without accumulating duplicate Qdrant points.
+- Settings → Pulse keeps operational controls visible and moves scoring weights,
+  recommender seed balance, and L2 penalty behind collapsed Advanced tuning.
+- Tailscale friends-showcase docs now state the current single-user boundary and
+  warn that `MULTITENANT_ENABLED=true` is not isolation.
+- Model Lifecycle backend v1 adds catalog/status/recommendation fields to
+  `/api/system/models`, exposes `/api/system/hardware`, and adds guarded
+  pull/delete routes for Ollama models. Job-backed progress UI remains pending.
+- Model Lifecycle now packages the curated catalog in `jarvis_common`, uses the
+  contract status enum, enqueues `model.pull` through Procrastinate/SSE, rejects
+  unpulled local assignments, and exposes cloud catalog entries in the Settings
+  model selector when provider keys are configured.
+
 ## [1.7.0] — 2026-05-04
 
 Audit fix sweep — 8 groups (A-H), 47 findings closed, 3 new migrations.

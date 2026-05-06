@@ -120,6 +120,21 @@ thread `user_id` consistently.
 Do not claim multi-tenant enforcement is complete until this is implemented and
 verified with live tests.
 
+### Future Multi-User Boundary
+
+The next real multi-user phase must be an auth and ownership project, not a
+Tailscale or deployment-mode tweak. Minimum scope:
+
+- Replace the single-user auth stubs with a real user/session resolver.
+- Add a durable user/session model and thread resolved users through every API,
+  job, Telegram, and background-worker path.
+- Enforce per-user ownership on reads and writes before exposing shared access
+  as multi-user.
+- Map Telegram chat IDs to users instead of treating pairing state globally.
+- Revisit per-paper `discovery_origin`; if multiple users can see the same paper,
+  origin may need to become per-user state rather than paper-global metadata.
+- Ship live IDOR regression tests before any multi-user claim.
+
 ## Persistence
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through

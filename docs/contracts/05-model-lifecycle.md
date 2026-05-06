@@ -1,10 +1,43 @@
 # Contract 05 — Model Lifecycle
 
-**Status:** DRAFT — pending plan
+**Status:** SHIPPED — backend and Settings lifecycle v1 live-verified
 **Date:** 2026-05-03
 **Scope:** Model catalog, hardware-aware recommendations, pull-on-demand UI, cloud model integration, Settings UI GHOST surface fix
 **Depends on:** Phase C (embedding swap, spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`)
 **Related:** `docs/contracts/03-llm.md`, `docs/specs/2026-05-03-c-embedding-upgrade.md`
+
+---
+
+## Implementation Status — 2026-05-06
+
+Backend and Settings v1 are complete for the local single-user stack:
+
+- `GET /api/system/models` preserves the existing `installed`, `current`,
+  `hardware`, and `issues` fields while adding `catalog` and `recommendations`.
+- `GET /api/system/hardware` reports accelerator data with `nvidia-smi`, macOS
+  approximate VRAM, or CPU fallback.
+- `GET /api/system/models/recommendations?role=...` returns catalog-backed
+  recommendations for `smart`, `fast`, and `embed`.
+- `POST /api/system/models/{tag}/pull` runs through the job-backed
+  `model.pull` task with progress over the existing jobs SSE stream.
+- `DELETE /api/system/models/{tag}` rejects active assignments and proxies
+  inactive deletes to Ollama.
+- Settings model selectors expose hardware requirements, fit/status, pull
+  actions, delete actions, and assignment blockers for local and cloud catalog
+  entries.
+
+Live proof on 2026-05-06:
+- Hardware API reported 15.9 GB VRAM from `nvidia-smi`, Tier 2.
+- `model.pull` job `95798314-844a-45a5-9cda-faa801e41331` pulled
+  `qwen3:14b` successfully through Procrastinate.
+- Settings API assigned `smart=qwen3:14b`, `fast=qwen3:4b`, and
+  `embed=qwen3-embedding:0.6b`; `/api/system/models` reported all three as
+  active catalog entries.
+- LiteLLM aliases were updated to `ollama/qwen3:14b`,
+  `ollama/qwen3:4b`, and `ollama/qwen3-embedding:0.6b`.
+- Phase C completed against the same stack: Qdrant `paper_chunks` is 1024d with
+  4,888 points, and PostgreSQL has 4,888/4,888 chunks marked with
+  `qwen3-embedding:0.6b`.
 
 ---
 
@@ -16,7 +49,7 @@
 2. **Hardware detection** — VRAM probe at startup, TTL-cached, drives recommendations.
 3. **Recommendation function** — maps detected VRAM to 3 tiers; returns ranked candidates per role (smart / fast / embed).
 4. **Status enum** — 6 values: `active | pulled | downloadable | unfit | cloud_active | cloud_required`.
-5. **Pull-on-demand lifecycle** — explicit user action with confirm dialog showing disk/VRAM cost; procrastinate `model.pull` task (#20); progress via existing SSE jobs stream.
+5. **Pull-on-demand lifecycle** — explicit user action with confirm dialog showing disk/VRAM cost; procrastinate `model.pull` task; progress via existing SSE jobs stream.
 6. **Delete lifecycle** — explicit user action; fails loudly if model is currently assigned.
 7. **Cloud model integration** — catalog entries for Anthropic/OpenAI cloud aliases; Settings UI fix for GHOST surface (API keys exist but no model-select UI).
 8. **Hard migration** — `nomic-embed-text` and `mistral-nemo:12b` removed from catalog and from `litellm/config.yaml` defaults. Phase C rebuilds Qdrant. No legacy user protection needed (single-user, pre-launch).
@@ -78,10 +111,13 @@ Bundled inside the Python package. Loaded via `importlib.resources` so it works 
 | `description` | string | 1 sentence. No benchmark theater. |
 | `notes` | string | Caveats, known issues. E.g. "thinking model — strips `<think>` blocks". |
 | `last_reviewed` | ISO date | When this entry was last verified against Ollama registry. |
+| `embedding_dimension` | integer/null | Embedding output dimension when known. |
+| `phase` | `default`/`advanced`/`future` | Whether the entry is a default, evaluation candidate, or future option. |
+| `assignable` | boolean | Whether Settings may assign the model today. |
 
 Cloud entries omit `ollama_tag`, set `vram_gb=0`, `disk_gb=0`, `tier=0`.
 
-### 1.3 Curated Entries (~12)
+### 1.3 Curated Entries (~13)
 
 | id | Name | Role(s) | VRAM GB | Disk GB | Tier | License |
 |---|---|---|---|---|---|---|
@@ -92,6 +128,7 @@ Cloud entries omit `ollama_tag`, set `vram_gb=0`, `disk_gb=0`, `tier=0`.
 | `gemma3:12b` | Gemma 3 12B | smart | 8.5 | 8.1 | 2 | Apache 2.0 |
 | `llama4:scout` | Llama 4 Scout | smart | 14 | 12 | 2 | Llama 4 Community |
 | `qwen3-embedding:0.6b` | Qwen3 Embedding 0.6B | embed | 1.2 | 0.6 | 0 | Apache 2.0 |
+| `qwen3-embedding:4b` | Qwen3 Embedding 4B | embed | 3.0 | 2.6 | 2 | Apache 2.0 |
 | `mxbai-embed-large` | MXBai Embed Large v1 | embed | 0.8 | 0.7 | 0 | Apache 2.0 |
 | `anthropic/claude-sonnet-4-6` | Claude Sonnet 4.6 | smart | 0 | 0 | 0 | Commercial |
 | `anthropic/claude-haiku-4-5` | Claude Haiku 4.5 | smart, fast | 0 | 0 | 0 | Commercial |
@@ -101,9 +138,10 @@ Cloud entries omit `ollama_tag`, set `vram_gb=0`, `disk_gb=0`, `tier=0`.
 **Why these and not others:**
 - Gemma 4 / Qwen 3.6-Plus / DeepSeek V4 omitted — Ollama tags unconfirmed at time of writing. Add via `last_reviewed` update when tags stabilize.
 - `mistral-nemo:12b` — excluded (hard path; nomic-embed-text likewise excluded).
-- `mxbai-embed-large` — kept as embed fallback in case `qwen3-embedding:0.6b` tag is not yet in Ollama at Phase C execution time (risk §8.1).
+- `qwen3-embedding:4b` — tracked as an advanced Phase D candidate for notation-heavy scientific retrieval. It is not assignable in Phase C because its output dimension/rebuild policy is separate from the 1024d Qwen3-Embedding-0.6B collection.
+- `mxbai-embed-large` — kept as a future embed fallback but not assignable by default because its embedding dimension differs from Qwen3 and requires matching runtime/Qdrant config.
 - `llama4:scout` — included for 10M-token context window (long paper chains). Llama 4 Community license allows commercial with attribution.
-- Cloud embed (`openai/text-embedding-3-small`) — included for users who prefer cloud-only. Requires Phase C's `EMBEDDING_DIMENSION` to be configurable (1536 for this model vs 1024 for Qwen3). Gated by cloud API key presence.
+- Cloud embed (`openai/text-embedding-3-small`) — listed as a future option only. It is not assignable in Phase C because cloud embeddings require an explicit dimension and rebuild policy.
 
 ### 1.4 Catalog Staleness
 
@@ -238,11 +276,14 @@ Every catalog entry, when returned via the API, carries a `status` field compute
 | `downloadable` | In catalog, not yet pulled; hardware tier is sufficient. |
 | `unfit` | In catalog, not yet pulled; hardware tier is insufficient (vram_gb too low). |
 | `cloud_active` | Cloud entry; API key present; assigned to at least one role alias. |
-| `cloud_required` | Cloud entry; API key present; not currently assigned. |
+| `cloud_required` | Cloud entry; not active. The companion `provider_key_present` boolean tells the UI whether it can be selected immediately or must send the user to Providers first. |
 
 `unfit` is NOT shown as an error if the model is merely recommended but not yet downloaded. It is shown as the status so the user understands why the "Pull" button is styled differently.
 
-Cloud entries without an API key are NOT shown in the UI at all (they provide no actionable path).
+Cloud entries without an API key are shown in the available-models table with a
+Providers CTA, but are not selectable in role dropdowns until the key exists.
+Cloud entries with a key are selectable even when their status is
+`cloud_required`.
 
 **Computation order:**
 1. Fetch Ollama `/api/tags` → `pulled_tags: set[str]`
@@ -261,7 +302,7 @@ POST /api/system/models/{ollama_tag}/pull
 ```
 
 - Returns immediately with `{ "job_id": "<uuid>", "status": "queued" }`.
-- Dispatches procrastinate task `model.pull` (kind #20 in `task_registry.py`).
+- Dispatches procrastinate task `model.pull`.
 - Progress streamed via `GET /api/jobs/{job_id}/stream` (existing SSE bridge — no new machinery needed).
 
 **Procrastinate task signature:**
@@ -421,7 +462,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 
 | Step | Action |
 |---|---|
-| Phase C | Pull `qwen3-embedding:0.6b`, rebuild Qdrant with 1024d, set `EMBEDDING_DIMENSION=1024`, update `litellm/config.yaml` embed alias. Full spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
+| Phase C | Pull `qwen3-embedding:0.6b`, rebuild `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, update `litellm/config.yaml` embed alias, and leave `kg_entities` as a separately checkpointed/rebuildable optional collection. Full spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
 | This sprint | Remove `nomic-embed-text` and `mistral-nemo:12b` from `litellm/config.yaml`. Delete their catalog entries (they were never in the catalog; they are just the current live config values). |
 | This sprint | Set new defaults: `smart=qwen3:14b`, `fast=qwen3:4b`, `embed=qwen3-embedding:0.6b`. |
 | This sprint | Pull new smart/fast defaults on first boot if not already present — this is the ONE exception to "no auto-pull": the initial default models are pulled silently during stack startup (analogous to current behavior where `docker compose up` downloads Ollama models). Not a background job; Ollama's own `OLLAMA_PRELOAD` or startup script. |
@@ -439,7 +480,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 | `DELETE` | `/api/system/models/{tag}` | Delete if unassigned |
 
 Existing endpoints unchanged:
-- `POST /api/settings/{key}` — handles `llm.smart_model`, `llm.fast_model`, `llm.embed_model`
+- `PUT /api/config/{key}` — handles `llm.smart_model`, `llm.fast_model`, `llm.embed_model`
 - `POST /api/providers/{provider}/test` — unchanged
 - `GET /api/jobs/{id}/stream` — pull progress (no change needed)
 
@@ -452,7 +493,7 @@ This contract does NOT prescribe task grouping — that is for the writing-plans
 1. `jarvis_common/data/model_catalog.json` + catalog loader module
 2. Hardware detection endpoint + `HardwareInfo` dataclass
 3. `GET /api/system/models` with status computation
-4. `model.pull` procrastinate task (#20) + `POST /api/system/models/{tag}/pull`
+4. `model.pull` procrastinate task + `POST /api/system/models/{tag}/pull`
 5. `DELETE /api/system/models/{tag}` with guard
 6. Frontend: Models tab layout + status badges + confirm dialog + pull progress
 7. Frontend: GHOST surface fix (cloud model-select dropdown in role pickers)
@@ -479,7 +520,7 @@ Every cited identifier was confirmed against HEAD (`master @ 030ea38c`) via Read
 | `llm.google.api_key` | `services/paper_ingestion/paper_ingestion/routers/settings.py:_ALLOWED_CONFIG_KEYS` | Same |
 | `POST /api/providers/{provider}/test` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | Existing endpoint; provider test-ping only; no model-select today |
 | `_SUPPORTED_PROVIDERS` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | `frozenset({"anthropic", "openai", "google"})` |
-| Cloud entries commented-out | `litellm/config.yaml:62-66` | `openai/gpt-4o`, `anthropic/claude-sonnet-4-6`, `anthropic/claude-haiku-4-5`, `openai/text-embedding-3-small` — all commented out; active: `ollama/nomic-embed-text` (embed), `ollama/mistral-nemo` (smart), `ollama/qwen3:4b` (fast) |
-| `EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "768"))` | `services/paper_ingestion/paper_ingestion/ingestion/embedder.py:36` | Module-level constant; drives Qdrant collection size |
-| `embed_dim_expected = 768` (inline literal) | `services/paper_ingestion/paper_ingestion/routers/pulse.py:356` | Must be replaced with `EMBEDDING_DIMENSION` import in Phase C |
-| `task_registry.py` task count | `libs/jarvis_common/jarvis_common/task_registry.py` | 19 task kinds registered; `model.pull` will be #20 |
+| Runtime defaults | `litellm/config.yaml` | Active defaults are `ollama/qwen3:14b` (smart), `ollama/qwen3:4b` (fast), and `ollama/qwen3-embedding:0.6b` (embed). Cloud examples remain commented out/non-default. |
+| `EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))` | `services/paper_ingestion/paper_ingestion/ingestion/embedder.py` | Module-level constant; drives Qdrant collection size and existing-collection dimension checks. |
+| `embed_dim_expected = EMBEDDING_DIMENSION` | `services/paper_ingestion/paper_ingestion/routers/pulse.py` | Pulse debug validates topic embedding dimensions against the runtime embedding dimension. |
+| `task_registry.py` task count | `libs/jarvis_common/jarvis_common/task_registry.py` | Job kinds are registry-driven; `model.pull` is the paper-ingestion owner for pull jobs. |

@@ -24,10 +24,10 @@ model_list:
 
   - model_name: "smart"
     litellm_params:
-      model: "ollama/mistral-nemo"
+      model: "ollama/qwen3:14b"
       api_base: "http://ollama:11434"
       temperature: 0.2
-      num_ctx: 8192
+      num_ctx: 32768
 
   # --- "fast" alias: cheaper/faster model for simple tasks (relevance scoring, etc.) ---
 
@@ -52,6 +52,7 @@ model_list:
   # WARNING: Embedding models are NOT interchangeable — latency routing must
   # never mix providers. Use only ONE embed provider at a time.
   # Uncomment the OpenAI entry below (and comment Ollama) to switch providers.
+  # Its example dimension is provider/model specific, not the default local value.
 
   # - model_name: "embed"
   #   litellm_params:
@@ -61,9 +62,9 @@ model_list:
 
   - model_name: "embed"
     litellm_params:
-      model: "ollama/nomic-embed-text"
+      model: "ollama/qwen3-embedding:0.6b"
       api_base: "http://ollama:11434"
-      dimensions: 768  # nomic-embed-text outputs 768d, must match EMBEDDING_DIMENSION
+      dimensions: 1024  # qwen3-embedding:0.6b outputs 1024d, must match EMBEDDING_DIMENSION
 
 router_settings:
   routing_strategy: "latency-based-routing"

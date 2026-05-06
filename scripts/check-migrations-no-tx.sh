@@ -56,26 +56,27 @@ if [ "${#DUP_VIOLATIONS[@]}" -gt 0 ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# Check 3: init.sql generate_series upper bound must match the highest
-# migration number on disk.  Fresh installs call init.sql; if the bound is
-# lower than the latest migration, those migrations will be re-applied on
-# every startup by the migration runner (the schema_migrations rows are
-# missing, so the runner treats them as unapplied).
+# Check 3: init.sql must never blanket-mark migrations with generate_series.
+# Fresh installs run init.sql before the service migration runner. If init.sql
+# seeds versions it does not actually embody, the runner skips real migrations
+# and leaves silent schema gaps.
 # ---------------------------------------------------------------------------
-LATEST_MIG=$(ls db/migrations/*.sql 2>/dev/null \
-  | grep -oE '/[0-9]+_' | grep -oE '[0-9]+' | sort -n | tail -1)
-INIT_BOUND=$(grep -oE 'generate_series\(1, ([0-9]+)\)' db/init.sql \
-  | grep -oE '[0-9]+' | tail -1)
+INIT_SQL_NO_COMMENTS=$(grep -vE '^[[:space:]]*--' db/init.sql)
 
-if [ -z "$LATEST_MIG" ] || [ -z "$INIT_BOUND" ]; then
-  echo "check-migrations-no-tx: could not determine LATEST_MIG ($LATEST_MIG) or INIT_BOUND ($INIT_BOUND)" >&2
+if printf '%s\n' "$INIT_SQL_NO_COMMENTS" | grep -q "generate_series"; then
+  echo "db/init.sql must not use generate_series to seed schema_migrations." >&2
+  echo "  Seed only explicitly embodied migration versions." >&2
   exit 1
 fi
 
-if [ "$INIT_BOUND" -lt "$LATEST_MIG" ]; then
-  echo "init.sql generate_series upper bound ($INIT_BOUND) is less than latest migration ($LATEST_MIG)."
-  echo "  Bump 'generate_series(1, $INIT_BOUND)' → 'generate_series(1, $LATEST_MIG)' in db/init.sql"
-  exit 1
-fi
+BOOTSTRAP_SQL=$(printf '%s\n' "$INIT_SQL_NO_COMMENTS" | sed -n '/CREATE TABLE IF NOT EXISTS schema_migrations/,$p')
+RUNTIME_REPLAY_VERSIONS=(33 49 50 51 52 53 54 55 56 57)
+
+for version in "${RUNTIME_REPLAY_VERSIONS[@]}"; do
+  if printf '%s\n' "$BOOTSTRAP_SQL" | grep -qE "\\($version\\)"; then
+    echo "db/init.sql must not pre-seed migration $version; it is replayed by the runtime runner." >&2
+    exit 1
+  fi
+done
 
 exit 0

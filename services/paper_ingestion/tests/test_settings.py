@@ -131,21 +131,96 @@ async def test_get_config_not_found(_app):
 @pytest.mark.asyncio
 async def test_set_config_allowed_key(_app):
     """PUT /api/config/{key} sets a config value for an allowed key."""
-    app, conn, _ = _app
+    app, conn, mock_http = _app
+    mock_http.get.return_value = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"models": [{"name": "qwen3:4b"}]}),
+    )
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
         resp = await client.put(
             "/api/config/llm.smart_model",
-            json={"key": "llm.smart_model", "value": "new-model"},
+            json={"key": "llm.smart_model", "value": "qwen3:4b"},
         )
 
     assert resp.status_code == 200
     body = resp.json()
     assert body["key"] == "llm.smart_model"
-    assert body["value"] == "new-model"
+    assert body["value"] == "qwen3:4b"
     conn.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_set_config_rejects_unpulled_catalog_model(_app):
+    """Local catalog models must be pulled before assignment."""
+    app, conn, mock_http = _app
+    mock_http.get.return_value = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"models": []}),
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/llm.smart_model",
+            json={"key": "llm.smart_model", "value": "qwen3:4b"},
+        )
+
+    assert resp.status_code == 422
+    assert resp.json()["detail"] == "Model not pulled. Pull it first."
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_config_rejects_nonassignable_embedding_candidate(_app):
+    """Advanced/future embedding catalog entries cannot be assigned by accident."""
+    app, conn, mock_http = _app
+    mock_http.get.return_value = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"models": [{"name": "qwen3-embedding:4b"}]}),
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/llm.embed_model",
+            json={"key": "llm.embed_model", "value": "qwen3-embedding:4b"},
+        )
+
+    assert resp.status_code == 422
+    assert "not assignable yet" in resp.json()["detail"]
+    conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_set_config_does_not_persist_when_litellm_update_fails(_app, monkeypatch):
+    """Model assignments are atomic: failed LiteLLM update leaves DB unchanged."""
+    app, conn, mock_http = _app
+    mock_http.get.return_value = MagicMock(
+        status_code=200,
+        json=MagicMock(return_value={"models": [{"name": "qwen3:4b"}]}),
+    )
+
+    async def fail_update(*args, **kwargs):
+        raise RuntimeError("LiteLLM config is read-only")
+
+    monkeypatch.setattr("paper_ingestion.routers.settings.update_litellm_model", fail_update)
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put(
+            "/api/config/llm.smart_model",
+            json={"key": "llm.smart_model", "value": "qwen3:4b"},
+        )
+
+    assert resp.status_code == 400
+    assert "LiteLLM config is read-only" in resp.json()["detail"]
+    conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio

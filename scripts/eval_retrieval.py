@@ -18,7 +18,7 @@ Environment variables:
     QDRANT_PORT         - Qdrant port (default: 6333)
     LITELLM_BASE_URL    - LiteLLM proxy URL (default: http://localhost:4000)
     EMBEDDING_MODEL     - LiteLLM model alias (default: embed)
-    EMBEDDING_DIMENSION - Vector dimension (default: 768)
+    EMBEDDING_DIMENSION - Vector dimension (default: 1024)
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 
 import asyncpg
 import httpx
@@ -44,6 +45,16 @@ class ScriptError(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+for _path in (
+    _REPO_ROOT,
+    _REPO_ROOT / "libs" / "jarvis_common",
+    _REPO_ROOT / "services" / "paper_ingestion",
+):
+    path_str = str(_path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
+
 if __package__:
     from scripts._db import get_dsn
 else:
@@ -64,7 +75,7 @@ from jarvis_common.llm_client import (
 LITELLM_CONFIG = get_litellm_config(base_url_default="http://localhost:4000")
 LITELLM_BASE_URL = LITELLM_CONFIG.base_url
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
-EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "768"))
+EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None

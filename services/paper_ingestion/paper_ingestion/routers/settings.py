@@ -2,6 +2,7 @@
 
 import contextlib
 import logging
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -36,6 +37,7 @@ from paper_ingestion.services.litellm_config import (
     reload_litellm,
     update_litellm_model,
 )
+from paper_ingestion.services.model_lifecycle import catalog_entry_for_model, normalize_model_tag
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["settings"])
@@ -228,6 +230,15 @@ def _validate_optional_int(v: Any) -> None:
         raise ValueError("value must be an integer or null")
 
 
+def _record_get(row: Any, key: str) -> Any:
+    if hasattr(row, "get"):
+        return row.get(key)
+    try:
+        return row[key]
+    except Exception:
+        return None
+
+
 def _validate_l2_lambda(v: Any) -> None:
     """Validate pulse.l2_lambda — cosine-penalty multiplier for negative signals.
 
@@ -329,6 +340,78 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
 # --- User Config ---
 
 
+async def _fetch_installed_ollama_names(request: Request) -> set[str]:
+    """Return normalized Ollama model names for assignment validation."""
+    http = request.app.state.http_client
+    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    try:
+        resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not verify installed Ollama models",
+        ) from exc
+    if resp.status_code != 200:
+        raise HTTPException(status_code=503, detail="Could not verify installed Ollama models")
+    data = resp.json()
+    return {normalize_model_tag(str(item.get("name", ""))) for item in data.get("models", [])}
+
+
+async def _cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> bool:
+    config_key = f"llm.{provider}.api_key"
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config WHERE key = $1",
+            config_key,
+        )
+    return bool(
+        row is not None
+        and (
+            _record_get(row, "encrypted_value") is not None or _record_get(row, "value") is not None
+        )
+    )
+
+
+async def _validate_model_assignment(
+    *,
+    request: Request,
+    key: str,
+    model_id: str,
+    db_pool: asyncpg.Pool,
+) -> None:
+    """Reject model assignments that are not usable in this deployment."""
+    role = ROLE_TO_ALIAS.get(key)
+    if role is None:
+        return
+    entry = catalog_entry_for_model(model_id)
+    if entry is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model {model_id!r} is not in the model catalog",
+        )
+    if not entry.assignable:
+        raise HTTPException(
+            status_code=422,
+            detail="This model is tracked for evaluation but is not assignable yet.",
+        )
+    if role not in entry.roles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model {model_id!r} cannot be assigned to the {role!r} role",
+        )
+    if entry.provider == "ollama":
+        installed_names = await _fetch_installed_ollama_names(request)
+        tag = normalize_model_tag(entry.ollama_tag or entry.id)
+        if tag not in installed_names:
+            raise HTTPException(status_code=422, detail="Model not pulled. Pull it first.")
+        return
+    if not await _cloud_provider_key_present(entry.provider, db_pool):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Configure the {entry.provider} API key before assigning this model.",
+        )
+
+
 def _resolve_config_value(key: str, row: dict) -> Any:
     """Return the display value for a config row, applying masking / decryption."""
     if key in _ENCRYPTED_KEYS:
@@ -395,6 +478,13 @@ async def set_config(
             validator(body.value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if key in ROLE_TO_ALIAS:
+        await _validate_model_assignment(
+            request=request,
+            key=key,
+            model_id=str(body.value),
+            db_pool=db_pool,
+        )
     # For pulse.cron: read the current value before overwriting so we can roll back.
     old_pulse_cron: str | None = None
     if key == "pulse.cron":
@@ -402,6 +492,20 @@ async def set_config(
             row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
+
+    if key in ROLE_TO_ALIAS:
+        from paper_ingestion.services.litellm_config import _config_lock
+
+        try:
+            async with _config_lock:
+                updated = await update_litellm_model(key, str(body.value), db_pool=db_pool)
+                if updated:
+                    reloaded = await reload_litellm()
+                    if not reloaded:
+                        raise RuntimeError("LiteLLM accepted the alias update but reload failed")
+        except (ValueError, RuntimeError) as exc:
+            # SEC-002: validation, read-only config, or LiteLLM admin API failure.
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Pass body.value directly — asyncpg's JSONB codec (registered via init_pg_connection)
     # handles JSON encoding. Wrapping with json.dumps() would double-encode the value,
@@ -426,17 +530,6 @@ async def set_config(
                 key,
                 body.value,
             )
-    if key in ROLE_TO_ALIAS:
-        from paper_ingestion.services.litellm_config import _config_lock
-
-        try:
-            async with _config_lock:
-                updated = await update_litellm_model(key, body.value, db_pool=db_pool)
-        except (ValueError, RuntimeError) as exc:
-            # SEC-002: model name validation failure or read-only config mount
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if updated:
-            await reload_litellm()
     if key == "pulse.cron":
         try:
             if scheduler is not None:

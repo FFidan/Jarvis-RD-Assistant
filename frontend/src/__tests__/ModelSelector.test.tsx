@@ -28,10 +28,13 @@ vi.mock('@/components/ui/select', () => ({
   SelectGroup: ({ children }: any) => <div data-testid="select-group">{children}</div>,
   SelectLabel: ({ children }: any) => <div data-testid="select-label">{children}</div>,
   SelectSeparator: () => <hr data-testid="select-separator" />,
-  SelectItem: ({ children, value }: any) => (
+  SelectItem: ({ children, value, disabled }: any) => (
     <div
       data-testid={`select-item-${value}`}
-      onClick={() => selectOnValueChange?.(value)}
+      aria-disabled={disabled ? 'true' : undefined}
+      onClick={() => {
+        if (!disabled) selectOnValueChange?.(value);
+      }}
       role="option"
     >
       {children}
@@ -43,16 +46,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
   return {
     ...orig,
-    apiFetch: vi.fn().mockResolvedValue({
-      status: 'ok',
-      installed: [
-        { name: 'mistral-nemo', size: 4.1e9, parameter_size: '7B', quantization: 'Q4_0' },
-        { name: 'qwen3.5:4b', size: 500e6, parameter_size: '4B', quantization: 'Q8_0' },
-      ],
-      hardware: { ollama_running: 1 },
-      current: { smart_model: 'mistral-nemo' },
-      issues: {},
-    }),
+    apiFetch: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -74,13 +68,148 @@ function renderComponent(props: Partial<React.ComponentProps<typeof ModelSelecto
 
 const defaultModels = {
   status: 'ok',
-  installed: [
-    { name: 'mistral-nemo', size: 4.1e9, parameter_size: '7B', quantization: 'Q4_0' },
-    { name: 'qwen3.5:4b', size: 500e6, parameter_size: '4B', quantization: 'Q8_0' },
-  ],
+  installed: [],
   hardware: { ollama_running: 1 },
-  current: { smart_model: 'mistral-nemo' },
+  current: { smart_model: 'qwen3:14b' },
   issues: {},
+  catalog: [
+    {
+      id: 'qwen3:14b',
+      name: 'Qwen3 14B',
+      provider: 'ollama',
+      ollama_tag: 'qwen3:14b',
+      roles: ['smart'],
+      vram_gb: 9.5,
+      disk_gb: 9.2,
+      context_tokens: 32768,
+      license: 'Apache 2.0',
+      tier: 2,
+      description: 'Strong reasoning for scientific text.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'active',
+      active: true,
+      pulled: true,
+      provider_key_present: false,
+      fit: 'fits',
+      can_assign: true,
+      assign_blocker: null,
+      size: 4.1e9,
+      quantization: 'Q4_0',
+    },
+    {
+      id: 'qwen3:4b',
+      name: 'Qwen3 4B',
+      provider: 'ollama',
+      ollama_tag: 'qwen3:4b',
+      roles: ['fast'],
+      vram_gb: 3.5,
+      disk_gb: 2.5,
+      context_tokens: 32768,
+      license: 'Apache 2.0',
+      tier: 1,
+      description: 'Fast local model.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'downloadable',
+      active: false,
+      pulled: false,
+      provider_key_present: false,
+      fit: 'fits',
+      can_assign: false,
+      assign_blocker: 'Pull this model before assigning it.',
+      quantization: 'Q8_0',
+    },
+    {
+      id: 'qwen3-embedding:0.6b',
+      name: 'Qwen3 Embedding 0.6B',
+      provider: 'ollama',
+      ollama_tag: 'qwen3-embedding:0.6b',
+      roles: ['embed'],
+      vram_gb: 1.2,
+      disk_gb: 0.6,
+      context_tokens: 8192,
+      license: 'Apache 2.0',
+      tier: 0,
+      description: 'Embedding model.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'pulled',
+      active: false,
+      pulled: true,
+      provider_key_present: false,
+      fit: 'fits',
+      can_assign: true,
+      assign_blocker: null,
+    },
+    {
+      id: 'qwen3:30b-a3b',
+      name: 'Qwen3 30B-A3B',
+      provider: 'ollama',
+      ollama_tag: 'qwen3:30b-a3b',
+      roles: ['smart'],
+      vram_gb: 19,
+      disk_gb: 17,
+      context_tokens: 32768,
+      license: 'Apache 2.0',
+      tier: 3,
+      description: 'Large local model.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'unfit',
+      active: false,
+      pulled: false,
+      provider_key_present: false,
+      fit: 'requires more VRAM',
+      can_assign: false,
+      assign_blocker: 'Requires more VRAM.',
+    },
+    {
+      id: 'anthropic/claude-haiku-4-5',
+      name: 'Claude Haiku 4.5',
+      provider: 'anthropic',
+      ollama_tag: null,
+      roles: ['smart', 'fast'],
+      vram_gb: 0,
+      disk_gb: 0,
+      context_tokens: 200000,
+      license: 'Commercial',
+      tier: 0,
+      description: 'Fast cloud model.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'cloud_required',
+      active: false,
+      pulled: false,
+      provider_key_present: false,
+      fit: 'cloud',
+      can_assign: false,
+      assign_blocker: 'Add an Anthropic API key before assigning this model.',
+    },
+    {
+      id: 'openai/gpt-4o',
+      name: 'GPT-4o',
+      provider: 'openai',
+      ollama_tag: null,
+      roles: ['smart'],
+      vram_gb: 0,
+      disk_gb: 0,
+      context_tokens: 128000,
+      license: 'Commercial',
+      tier: 0,
+      description: 'Cloud reasoning model.',
+      notes: '',
+      last_reviewed: '2026-05-03',
+      status: 'cloud_required',
+      active: false,
+      pulled: false,
+      provider_key_present: true,
+      fit: 'cloud',
+      can_assign: true,
+      assign_blocker: null,
+    },
+  ],
+  recommendations: {},
 };
 
 describe('ModelSelector', () => {
@@ -96,34 +225,119 @@ describe('ModelSelector', () => {
     expect(screen.getByText('Select a model')).toBeInTheDocument();
   });
 
-  it('shows model names with metadata (parameter_size, quantization, formatted size)', async () => {
-    renderComponent();
+  it('filters role-compatible models from catalog entries', async () => {
+    renderComponent({ configKey: 'llm.fast_model' });
     await waitFor(() => {
-      expect(screen.getByText('mistral-nemo')).toBeInTheDocument();
-      expect(screen.getByText('qwen3.5:4b')).toBeInTheDocument();
+      expect(screen.getByText('Qwen3 4B')).toBeInTheDocument();
     });
-    // Check metadata
-    expect(screen.getByText('7B')).toBeInTheDocument();
-    expect(screen.getByText('Q4_0')).toBeInTheDocument();
-    expect(screen.getByText('4B')).toBeInTheDocument();
     expect(screen.getByText('Q8_0')).toBeInTheDocument();
-    // Check formatted sizes
-    expect(screen.getByText('(4.1GB)')).toBeInTheDocument();
-    expect(screen.getByText('(500MB)')).toBeInTheDocument();
+    expect(screen.getByText('(2.5GB disk)')).toBeInTheDocument();
+    expect(screen.getByText('3.5GB VRAM')).toBeInTheDocument();
+    expect(screen.queryByText('Qwen3 14B')).not.toBeInTheDocument();
+    expect(screen.queryByText('Qwen3 Embedding 0.6B')).not.toBeInTheDocument();
     expect(screen.getByText('Local (Ollama)')).toBeInTheDocument();
   });
 
-  it('shows "current" badge when model matches role', async () => {
-    renderComponent({ value: 'mistral-nemo', configKey: 'llm.smart_model' });
+  it('shows current badge when catalog entry is active for the role', async () => {
+    renderComponent({ value: 'qwen3:14b', configKey: 'llm.smart_model' });
     await waitFor(() => {
       expect(screen.getByText('current')).toBeInTheDocument();
     });
-    // "current" should only appear once (for mistral-nemo matching smart role)
     const currentBadges = screen.getAllByText('current');
     expect(currentBadges).toHaveLength(1);
   });
 
-  it('shows "No models found. Is Ollama running?" when installed array is empty', async () => {
+  it('shows downloadable local catalog entries but does not allow assigning them', async () => {
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.fast_model' });
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 4B')).toBeInTheDocument();
+      expect(screen.getByText('downloadable')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Pull this model before assigning it.')).toBeInTheDocument();
+
+    const option = screen.getByTestId('select-item-qwen3:4b');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('shows unfit local catalog entries but does not allow assigning them', async () => {
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Qwen3 30B-A3B')).toBeInTheDocument();
+    expect(screen.getByText('Requires more VRAM.')).toBeInTheDocument();
+    const option = screen.getByTestId('select-item-qwen3:30b-a3b');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('shows cloud entries when provider key is present', async () => {
+    renderComponent({ configKey: 'llm.smart_model' });
+    await waitFor(() => {
+      expect(screen.getByText('OpenAI')).toBeInTheDocument();
+      expect(screen.getByText('GPT-4o')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('Claude Haiku 4.5')).not.toBeInTheDocument();
+  });
+
+  it('renders detected hardware and per-model hardware requirements', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      hardware: {
+        vram_gb: 16,
+        vram_source: 'nvidia-smi',
+        tier: 2,
+        detected_at: '2026-05-06T10:00:00Z',
+      },
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Detected hardware')).toBeInTheDocument();
+    });
+    expect(screen.getByText('16GB VRAM')).toBeInTheDocument();
+    expect(screen.getByText('Tier 2')).toBeInTheDocument();
+    expect(screen.getByText('Requires Tier 2')).toBeInTheDocument();
+    expect(screen.getByText('9.5GB VRAM')).toBeInTheDocument();
+  });
+
+  it('honors backend-owned assignment blockers over derived local status', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: {},
+      catalog: [
+        {
+          ...defaultModels.catalog[0],
+          active: true,
+          pulled: true,
+          status: 'active',
+          can_assign: false,
+          assign_blocker: 'Backend assignment policy blocked this model.',
+        },
+      ],
+    });
+    const onChange = vi.fn();
+
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Backend assignment policy blocked this model.')).toBeInTheDocument();
+    });
+    const option = screen.getByTestId('select-item-qwen3:14b');
+    expect(option).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(option);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('shows "No models found. Is Ollama running?" when catalog is empty', async () => {
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue({
       status: 'ok',
@@ -131,6 +345,8 @@ describe('ModelSelector', () => {
       hardware: {},
       current: {},
       issues: {},
+      catalog: [],
+      recommendations: {},
     });
 
     renderComponent();
@@ -147,11 +363,14 @@ describe('ModelSelector', () => {
       hardware: {},
       current: {},
       issues: { installed: 'Could not load installed Ollama models.' },
+      catalog: [],
+      recommendations: {},
     });
 
     renderComponent();
     await waitFor(() => {
       expect(screen.getByText('Could not load installed Ollama models.')).toBeInTheDocument();
+      expect(screen.getByText('No models available.')).toBeInTheDocument();
     });
   });
 
@@ -167,50 +386,63 @@ describe('ModelSelector', () => {
     });
   });
 
-  it('calls onChange with model name when item is selected', async () => {
+  it('calls onChange with catalog id when assignable local item is selected', async () => {
     const onChange = vi.fn();
-    renderComponent({ onChange });
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
     await waitFor(() => {
-      expect(screen.getByText('mistral-nemo')).toBeInTheDocument();
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
     });
 
-    // Click the SelectItem for mistral-nemo
-    fireEvent.click(screen.getByTestId('select-item-mistral-nemo'));
-    expect(onChange).toHaveBeenCalledWith('mistral-nemo');
+    fireEvent.click(screen.getByTestId('select-item-qwen3:14b'));
+    expect(onChange).toHaveBeenCalledWith('qwen3:14b');
   });
 
-  it('formats sizes correctly: 4.1e9 → "(4.1GB)", 500e6 → "(500MB)"', async () => {
-    renderComponent();
+  it('calls onChange with cloud catalog id when keyed cloud item is selected', async () => {
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
     await waitFor(() => {
-      expect(screen.getByText('(4.1GB)')).toBeInTheDocument();
-      expect(screen.getByText('(500MB)')).toBeInTheDocument();
+      expect(screen.getByText('GPT-4o')).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByTestId('select-item-openai/gpt-4o'));
+    expect(onChange).toHaveBeenCalledWith('openai/gpt-4o');
   });
 
-  it('groups configured cloud models by provider while preserving current badge', async () => {
+  it('shows active cloud catalog entries even when provider key status is not present', async () => {
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue({
       status: 'ok',
-      installed: defaultModels.installed,
+      installed: [],
       hardware: {},
-      current: { smart_model: 'claude-sonnet-4-6' },
+      current: { smart_model: 'anthropic/claude-haiku-4-5' },
       issues: {},
+      catalog: [
+        {
+          ...defaultModels.catalog[4],
+          status: 'cloud_active',
+          active: true,
+          provider_key_present: false,
+          can_assign: true,
+          assign_blocker: null,
+        },
+      ],
+      recommendations: {},
     });
 
-    renderComponent({ value: 'claude-sonnet-4-6', configKey: 'llm.smart_model' });
+    renderComponent({ value: 'anthropic/claude-haiku-4-5', configKey: 'llm.smart_model' });
 
     await waitFor(() => {
       expect(screen.getByText('Anthropic')).toBeInTheDocument();
-      expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument();
+      expect(screen.getByText('Claude Haiku 4.5')).toBeInTheDocument();
     });
     expect(screen.getAllByText('current')).toHaveLength(1);
   });
 
   it('normalizes :latest suffix when matching selected local models', async () => {
-    renderComponent({ value: 'mistral-nemo:latest', configKey: 'llm.smart_model' });
+    renderComponent({ value: 'qwen3:14b:latest', configKey: 'llm.smart_model' });
 
     await waitFor(() => {
-      expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'mistral-nemo');
+      expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'qwen3:14b');
     });
   });
 });

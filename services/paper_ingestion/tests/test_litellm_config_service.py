@@ -136,7 +136,7 @@ async def test_update_embed_model(tmp_path, monkeypatch):
     _write_config(
         config_path,
         [
-            {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
+            {"model_name": "embed", "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"}},
         ],
     )
     monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
@@ -156,7 +156,7 @@ async def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
         [
             {"model_name": "smart", "litellm_params": {"model": "ollama/mistral-nemo"}},
             {"model_name": "fast", "litellm_params": {"model": "ollama/qwen3:4b"}},
-            {"model_name": "embed", "litellm_params": {"model": "ollama/nomic-embed-text"}},
+            {"model_name": "embed", "litellm_params": {"model": "ollama/qwen3-embedding:0.6b"}},
         ],
     )
     monkeypatch.setattr("paper_ingestion.services.litellm_config.LITELLM_CONFIG_PATH", config_path)
@@ -168,4 +168,4 @@ async def test_update_leaves_other_entries_untouched(tmp_path, monkeypatch):
     assert updated["model_list"][1]["litellm_params"]["model"] == "ollama/phi3:mini"
     # smart and embed should be unchanged
     assert updated["model_list"][0]["litellm_params"]["model"] == "ollama/mistral-nemo"
-    assert updated["model_list"][2]["litellm_params"]["model"] == "ollama/nomic-embed-text"
+    assert updated["model_list"][2]["litellm_params"]["model"] == "ollama/qwen3-embedding:0.6b"

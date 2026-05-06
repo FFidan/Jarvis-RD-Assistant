@@ -16,6 +16,109 @@ logger = logging.getLogger(__name__)
 
 _TXN_LINE_RE = re.compile(r"^\s*(BEGIN|COMMIT|ROLLBACK)\s*;?\s*$", re.IGNORECASE)
 
+_MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
+    (
+        33,
+        "user_config.encrypted_value",
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'user_config'
+              AND column_name = 'encrypted_value'
+        )
+        """,
+    ),
+    (
+        49,
+        "recommendation_feedback table with legacy pulse_ratings dropped",
+        """
+        SELECT
+            to_regclass('public.recommendation_feedback') IS NOT NULL
+            AND to_regclass('public.pulse_ratings') IS NULL
+        """,
+    ),
+    (
+        50,
+        "My Day phase 2 columns",
+        """
+        SELECT
+            EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'projects'
+                  AND column_name = 'next_milestone'
+            )
+            AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'projects'
+                  AND column_name = 'next_milestone_due'
+            )
+            AND EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'tasks'
+                  AND column_name = 'color'
+            )
+        """,
+    ),
+    (51, "journal_entries table", "SELECT to_regclass('public.journal_entries') IS NOT NULL"),
+    (
+        52,
+        "Procrastinate broker schema",
+        """
+        SELECT
+            to_regtype('public.procrastinate_job_to_defer_v1') IS NOT NULL
+            AND to_regclass('public.procrastinate_jobs') IS NOT NULL
+            AND EXISTS (
+                SELECT 1
+                FROM pg_proc
+                WHERE proname = 'procrastinate_defer_jobs_v1'
+            )
+        """,
+    ),
+    (53, "legacy jobs table removal", "SELECT to_regclass('public.jobs') IS NULL"),
+    (54, "job_progress table", "SELECT to_regclass('public.job_progress') IS NOT NULL"),
+    (
+        55,
+        "recommendation_feedback.user_id integer type",
+        """
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'recommendation_feedback'
+              AND column_name = 'user_id'
+              AND udt_name = 'int4'
+        )
+        """,
+    ),
+    (
+        57,
+        "default model and FSRS config rows",
+        """
+        SELECT NOT EXISTS (
+            SELECT 1
+            FROM (
+                VALUES
+                    ('llm.smart_model'),
+                    ('llm.fast_model'),
+                    ('llm.embed_model'),
+                    ('fsrs.desired_retention'),
+                    ('fsrs.learning_steps')
+            ) AS required(key)
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM user_config
+                WHERE user_config.key = required.key
+            )
+        )
+        """,
+    ),
+)
+
 
 def _strip_outer_transaction_control(sql: str) -> str:
     """Drop standalone BEGIN/COMMIT/ROLLBACK lines outside dollar-quoted blocks.
@@ -37,6 +140,41 @@ def _strip_outer_transaction_control(sql: str) -> str:
     return "".join(out)
 
 
+async def _repair_false_applied_migrations(conn: asyncpg.Connection) -> None:
+    """Remove known false-applied markers when their schema probe fails."""
+    probe_versions = [version for version, _, _ in _MIGRATION_SCHEMA_PROBES]
+    applied = {
+        row["version"]
+        for row in await conn.fetch(
+            "SELECT version FROM schema_migrations WHERE version = ANY($1::int[])",
+            probe_versions,
+        )
+    }
+
+    for version, description, probe_sql in _MIGRATION_SCHEMA_PROBES:
+        if version not in applied:
+            continue
+
+        try:
+            probe_ok = await conn.fetchval(probe_sql)
+        except (
+            asyncpg.UndefinedColumnError,
+            asyncpg.UndefinedObjectError,
+            asyncpg.UndefinedTableError,
+        ):
+            probe_ok = False
+        if probe_ok:
+            continue
+
+        logger.warning(
+            "schema_migrations marks migration %s as applied but %s is missing; "
+            "removing marker so the migration can replay",
+            version,
+            description,
+        )
+        await conn.execute("DELETE FROM schema_migrations WHERE version = $1", version)
+
+
 async def run_migrations(pool: asyncpg.Pool) -> None:
     """Apply unapplied SQL migrations from db/migrations/ on startup."""
     async with pool.acquire() as conn:
@@ -56,6 +194,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
                     applied_at TIMESTAMPTZ DEFAULT NOW()
                 )
             """)
+            await _repair_false_applied_migrations(conn)
             applied = {
                 r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")
             }

@@ -8,6 +8,7 @@ internals or causing circular imports.
 from __future__ import annotations
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,6 +28,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
+
+_EMBEDDING_ERROR_SECRET_RE = re.compile(
+    r"(Bearer\s+)[A-Za-z0-9._~+/=-]+|"
+    r"(sk-[A-Za-z0-9._-]+)|"
+    r"(Authorization:\s*)[^\s,;]+|"
+    r"https?://[^\s,;]+",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_embedding_failure_detail(exc: BaseException, *, max_chars: int = 240) -> str:
+    """Keep provider diagnostics actionable without leaking URLs or credentials."""
+    compact = " ".join(str(exc).split())
+
+    def _redact(match: re.Match[str]) -> str:
+        if match.group(1) or match.group(3):
+            return f"{match.group(1) or match.group(3)}<redacted>"
+        if match.group(2):
+            return "<redacted>"
+        return "<url>"
+
+    redacted = _EMBEDDING_ERROR_SECRET_RE.sub(_redact, compact)
+    return redacted[:max_chars]
+
+
+def _embedding_failure_message(exc: BaseException) -> str:
+    detail = _sanitize_embedding_failure_detail(exc)
+    base = detail if detail.lower().startswith("embedding service") else "Embedding service error"
+    if detail and base != detail:
+        base = f"{base}: {detail}"
+    return (
+        f"{base}. Check LiteLLM/Ollama health, embedding model availability, "
+        "and LITELLM_MASTER_KEY wiring."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -181,14 +216,10 @@ async def run_process_pdf(
                 " set TORCH_DEVICE=cpu."
             ) from e
         logger.error("Process PDF embedding failure for paper %d: %s", paper_id, e)
-        raise RuntimeError(
-            "Embedding service error. Check that an LLM/embedding provider is configured."
-        ) from e
+        raise RuntimeError(_embedding_failure_message(e)) from e
     except httpx.HTTPStatusError as e:
         logger.error("Process PDF embedding HTTP failure for paper %d: %s", paper_id, e)
-        raise RuntimeError(
-            "Embedding service error. Check that an LLM/embedding provider is configured."
-        ) from e
+        raise RuntimeError(_embedding_failure_message(e)) from e
 
     await _maybe_progress(0.4, "Extracted")
     await _maybe_progress(0.7, "Chunked")

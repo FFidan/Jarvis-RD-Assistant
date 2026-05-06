@@ -85,15 +85,17 @@ async def test_run_process_pdf_raises_when_qdrant_cleanup_fails():
 
 @pytest.mark.asyncio
 async def test_run_process_pdf_wraps_embedding_failures():
-    """Embedding errors become a stable RuntimeError for callers."""
+    """Embedding errors keep sanitized cause detail for operators."""
     conn = AsyncMock()
     conn.fetchval.return_value = 0
     pool = _make_pool(conn)
     pdf_processor = MagicMock()
-    pdf_processor.process = AsyncMock(side_effect=RuntimeError("embedding unavailable"))
+    pdf_processor.process = AsyncMock(
+        side_effect=RuntimeError("Embedding service error (HTTP 401): bad auth")
+    )
     embedder = MagicMock()
 
-    with pytest.raises(RuntimeError, match="Embedding service error"):
+    with pytest.raises(RuntimeError) as exc_info:
         await run_process_pdf(
             paper_id=9,
             pdf_path=Path("/tmp/paper.pdf"),
@@ -101,6 +103,10 @@ async def test_run_process_pdf_wraps_embedding_failures():
             pdf_processor=pdf_processor,
             embedder=embedder,
         )
+
+    message = str(exc_info.value)
+    assert "Embedding service error (HTTP 401): bad auth" in message
+    assert "LITELLM_MASTER_KEY" in message
 
 
 # ---------------------------------------------------------------------------
@@ -244,3 +250,40 @@ async def test_pdf_workflow_preserves_embedding_error_for_httpx_failures():
             pdf_processor=pdf_processor,
             embedder=embedder,
         )
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 500])
+@pytest.mark.asyncio
+async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: int):
+    """Provider HTTP status survives PDF workflow wrapping while URLs are redacted."""
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    pool = _make_pool(conn)
+    response = httpx.Response(
+        status_code,
+        request=httpx.Request("POST", "http://litellm:4000/v1/embeddings"),
+        text="provider detail",
+    )
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            f"{status_code} at http://litellm:4000/v1/embeddings",
+            request=response.request,
+            response=response,
+        )
+    )
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await run_process_pdf(
+            paper_id=45,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )
+
+    message = str(exc_info.value)
+    assert f"{status_code}" in message
+    assert "LITELLM_MASTER_KEY" in message
+    assert "http://litellm:4000" not in message

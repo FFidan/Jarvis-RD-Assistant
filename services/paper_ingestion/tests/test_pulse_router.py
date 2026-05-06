@@ -342,8 +342,10 @@ def test_debug_returns_expected_shape_when_deck_exists(client):
             }
         ),
     ]
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
+
     embed_rows = [
-        FakeRecord({"key": "topic.1.embedding", "value": [0.1] * 768}),
+        FakeRecord({"key": "topic.1.embedding", "value": [0.1] * EMBEDDING_DIMENSION}),
     ]
 
     # conn.fetchrow returns deck_row on first call; conn.fetch returns cards then embeds
@@ -370,7 +372,7 @@ def test_debug_returns_expected_shape_when_deck_exists(client):
     # Topic embedding sanity
     assert len(body["topic_embeddings"]) == 1
     emb = body["topic_embeddings"][0]
-    assert emb["dim"] == 768
+    assert emb["dim"] == EMBEDDING_DIMENSION
     assert emb["ok"] is True
     assert emb["non_null"] is True
 

@@ -80,7 +80,7 @@ cd Jarvis-RD-Assistant
 - See [docs/DEPLOYMENT.md — Solo deployment](docs/DEPLOYMENT.md#solo-deployment) for the minimal bring-up path.
 - See [docs/DEPLOYMENT.md — Remote access via Tailscale](docs/DEPLOYMENT.md#remote-access-via-tailscale) for off-LAN access.
 
-First boot pulls ~10 GB of Ollama models (`mistral-nemo`, `qwen3:4b`, `nomic-embed-text`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
+First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
 
 ### GPU Acceleration (optional)
 
@@ -102,6 +102,12 @@ docker compose up -d
 Then open the dashboard URL (default `https://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
 
 ## Database upgrade notes
+
+As of 2026-05-05, startup repairs the known false-applied migration state from
+older `db/init.sql` snapshots that blanket-seeded `schema_migrations`. After
+`git pull && ./update.sh`, let `paper_ingestion` start and run migrations; do not
+manually patch missing `user_config.encrypted_value`, Procrastinate tables/types,
+or `job_progress` unless the migration runner logs an explicit SQL failure.
 
 If your dev DB was started from `master` between commits `7ac5af3` and the 2026-04-26 remediation, migrations 040 and 041 may be missing (the files were briefly numbered 037/038, colliding with `pulse_models` and `paper_contradictions`). Run the one-shot reconciliation script to catch up:
 
@@ -145,9 +151,10 @@ For reaching JARVIS from outside your LAN, see [docs/DEPLOYMENT.md — Remote ac
 | `ANTHROPIC_API_KEY` | _(empty)_ | Enable Anthropic models via LiteLLM |
 | `TELEGRAM_BOT_TOKEN` | _(empty)_ | Telegram bot (requires `--profile telegram`) |
 | `TELEGRAM_CHAT_ID` | _(empty)_ | Your Telegram chat ID |
-| `OLLAMA_MODELS` | `mistral-nemo,qwen3:4b,nomic-embed-text` | Models to pull on first start |
+| `OLLAMA_MODELS` | `qwen3:14b,qwen3:4b,qwen3-embedding:0.6b` | Models to pull on first start |
 | `EMBEDDING_MODEL` | `embed` | LiteLLM alias for embedding model |
-| `EMBEDDING_DIMENSION` | `768` | Must match the embedding model |
+| `EMBEDDING_MODEL_NAME` | `qwen3-embedding:0.6b` | Human-readable embedding model stored on chunk metadata |
+| `EMBEDDING_DIMENSION` | `1024` | Must match the embedding model |
 | `DASHBOARD_PASSWORD` | _(empty)_ | Dashboard login password (empty = no auth) |
 | `DEV_MODE` | `false` | **⚠️ Bypasses ALL authentication on every endpoint when `true`.** Only for local development. The service refuses to start with `DEV_MODE=true` if `ENVIRONMENT=production`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
@@ -336,7 +343,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 ├── libs/jarvis_common/         # Shared Python library (auth, DB helpers, LLM client)
 ├── db/
 │   ├── init.sql                # PostgreSQL schema
-│   └── migrations/             # Versioned schema changes (001-049)
+│   └── migrations/             # Versioned schema changes
 ├── litellm/config.yaml         # LLM gateway routing (smart/fast/embed aliases)
 ├── n8n/workflows/              # n8n workflow recreation guide
 ├── docker-compose.yml          # All services
@@ -351,7 +358,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 | **Frontend** | React 19, TypeScript, Vite, Shadcn/ui, TanStack Query v5, Zustand, React Router v7, Recharts, Cytoscape.js |
 | **Backend** | FastAPI, Python 3.12, asyncpg, Pydantic v2 |
 | **LLM Gateway** | LiteLLM (routes to Ollama, OpenAI, Anthropic, etc.) |
-| **Local LLM** | Ollama (mistral-nemo, qwen3:4b, nomic-embed-text) |
+| **Local LLM** | Ollama (qwen3:14b, qwen3:4b, qwen3-embedding:0.6b) |
 | **Database** | PostgreSQL 16 |
 | **Vector DB** | Qdrant |
 | **Spaced Repetition** | py-fsrs (FSRS algorithm) |
@@ -378,7 +385,7 @@ These projects are credited for the ideas and patterns that informed JARVIS's de
 
 ## Troubleshooting
 
-**Ollama first-boot is slow.** On first start, Ollama pulls `mistral-nemo`, `qwen3:4b`, and `nomic-embed-text`. Expect 5–10 minutes on a decent connection. Watch progress with `docker compose logs -f ollama`.
+**Ollama first-boot is slow.** On first start, Ollama pulls `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:0.6b`. Expect 5–15 minutes on a decent connection. Watch progress with `docker compose logs -f ollama`.
 
 **`paper_ingestion` exits with "JARVIS_API_KEY not set" in production.** Set `JARVIS_API_KEY` to at least 32 chars in `.env`, or set `ENVIRONMENT=development` for local-only use.
 
@@ -386,7 +393,7 @@ These projects are credited for the ideas and patterns that informed JARVIS's de
 
 **GPU not detected.** Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host, then `docker compose restart ollama`. Verify with `docker compose exec ollama nvidia-smi`.
 
-**Pulse cards are empty or stage-2 scoring times out.** The scoring pipeline uses the `smart` Ollama model (mistral-nemo). With 50 candidates and `_LLM_CONCURRENCY=5`, a cold model can take several minutes on first run. Subsequent runs are faster. Check logs with `docker compose logs paper_ingestion | grep pulse.stage2`.
+**Pulse cards are empty or stage-2 scoring times out.** The scoring pipeline uses the `smart` Ollama model (`qwen3:14b` by default). With 50 candidates and `_LLM_CONCURRENCY=5`, a cold model can take several minutes on first run. Subsequent runs are faster. Check logs with `docker compose logs paper_ingestion | grep pulse.stage2`.
 
 **Dashboard shows "Network Error" on every API call.** The frontend calls `/api/*` through the dashboard's nginx, which proxies to `paper_ingestion:8000` and `learning_engine:8001` over the internal Docker network. If the backends are unhealthy, the dashboard still loads but every call fails. Check `docker compose ps` — all services should be `healthy`.
 

@@ -126,7 +126,7 @@ async def test_get_provider_api_key_unsupported_raises():
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_update_litellm_model_injects_cloud_key(monkeypatch):
+async def test_update_litellm_model_injects_cloud_key_and_master_key(monkeypatch):
     """Cloud model name triggers POST to /config/update with api_key in payload."""
     from cryptography.fernet import Fernet
 
@@ -142,6 +142,7 @@ async def test_update_litellm_model_injects_cloud_key(monkeypatch):
 
     # Wire env so get_litellm_config() finds the base_url.
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm-test:4000")
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-master-test")
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = {
@@ -167,6 +168,25 @@ async def test_update_litellm_model_injects_cloud_key(monkeypatch):
     assert body["model_list"][0]["model_name"] == "smart"
     assert body["model_list"][0]["litellm_params"]["model"] == "anthropic/claude-sonnet-4-5"
     assert body["model_list"][0]["litellm_params"]["api_key"] == plaintext_key
+    assert posted_json.headers["Authorization"] == "Bearer sk-master-test"
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_update_litellm_model_raises_when_cloud_update_fails(monkeypatch):
+    """Cloud assignment failures must surface to the settings router."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm-test:4000")
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {
+        "value": "sk-openai-test",
+        "encrypted_value": None,
+    }
+    respx.post("http://litellm-test:4000/config/update").mock(
+        return_value=httpx.Response(401, json={"error": "bad key"})
+    )
+
+    with pytest.raises(RuntimeError, match="LiteLLM /config/update failed"):
+        await update_litellm_model("smart", "openai/gpt-4o", db_pool=pool)
 
 
 @pytest.mark.asyncio

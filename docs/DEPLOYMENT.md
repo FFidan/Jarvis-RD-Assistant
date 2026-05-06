@@ -25,8 +25,8 @@ Optional:
 
 Health checks:
 
-    curl http://127.0.0.1:8000/health/readiness   # paper_ingestion
-    curl http://127.0.0.1:8001/health/readiness   # learning_engine
+    curl http://127.0.0.1:8010/health   # paper_ingestion
+    curl http://127.0.0.1:8011/health   # learning_engine
 
 ---
 
@@ -63,9 +63,9 @@ ports opened. Encrypted at the WireGuard layer, no DNS / cert provisioning.
     # 2. Install Tailscale on phone / laptop / etc.
 
     # 3. Reach the webapp on tailnet:
-    #    http://<jarvis-pc-tailnet-name>:3000
-    #    or with HTTPS via tailscale serve:
-    sudo tailscale serve --https=443 http://localhost:3000
+    #    https://<jarvis-pc-tailnet-name>:3001
+    #    or without exposing port 3001 in the URL:
+    sudo tailscale serve --https=443 https+insecure://localhost:3001
 
 Telegram remote works without any setup change — the bot polls Telegram
 outbound (no inbound exposure required).
@@ -85,6 +85,20 @@ backend without validating its self-signed cert:
 
 Access the dashboard at `https://<host-tailnet-name>` from your phone. No
 certificate warning, no port 3001 in the URL.
+
+### Friends showcase mode over Tailscale
+
+JARVIS can be shown to trusted friends by adding their devices to your tailnet
+and using the Tailscale URL above. This is shared single-user access, not
+multi-user mode.
+
+Everyone who can open the dashboard shares the same library, settings, Pulse
+feedback, Telegram pairing state, and `JARVIS_API_KEY`. Use this only for a
+trusted showcase where shared state is expected.
+
+Do not set `MULTITENANT_ENABLED=true` for this mode. That flag currently logs a
+critical warning because the runtime still uses a single-user auth resolver; it
+does not isolate users or enforce ownership.
 
 ---
 
@@ -303,6 +317,24 @@ What `update.sh` does (see the top of `update.sh` for the full flow):
 
 `update.sh` never auto-rollbacks — the operator decides. Logs for the failed service: `docker compose logs --tail=200 <svc>`.
 
+### Database migration repair after updates
+
+`paper_ingestion` runs the migration runner on startup. The runner is
+idempotent and also repairs the known 2026-05-05 false-applied migration state
+caused by old `db/init.sql` snapshots that blanket-seeded `schema_migrations`.
+If rows for migrations 033 or 049-057 were marked applied without their schema
+objects/data, startup removes only the bad marker and replays the migration.
+
+Do not manually `ALTER TABLE` for missing `user_config.encrypted_value`,
+Procrastinate objects, `job_progress`, or the 049-057 follow-up schema unless
+the migration runner logs a real SQL failure. The normal repair path is:
+
+```bash
+git pull
+./update.sh
+docker compose logs --tail=200 paper_ingestion
+```
+
 ---
 
 ## Backup + Restore
@@ -382,7 +414,9 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | `update.sh` says "not running" for a service you're not using | The service is profile-gated (n8n / telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |
 | Pre-existing `docker-compose.override.yml` causes port conflicts after running `setup.sh` mode 2 | `setup.sh` now backs it up automatically, but old installs may still have one | `setup.sh` moves it to `docker-compose.override.yml.bak.<ts>`. Delete the backup once you're sure you don't need it. |
 | Settings → "Models & Preferences" shows "No config entries" | DB was initialized before migration 057 seeded default config rows | Restart paper_ingestion to trigger the migration runner: `docker compose restart paper_ingestion`. Verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — should return 3 rows. |
-| Selecting a model returns HTTP 400 "LiteLLM config is read-only" | `:latest` suffix mismatch between Ollama model names and the LiteLLM config.yaml entries | Fixed in build ≥ 2026-05-05. On older builds, enter the model name without `:latest` suffix (e.g., `mistral-nemo` not `mistral-nemo:latest`) via the API directly. |
+| Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Runtime LiteLLM config is mounted read-only or the selected model is not pulled/assignable | Pull the model first from Settings → Models, or restart LiteLLM with an updated config. The default smart model is `qwen3:14b`. |
+| `paper_ingestion` exits with an embedding dimension mismatch, or `/api/system/models` reports `embedding_config` | Existing `.env` or Qdrant state still points at the old 768d embedding setup while LiteLLM uses Qwen3 1024d | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:0.6b` and `EMBEDDING_DIMENSION=1024` in `.env`, pull the model, take the explicit Qdrant checkpoint, then run `REEMBED_RECREATE_COLLECTION=true python -m scripts.reembed` only if the collection is still wrong-dimension. |
+| Phase C re-embedding is too slow through LiteLLM/Ollama | `scripts/reembed.py` defaults to the runtime LiteLLM path, which is safe but HTTP-bound and sequential | Benchmark locally first: `REEMBED_BENCHMARK=true REEMBED_BACKEND=local python -m scripts.reembed`. If output count and dimension are correct, resume with `REEMBED_BACKEND=local python -m scripts.reembed`. Use `REEMBED_BACKEND=onnx` only when optional ONNX dependencies are installed and benchmarked faster on that host. |
 
 ---
 
@@ -419,7 +453,11 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 | `POST` | `/api/ask/stream` | API key | SSE-streamed RAG chat |
 | `GET` | `/api/pulse/today` | API key | Today's Pulse deck |
 | `POST` | `/api/pulse/generate` | API key | Trigger overnight Pulse run on-demand |
-| `GET` | `/api/system/models` | API key | Installed Ollama models + current config |
+| `GET` | `/api/system/hardware` | API key | Detected local VRAM, source, and hardware tier for model selection |
+| `GET` | `/api/system/models` | API key | Curated model catalog with installed/current/status/can-assign metadata |
+| `GET` | `/api/system/models/recommendations?role=smart` | API key | Ranked model recommendations for a role |
+| `POST` | `/api/system/models/{tag}/pull` | API key | Enqueue a Procrastinate-backed Ollama model pull job |
+| `DELETE` | `/api/system/models/{tag}` | API key | Delete an inactive curated Ollama model; rejects active/unknown tags |
 | `GET` | `/api/jobs/{id}/stream` | API key | SSE stream for async job progress |
 
 `learning_engine` (:8001) endpoints follow the same auth convention (`X-API-Key` header). See `services/learning_engine/paper_ingestion/routers/` for the full surface.

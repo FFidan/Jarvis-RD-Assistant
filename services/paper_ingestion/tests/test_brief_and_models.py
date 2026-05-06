@@ -200,9 +200,9 @@ async def test_system_models_full_response(_app):
 
     # Mock config DB fetch: return LLM config entries
     conn.fetch.return_value = [
-        FakeRecord(key="llm.smart_model", value="mistral-nemo"),
-        FakeRecord(key="llm.fast_model", value="qwen3.5:4b"),
-        FakeRecord(key="llm.embed_model", value="nomic-embed-text"),
+        FakeRecord(key="llm.smart_model", value="qwen3:4b"),
+        FakeRecord(key="llm.fast_model", value="qwen3:4b"),
+        FakeRecord(key="llm.embed_model", value="qwen3-embedding:0.6b"),
     ]
 
     async def mock_get_side_effect(url, **kwargs):
@@ -212,18 +212,26 @@ async def test_system_models_full_response(_app):
                 {
                     "models": [
                         {
-                            "name": "mistral-nemo",
+                            "name": "qwen3:4b",
                             "size": 4100000000,
                             "details": {
-                                "parameter_size": "7B",
+                                "parameter_size": "4B",
                                 "quantization_level": "Q4_0",
                             },
-                        }
+                        },
+                        {
+                            "name": "qwen3-embedding:0.6b",
+                            "size": 600000000,
+                            "details": {
+                                "parameter_size": "0.6B",
+                                "quantization_level": "Q8_0",
+                            },
+                        },
                     ]
                 },
             )
         elif "/api/ps" in str(url):
-            return MockResponse(200, {"models": [{"name": "mistral-nemo"}]})
+            return MockResponse(200, {"models": [{"name": "qwen3:4b"}]})
         return MockResponse(404)
 
     mock_http.get.side_effect = mock_get_side_effect
@@ -238,18 +246,21 @@ async def test_system_models_full_response(_app):
     assert body.issues == {}
 
     # Installed models
-    assert len(body.installed) == 1
-    assert body.installed[0]["name"] == "mistral-nemo"
-    assert body.installed[0]["parameter_size"] == "7B"
+    assert len(body.installed) == 2
+    assert body.installed[0]["name"] == "qwen3:4b"
+    assert body.installed[0]["parameter_size"] == "4B"
     assert body.installed[0]["quantization"] == "Q4_0"
 
     # Hardware info
     assert body.hardware["ollama_running"] == 1
 
     # Current config assignments (key stripped of 'llm.' prefix)
-    assert body.current["smart_model"] == "mistral-nemo"
-    assert body.current["fast_model"] == "qwen3.5:4b"
-    assert body.current["embed_model"] == "nomic-embed-text"
+    assert body.current["smart_model"] == "qwen3:4b"
+    assert body.current["fast_model"] == "qwen3:4b"
+    assert body.current["embed_model"] == "qwen3-embedding:0.6b"
+    assert any(item["id"] == "qwen3-embedding:0.6b" for item in body.catalog)
+    assert any(item["status"] == "active" for item in body.catalog)
+    assert "embed" in body.recommendations
 
 
 @pytest.mark.asyncio
@@ -266,11 +277,42 @@ async def test_system_models_ollama_unreachable(_app):
     body = await get_system_models(request)
     assert body.status == "degraded"
     assert body.installed == []
-    assert body.hardware == {}
+    assert "ollama_running" not in body.hardware
     assert body.issues == {
         "installed": "Could not load installed Ollama models.",
         "runtime": "Could not load Ollama runtime status.",
     }
+
+
+@pytest.mark.asyncio
+async def test_system_models_reports_embedding_config_mismatch(_app, monkeypatch):
+    """GET /api/system/models surfaces stale model/dimension env drift."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.system.EMBEDDING_MODEL_NAME",
+        "qwen3-embedding:0.6b",
+    )
+    monkeypatch.setattr("paper_ingestion.routers.system.EMBEDDING_DIMENSION", 768)
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": []})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    body = await get_system_models(request)
+
+    assert body.status == "degraded"
+    assert "embedding_config" in body.issues
+    assert "qwen3-embedding:0.6b outputs 1024 dimensions" in body.issues["embedding_config"]
 
 
 @pytest.mark.asyncio
@@ -367,7 +409,150 @@ async def test_system_models_runtime_probe_failure_keeps_installed_models(_app):
     body = await get_system_models(request)
     assert body.status == "degraded"
     assert len(body.installed) == 1
-    assert body.hardware == {}
+    assert "ollama_running" not in body.hardware
     assert body.issues == {
         "runtime": "Could not load Ollama runtime status.",
     }
+
+
+@pytest.mark.asyncio
+async def test_model_recommendations_endpoint_returns_role_catalog(_app):
+    """GET /api/system/models/recommendations returns role-filtered catalog entries."""
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import get_model_recommendations
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = [FakeRecord(key="llm.embed_model", value="embed")]
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": [{"name": "qwen3-embedding:0.6b"}]})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    body = await get_model_recommendations(request, role="embed")
+
+    assert body["role"] == "embed"
+    assert body["recommendations"][0]["id"] == "qwen3-embedding:0.6b"
+    assert body["recommendations"][0]["status"] == "active"
+
+
+@pytest.mark.asyncio
+async def test_pull_system_model_enqueues_model_pull_job(_app, monkeypatch):
+    """POST /api/system/models/{tag}/pull enqueues a model.pull job."""
+    app, _conn, mock_http = _app
+    import jarvis_common.task_registry as task_registry
+    from paper_ingestion.routers.system import pull_system_model
+
+    request = _make_request(app.state.db_pool, mock_http)
+    fake_task = MagicMock()
+    fake_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry.KIND_TO_TASK, "model.pull", fake_task)
+
+    body = await pull_system_model("qwen3:4b", request, user_id=None)
+
+    assert body.status == "queued"
+    fake_task.defer_async.assert_awaited_once()
+    assert fake_task.defer_async.await_args.kwargs["ollama_tag"] == "qwen3:4b"
+
+
+@pytest.mark.asyncio
+async def test_delete_system_model_rejects_active_assignment(_app):
+    """DELETE /api/system/models/{tag} rejects currently assigned models."""
+    app, conn, mock_http = _app
+    from fastapi import HTTPException
+    from paper_ingestion.routers.system import delete_system_model
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = [FakeRecord(key="llm.smart_model", value="qwen3:4b")]
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": [{"name": "qwen3:4b"}]})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    with pytest.raises(HTTPException) as exc:
+        await delete_system_model("qwen3:4b", request)
+
+    assert exc.value.status_code == 409
+    mock_http.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_system_model_calls_ollama_delete_for_inactive_model(_app):
+    """DELETE /api/system/models/{tag} proxies inactive models to Ollama delete."""
+    app, conn, mock_http = _app
+    from paper_ingestion.routers.system import delete_system_model
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = [FakeRecord(key="llm.smart_model", value="qwen3:4b")]
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": [{"name": "qwen3:8b"}]})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+    mock_http.request.return_value = MockResponse(200, {"status": "success"})
+
+    body = await delete_system_model("qwen3:8b", request)
+
+    assert body.status_code == 204
+    mock_http.request.assert_awaited_once()
+    assert mock_http.request.await_args.args[:2] == (
+        "DELETE",
+        "http://ollama:11434/api/delete",
+    )
+    assert mock_http.request.await_args.kwargs["json"] == {"name": "qwen3:8b"}
+
+
+@pytest.mark.asyncio
+async def test_delete_system_model_rejects_non_catalog_model(_app):
+    """DELETE /api/system/models/{tag} must not delete arbitrary Ollama tags."""
+    app, conn, mock_http = _app
+    from fastapi import HTTPException
+    from paper_ingestion.routers.system import delete_system_model
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = [FakeRecord(key="llm.smart_model", value="qwen3:4b")]
+
+    with pytest.raises(HTTPException) as exc:
+        await delete_system_model("llama3:latest", request)
+
+    assert exc.value.status_code == 404
+    mock_http.request.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_delete_system_model_fails_closed_when_current_assignments_unavailable(_app):
+    """DELETE must not proceed when active model assignments cannot be verified."""
+    app, conn, mock_http = _app
+    from fastapi import HTTPException
+    from paper_ingestion.routers.system import delete_system_model
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.side_effect = RuntimeError("database unavailable")
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": [{"name": "qwen3:8b"}]})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    with pytest.raises(HTTPException) as exc:
+        await delete_system_model("qwen3:8b", request)
+
+    assert exc.value.status_code == 503
+    mock_http.request.assert_not_called()

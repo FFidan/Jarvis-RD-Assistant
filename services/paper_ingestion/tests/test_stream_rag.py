@@ -256,7 +256,7 @@ async def testprepare_single_paper_rag_returns_messages_and_sources():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # Stub embed_texts and search
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
 
     hits = [
         _make_hit(paper_id=1, chunk_index=0, content="chunk A", page_number=1, score=0.9),
@@ -313,7 +313,7 @@ async def testprepare_cross_paper_rag_returns_messages_and_sources():
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
 
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
     embedder.search_chunks_global = AsyncMock(
         return_value=[
             {
@@ -384,7 +384,7 @@ async def testprepare_cross_paper_rag_no_chunks_returns_dict():
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
 
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768])
+    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 1024])
     embedder.search_chunks_global = AsyncMock(return_value=[])
 
     mock_pool = AsyncMock()

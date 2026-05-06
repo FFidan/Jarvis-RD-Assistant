@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 import yaml
 from jarvis_common.crypto import resolve_secret_row
-from jarvis_common.llm_client import get_litellm_config
+from jarvis_common.llm_client import build_litellm_headers, get_litellm_config
 
 logger = logging.getLogger(__name__)
 
@@ -278,6 +278,7 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
             resp = await client.post(
                 f"{litellm_cfg.base_url}/config/update",
                 json=payload,
+                headers=build_litellm_headers(litellm_cfg),
             )
         if resp.status_code < 400:
             logger.info(
@@ -286,18 +287,14 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
                 model_name,
             )
             return True
-        logger.warning(
-            "LiteLLM /config/update returned %s for alias %r",
-            resp.status_code,
-            alias,
+        text = resp.text[:500]
+        raise RuntimeError(
+            f"LiteLLM /config/update failed for alias {alias!r}: HTTP {resp.status_code} {text}"
         )
     except Exception as exc:
-        logger.warning(
-            "Could not push cloud alias %r to LiteLLM: %r",
-            alias,
-            exc,
-        )
-    return False
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(f"Could not push cloud alias {alias!r} to LiteLLM: {exc}") from exc
 
 
 async def reload_litellm() -> bool:
@@ -314,6 +311,7 @@ async def reload_litellm() -> bool:
             resp = await client.post(
                 f"{litellm_cfg.base_url}/config/update",
                 json={},
+                headers=build_litellm_headers(litellm_cfg),
             )
             if resp.status_code < 400:
                 logger.info("LiteLLM config reloaded successfully")

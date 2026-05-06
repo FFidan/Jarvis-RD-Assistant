@@ -917,18 +917,22 @@ CREATE TRIGGER trg_extraction_templates_updated_at
 -- =============================================================================
 -- SCHEMA-MIGRATIONS BOOTSTRAP
 -- =============================================================================
--- This file mirrors the post-migration steady state for fresh installs. Pre-
--- populate schema_migrations so the runtime migrations runner skips every
--- versioned migration that is already baked into this schema. Without this,
--- the runner would re-apply migrations whose backfill UPDATEs reference legacy
--- columns this file has already dropped (e.g. paper_user_state.status, removed
--- by migration 047).
+-- This file mirrors most of the post-migration steady state for fresh installs.
+-- Pre-populate schema_migrations only for migrations already baked into this
+-- snapshot. Later additive/corrective migrations are intentionally left absent
+-- so the runtime runner applies them on first boot. Do not use generate_series:
+-- it can falsely mark migrations as applied when init.sql does not embody them.
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY,
     applied_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-INSERT INTO schema_migrations (version)
-SELECT generate_series(1, 57)
+INSERT INTO schema_migrations (version) VALUES
+    (1), (2), (3), (4), (5), (6), (7), (8),
+    (9), (10), (11), (12), (13), (14), (15), (16),
+    (17), (18), (19), (20), (21), (22), (23), (24),
+    (25), (26), (27), (28), (29), (30), (31), (32),
+    (34), (35), (36), (37), (38), (39), (40), (41),
+    (42), (43), (44), (45), (46), (47), (48)
 ON CONFLICT (version) DO NOTHING;

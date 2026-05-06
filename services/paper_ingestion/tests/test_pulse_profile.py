@@ -118,7 +118,7 @@ async def test_load_profile_happy_path():
     positive_rows = _make_positive_rating_rows()
     negative_rows = _make_negative_rating_rows()
 
-    vec = fake_embedding_vector(768)
+    vec = fake_embedding_vector()
     neg_abstract_rows = _make_neg_abstract_rows(2)
 
     # conn.fetch returns different things on sequential calls (10 total)
@@ -137,7 +137,7 @@ async def test_load_profile_happy_path():
 
     # embed_texts: called once for library centroid (3 papers), once for negative centroid (2 papers)
     mock_embedder = AsyncMock()
-    neg_vec = fake_embedding_vector(768)
+    neg_vec = fake_embedding_vector()
     mock_embedder.embed_texts.side_effect = [
         [vec, vec, vec],  # library centroid call
         [neg_vec, neg_vec],  # negative centroid call
@@ -154,7 +154,7 @@ async def test_load_profile_happy_path():
     assert "A1234" in profile.tracked_author_s2_ids
     # centroid should be computed
     assert profile.library_centroid is not None
-    assert len(profile.library_centroid) == 768
+    assert len(profile.library_centroid) == len(vec)
     # Config
     assert profile.deck_size == 10
     assert profile.stage2_top_k == 40
@@ -166,7 +166,7 @@ async def test_load_profile_happy_path():
     assert profile.negative_topics == ["Reinforcement Learning"]
     assert profile.negative_authors == ["Boring Author"]
     assert profile.negative_centroid is not None
-    assert len(profile.negative_centroid) == 768
+    assert len(profile.negative_centroid) == len(neg_vec)
     assert profile.dampened_topics == set()
     # liked_paper_ids: all ids from positive_rows (not capped like recent_positive_titles)
     # _make_positive_rating_rows() returns 11 rows, all with ids → 11 liked_paper_ids

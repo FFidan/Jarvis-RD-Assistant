@@ -8,7 +8,12 @@ import sys
 from types import ModuleType
 
 import pytest
-from paper_ingestion.pulse.training import FEATURE_NAMES, train_classifier_model
+from paper_ingestion.pulse.training import (
+    FEATURE_NAMES,
+    classifier_scores,
+    load_active_classifier,
+    train_classifier_model,
+)
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -145,7 +150,9 @@ async def test_train_classifier_persists_active_fake_model(monkeypatch: pytest.M
     conn.transaction.assert_called_once()
 
     deactivate_call, insert_call = conn.execute.await_args_list
-    assert "UPDATE pulse_models SET is_active = FALSE" in deactivate_call.args[0]
+    assert "UPDATE pulse_models" in deactivate_call.args[0]
+    assert "SET is_active = FALSE" in deactivate_call.args[0]
+    assert "user_id IS NOT DISTINCT FROM $1" in deactivate_call.args[0]
     assert "INSERT INTO pulse_models" in insert_call.args[0]
     # args[1] = user_id (new param from Group B user_id threading)
     model_blob = insert_call.args[2]
@@ -253,9 +260,60 @@ async def test_train_classifier_sql_references_recommendation_feedback(
         "SQL must reference recommendation_feedback (migration 049 dropped pulse_ratings)"
     )
     assert "pulse_ratings" not in sql, "SQL must NOT reference the dropped pulse_ratings table"
-    assert "pulse_thumbs" in sql and "dismiss_combined" in sql, (
-        "SQL must filter to source IN ('pulse_thumbs', 'dismiss_combined')"
-    )
+    for source in ("pulse_thumbs", "feed_thumbs", "paper_detail_thumbs", "dismiss_combined"):
+        assert source in sql
+
+
+@pytest.mark.asyncio
+async def test_train_classifier_sql_includes_all_explicit_feedback_sources(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Training consumes explicit thumbs from Pulse, feed, detail, and combined dismiss."""
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = []
+
+    await train_classifier_model(pool, min_ratings=1)
+
+    sql: str = conn.fetch.await_args.args[0]
+    assert "'pulse_thumbs'" in sql
+    assert "'feed_thumbs'" in sql
+    assert "'paper_detail_thumbs'" in sql
+    assert "'dismiss_combined'" in sql
+    assert "JOIN pulse_cards" in sql
+    assert "COALESCE(pc.signals" not in sql
+    assert "pc.signals <> '{}'::jsonb" in sql
+
+
+@pytest.mark.asyncio
+async def test_train_classifier_ignores_feedback_without_feature_signals(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Explicit feedback without feature signals must not train zero-vector examples."""
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    rows: list[FakeRecord] = []
+    for idx in range(6):
+        rows.append(
+            FakeRecord(
+                {
+                    "rating": "positive" if idx < 3 else "negative",
+                    "signals": {},
+                }
+            )
+        )
+    conn.fetch.return_value = rows
+
+    result = await train_classifier_model(pool, min_ratings=6)
+
+    assert result == {
+        "trained": False,
+        "available": True,
+        "sample_count": 0,
+        "degradation_reason": "need at least 6 ratings",
+        "excluded_missing_signal_count": 6,
+    }
+    conn.execute.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -287,3 +345,62 @@ async def test_train_classifier_binary_signal_label_mapping(
     assert set(model.labels) == {0, 1}, (
         "Labels must be binary {0, 1} — old 5-state mapping ('up'/'save'/'open') must be gone"
     )
+
+
+@pytest.mark.asyncio
+async def test_load_active_classifier_filters_by_user_id(monkeypatch: pytest.MonkeyPatch):
+    """Active classifier loading must select the model for the requested user."""
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = None
+
+    model, meta = await load_active_classifier(pool, user_id=55)
+
+    assert model is None
+    assert meta == {"available": False, "degradation_reason": "no active model"}
+    sql: str = conn.fetchrow.await_args.args[0]
+    params = conn.fetchrow.await_args.args[1:]
+    assert "user_id IS NOT DISTINCT FROM $1" in sql
+    assert params == (55,)
+
+
+@pytest.mark.asyncio
+async def test_classifier_scores_loads_user_scoped_model(monkeypatch: pytest.MonkeyPatch):
+    """Scoring must use the active classifier for the same user scope as training."""
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    model_blob = pickle.dumps(FakeLogisticRegression())
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "model_blob": model_blob,
+            "feature_names": FEATURE_NAMES,
+            "metrics": {"sample_count": 6},
+            "trained_at": None,
+        }
+    )
+
+    scores, meta = await classifier_scores(pool, [{"embedding": 1.0}], user_id=55)
+
+    assert scores == [0.8]
+    assert meta["available"] is True
+    sql: str = conn.fetchrow.await_args.args[0]
+    params = conn.fetchrow.await_args.args[1:]
+    assert "user_id IS NOT DISTINCT FROM $1" in sql
+    assert params == (55,)
+
+
+@pytest.mark.asyncio
+async def test_train_classifier_deactivates_only_requested_user_model(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Training a per-user model must not deactivate active models for other users."""
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = _feedback_rows(6)
+
+    result = await train_classifier_model(pool, min_ratings=6, user_id=55)
+
+    assert result["trained"] is True
+    deactivate_call = conn.execute.await_args_list[0]
+    assert "user_id IS NOT DISTINCT FROM $1" in deactivate_call.args[0]
+    assert deactivate_call.args[1:] == (55,)

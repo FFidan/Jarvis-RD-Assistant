@@ -22,6 +22,9 @@ import pytest
 _PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
+_JARVIS_COMMON_ROOT = str(Path(_PROJECT_ROOT) / "libs" / "jarvis_common")
+if _JARVIS_COMMON_ROOT not in sys.path:
+    sys.path.insert(0, _JARVIS_COMMON_ROOT)
 
 
 class _FakePointIdsList:
@@ -106,6 +109,7 @@ def _make_mock_pool(
     conn.fetch = AsyncMock(return_value=fetch_return or [])
     conn.fetchval = AsyncMock(return_value=fetchval_return)
     conn.execute = AsyncMock()
+    conn.executemany = AsyncMock()
 
     # transaction context manager
     txn = AsyncMock()
@@ -122,7 +126,68 @@ def _make_mock_pool(
     return pool
 
 
-def _make_mock_http_client(embedding_dim: int = 768) -> AsyncMock:
+def _make_sequenced_pool(
+    fetch_returns: list[list],
+    *,
+    fetchval_returns: list[int] | None = None,
+) -> tuple[AsyncMock, list[AsyncMock]]:
+    """Create a pool whose acquired connections return query-specific results in order."""
+    fetchval_returns = list(fetchval_returns or [])
+    conns: list[AsyncMock] = []
+    contexts: list[AsyncMock] = []
+    for fetch_return in fetch_returns:
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=fetch_return)
+        conn.fetchval = AsyncMock(side_effect=fetchval_returns)
+        conn.execute = AsyncMock()
+        conn.executemany = AsyncMock()
+
+        txn = AsyncMock()
+        txn.__aenter__ = AsyncMock(return_value=txn)
+        txn.__aexit__ = AsyncMock(return_value=False)
+        conn.transaction = MagicMock(return_value=txn)
+
+        ctx = AsyncMock()
+        ctx.__aenter__ = AsyncMock(return_value=conn)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        contexts.append(ctx)
+        conns.append(conn)
+
+    pool = AsyncMock()
+    pool.acquire = MagicMock(side_effect=contexts)
+    pool.close = AsyncMock()
+    return pool, conns
+
+
+class _FakeEmbeddingBackend:
+    name = "fake"
+
+    def __init__(
+        self,
+        *,
+        embedding_dim: int,
+        fail_on_call: int | None = None,
+        wrong_count: bool = False,
+        wrong_dimension: bool = False,
+    ) -> None:
+        self.embedding_dim = embedding_dim
+        self.fail_on_call = fail_on_call
+        self.wrong_count = wrong_count
+        self.wrong_dimension = wrong_dimension
+        self.calls = 0
+        self.seen_batches: list[list[str]] = []
+
+    async def embed_texts(self, _client, texts):
+        self.calls += 1
+        self.seen_batches.append(list(texts))
+        if self.fail_on_call == self.calls:
+            raise RuntimeError(f"Embedding API failure on batch {self.calls}")
+        dim = self.embedding_dim - 1 if self.wrong_dimension else self.embedding_dim
+        count = max(0, len(texts) - 1) if self.wrong_count else len(texts)
+        return [[0.1] * dim for _ in range(count)]
+
+
+def _make_mock_http_client(embedding_dim: int = 1024) -> AsyncMock:
     """Create a mock httpx.AsyncClient that returns fake embeddings."""
     client = AsyncMock()
 
@@ -144,9 +209,96 @@ def _make_mock_http_client(embedding_dim: int = 768) -> AsyncMock:
     return client
 
 
+def _collection_info(size: int) -> SimpleNamespace:
+    return SimpleNamespace(
+        config=SimpleNamespace(params=SimpleNamespace(vectors=SimpleNamespace(size=size)))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test 1: Old Qdrant points deleted before new ones stored
 # ---------------------------------------------------------------------------
+
+
+async def test_ensure_collection_dimension_creates_missing_collection():
+    """Missing Qdrant collection is created at the configured embedding dimension."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=False)
+
+    await reembed_mod.ensure_collection_dimension(qdrant)
+
+    qdrant.create_collection.assert_awaited_once()
+    vector_config = qdrant.create_collection.await_args.kwargs["vectors_config"]
+    assert vector_config.size == reembed_mod.EMBEDDING_DIMENSION
+
+
+async def test_ensure_collection_dimension_rejects_model_dimension_env_mismatch():
+    """Known embedding model and EMBEDDING_DIMENSION drift fails before Qdrant mutation."""
+    import importlib
+
+    with patch.dict(
+        "os.environ",
+        {"EMBEDDING_MODEL_NAME": "qwen3-embedding:0.6b", "EMBEDDING_DIMENSION": "768"},
+    ):
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=False)
+
+    with pytest.raises(RuntimeError, match="Embedding configuration mismatch"):
+        await reembed_mod.ensure_collection_dimension(qdrant)
+
+    qdrant.collection_exists.assert_not_called()
+    qdrant.create_collection.assert_not_called()
+
+
+async def test_ensure_collection_dimension_refuses_mismatch_without_checkpoint_flag():
+    """Wrong-dimension collection is a hard stop unless recreate is explicit."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    qdrant.get_collection = AsyncMock(
+        return_value=_collection_info(reembed_mod.EMBEDDING_DIMENSION - 256)
+    )
+
+    with pytest.raises(reembed_mod.ScriptError, match="REEMBED_RECREATE_COLLECTION=true"):
+        await reembed_mod.ensure_collection_dimension(qdrant)
+
+    qdrant.delete_collection.assert_not_called()
+    qdrant.create_collection.assert_not_called()
+
+
+async def test_ensure_collection_dimension_recreates_mismatch_with_checkpoint_flag():
+    """The deliberate recreate flag deletes and recreates the wrong-dimension collection."""
+    sys_path_ctx = patch.dict("os.environ", {"REEMBED_RECREATE_COLLECTION": "true"})
+    with sys_path_ctx:
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    qdrant.get_collection = AsyncMock(
+        return_value=_collection_info(reembed_mod.EMBEDDING_DIMENSION - 256)
+    )
+
+    await reembed_mod.ensure_collection_dimension(qdrant)
+
+    qdrant.delete_collection.assert_awaited_once_with(collection_name="paper_chunks")
+    qdrant.create_collection.assert_awaited_once()
 
 
 async def test_old_qdrant_points_deleted():
@@ -157,6 +309,7 @@ async def test_old_qdrant_points_deleted():
         {
             "LITELLM_BASE_URL": "http://test:4000",
             "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
         },
     )
     with sys_path_ctx:
@@ -180,9 +333,10 @@ async def test_old_qdrant_points_deleted():
 
     pool = _make_mock_pool(fetch_return=chunks)
     qdrant = AsyncMock()
-    http_client = _make_mock_http_client()
+    http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    count = await reembed_mod.reembed_paper(1, pool, qdrant, http_client)
+    count = await reembed_mod.reembed_paper(1, pool, qdrant, http_client, backend)
 
     assert count == 3
 
@@ -202,6 +356,10 @@ async def test_old_qdrant_points_deleted():
         assert pt.payload["embedding_model"] == "nomic-embed-text"
         assert pt.payload["paper_id"] == 1
 
+    assert [pt.id for pt in new_points] == [
+        reembed_mod.deterministic_point_id(1, i, "nomic-embed-text") for i in range(3)
+    ]
+
 
 # ---------------------------------------------------------------------------
 # Test 2: DB updated with new embedding_model after re-embedding
@@ -215,6 +373,7 @@ async def test_db_embedding_model_updated():
         {
             "LITELLM_BASE_URL": "http://test:4000",
             "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
         },
     )
     with sys_path_ctx:
@@ -228,9 +387,10 @@ async def test_db_embedding_model_updated():
 
     pool = _make_mock_pool(fetch_return=chunks)
     qdrant = AsyncMock()
-    http_client = _make_mock_http_client()
+    http_client = _make_mock_http_client(reembed_mod.EMBEDDING_DIMENSION)
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
 
-    await reembed_mod.reembed_paper(42, pool, qdrant, http_client)
+    await reembed_mod.reembed_paper(42, pool, qdrant, http_client, backend)
 
     # Get the connection mock from the second acquire() call (the UPDATE path)
     # The pool.acquire() is called twice: once for fetch, once for update
@@ -240,13 +400,18 @@ async def test_db_embedding_model_updated():
     second_ctx = pool.acquire.return_value
     conn = await second_ctx.__aenter__()
 
-    # Verify UPDATE calls set the new model name
-    assert conn.execute.call_count == 2  # one per chunk
-    for call in conn.execute.call_args_list:
-        args = call.args
-        # args[0] is the SQL, args[2] is the embedding_model value
-        assert "UPDATE paper_chunks" in args[0]
-        assert args[2] == "nomic-embed-text"
+    # Verify batched UPDATE sets the new model name
+    conn.executemany.assert_awaited_once()
+    sql, values = conn.executemany.await_args.args
+    assert "UPDATE paper_chunks" in sql
+    assert len(values) == 2
+    for point_id, model_name, row_id in values:
+        assert model_name == "nomic-embed-text"
+        assert row_id in {100, 101}
+        assert point_id in {
+            reembed_mod.deterministic_point_id(42, 0, "nomic-embed-text"),
+            reembed_mod.deterministic_point_id(42, 1, "nomic-embed-text"),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -261,6 +426,7 @@ async def test_idempotent_skip_already_reembedded():
         {
             "LITELLM_BASE_URL": "http://test:4000",
             "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
         },
     )
     with sys_path_ctx:
@@ -282,6 +448,10 @@ async def test_idempotent_skip_already_reembedded():
     pool.close = AsyncMock()
 
     qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    qdrant.get_collection = AsyncMock(
+        return_value=_collection_info(reembed_mod.EMBEDDING_DIMENSION)
+    )
 
     # create_pool is an async function, so the mock must return a coroutine
     async def _fake_create_pool(*args, **kwargs):
@@ -313,6 +483,7 @@ async def test_main_exits_when_pool_creation_fails():
         {
             "LITELLM_BASE_URL": "http://test:4000",
             "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
         },
     )
     with sys_path_ctx:
@@ -339,6 +510,7 @@ async def test_reembed_partial_failure_preserves_old_points():
         {
             "LITELLM_BASE_URL": "http://test:4000",
             "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
         },
     )
     with sys_path_ctx:
@@ -364,22 +536,175 @@ async def test_reembed_partial_failure_preserves_old_points():
     pool = _make_mock_pool(fetch_return=chunks)
     qdrant = AsyncMock()
 
-    # embed_texts succeeds on first batch, raises on second
-    call_count = 0
+    backend = _FakeEmbeddingBackend(
+        embedding_dim=reembed_mod.EMBEDDING_DIMENSION,
+        fail_on_call=2,
+    )
 
-    async def _mock_embed_texts(client, texts):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return [[0.1] * 768 for _ in texts]
-        raise RuntimeError("Embedding API failure on batch 2")
-
-    with patch.object(reembed_mod, "embed_texts", side_effect=_mock_embed_texts):
-        with pytest.raises(RuntimeError, match="Embedding API failure on batch 2"):
-            await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock())
+    with pytest.raises(RuntimeError, match="Embedding API failure on batch 2"):
+        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
 
     # Old points must NOT have been deleted (atomic safety)
     qdrant.delete.assert_not_called()
+
+
+async def test_main_raises_after_non_script_error_paper_failures():
+    """Per-paper non-ScriptError failures make the overall run fail after the loop."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    paper_ids = [{"paper_id": 1}, {"paper_id": 2}]
+    pool, _conns = _make_sequenced_pool([paper_ids])
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    qdrant.get_collection = AsyncMock(
+        return_value=_collection_info(reembed_mod.EMBEDDING_DIMENSION)
+    )
+
+    async def _fake_create_pool(*args, **kwargs):
+        return pool
+
+    reembed_calls: list[int] = []
+
+    async def _fake_reembed_paper(pid, *_args):
+        reembed_calls.append(pid)
+        if pid == 1:
+            raise RuntimeError("paper exploded")
+        return 3
+
+    with (
+        patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
+        patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(reembed_mod, "reembed_paper", side_effect=_fake_reembed_paper),
+    ):
+        with pytest.raises(reembed_mod.ScriptError, match="paper_id=1"):
+            await reembed_mod.main()
+
+    assert reembed_calls == [1, 2]
+    pool.close.assert_awaited_once()
+
+
+async def test_reembed_old_qdrant_delete_failure_is_fatal_by_default():
+    """Old Qdrant cleanup failures are fatal because they break vector-count parity."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    chunks = [_make_chunk_row(1, 0, "chunk", embedding_id="old-point")]
+    pool = _make_mock_pool(fetch_return=chunks)
+    qdrant = AsyncMock()
+    qdrant.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    with pytest.raises(reembed_mod.ScriptError, match="Failed to delete old Qdrant points"):
+        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+
+
+async def test_reembed_old_qdrant_delete_failure_can_continue_with_explicit_flag():
+    """Debug continuation mode preserves the old tolerant cleanup behavior explicitly."""
+    with patch.dict("os.environ", {"REEMBED_CONTINUE_ON_ERROR": "true"}):
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+
+    chunks = [_make_chunk_row(1, 0, "chunk", embedding_id="old-point")]
+    pool = _make_mock_pool(fetch_return=chunks)
+    qdrant = AsyncMock()
+    qdrant.delete = AsyncMock(side_effect=RuntimeError("delete failed"))
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    assert await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend) == 1
+
+
+async def test_verify_postconditions_requires_db_target_count_and_qdrant_count_parity():
+    """Final verification fails when target-model DB chunks and Qdrant vectors diverge."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    pool = _make_mock_pool(fetchval_return=7)
+    qdrant = AsyncMock()
+    qdrant.count = AsyncMock(return_value=SimpleNamespace(count=8))
+
+    with pytest.raises(reembed_mod.ScriptError, match="Postcondition failed"):
+        await reembed_mod.verify_postconditions(pool, qdrant)
+
+
+async def test_main_runs_postcondition_after_successful_reembed():
+    """Successful re-embed runs the final DB/Qdrant count parity gate."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    paper_ids = [{"paper_id": 1}]
+    pool, _conns = _make_sequenced_pool([paper_ids])
+    qdrant = AsyncMock()
+    qdrant.collection_exists = AsyncMock(return_value=True)
+    qdrant.get_collection = AsyncMock(
+        return_value=_collection_info(reembed_mod.EMBEDDING_DIMENSION)
+    )
+
+    async def _fake_create_pool(*args, **kwargs):
+        return pool
+
+    with (
+        patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
+        patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(reembed_mod, "reembed_paper", AsyncMock(return_value=3)),
+        patch.object(reembed_mod, "verify_postconditions", AsyncMock()) as verify_postconditions,
+    ):
+        await reembed_mod.main()
+
+    verify_postconditions.assert_awaited_once_with(pool, qdrant)
+
+
+async def test_reembed_fails_on_embedding_count_mismatch():
+    """Partial embedding responses fail loudly before Qdrant writes."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    chunks = [_make_chunk_row(1, i, f"chunk {i}") for i in range(2)]
+    pool = _make_mock_pool(fetch_return=chunks)
+    qdrant = AsyncMock()
+    backend = _FakeEmbeddingBackend(
+        embedding_dim=reembed_mod.EMBEDDING_DIMENSION,
+        wrong_count=True,
+    )
+
+    with pytest.raises(reembed_mod.ScriptError, match="Embedding count mismatch"):
+        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+
+    qdrant.upsert.assert_not_called()
+
+
+async def test_reembed_fails_on_embedding_dimension_mismatch():
+    """Wrong-size embeddings fail before Qdrant upsert/DB update."""
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    chunks = [_make_chunk_row(1, 0, "chunk")]
+    pool = _make_mock_pool(fetch_return=chunks)
+    qdrant = AsyncMock()
+    backend = _FakeEmbeddingBackend(
+        embedding_dim=reembed_mod.EMBEDDING_DIMENSION,
+        wrong_dimension=True,
+    )
+
+    with pytest.raises(reembed_mod.ScriptError, match="Embedding dimension mismatch"):
+        await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+
+    qdrant.upsert.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +723,11 @@ async def test_embedder_payload_includes_model_name():
     embedder = Embedder(mock_http, mock_qdrant)
 
     # Mock embed_texts to return fake embeddings
-    embedder.embed_texts = AsyncMock(return_value=[[0.1] * 768, [0.2] * 768])
+    from paper_ingestion.embedder import EMBEDDING_DIMENSION
+
+    embedder.embed_texts = AsyncMock(
+        return_value=[[0.1] * EMBEDDING_DIMENSION, [0.2] * EMBEDDING_DIMENSION]
+    )
 
     chunks = [
         ChunkForEmbedding(
@@ -417,3 +746,75 @@ async def test_embedder_payload_includes_model_name():
     for pt in upserted_points:
         assert pt.payload["embedding_model"] == EMBEDDING_MODEL_NAME
         assert pt.payload["paper_id"] == 99
+
+
+def test_build_embedding_backend_accepts_supported_names():
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+
+    assert reembed_mod.build_embedding_backend("litellm").name == "litellm"
+    assert reembed_mod.build_embedding_backend("local").name == "local"
+    assert reembed_mod.build_embedding_backend("onnx").name == "onnx"
+
+
+def test_build_embedding_backend_rejects_unknown_name():
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+
+    with pytest.raises(reembed_mod.ScriptError, match="Unsupported REEMBED_BACKEND"):
+        reembed_mod.build_embedding_backend("bogus")
+
+
+def test_parse_args_supports_safe_help_flags():
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+
+    args = reembed_mod.parse_args(["--benchmark", "--backend", "local", "--benchmark-size", "2"])
+
+    assert args.benchmark is True
+    assert args.backend == "local"
+    assert args.benchmark_size == 2
+
+
+def test_deterministic_point_id_is_stable_and_model_scoped():
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+
+    first = reembed_mod.deterministic_point_id(1, 2, "qwen3-embedding:0.6b")
+    second = reembed_mod.deterministic_point_id(1, 2, "qwen3-embedding:0.6b")
+    other_model = reembed_mod.deterministic_point_id(1, 2, "nomic-embed-text")
+
+    assert first == second
+    assert first != other_model
+    assert len(first) == 36
+
+
+async def test_run_benchmark_is_read_only():
+    import importlib
+
+    import scripts.reembed as reembed_mod
+
+    importlib.reload(reembed_mod)
+    rows = [_make_chunk_row(1, i, f"chunk {i}") for i in range(3)]
+    pool = _make_mock_pool(fetch_return=rows)
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    await reembed_mod.run_benchmark(pool, backend)
+
+    ctx = pool.acquire.return_value
+    conn = await ctx.__aenter__()
+    conn.fetch.assert_awaited_once()
+    conn.executemany.assert_not_called()
+    conn.execute.assert_not_called()

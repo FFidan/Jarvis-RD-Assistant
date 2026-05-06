@@ -46,6 +46,7 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
     "contradictions.scan": "paper_ingestion",
     "pulse.generate": "paper_ingestion",
     "pulse.train_classifier": "paper_ingestion",
+    "model.pull": "paper_ingestion",
     "zotero.push": "paper_ingestion",
     "zotero.resync": "paper_ingestion",
     "zotero.sync_from_zotero": "paper_ingestion",
@@ -536,7 +537,7 @@ async def list_jobs(
         limit,  # $4 — LIMIT
     ]
 
-    query = """
+    query_with_progress = """
         SELECT pj.args->>'job_id' AS id,
                pj.task_name AS kind,
                pj.args->>'user_id' AS user_id,
@@ -552,13 +553,14 @@ async def list_jobs(
                pj.args - 'job_id' - 'user_id' AS payload,
                NULL::jsonb AS result,
                NULL::jsonb AS error,
-               0::float AS progress,
-               NULL::text AS progress_message,
+               COALESCE(jp.progress, 0)::float AS progress,
+               jp.message AS progress_message,
                (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
                (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
                (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
                'procrastinate' AS source
         FROM procrastinate_jobs pj
+        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'
         WHERE pj.args ? 'job_id'
           AND ($1::text IS NULL OR
                CASE pj.status
@@ -575,7 +577,18 @@ async def list_jobs(
         ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """
+    query_without_progress = query_with_progress.replace(
+        "COALESCE(jp.progress, 0)::float AS progress,\n"
+        "               jp.message AS progress_message,",
+        "0::float AS progress,\n               NULL::text AS progress_message,",
+    ).replace(
+        "        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'\n",
+        "",
+    )
 
     async with pool.acquire() as conn:
-        rows = await conn.fetch(query, *params)
+        try:
+            rows = await conn.fetch(query_with_progress, *params)
+        except asyncpg.UndefinedTableError:
+            rows = await conn.fetch(query_without_progress, *params)
     return [dict(r) for r in rows]

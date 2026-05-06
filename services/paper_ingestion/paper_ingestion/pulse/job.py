@@ -267,6 +267,7 @@ async def run_pulse(
             classifier_values, classifier_meta = await classifier_scores(
                 db_pool,
                 [sc.signals for sc in enriched],
+                user_id=None,
             )
         else:
             classifier_values = [0.0 for _ in enriched]
