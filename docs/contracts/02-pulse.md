@@ -4,7 +4,7 @@
 **Reviewers must update this contract in the same patch as any change to:**
 - The 8 numbered steps in [pulse/job.py:run_pulse](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L68)
 - `_DEFAULT_WEIGHTS` in [pulse/profile.py:19-30](../../services/paper_ingestion/paper_ingestion/pulse/profile.py#L19-L30)
-- `_LLM_CONCURRENCY` / `_STAGE2_TIMEOUT_SECONDS` / per-call timeouts
+- `_LLM_CONCURRENCY` / `_STAGE2_TIMEOUT_SECONDS` / `PULSE_STAGE2_*` scoring knobs / per-call timeouts
 - The `signals` dict shape on `ScoredCandidate`
 - The `stats` dict keys produced by `run_pulse` (drives the Settings → Pulse Diagnostics panel)
 
@@ -173,30 +173,31 @@ Load path ([profile.py:178-186](../../services/paper_ingestion/paper_ingestion/p
 |---|---|---|---|
 | Per-LLM-call timeout | 120 s | `LLM_TIMEOUT_DEFAULT` at [llm_client.py:16](../../libs/jarvis_common/jarvis_common/llm_client.py#L16) | Single chat completion request (or single retry) cannot exceed this |
 | Stage-2 concurrency | 8 | `_LLM_CONCURRENCY` at [scoring.py:30](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L30) | Semaphore-bounded parallel scorers |
-| Stage-2 batch size | 5 | `_stage2_batch_size` at [job.py:182](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L182) | How many candidates to score before reporting `ctx.update_progress` |
+| Stage-2 model alias | `fast` | `PULSE_STAGE2_MODEL` with fallback at [scoring.py:47](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L47) | Uses the smaller local model for Pulse scoring by default; operators can override to `smart` or another LiteLLM alias |
+| Stage-2 retry budget | 1 | `PULSE_STAGE2_MAX_RETRIES` with fallback at [scoring.py:52-61](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L52-L61) | Caps structured-output retries so one bad candidate does not expand into a long manual Pulse run |
+| Stage-2 orchestrator call | 1 call over all Stage-1 survivors | `_stage2_with_progress` at [job.py:218-232](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L218-L232); inner concurrency at [scoring.py:292](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L292) | `run_pulse` no longer slices candidates into outer batches; `stage2_llm_rerank` owns per-candidate concurrency |
 | Stage-2 wall-clock cap | 600 s | `_STAGE2_TIMEOUT_SECONDS` at [job.py:48](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L48); applied at [job.py:204-207](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L204-L207) | Outer `asyncio.wait_for` around all Stage-2 work; on timeout → `_fallback_stage2` |
 
 ### 5.1 Worst-case math
 
-With `pulse.stage2_top_k = 40` (default), `_LLM_CONCURRENCY = 8`, and
-per-call timeout 120 s, the theoretical worst-case Stage-2 wall-clock is
+With `pulse.stage2_top_k = 40` (default), `_LLM_CONCURRENCY = 8`,
+`PULSE_STAGE2_MODEL=fast`, `PULSE_STAGE2_MAX_RETRIES=1`, and per-call timeout
+120 s, the theoretical worst-case Stage-2 wall-clock is
 
 ```
-  ceil(40 / 8) waves × 120 s/wave = 600 s
+  ceil(40 / 8) waves × 120 s/wave × up to 2 attempts = 1200 s
 ```
 
-which **exactly reaches the 600 s cap**. In practice candidates take less
-than 120 s each (Ollama Mistral-Nemo on the project's GPU averages 20–40 s),
-so typical Stage-2 runs land well below 200 s. The adjustment (Task B.1,
-2026-05-02) was driven by observed timeout during test runs; this tuning
-moves the worst-case boundary to the existing timeout limit without
-compromising typical p50/p95 latency.
+The outer 600 s cap still wins. In practice the fast alias is expected to score
+well below the per-call timeout; if structured-output validation repeatedly
+fails, the pipeline degrades to embedding-only fallback instead of blocking the
+job indefinitely. The May 2026 speed fix removed the old outer batch-of-5 loop
+so `run_pulse` makes one Stage-2 call and lets the scorer's semaphore control
+parallelism.
 
-**Implication for B.1 (Instructor):** Instructor's `max_retries=2` adds up
-to 3× round-trips per call on validation failure. That is **orthogonal to**
-this timeout. If validation failures are <5% of calls (typical with a JSON-mode
-local model), the latency cost is small. If they are higher, the 600 s cap
-becomes a tighter constraint, not a looser one.
+**Implication for B.1 (Instructor):** Instructor retry count is part of the
+latency budget now. Keep `PULSE_STAGE2_MAX_RETRIES` low unless you have measured
+validation failures and accepted the longer wall-clock risk.
 
 ---
 
@@ -265,6 +266,12 @@ The `stats` dict is the **only** structured surface for Pulse
 observability today. After [04-observability.md](04-observability.md) ships,
 Langfuse traces become a parallel surface for per-call latency and per-stage timing.
 
+Provider diagnostics in `source_diagnostics` are user-visible and MUST be
+sanitized. They may include provider names, status classes, HTTP status codes,
+and retry hints; they must not include raw exception strings, full request URLs,
+tokens, or provider response bodies. Raw exception detail belongs in service
+logs only.
+
 ---
 
 ## 8. Deck persist semantics
@@ -328,7 +335,7 @@ Documenting; not prescribing.
 These dispositions are the implementation plan's call. The contract's job
 is to surface the choices.
 
-**Decision log:** The "600 s Stage-2 cap (observed to fire 2026-05-02)" row has been **RESOLVED** as of Task B.1 (2026-05-02) — disposition (b) was selected: `_LLM_CONCURRENCY` increased 5→8 and `_DEFAULT_STAGE2_TOP_K` reduced 50→40, moving worst-case to exactly the 600 s boundary. The combined change delivers the same per-user top-k reduction as disposition (a) alone, but distributes the wall-clock savings across higher parallelism.
+**Decision log:** The "600 s Stage-2 cap (observed to fire 2026-05-02)" row was first resolved by Task B.1 (2026-05-02) via `_LLM_CONCURRENCY` 5→8 and `_DEFAULT_STAGE2_TOP_K` 50→40. The 2026-05-06 closeout keeps those limits but routes Stage 2 through the fast alias by default, lowers structured-output retries to 1, and removes the outer batch loop so the scorer's semaphore is the only concurrency control.
 
 ---
 
@@ -352,16 +359,17 @@ Every cited identifier was Read in the session producing this contract.
 | `_STAGE2_TIMEOUT_SECONDS = 600` | services/paper_ingestion/paper_ingestion/pulse/job.py:48 | Stage-2 wall-clock cap |
 | `_fallback_stage2` | services/paper_ingestion/paper_ingestion/pulse/job.py:51-65 | Clears LLM signals, preserves Stage 1 final_score |
 | `asyncio.wait_for(_stage2_with_progress(), timeout=600)` | services/paper_ingestion/paper_ingestion/pulse/job.py:204-207 | Timeout enforcement |
-| Stage-2 batch + progress reporting | services/paper_ingestion/paper_ingestion/pulse/job.py:182-202 | Per-batch ctx.update_progress |
+| Stage-2 single-call progress reporting | services/paper_ingestion/paper_ingestion/pulse/job.py:218-232 | One Stage-2 call over all survivors; completion progress reports `N/N` |
 | Citation signals gate | services/paper_ingestion/paper_ingestion/pulse/job.py:233-241 | `wants_citation` triggers compute_citation_signals |
 | Classifier gate | services/paper_ingestion/paper_ingestion/pulse/job.py:258-270 | `wants_classifier` triggers classifier_scores |
 | Per-card SAVEPOINT loop | services/paper_ingestion/paper_ingestion/pulse/job.py:331-345 | Isolates failing card upserts |
 | `pulse.train_classifier` post-run enqueue | services/paper_ingestion/paper_ingestion/pulse/job.py:373 | Self-improving classifier loop |
 | `_pulse_generate_job` job_handler | services/paper_ingestion/paper_ingestion/pulse/job.py:384-417 | On-demand entry point via jobs subsystem |
 | `ScoredCandidate` dataclass | services/paper_ingestion/paper_ingestion/pulse/scoring.py:42-53 | Cross-stage envelope |
-| `_LLM_CONCURRENCY = 8` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:30 | Stage-2 semaphore (bumped 5→8 by Task B.1) |
-| `_LLM_MODEL = "smart"` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:31 | Stage-2 model alias |
-| `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:32-33 | Stage-2 LLM options |
+| `_LLM_CONCURRENCY = 8` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:46 | Stage-2 semaphore |
+| `_LLM_MODEL` from `PULSE_STAGE2_MODEL` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:47 | Stage-2 model alias defaults to `fast` |
+| `_stage2_max_retries()` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:52-61 | Stage-2 structured-output retry budget defaults to 1 |
+| `_LLM_MAX_TOKENS = 512`, `_LLM_TEMPERATURE = 0.0` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:48-49 | Stage-2 LLM options |
 | `stage1_embedding_filter` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:94-217 | Stage 1: embed + cosine + recency + author bonus + L2 |
 | `stage2_llm_rerank` | services/paper_ingestion/paper_ingestion/pulse/scoring.py:225-334 | Stage 2 with bounded concurrency |
 | `_score_one` LLM call | services/paper_ingestion/paper_ingestion/pulse/scoring.py:259-301 | Per-candidate LLM call inside semaphore |

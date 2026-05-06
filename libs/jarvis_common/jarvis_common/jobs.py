@@ -65,7 +65,7 @@ JOB_HANDLER_OWNER: dict[str, Literal["paper_ingestion", "learning_engine", "tele
 class ProgressContext(Protocol):
     """Minimum interface a job handler receives as its execution context."""
 
-    async def report_progress(self, percent: float, message: str = "") -> None: ...
+    async def update_progress(self, progress: float, message: str | None = None) -> None: ...
 
 
 # SSE keepalive / max-stream constants shared across routers
@@ -582,19 +582,45 @@ async def list_jobs(
         ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """
-    query_without_progress = query_with_progress.replace(
-        "COALESCE(jp.progress, 0)::float AS progress,\n"
-        "               jp.message AS progress_message,\n"
-        "               jp.result AS result,\n"
-        "               jp.error AS error,",
-        "0::float AS progress,\n"
-        "               NULL::text AS progress_message,\n"
-        "               NULL::jsonb AS result,\n"
-        "               NULL::jsonb AS error,",
-    ).replace(
-        "        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'\n",
-        "",
-    )
+    query_without_progress = """
+        SELECT pj.args->>'job_id' AS id,
+               pj.task_name AS kind,
+               pj.args->>'user_id' AS user_id,
+               CASE pj.status
+                 WHEN 'todo'       THEN 'queued'
+                 WHEN 'doing'      THEN 'running'
+                 WHEN 'succeeded'  THEN 'succeeded'
+                 WHEN 'failed'     THEN 'failed'
+                 WHEN 'cancelled'  THEN 'cancelled'
+                 WHEN 'aborting'   THEN 'cancelled'
+                 WHEN 'aborted'    THEN 'cancelled'
+                 ELSE 'running' END AS status,
+               pj.args - 'job_id' - 'user_id' AS payload,
+               NULL::jsonb AS result,
+               NULL::jsonb AS error,
+               0::float AS progress,
+               NULL::text AS progress_message,
+               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
+               (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
+               (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at,
+               'procrastinate' AS source
+        FROM procrastinate_jobs pj
+        WHERE pj.args ? 'job_id'
+          AND ($1::text IS NULL OR
+               CASE pj.status
+                 WHEN 'todo'       THEN 'queued'
+                 WHEN 'doing'      THEN 'running'
+                 WHEN 'succeeded'  THEN 'succeeded'
+                 WHEN 'failed'     THEN 'failed'
+                 WHEN 'cancelled'  THEN 'cancelled'
+                 WHEN 'aborting'   THEN 'cancelled'
+                 WHEN 'aborted'    THEN 'cancelled'
+                 ELSE 'running' END = $1)
+          AND ($2::text IS NULL OR pj.task_name = $2)
+          AND ($3::text IS NULL OR pj.args->>'user_id' IS NULL OR pj.args->>'user_id' = $3)
+        ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
+        LIMIT $4
+    """
 
     async with pool.acquire() as conn:
         try:

@@ -100,6 +100,64 @@ async def test_stage2_fills_llm_scores():
 
 
 @pytest.mark.asyncio
+async def test_stage2_uses_fast_model_and_single_retry_by_default(monkeypatch):
+    """Pulse Stage 2 defaults to the faster local scoring alias and reduced retries."""
+    import importlib
+
+    import paper_ingestion.pulse.scoring as scoring_mod
+
+    monkeypatch.delenv("PULSE_STAGE2_MODEL", raising=False)
+    monkeypatch.delenv("PULSE_STAGE2_MAX_RETRIES", raising=False)
+    importlib.reload(scoring_mod)
+
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper)]
+    profile = _make_profile()
+
+    with patch(
+        "paper_ingestion.pulse.scoring.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_make_scoring_output(relevance=8, novelty=6),
+    ) as call_llm:
+        await scoring_mod.stage2_llm_rerank(
+            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+        )
+
+    call_kwargs = call_llm.await_args.kwargs
+    assert call_kwargs["options"].model == "fast"
+    assert call_kwargs["max_retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stage2_model_and_retry_budget_are_env_configurable(monkeypatch):
+    """Operators can trade Pulse quality/speed without code changes."""
+    import importlib
+
+    import paper_ingestion.pulse.scoring as scoring_mod
+
+    monkeypatch.setenv("PULSE_STAGE2_MODEL", "smart")
+    monkeypatch.setenv("PULSE_STAGE2_MAX_RETRIES", "0")
+    importlib.reload(scoring_mod)
+
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper)]
+    profile = _make_profile()
+
+    with patch(
+        "paper_ingestion.pulse.scoring.call_llm_structured",
+        new_callable=AsyncMock,
+        return_value=_make_scoring_output(relevance=8, novelty=6),
+    ) as call_llm:
+        await scoring_mod.stage2_llm_rerank(
+            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+        )
+
+    call_kwargs = call_llm.await_args.kwargs
+    assert call_kwargs["options"].model == "smart"
+    assert call_kwargs["max_retries"] == 0
+
+
+@pytest.mark.asyncio
 async def test_stage2_normalizes_scores_to_0_1():
     """llm_relevance and llm_novelty signals are normalized to [0,1] (value/10)."""
     paper = _make_paper(0)

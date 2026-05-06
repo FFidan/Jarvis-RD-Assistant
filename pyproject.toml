@@ -38,6 +38,7 @@ paper-ingestion = [
     "rapidfuzz>=3.0.0",
     "slowapi>=0.1.9",
     "tiktoken>=0.7.0",
+    "transformers>=4.45.2,<4.52.0",
     "uvicorn[standard]>=0.30.0",
     "uvloop>=0.19,<1",
 ]

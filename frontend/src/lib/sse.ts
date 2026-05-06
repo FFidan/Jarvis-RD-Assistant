@@ -59,6 +59,10 @@ export interface AnalyzeErrorEvent {
   type: 'error';
   step: string;
   message: string;
+  /** Stable sanitized code intended for display and support correlation. */
+  error_code?: string | null;
+  /** Sanitized user-facing message. Prefer this over raw backend internals when present. */
+  display_message?: string | null;
   /** Structured error class name from the backend (e.g. "PdfTooLargeError"). Optional — absent until W1.6-I backend ships. */
   error_type?: string | null;
   /** Human-readable detail string from the backend. Optional — absent until W1.6-I backend ships. */
@@ -115,7 +119,7 @@ export async function* streamSSE(
       useAuthStore.getState().logout();
       throw new Error('Unauthorized — session ended');
     }
-    throw new Error(`SSE ${res.status}: ${await res.text()}`);
+    throw new Error(`SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
   }
 
   for await (const data of parseSSEFrames(res)) {
@@ -152,7 +156,7 @@ export async function* streamAnalyze(
       useAuthStore.getState().logout();
       throw new Error('Unauthorized — session ended');
     }
-    throw new Error(`Analyze SSE ${res.status}: ${await res.text()}`);
+    throw new Error(`Analyze SSE ${res.status}: ${res.status >= 500 ? 'Server error' : 'Request failed'}`);
   }
 
   for await (const data of parseSSEFrames(res)) {

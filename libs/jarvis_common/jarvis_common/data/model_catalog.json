@@ -12,7 +12,9 @@
     "tier": 1,
     "description": "Small local Qwen3 model for quick tasks and light reasoning.",
     "notes": "",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "qwen3:8b",
@@ -27,7 +29,9 @@
     "tier": 1,
     "description": "Balanced local Qwen3 model for everyday scientific reading.",
     "notes": "",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "qwen3:14b",
@@ -42,7 +46,9 @@
     "tier": 2,
     "description": "Stronger local reasoning model for scientific text.",
     "notes": "",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "qwen3:30b-a3b",
@@ -57,7 +63,9 @@
     "tier": 3,
     "description": "MoE Qwen3 model for higher-end local machines.",
     "notes": "",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "gemma3:12b",
@@ -72,7 +80,9 @@
     "tier": 2,
     "description": "Alternative local smart model for mid-tier GPUs.",
     "notes": "",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "llama4:scout",
@@ -87,7 +97,9 @@
     "tier": 2,
     "description": "Long-context local model for extended paper chains.",
     "notes": "License requires attribution.",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "qwen3-embedding:0.6b",
@@ -104,7 +116,8 @@
     "notes": "Outputs 1024-dimensional embeddings.",
     "last_reviewed": "2026-05-03",
     "embedding_dimension": 1024,
-    "phase": "default"
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "qwen3-embedding:4b",
@@ -116,7 +129,7 @@
     "disk_gb": 2.6,
     "context_tokens": 32768,
     "license": "Apache 2.0",
-    "tier": 2,
+    "tier": 1,
     "description": "Advanced local embedding candidate for notation-heavy scientific retrieval.",
     "notes": "Not assignable in Phase C. Default output dimension differs from the 1024d Qwen3-Embedding-0.6B collection and requires a deliberate MRL/custom-dimension or rebuild plan.",
     "last_reviewed": "2026-05-06",
@@ -154,7 +167,9 @@
     "tier": 0,
     "description": "Cloud smart model for high-quality reasoning.",
     "notes": "Requires an Anthropic API key.",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "anthropic/claude-haiku-4-5",
@@ -169,7 +184,9 @@
     "tier": 0,
     "description": "Cloud fast model for lightweight tasks.",
     "notes": "Requires an Anthropic API key.",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "openai/gpt-4o",
@@ -184,7 +201,9 @@
     "tier": 0,
     "description": "Cloud smart model through OpenAI.",
     "notes": "Requires an OpenAI API key.",
-    "last_reviewed": "2026-05-03"
+    "last_reviewed": "2026-05-03",
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "openai/text-embedding-3-small",

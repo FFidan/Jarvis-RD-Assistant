@@ -82,7 +82,9 @@ def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str,
         }
     return {
         "status": "api_error" if status_code else "error",
-        "message": str(exc),
+        "message": (
+            f"{source_name} request failed. Check provider status and source configuration."
+        ),
         "status_code": status_code,
         "retry_after_s": _retry_after_seconds(exc),
         "settings_hint": None,

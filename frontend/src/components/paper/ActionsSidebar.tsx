@@ -143,9 +143,15 @@ export function ActionsSidebar({
             ...prev,
             ...(event.step ? { [event.step]: 'failed' as StepStatus } : {}),
           }));
-          // Surface structured error (error_type + error_detail) when the backend provides them.
+          // Prefer sanitized backend display fields; fall back to legacy raw fields for old services.
           const structuredMsg =
-            event.error_type && event.error_detail
+            event.error_code && event.display_message
+              ? `${event.error_code}: ${event.display_message}`
+              : event.display_message
+              ? event.display_message
+              : event.error_code
+              ? event.error_code
+              : event.error_type && event.error_detail
               ? `${event.error_type}: ${event.error_detail}`
               : event.error_type
               ? event.error_type
@@ -292,7 +298,12 @@ export function ActionsSidebar({
       >
         <Wand2 className="mr-2 h-4 w-4" />
         {analyzeLabel}
-        <InfoTooltip content={ACTION_TOOLTIPS['analyze']} side="left" className="ml-auto" />
+        <InfoTooltip
+          content={ACTION_TOOLTIPS['analyze']}
+          side="left"
+          className="ml-auto"
+          triggerElement="span"
+        />
       </Button>
 
       {/* Step tracker: always visible so users can see pipeline completion state */}
@@ -350,7 +361,12 @@ export function ActionsSidebar({
               >
                 <Download className="mr-2 h-4 w-4" />
                 {downloadMut.isPending ? 'Downloading...' : 'Download PDF'}
-                <InfoTooltip content={ACTION_TOOLTIPS['download']} side="left" className="ml-auto" />
+                <InfoTooltip
+                  content={ACTION_TOOLTIPS['download']}
+                  side="left"
+                  className="ml-auto"
+                  triggerElement="span"
+                />
               </Button>
             )}
 
@@ -366,7 +382,12 @@ export function ActionsSidebar({
               >
                 <Cog className="mr-2 h-4 w-4" />
                 {processMut.isPending ? 'Processing...' : 'Process PDF'}
-                <InfoTooltip content={ACTION_TOOLTIPS['process']} side="left" className="ml-auto" />
+                <InfoTooltip
+                  content={ACTION_TOOLTIPS['process']}
+                  side="left"
+                  className="ml-auto"
+                  triggerElement="span"
+                />
               </Button>
             )}
 
@@ -381,7 +402,12 @@ export function ActionsSidebar({
               >
                 <FileText className="mr-2 h-4 w-4" />
                 {summarizeMut.isPending ? 'Summarizing...' : 'Generate Summary'}
-                <InfoTooltip content={ACTION_TOOLTIPS['summarize']} side="left" className="ml-auto" />
+                <InfoTooltip
+                  content={ACTION_TOOLTIPS['summarize']}
+                  side="left"
+                  className="ml-auto"
+                  triggerElement="span"
+                />
               </Button>
             )}
 
@@ -504,7 +530,12 @@ export function ActionsSidebar({
           >
             <Sparkles className="mr-2 h-4 w-4" />
             {isGenPending ? 'Generating…' : 'Generate Cards'}
-            <InfoTooltip content={ACTION_TOOLTIPS['generate-cards']} side="left" className="ml-auto" />
+            <InfoTooltip
+              content={ACTION_TOOLTIPS['generate-cards']}
+              side="left"
+              className="ml-auto"
+              triggerElement="span"
+            />
           </Button>
         </div>
       ) : (

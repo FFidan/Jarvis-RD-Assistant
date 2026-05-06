@@ -374,7 +374,7 @@ async def test_pulse_job_stamps_pulse() -> None:
         ),
         patch(
             "paper_ingestion.pulse.job.discover_candidates",
-            AsyncMock(return_value=([], {})),
+            AsyncMock(return_value=([], {}, {})),
         ),
         patch(
             "paper_ingestion.pulse.job.stage1_embedding_filter",

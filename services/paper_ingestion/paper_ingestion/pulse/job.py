@@ -167,11 +167,7 @@ async def run_pulse(
             source_cache=source_cache,
             include_diagnostics=True,
         )
-        if len(discovery_result) == 2:
-            candidates, source_counts = discovery_result
-            source_diagnostics = {}
-        else:
-            candidates, source_counts, source_diagnostics = discovery_result
+        candidates, source_counts, source_diagnostics = discovery_result  # type: ignore[assignment]
     except Exception as exc:  # broad: fan-out over heterogeneous source plugins; degrade to []
         stats["last_error"] = f"discover_candidates: {exc}"
         logger.exception("pulse.discover failed")
@@ -213,31 +209,23 @@ async def run_pulse(
         stage2_out = []
     else:
         try:
-            _stage2_batch_size = 5
             _stage2_total = len(stage1_out)
-            _stage2_results: list[ScoredCandidate] = []
 
             async def _stage2_with_progress() -> list[ScoredCandidate]:
-                """Score candidates in batches, reporting per-batch progress via ctx."""
-                all_results: list[ScoredCandidate] = []
-                for _batch_start in range(0, _stage2_total, _stage2_batch_size):
-                    batch = stage1_out[_batch_start : _batch_start + _stage2_batch_size]
-                    batch_results = await stage2_llm_rerank(
-                        batch,
-                        profile,
-                        http_client,
-                        verifier=svc.verifier,
-                        openai_client=svc.openai_client,
+                """Score all candidates in one call; inner stage2 handles concurrency."""
+                results = await stage2_llm_rerank(
+                    stage1_out,
+                    profile,
+                    http_client,
+                    verifier=svc.verifier,
+                    openai_client=svc.openai_client,
+                )
+                if ctx:
+                    await ctx.update_progress(
+                        0.95,
+                        f"Stage 2 LLM scoring ({_stage2_total}/{_stage2_total})",
                     )
-                    all_results.extend(batch_results)
-                    _scored_so_far = len(all_results)
-                    if ctx:
-                        _pct = min(0.95, 0.85 + 0.10 * (_scored_so_far / _stage2_total))
-                        await ctx.update_progress(
-                            _pct,
-                            f"Stage 2 LLM scoring ({_scored_so_far}/{_stage2_total})",
-                        )
-                return all_results
+                return results
 
             stage2_out = await asyncio.wait_for(
                 _stage2_with_progress(),

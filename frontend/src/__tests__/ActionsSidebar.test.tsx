@@ -204,6 +204,60 @@ describe('ActionsSidebar', () => {
     expect(screen.getByRole('button', { name: /Retry processing/i })).toBeInTheDocument();
   });
 
+  it('safe analyze error display prefers display_message and error_code over raw internals', async () => {
+    const user = userEvent.setup();
+
+    mockStreamEvents = [
+      { type: 'step', step: 'downloading', status: 'completed' },
+      { type: 'step', step: 'processing', status: 'started' },
+      {
+        type: 'error',
+        step: 'processing',
+        message: 'PDF processing failed',
+        error_type: 'KeyError',
+        error_detail: 'encoder registry missing key',
+        error_code: 'PDF_PROCESSING_FAILED',
+        display_message: 'The PDF could not be processed. Try another source.',
+      } as never,
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/PDF_PROCESSING_FAILED/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/The PDF could not be processed\. Try another source\./),
+      ).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/KeyError/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/encoder registry/)).not.toBeInTheDocument();
+  });
+
+  it('safe analyze error display uses error_code without falling back to raw internals', async () => {
+    const user = userEvent.setup();
+
+    mockStreamEvents = [
+      {
+        type: 'error',
+        step: 'processing',
+        message: 'PDF processing failed',
+        error_type: 'KeyError',
+        error_detail: 'encoder registry missing key',
+        error_code: 'PDF_PROCESSING_FAILED',
+      } as never,
+    ];
+
+    renderSidebar();
+    await user.click(screen.getByRole('button', { name: /Analyze Paper/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText('PDF_PROCESSING_FAILED')).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/KeyError/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/encoder registry/)).not.toBeInTheDocument();
+  });
+
   it('download failure via SSE error event shows error message', async () => {
     const user = userEvent.setup();
 

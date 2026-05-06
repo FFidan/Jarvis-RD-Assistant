@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Cpu, Download, Trash2 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Button } from '@/components/ui/button';
 import {
   Select,
@@ -12,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { useConfirm } from '@/hooks/use-confirm';
 import { apiFetch } from '@/lib/api';
 
 interface SystemModels {
@@ -139,8 +141,18 @@ function matchesConfiguredValue(entry: ModelCatalogEntry, value: string): boolea
   );
 }
 
+function localModelTag(entry: ModelCatalogEntry): string {
+  return entry.ollama_tag ?? entry.id;
+}
+
+function localModelPath(entry: ModelCatalogEntry): string {
+  return encodeURIComponent(localModelTag(entry));
+}
+
 export function ModelSelector({ value, onChange, configKey: role }: ModelSelectorProps) {
   const queryClient = useQueryClient();
+  const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
+  const [deleteTarget, setDeleteTarget] = useState<ModelCatalogEntry | null>(null);
   const { data, error } = useQuery<SystemModels>({
     queryKey: ['system-models'],
     queryFn: () => apiFetch<SystemModels>('/api/system/models'),
@@ -209,28 +221,62 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     }))
     .filter((group) => group.models.length > 0);
   const detectedHardware = hardwareSummary(data?.hardware);
-  const selectedLocalTag =
-    selectedEntry && isLocalModel(selectedEntry) ? (selectedEntry.ollama_tag ?? selectedEntry.id) : '';
-  const modelPath = selectedLocalTag ? encodeURIComponent(selectedLocalTag) : '';
+  const pullableModels = allModels.filter(
+    (entry) =>
+      isLocalModel(entry) &&
+      entry.status === 'downloadable' &&
+      entry.fit !== 'unfit',
+  );
   const pullMutation = useMutation({
-    mutationFn: () => apiFetch(`/api/system/models/${modelPath}/pull`, { method: 'POST' }),
+    mutationFn: (entry: ModelCatalogEntry) =>
+      apiFetch(`/api/system/models/${localModelPath(entry)}/pull`, { method: 'POST' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
   });
   const deleteMutation = useMutation({
-    mutationFn: () => apiFetch(`/api/system/models/${modelPath}`, { method: 'DELETE' }),
+    mutationFn: (entry: ModelCatalogEntry) =>
+      apiFetch(`/api/system/models/${localModelPath(entry)}`, { method: 'DELETE' }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
   });
-  const canPullSelected =
-    selectedEntry !== undefined &&
-    isLocalModel(selectedEntry) &&
-    selectedEntry.status === 'downloadable' &&
-    selectedEntry.fit !== 'unfit';
+  const [pullingIds, setPullingIds] = useState<Set<string>>(new Set());
   const canDeleteSelected =
     selectedEntry !== undefined &&
     isLocalModel(selectedEntry) &&
     selectedEntry.pulled &&
     !selectedEntry.active &&
     selectedEntry.status !== 'active';
+  const deletableModels = (catalog ?? []).filter(
+    (e) =>
+      isLocalModel(e) &&
+      e.pulled &&
+      !e.active &&
+      e.status !== 'active' &&
+      e.id !== selectedEntry?.id,
+  );
+  const handlePull = async (entry: ModelCatalogEntry) => {
+    const parts: string[] = [];
+    if (entry.disk_gb > 0) parts.push(`${entry.disk_gb.toFixed(1)} GB disk`);
+    if (entry.vram_gb > 0) parts.push(`${entry.vram_gb.toFixed(1)} GB VRAM`);
+    const sizeNote = parts.length > 0 ? ` (requires ${parts.join(', ')})` : '';
+    if (!window.confirm(`Pull ${entry.name}?${sizeNote}`)) return;
+    setPullingIds((prev) => new Set(prev).add(entry.id));
+    try {
+      await pullMutation.mutateAsync(entry);
+    } finally {
+      setPullingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(entry.id);
+        return next;
+      });
+    }
+  };
+  const handleDelete = async (entry: ModelCatalogEntry) => {
+    setDeleteTarget(entry);
+    const confirmed = await confirm();
+    if (confirmed) {
+      deleteMutation.mutate(entry);
+    }
+    setDeleteTarget(null);
+  };
 
   return (
     <div className="space-y-2">
@@ -330,36 +376,63 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
           )}
         </SelectContent>
       </Select>
-      {(canPullSelected || canDeleteSelected) && selectedEntry && (
+      {(pullableModels.length > 0 || (canDeleteSelected && selectedEntry) || deletableModels.length > 0) && (
         <div className="flex flex-wrap gap-2">
-          {canPullSelected && (
+          {pullableModels.map((entry) => (
             <Button
+              key={`pull-${entry.id}`}
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => pullMutation.mutate()}
-              disabled={pullMutation.isPending}
-              aria-label={`Pull model ${selectedEntry.name}`}
+              onClick={() => handlePull(entry)}
+              disabled={pullingIds.has(entry.id)}
+              aria-label={`Pull model ${entry.name}`}
             >
               <Download className="mr-2 h-4 w-4" />
-              Pull
+              Pull {entry.name}
             </Button>
-          )}
-          {canDeleteSelected && (
+          ))}
+          {canDeleteSelected && selectedEntry && (
             <Button
               type="button"
               size="sm"
               variant="outline"
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
+              onClick={() => handleDelete(selectedEntry)}
+              disabled={deleteMutation.isPending || !!deleteTarget}
               aria-label={`Delete model ${selectedEntry.name}`}
             >
               <Trash2 className="mr-2 h-4 w-4" />
               Delete
             </Button>
           )}
+          {deletableModels.map((entry) => (
+            <Button
+              key={`delete-${entry.id}`}
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => handleDelete(entry)}
+              disabled={deleteMutation.isPending || !!deleteTarget}
+              aria-label={`Delete model ${entry.name}`}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete {entry.name}
+            </Button>
+          ))}
         </div>
       )}
+      <ConfirmDialog
+        open={isOpen && deleteTarget !== null}
+        title="Delete Model"
+        description={
+          deleteTarget
+            ? `This will remove ${deleteTarget.name} from Ollama. You can pull it again later.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
+      />
     </div>
   );
 }

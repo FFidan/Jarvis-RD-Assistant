@@ -215,6 +215,7 @@ const defaultModels = {
 describe('ModelSelector', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     // Restore default mock after tests that override it
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue(defaultModels);
@@ -426,7 +427,88 @@ describe('ModelSelector', () => {
     });
   });
 
-  it('offers a delete action for selected inactive pulled local models', async () => {
+  it('offers a pull action for downloadable local models while the current value remains selected', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      current: { smart_model: 'qwen3:14b' },
+      catalog: [
+        defaultModels.catalog[0],
+        {
+          ...defaultModels.catalog[1],
+          id: 'qwen3:8b',
+          name: 'Qwen3 8B',
+          ollama_tag: 'qwen3:8b',
+          roles: ['smart'],
+          disk_gb: 4.9,
+          vram_gb: 5.5,
+          tier: 1,
+          quantization: 'Q4_K_M',
+        },
+      ],
+    });
+
+    renderComponent({ value: 'qwen3:14b', configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'qwen3:14b');
+      expect(screen.getByRole('button', { name: 'Pull model Qwen3 8B' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
+
+    await waitFor(() => {
+      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
+        method: 'POST',
+      });
+    });
+  });
+
+  it('does not assign a downloadable local model before its pull succeeds', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    let resolvePull!: () => void;
+    const pullPromise = new Promise<void>((resolve) => {
+      resolvePull = resolve;
+    });
+    vi.mocked(apiFetch).mockImplementation((path, init) => {
+      if (path === '/api/system/models/qwen3%3A8b/pull' && init?.method === 'POST') {
+        return pullPromise as never;
+      }
+      return Promise.resolve({
+        ...defaultModels,
+        current: { smart_model: 'qwen3:14b' },
+        catalog: [
+          defaultModels.catalog[0],
+          {
+            ...defaultModels.catalog[1],
+            id: 'qwen3:8b',
+            name: 'Qwen3 8B',
+            ollama_tag: 'qwen3:8b',
+            roles: ['smart'],
+          },
+        ],
+      }) as never;
+    });
+    const onChange = vi.fn();
+
+    renderComponent({ value: 'qwen3:14b', onChange, configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pull model Qwen3 8B' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 8B' }));
+
+    await waitFor(() => {
+      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A8b/pull', {
+        method: 'POST',
+      });
+    });
+    expect(onChange).not.toHaveBeenCalled();
+    resolvePull();
+  });
+
+  it('requires confirmation before deleting selected inactive pulled local models', async () => {
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue(defaultModels);
 
@@ -438,6 +520,16 @@ describe('ModelSelector', () => {
       ).toBeInTheDocument();
     });
     fireEvent.click(screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }));
+    expect(screen.getByText('Delete Model')).toBeInTheDocument();
+    expect(screen.getByText(/This will remove Qwen3 Embedding 0.6B from Ollama/)).toBeInTheDocument();
+    expect(
+      vi.mocked(apiFetch).mock.calls.some(
+        ([path, init]) =>
+          path === '/api/system/models/qwen3-embedding%3A0.6b' && init?.method === 'DELETE',
+      ),
+    ).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
 
     await waitFor(() => {
       expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3-embedding%3A0.6b', {
@@ -474,6 +566,19 @@ describe('ModelSelector', () => {
       expect(screen.getByText('Claude Haiku 4.5')).toBeInTheDocument();
     });
     expect(screen.getAllByText('current')).toHaveLength(1);
+  });
+
+  it('does not show delete button for the active model assignment', async () => {
+    renderComponent({ value: 'qwen3:14b', configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+    });
+    // The active smart model should not have a delete button;
+    // other pulled non-active models (e.g. the embed model) may still show one.
+    expect(
+      screen.queryByRole('button', { name: /delete model qwen3 14b/i }),
+    ).not.toBeInTheDocument();
   });
 
   it('normalizes :latest suffix when matching selected local models', async () => {

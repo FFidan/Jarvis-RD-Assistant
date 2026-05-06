@@ -404,11 +404,7 @@ class _FakePdfReadError(Exception):
 
 @pytest.mark.asyncio
 async def test_analyze_stream_process_failure_structured_error(monkeypatch):
-    """C1: When run_process_pdf raises, the SSE error event has structured fields.
-
-    Asserts schema: {"type": "error", "stage": "process_pdf",
-                     "error_type": <class name>, "error_detail": <str(exc)[:200]>}
-    """
+    """C1: When run_process_pdf raises, the SSE error event has safe structured fields."""
     paper_row = {
         "id": 7,
         "source_type": "arxiv",
@@ -431,8 +427,11 @@ async def test_analyze_stream_process_failure_structured_error(monkeypatch):
     err = error_events[0]
     assert err["type"] == "error"
     assert err["stage"] == "process_pdf"
-    assert err["error_type"] == "_FakePdfReadError"
-    assert err["error_detail"] == error_msg
+    assert err["error_code"] == "PDF_PROCESSING_FAILED"
+    assert err["error_type"] == "PDF_PROCESSING_FAILED"
+    assert err["display_message"] == "PDF processing failed. Check service logs for details."
+    assert err["error_detail"] == "PDF processing failed. Check service logs for details."
+    assert error_msg not in str(err)
     # Old "step" / "message" keys ALSO present so the existing FE step-tracker +
     # per-stage Retry button (W1.6-F) keep working — backend emits both shapes.
     assert err["step"] == "processing"
@@ -443,7 +442,7 @@ async def test_analyze_stream_process_failure_structured_error(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_analyze_stream_process_failure_error_detail_truncated(monkeypatch):
-    """C1: error_detail is capped at 200 characters."""
+    """C1: long internal exception text is not exposed as error_detail."""
     paper_row = {
         "id": 8,
         "source_type": "arxiv",
@@ -461,7 +460,38 @@ async def test_analyze_stream_process_failure_error_detail_truncated(monkeypatch
 
     error_events = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
     assert len(error_events) == 1
-    assert len(error_events[0]["error_detail"]) == 200
+    assert (
+        error_events[0]["error_detail"] == "PDF processing failed. Check service logs for details."
+    )
+    assert long_msg not in str(error_events[0])
+
+
+@pytest.mark.asyncio
+async def test_analyze_stream_process_failure_redacts_internal_exception(monkeypatch):
+    """Unexpected processing exceptions expose a safe code/message, not raw internals."""
+    paper_row = {
+        "id": 9,
+        "source_type": "arxiv",
+        "pdf_url": "https://arxiv.org/pdf/test.pdf",
+        "pdf_downloaded": True,
+        "pdf_local_path": "/data/pdfs/9.pdf",
+    }
+    mock_request, mock_pool, deps = _make_mock_request(paper_row)
+
+    mock_process = AsyncMock(side_effect=KeyError("encoder"))
+    events, _ = await _collect_events(
+        monkeypatch, mock_request, 9, mock_pool, deps, mock_process=mock_process
+    )
+
+    error_events = [e for e in events if isinstance(e, dict) and e.get("type") == "error"]
+    assert len(error_events) == 1
+    err = error_events[0]
+    assert err["error_code"] == "PDF_PROCESSING_FAILED"
+    assert err["display_message"] == "PDF processing failed. Check service logs for details."
+    assert err["error_type"] == "PDF_PROCESSING_FAILED"
+    assert err["error_detail"] == "PDF processing failed. Check service logs for details."
+    assert "KeyError" not in str(err)
+    assert "encoder" not in str(err)
 
 
 @pytest.mark.asyncio

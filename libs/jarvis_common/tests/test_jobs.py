@@ -525,6 +525,53 @@ async def test_list_jobs_returns_only_procrastinate_rows():
     assert "procrastinate_jobs" in issued_sql, "list_jobs must query procrastinate_jobs"
 
 
+@pytest.mark.asyncio
+async def test_list_jobs_fallback_omits_job_progress_alias_when_missing():
+    """list_jobs() fallback must not reference jp after removing the progress join."""
+    import asyncpg as _asyncpg
+    from jarvis_common.jobs import list_jobs
+
+    fallback_row = {
+        "id": "p-list-1",
+        "kind": "digest.weekly",
+        "user_id": None,
+        "status": "queued",
+        "payload": {},
+        "result": None,
+        "error": None,
+        "progress": 0.0,
+        "progress_message": None,
+        "created_at": None,
+        "started_at": None,
+        "finished_at": None,
+        "source": "procrastinate",
+    }
+
+    conn = AsyncMock()
+    conn.fetch = AsyncMock(
+        side_effect=[
+            _asyncpg.UndefinedTableError('relation "job_progress" does not exist'),
+            [fallback_row],
+        ]
+    )
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=conn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire = MagicMock(return_value=cm)
+
+    rows = await list_jobs(pool, status="queued", kind="digest.weekly", user_id="u1", limit=5)
+
+    assert rows == [fallback_row]
+    assert conn.fetch.await_count == 2
+    fallback_sql = conn.fetch.await_args_list[1].args[0]
+    assert "LEFT JOIN job_progress" not in fallback_sql
+    assert "jp." not in fallback_sql
+    assert "NULL::jsonb AS result" in fallback_sql
+    assert "NULL::jsonb AS error" in fallback_sql
+    assert conn.fetch.await_args_list[1].args[1:] == ("queued", "digest.weekly", "u1", 5)
+
+
 # ---------------------------------------------------------------------------
 # job_progress LEFT JOIN — migration 054 wiring
 # ---------------------------------------------------------------------------

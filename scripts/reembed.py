@@ -51,7 +51,15 @@ from typing import Any, Protocol
 import asyncpg
 import httpx
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointIdsList,
+    PointStruct,
+    VectorParams,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,6 +132,11 @@ REEMBED_CONTINUE_ON_ERROR = os.environ.get("REEMBED_CONTINUE_ON_ERROR", "").lowe
     "yes",
 }
 RECREATE_COLLECTION = os.environ.get("REEMBED_RECREATE_COLLECTION", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
+REEMBED_SNAPSHOT_CONFIRMED = os.environ.get("REEMBED_SNAPSHOT_CONFIRMED", "").lower() in {
     "1",
     "true",
     "yes",
@@ -379,6 +392,11 @@ async def ensure_collection_dimension(qdrant: AsyncQdrantClient) -> None:
             f"{message} Set REEMBED_RECREATE_COLLECTION=true only after taking an explicit "
             "Qdrant checkpoint/snapshot."
         )
+    if not REEMBED_SNAPSHOT_CONFIRMED:
+        raise ScriptError(
+            f"{message} Set REEMBED_SNAPSHOT_CONFIRMED=true to confirm a Qdrant snapshot "
+            "was taken before setting REEMBED_RECREATE_COLLECTION=true."
+        )
 
     logger.warning("%s Recreating collection because REEMBED_RECREATE_COLLECTION=true.", message)
     await qdrant.delete_collection(collection_name=COLLECTION_NAME)
@@ -445,7 +463,12 @@ async def reembed_paper(
     # 4. Delete old Qdrant points before flipping DB rows. If cleanup fails,
     #    the DB still says the paper needs re-embedding, so a rerun remains
     #    deterministic and can retry the same stale IDs.
-    old_point_ids = [r["embedding_id"] for r in rows if r["embedding_id"]]
+    new_point_ids_by_row_id = {row_id: point_id for point_id, row_id in update_rows}
+    old_point_ids = [
+        row["embedding_id"]
+        for row in rows
+        if row["embedding_id"] and row["embedding_id"] != new_point_ids_by_row_id[row["id"]]
+    ]
     if old_point_ids:
         try:
             await qdrant.delete(
@@ -498,16 +521,29 @@ async def verify_postconditions(pool: asyncpg.Pool, qdrant: AsyncQdrantClient) -
                 EMBEDDING_MODEL_NAME,
             )
         )
-    qdrant_count_result = await qdrant.count(collection_name=COLLECTION_NAME, exact=True)
+    qdrant_count_result = await qdrant.count(
+        collection_name=COLLECTION_NAME,
+        count_filter=Filter(
+            must=[
+                FieldCondition(
+                    key="embedding_model",
+                    match=MatchValue(value=EMBEDDING_MODEL_NAME),
+                )
+            ]
+        ),
+        exact=True,
+    )
     qdrant_vectors = int(qdrant_count_result.count)
     if db_target_chunks != qdrant_vectors:
         raise ScriptError(
             "Postcondition failed: DB target-model chunk count "
-            f"({db_target_chunks}) does not match Qdrant vector count ({qdrant_vectors})"
+            f"({db_target_chunks}) does not match Qdrant vector count for model "
+            f"{EMBEDDING_MODEL_NAME!r} ({qdrant_vectors})"
         )
     logger.info(
-        "Postcondition passed: DB target-model chunks=%d, Qdrant vectors=%d",
+        "Postcondition passed: DB target-model chunks=%d, Qdrant vectors for model %r=%d",
         db_target_chunks,
+        EMBEDDING_MODEL_NAME,
         qdrant_vectors,
     )
 

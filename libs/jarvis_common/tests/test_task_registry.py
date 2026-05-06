@@ -186,6 +186,33 @@ async def test_run_legacy_handler_records_job_error(monkeypatch) -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_run_legacy_handler_redacts_unexpected_exception_text(monkeypatch) -> None:
+    """Unexpected exceptions are logged server-side, not persisted verbatim for clients."""
+    import jarvis_common.task_registry as task_registry
+
+    pool = object()
+    http_client = object()
+    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+
+    async def handler(_pool, _http_client, _payload, _ctx):
+        raise RuntimeError("secret token at /tmp/provider-body")
+
+    monkeypatch.setattr(task_registry, "_pool", pool)
+    monkeypatch.setattr(task_registry, "_http_client", http_client)
+    monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+
+    with pytest.raises(RuntimeError):
+        await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)
+
+    ctx.record_terminal_outcome.assert_awaited_once()
+    error_payload = ctx.record_terminal_outcome.await_args.kwargs["error"]
+    assert error_payload["message"] == "Job failed"
+    assert error_payload["code"] == "JOB_FAILED"
+    assert "secret" not in str(error_payload)
+    assert "/tmp/provider-body" not in str(error_payload)
+
+
 # ---------------------------------------------------------------------------
 # Connector double-assign guard (task_registry.py:80 comment)
 # ---------------------------------------------------------------------------

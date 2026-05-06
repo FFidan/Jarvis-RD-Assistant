@@ -51,6 +51,9 @@ class _FakeVectorParams:
 _fake_qdrant_client_mod = SimpleNamespace(AsyncQdrantClient=MagicMock())
 _fake_qdrant_models_mod = SimpleNamespace(
     Distance=SimpleNamespace(COSINE="cosine"),
+    FieldCondition=MagicMock,
+    Filter=MagicMock,
+    MatchValue=MagicMock,
     PointIdsList=_FakePointIdsList,
     PointStruct=_FakePointStruct,
     VectorParams=_FakeVectorParams,
@@ -281,7 +284,9 @@ async def test_ensure_collection_dimension_refuses_mismatch_without_checkpoint_f
 
 async def test_ensure_collection_dimension_recreates_mismatch_with_checkpoint_flag():
     """The deliberate recreate flag deletes and recreates the wrong-dimension collection."""
-    sys_path_ctx = patch.dict("os.environ", {"REEMBED_RECREATE_COLLECTION": "true"})
+    sys_path_ctx = patch.dict(
+        "os.environ", {"REEMBED_RECREATE_COLLECTION": "true", "REEMBED_SNAPSHOT_CONFIRMED": "true"}
+    )
     with sys_path_ctx:
         import importlib
 
@@ -359,6 +364,52 @@ async def test_old_qdrant_points_deleted():
     assert [pt.id for pt in new_points] == [
         reembed_mod.deterministic_point_id(1, i, "nomic-embed-text") for i in range(3)
     ]
+
+
+async def test_old_qdrant_cleanup_keeps_existing_target_point_ids():
+    """Mixed-model papers must not delete chunks already using target point ids."""
+    sys_path_ctx = patch.dict(
+        "os.environ",
+        {
+            "LITELLM_BASE_URL": "http://test:4000",
+            "EMBEDDING_MODEL_NAME": "nomic-embed-text",
+            "EMBEDDING_DIMENSION": "768",
+        },
+    )
+    with sys_path_ctx:
+        import importlib
+
+        import scripts.reembed as reembed_mod
+
+        importlib.reload(reembed_mod)
+
+    already_target_id = reembed_mod.deterministic_point_id(1, 0, "nomic-embed-text")
+    stale_id = "old-stale-point"
+    chunks = [
+        _make_chunk_row(
+            1,
+            0,
+            "already target",
+            embedding_id=already_target_id,
+            embedding_model="nomic-embed-text",
+        ),
+        _make_chunk_row(
+            1,
+            1,
+            "stale chunk",
+            embedding_id=stale_id,
+            embedding_model="qwen3-embedding:0.6b",
+        ),
+    ]
+    pool = _make_mock_pool(fetch_return=chunks)
+    qdrant = AsyncMock()
+    backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
+
+    await reembed_mod.reembed_paper(1, pool, qdrant, AsyncMock(), backend)
+
+    qdrant.delete.assert_awaited_once()
+    deleted_ids = qdrant.delete.await_args.kwargs["points_selector"].points
+    assert deleted_ids == [stale_id]
 
 
 # ---------------------------------------------------------------------------

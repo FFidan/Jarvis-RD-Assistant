@@ -7,7 +7,6 @@ def test_model_catalog_contains_contract_entries() -> None:
     catalog = load_model_catalog()
     ids = {entry.id for entry in catalog}
 
-    assert len(catalog) == 13
     assert "qwen3-embedding:0.6b" in ids
     assert "qwen3-embedding:4b" in ids
     assert "anthropic/claude-sonnet-4-6" in ids

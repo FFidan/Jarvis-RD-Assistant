@@ -72,6 +72,7 @@ class _FakeConnection:
         self.applied_versions = applied_versions
         self.probe_results = probe_results
         self.deleted_versions: list[int] = []
+        self.executed_sqls: list[str] = []
 
     async def fetch(self, _sql: str, versions: list[int]) -> list[dict[str, int]]:
         return [{"version": version} for version in versions if version in self.applied_versions]
@@ -82,7 +83,8 @@ class _FakeConnection:
             raise result
         return result
 
-    async def execute(self, _sql: str, version: int) -> None:
+    async def execute(self, sql: str, version: int) -> None:
+        self.executed_sqls.append(sql)
         self.deleted_versions.append(version)
 
 
@@ -101,6 +103,7 @@ async def test_repair_false_applied_migrations_removes_failed_probe_rows() -> No
     await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
 
     assert conn.deleted_versions == [33]
+    assert any("DELETE FROM schema_migrations" in s for s in conn.executed_sqls)
 
 
 @pytest.mark.asyncio
@@ -136,3 +139,23 @@ async def test_migration_049_probe_requires_recommendation_feedback_and_no_pulse
     await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
 
     assert conn.deleted_versions == [49]
+
+
+@pytest.mark.asyncio
+async def test_migration_058_probe_requires_job_terminal_columns() -> None:
+    """058 is false-applied if job_progress lacks terminal result/error columns."""
+    probes = {version: probe_sql for version, _, probe_sql in _MIGRATION_SCHEMA_PROBES}
+    probe_058 = probes[58]
+
+    assert "job_progress" in probe_058
+    assert "result" in probe_058
+    assert "error" in probe_058
+
+    conn = _FakeConnection(
+        applied_versions={58},
+        probe_results={probe_058: False},
+    )
+
+    await _repair_false_applied_migrations(conn)  # type: ignore[arg-type]
+
+    assert conn.deleted_versions == [58]

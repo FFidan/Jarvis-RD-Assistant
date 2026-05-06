@@ -12,6 +12,7 @@ export interface InfoTooltipProps {
   content: React.ReactNode;
   side?: 'top' | 'right' | 'bottom' | 'left';
   className?: string;
+  triggerElement?: 'button' | 'span';
 }
 
 /**
@@ -25,21 +26,32 @@ export function InfoTooltip({
   content,
   side = 'top',
   className,
+  triggerElement = 'button',
 }: InfoTooltipProps) {
+  const triggerClassName = cn(
+    'inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+    className,
+  );
+  const icon = <Info className="h-3.5 w-3.5" aria-hidden="true" />;
+
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            aria-label="More info"
-            className={cn(
-              'inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-              className,
-            )}
-          >
-            <Info className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
+          {triggerElement === 'span' ? (
+            <span
+              aria-label="More info"
+              className={triggerClassName}
+              onClick={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+            >
+              {icon}
+            </span>
+          ) : (
+            <button type="button" aria-label="More info" className={triggerClassName}>
+              {icon}
+            </button>
+          )}
         </TooltipTrigger>
         <TooltipContent side={side} className="max-w-xs text-xs">
           {content}

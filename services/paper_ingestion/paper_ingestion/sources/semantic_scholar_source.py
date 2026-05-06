@@ -308,6 +308,9 @@ class SemanticScholarSource(PaperSource):
                 "year": f"{since_date.year}-",
             }
             data = await self._fetch_json("/paper/search", params=params)
+            if not data:
+                logger.warning("S2 search returned no data for query %r; skipping", query)
+                continue
             for item in data.get("data") or []:
                 pid = item.get("paperId", "")
                 if not pid or pid in seen_ids:
@@ -317,7 +320,9 @@ class SemanticScholarSource(PaperSource):
                 except Exception:
                     logger.exception("Failed to parse S2 paper: %s", pid)
                     continue
-                if paper.published_date is not None and paper.published_date < since_date:
+                if paper.published_date is None:
+                    continue
+                if paper.published_date < since_date:
                     continue
                 seen_ids.add(pid)
                 papers.append(paper)

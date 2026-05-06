@@ -210,8 +210,8 @@ async def call_llm_structured(
     _config = config or get_litellm_config()
     _messages: list[dict[str, str]] = list(messages) if messages else []
     if prompt:
-        if _options.system and not _messages:
-            _messages = [{"role": "system", "content": _options.system}]
+        if _options.system and not any(m.get("role") == "system" for m in _messages):
+            _messages = [{"role": "system", "content": _options.system}] + _messages
         _messages = _messages + [{"role": "user", "content": prompt}]
     elif not _messages:
         raise ValueError("Either prompt or messages must be provided")

@@ -126,10 +126,12 @@ def _require_dependencies() -> tuple[asyncpg.Pool, httpx.AsyncClient]:
 
 def _terminal_error_payload(exc: BaseException) -> dict[str, Any]:
     """Return a JSON-safe terminal job error payload."""
-    payload: dict[str, Any] = {"message": str(exc) or exc.__class__.__name__}
-    if isinstance(exc, JobError) and exc.action_link is not None:
-        payload["action_link"] = exc.action_link
-    return payload
+    if isinstance(exc, JobError):
+        payload: dict[str, Any] = {"message": str(exc) or exc.__class__.__name__}
+        if exc.action_link is not None:
+            payload["action_link"] = exc.action_link
+        return payload
+    return {"message": "Job failed", "code": "JOB_FAILED"}
 
 
 async def _run_legacy_handler(

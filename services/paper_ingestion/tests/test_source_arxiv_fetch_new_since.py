@@ -289,9 +289,13 @@ async def test_arxiv_no_magic_ceiling_in_query_url():
 
 
 @respx.mock
-async def test_fetch_new_since_timeout_records_informative_diagnostic():
-    """arXiv timeouts should not degrade into a blank error diagnostic."""
-    respx.get(ARXIV_API_URL).mock(side_effect=httpx.ReadTimeout("timed out"))
+async def test_fetch_new_since_timeout_records_sanitized_diagnostic():
+    """arXiv timeouts should not expose raw request URLs or provider details."""
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=httpx.ReadTimeout(
+            "timed out fetching https://export.arxiv.org/api/query?token=secret"
+        )
+    )
 
     source = _make_source()
     since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
@@ -301,4 +305,8 @@ async def test_fetch_new_since_timeout_records_informative_diagnostic():
     assert papers == []
     assert source.last_poll_diagnostic is not None
     assert source.last_poll_diagnostic["status"] == "error"
-    assert "timed out" in source.last_poll_diagnostic["message"].lower()
+    assert source.last_poll_diagnostic["message"] == (
+        "arXiv request failed. Check provider status and retry later."
+    )
+    assert "secret" not in str(source.last_poll_diagnostic)
+    assert "export.arxiv.org" not in str(source.last_poll_diagnostic)

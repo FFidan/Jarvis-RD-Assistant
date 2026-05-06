@@ -242,8 +242,8 @@ async def get_stats(
             SELECT
                 COUNT(*) AS decks_generated,
                 AVG(NULLIF((stats->>'candidate_count')::float, 0)) AS avg_candidates,
-                AVG((stats->>'llm_calls')::float) AS avg_llm_calls,
-                AVG((stats->>'duration_s')::float) AS avg_duration_s,
+                AVG(NULLIF((stats->>'llm_calls')::float, 0)) AS avg_llm_calls,
+                AVG(NULLIF((stats->>'duration_s')::float, 0)) AS avg_duration_s,
                 MAX(generated_at) AS last_run_at,
                 (
                     SELECT stats->>'last_error'

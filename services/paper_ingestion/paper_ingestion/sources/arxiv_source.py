@@ -28,6 +28,9 @@ ARXIV_API_URL = "https://export.arxiv.org/api/query"
 RATE_LIMIT_DELAY = 3.0
 _MAX_FETCH_ATTEMPTS = 3
 _ARXIV_FIELD_PREFIX = re.compile(r"\b(ti|au|abs|co|jr|cat|rn|id|all):")
+# Module-level lock ensures all ArxivSource instances share one connection slot,
+# matching arXiv's "one connection at a time" policy across the whole process.
+_ARXIV_REQUEST_LOCK: asyncio.Lock = asyncio.Lock()
 
 
 def _retry_after_s(value: str | None) -> float | None:
@@ -55,8 +58,6 @@ class ArxivSource(PaperSource):
         super().__init__(config, http_client)
         # arXiv asks clients to wait 3 seconds between repeated calls.
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
-        # arXiv's legacy API asks clients to use one connection at a time.
-        self._request_lock = asyncio.Lock()
 
     async def _rate_limit(self) -> None:
         """Enforce arXiv's conservative polling cadence."""
@@ -70,7 +71,7 @@ class ArxivSource(PaperSource):
         """
         for attempt in range(_MAX_FETCH_ATTEMPTS):
             try:
-                async with self._request_lock:
+                async with _ARXIV_REQUEST_LOCK:
                     await self._rate_limit()
                     response = await self.http_client.get(
                         ARXIV_API_URL, params=params, timeout=30.0
@@ -100,7 +101,7 @@ class ArxivSource(PaperSource):
                 except Exception as exc:
                     self._set_poll_diagnostic(
                         status="error",
-                        message=f"arXiv returned malformed XML: {exc}",
+                        message="arXiv returned malformed XML. Try again later.",
                         status_code=200,
                         retry_after_s=None,
                         settings_hint=(
@@ -123,10 +124,9 @@ class ArxivSource(PaperSource):
                 if response is not None:
                     self._record_transient_poll_diagnostic(response)
                 else:
-                    message = str(exc) or exc.__class__.__name__
                     self._set_poll_diagnostic(
                         status="error",
-                        message=f"arXiv request failed: {message}",
+                        message="arXiv request failed. Check provider status and retry later.",
                         status_code=None,
                         retry_after_s=None,
                         settings_hint=None,

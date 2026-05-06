@@ -292,6 +292,7 @@ class OpenAlexSource(PaperSource):
         try:
             response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
             if response.status_code in (429, 500, 502, 503, 504):
+                self._record_transient_poll_diagnostic(response)
                 logger.warning(
                     "OpenAlex search returned %d; returning empty list",
                     response.status_code,
@@ -342,6 +343,7 @@ class OpenAlexSource(PaperSource):
             if response.status_code == 404:
                 return None
             if response.status_code in (429, 500, 502, 503, 504):
+                self._record_transient_poll_diagnostic(response)
                 logger.warning("OpenAlex fetch_by_id %s returned %d", oa_id, response.status_code)
                 return None
             response.raise_for_status()

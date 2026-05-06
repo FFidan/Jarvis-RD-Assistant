@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
 from typing import Any
@@ -32,6 +33,8 @@ from paper_ingestion.services.model_lifecycle import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TAG_RE = re.compile(r"^[a-zA-Z0-9_./:@-]{1,200}$")
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 
@@ -226,6 +229,7 @@ async def get_setup_status(
 
 
 @router.get("/models", response_model=SystemModelsResponse)
+@limiter.limit("30/minute")
 async def get_system_models(request: Request) -> SystemModelsResponse:
     """Return installed Ollama models + hardware info + current assignments."""
     ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
@@ -319,12 +323,14 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
 
 
 @router.get("/hardware")
+@limiter.limit("10/minute")
 async def get_system_hardware(request: Request) -> dict[str, Any]:
     """Return local accelerator information for model selection."""
     return get_cached_hardware(request.app.state).to_dict()
 
 
 @router.get("/models/recommendations")
+@limiter.limit("30/minute")
 async def get_model_recommendations(
     request: Request,
     role: Role = "smart",
@@ -353,6 +359,8 @@ async def pull_system_model(
     user_id: int | None = Depends(current_user_id),
 ) -> JobCreateResponse:
     """Enqueue an Ollama model pull job and return immediately."""
+    if not _TAG_RE.match(tag):
+        raise HTTPException(status_code=422, detail="Invalid model tag format")
     entry = catalog_entry_for_model(tag)
     if entry is None or entry.provider != "ollama":
         raise HTTPException(status_code=404, detail="Unknown local catalog model")
@@ -374,6 +382,8 @@ async def pull_system_model(
 @router.delete("/models/{tag:path}", status_code=204, response_class=Response)
 async def delete_system_model(tag: str, request: Request) -> Response:
     """Delete an inactive Ollama model tag."""
+    if not _TAG_RE.match(tag):
+        raise HTTPException(status_code=422, detail="Invalid model tag format")
     entry = catalog_entry_for_model(tag)
     if entry is None or entry.provider != "ollama":
         raise HTTPException(status_code=404, detail="Unknown local catalog model")
@@ -387,7 +397,6 @@ async def delete_system_model(tag: str, request: Request) -> Response:
 
     normalized_tag = normalize_model_tag(tag)
     active = {normalize_model_tag(str(value)) for value in models.current.values()}
-    active.add(normalize_model_tag(EMBEDDING_MODEL_NAME))
     if normalized_tag in active:
         raise HTTPException(status_code=409, detail="Cannot delete an active model assignment")
 

@@ -8,6 +8,7 @@ Stage 3 — combine:          Weighted sum → final ranking.
 import asyncio
 import logging
 import math
+import os
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -43,9 +44,21 @@ from paper_ingestion.rag.verification import RagConfidence
 logger = logging.getLogger(__name__)
 
 _LLM_CONCURRENCY = 8
-_LLM_MODEL = "smart"  # mistral-nemo: non-thinking model, reliable JSON output
+_LLM_MODEL = os.environ.get("PULSE_STAGE2_MODEL", "fast").strip() or "fast"
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0
+
+
+def _stage2_max_retries() -> int:
+    raw = os.environ.get("PULSE_STAGE2_MAX_RETRIES", "1")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid PULSE_STAGE2_MAX_RETRIES=%r; using default retry budget of 1",
+            raw,
+        )
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +289,13 @@ async def stage2_llm_rerank(
     if not stage1_out:
         return []
 
+    if openai_client is None:
+        logger.warning(
+            "stage2_llm_rerank: openai_client is None — returning stage1 output unscored; "
+            "deck will be degraded (no LLM relevance/novelty signals)"
+        )
+        return stage1_out
+
     semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
 
     async def _score_one(sc: ScoredCandidate) -> ScoredCandidate:
@@ -299,6 +319,7 @@ async def stage2_llm_rerank(
                     response_model=PulseScoringOutput,
                     messages=scoring_messages,
                     options=options,
+                    max_retries=_stage2_max_retries(),
                 )
                 relevance = output.relevance
                 novelty = output.novelty

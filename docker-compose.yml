@@ -26,6 +26,8 @@ x-shared-env: &shared-env
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}
+  PULSE_STAGE2_MODEL: ${PULSE_STAGE2_MODEL:-fast}
+  PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
 
@@ -113,7 +115,7 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     environment:
-      - OLLAMA_MAX_LOADED_MODELS=3
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-3}
       - OLLAMA_FLASH_ATTENTION=1
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_NUM_PARALLEL=2
@@ -258,6 +260,7 @@ services:
       - ${LOCAL_PDF_PATH:-./shared/local_pdfs}:/data/local_pdfs:ro
       - ./db/migrations:/app/db/migrations:ro
       - marker_models:/tmp/appuser  # Persist Marker/Surya model cache across restarts
+      - hf_cache:/tmp/hf_cache  # Persist HuggingFace cache across container recreation
       - ./litellm:/app/litellm_config:ro  # shared config for model updates (SEC-002: ro)
     mem_limit: 6g
     deploy:
@@ -512,6 +515,7 @@ volumes:
   qdrant_data:
   postgres_backups:
   marker_models:
+  hf_cache:
   dashboard_certs:
   caddy_data:
   caddy_config:

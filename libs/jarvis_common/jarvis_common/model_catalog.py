@@ -77,12 +77,15 @@ def load_model_catalog() -> tuple[ModelCatalogEntry, ...]:
     return entries
 
 
+_STALE_THRESHOLD_DAYS = 90
+
+
 def warn_if_catalog_stale(
     entries: tuple[ModelCatalogEntry, ...],
     *,
     today: date | None = None,
 ) -> None:
-    """Log a warning for catalog entries older than 90 days."""
+    """Log a warning for catalog entries older than _STALE_THRESHOLD_DAYS days."""
     now = today or date.today()
     for entry in entries:
         try:
@@ -94,9 +97,11 @@ def warn_if_catalog_stale(
                 entry.last_reviewed,
             )
             continue
-        if (now - reviewed).days > 90:
+        elapsed = (now - reviewed).days
+        if elapsed > _STALE_THRESHOLD_DAYS:
             logger.warning(
-                "model catalog entry %s was last reviewed on %s",
+                "model catalog entry %s was last reviewed on %s (%d days ago)",
                 entry.id,
                 entry.last_reviewed,
+                elapsed,
             )

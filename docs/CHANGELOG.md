@@ -5,6 +5,23 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 ## [1.7.2-dev] — 2026-05-06
 
 ### Fixed
+- Analyze-paper failures now expose a sanitized SSE error payload to the
+  frontend instead of leaking internal exception names/details such as model
+  loader keys.
+- Pulse source diagnostics now sanitize generic provider exceptions, including
+  arXiv timeout/no-response and malformed-XML paths, while preserving status
+  codes and retry hints for operator-visible diagnostics.
+- `GET /api/jobs` fallback SQL no longer references `job_progress` aliases when
+  the table is absent during mixed-version startup.
+- Migration startup now verifies migration 058 by checking the terminal
+  `job_progress.result/error` columns before trusting a recorded marker.
+- Generic Procrastinate task failures now persist a stable `JOB_FAILED` payload;
+  expected `JobError` messages remain operator-visible.
+- `scripts/reembed.py` stale-vector cleanup no longer deletes the newly written
+  deterministic point when rerunning a partially migrated row.
+- Settings model selectors now show pull actions for downloadable local models
+  and use an explicit confirmation dialog before deleting pulled models.
+
 - Pulse source exhaustion is now persisted and surfaced as Degraded with
   per-source diagnostics, including arXiv/S2/OpenAlex/PubMed 429/5xx status and
   `Retry-After` hints when providers rate-limit.
@@ -58,6 +75,14 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
   no longer races Vitest's auto-advancing timer mode.
 
 ### Changed
+- Pulse Stage 2 now uses the `fast` alias by default, reads
+  `PULSE_STAGE2_MODEL` / `PULSE_STAGE2_MAX_RETRIES`, and calls the scorer once
+  over all Stage-1 survivors instead of slicing them into outer batches of five.
+- The Docker stack mounts a shared Hugging Face cache volume for paper
+  ingestion and passes `OLLAMA_MAX_LOADED_MODELS` through to Ollama to reduce
+  repeat model downloads and VRAM pressure.
+- `transformers` is pinned below 4.52 for Marker/Surya compatibility after the
+  local PDF-processing smoke reproduced `KeyError: 'encoder'` on newer releases.
 - Default local smart model is now `qwen3:14b`; first-boot Ollama pulls are
   `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:0.6b`.
 - `/api/system/models` catalog rows now expose `can_assign` and

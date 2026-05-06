@@ -308,7 +308,7 @@ async def test_fetch_new_since_429_returns_empty():
     assert source.last_poll_diagnostic is not None
     assert source.last_poll_diagnostic["status"] == "rate_limit"
     assert source.last_poll_diagnostic["status_code"] == 429
-    assert source.last_poll_diagnostic["retry_after_s"] == 9.0
+    assert source.last_poll_diagnostic["retry_after_s"] == 9
 
 
 # ---------------------------------------------------------------------------

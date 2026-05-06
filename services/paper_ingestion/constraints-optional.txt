@@ -50,10 +50,10 @@ sentence-transformers==5.4.1
 setuptools==81.0.0
 sympy==1.14.0
 threadpoolctl==3.6.0
-tokenizers==0.22.2
+tokenizers==0.21.4
 torch==2.11.0
 tqdm==4.67.3
-transformers==4.57.6
+transformers==4.51.3
 triton==3.6.0 ; sys_platform == 'linux'
 typing-extensions==4.15.0
 urllib3==2.6.3

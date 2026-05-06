@@ -118,6 +118,27 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
         )
         """,
     ),
+    (
+        58,
+        "job_progress terminal result/error columns",
+        """
+        SELECT
+            EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'job_progress'
+                  AND column_name = 'result'
+            )
+            AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = 'job_progress'
+                  AND column_name = 'error'
+            )
+        """,
+    ),
 )
 
 
@@ -184,7 +205,12 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             await conn.execute("SET LOCAL lock_timeout = '60s'")
             try:
                 await conn.execute("SELECT pg_advisory_xact_lock(42)")
-            except asyncpg.LockNotAvailableError:
+            except (asyncpg.LockNotAvailableError, asyncpg.PostgresError) as exc:
+                is_lock_timeout = not isinstance(exc, asyncpg.PostgresError) or (
+                    getattr(exc, "sqlstate", None) == "55P03"
+                )
+                if not is_lock_timeout:
+                    raise  # Not a lock-timeout error — let it propagate
                 message = "migration lock contended — another instance is running migrations"
                 if os.environ.get("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "").lower() in {
                     "1",

@@ -438,17 +438,49 @@ async def test_include_diagnostics_reports_rate_limit_and_unsupported_sources():
 
     assert result == []
     assert source_counts == {"_StubSource": 0, "_UnsupportedSource": 0}
-    assert (
-        diagnostics["ArxivSource" if "ArxivSource" in diagnostics else "_StubSource"]["status"]
-        == "rate_limit"
-    )
-    assert (
-        diagnostics["ArxivSource" if "ArxivSource" in diagnostics else "_StubSource"][
-            "retry_after_s"
-        ]
-        == 17
-    )
+    assert diagnostics["_StubSource"]["status"] == "rate_limit"
+    assert diagnostics["_StubSource"]["retry_after_s"] == 17
     assert diagnostics["_UnsupportedSource"]["status"] == "unsupported"
+
+
+@pytest.mark.asyncio
+async def test_include_diagnostics_redacts_raw_non_rate_limit_exception_text():
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    request = httpx.Request(
+        "GET",
+        "https://export.arxiv.org/api/query?search_query=secret-topic&api_key=token123",
+    )
+    arxiv_error = httpx.ReadTimeout(
+        "timed out fetching https://export.arxiv.org/api/query?api_key=token123",
+        request=request,
+    )
+    stubs = {"arxiv": _StubSource(raises=arxiv_error)}
+
+    def fake_get(name):
+        return _make_source_class(stubs[name])
+
+    profile = _make_profile()
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            profile,
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            include_diagnostics=True,
+        )
+
+    assert result == []
+    assert source_counts == {"_StubSource": 0}
+    diagnostic = diagnostics["_StubSource"]
+    assert diagnostic["status"] == "error"
+    assert "_StubSource request failed" in diagnostic["message"]
+    assert "token123" not in str(diagnostic)
+    assert "secret-topic" not in str(diagnostic)
+    assert "export.arxiv.org/api/query" not in str(diagnostic)
 
 
 @pytest.mark.asyncio

@@ -22,6 +22,8 @@ from paper_ingestion.routers._sse import SSE_DONE, sse_event
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["analyze"])
 
+PDF_PROCESSING_FAILED_MESSAGE = "PDF processing failed. Check service logs for details."
+
 
 def safe_sse_error_message(exc: Exception) -> str:
     """Return a safe error message that doesn't leak implementation details.
@@ -139,16 +141,18 @@ async def _analyze_stream(
 
         result = await run_process_pdf(paper_id, pdf_path, db_pool, pdf_processor, embedder)
         chunk_count = result.get("chunk_count", 0)
-    except Exception as exc:
-        logger.error("Processing failed for paper %d: %s", paper_id, exc)
+    except Exception:
+        logger.exception("Processing failed for paper %d", paper_id)
         yield sse_event(
             {
                 "type": "error",
                 "step": "processing",
                 "message": "PDF processing failed",
                 "stage": "process_pdf",
-                "error_type": type(exc).__name__,
-                "error_detail": str(exc)[:200],
+                "error_code": "PDF_PROCESSING_FAILED",
+                "display_message": PDF_PROCESSING_FAILED_MESSAGE,
+                "error_type": "PDF_PROCESSING_FAILED",
+                "error_detail": PDF_PROCESSING_FAILED_MESSAGE,
             }
         )
         yield SSE_DONE
