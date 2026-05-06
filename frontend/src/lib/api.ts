@@ -879,6 +879,17 @@ export const logFocusSession = (data: { duration_hours: number; task_id?: number
     body: JSON.stringify(data),
   });
 
+export const fetchIntentToday = () =>
+  apiFetch<{ intent: string | null; updated_at: string | null }>(
+    '/api/executive/intent/today',
+  );
+
+export const saveIntentToday = (intent: string) =>
+  apiFetch<{ intent: string | null; updated_at: string | null }>(
+    '/api/executive/intent/today',
+    { method: 'POST', body: JSON.stringify({ intent }) },
+  );
+
 // --- Pulse ---
 
 /** Fetch today's Pulse deck. Returns `null` when the backend reports 404. */

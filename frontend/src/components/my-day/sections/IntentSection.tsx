@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
-import { fetchMyDay, createQuickTask, updateTask } from '@/lib/api';
+import { fetchMyDay, createQuickTask, updateTask, fetchIntentToday, saveIntentToday } from '@/lib/api';
 import type { MyDayTask } from '@/types';
 import { SectionHeader } from './SectionHeader';
 import { TaskRow } from './TaskRow';
@@ -45,6 +45,8 @@ export function IntentSection() {
   const [addTitle, setAddTitle] = useState('');
   const [addPriority, setAddPriority] = useState<number>(3);
   const [showCompleted, setShowCompleted] = useState(false);
+  const [intentText, setIntentText] = useState('');
+  const intentRef = useRef<HTMLTextAreaElement>(null);
 
   const queryClient = useQueryClient();
 
@@ -53,6 +55,41 @@ export function IntentSection() {
     queryFn: fetchMyDay,
     refetchInterval: 60_000,
   });
+
+  // Intent query
+  const { data: intentData } = useQuery({
+    queryKey: ['intent', 'today'],
+    queryFn: fetchIntentToday,
+  });
+
+  // Seed local state from server (only when server value changes, not on user typing)
+  useEffect(() => {
+    setIntentText(intentData?.intent ?? '');
+  }, [intentData?.intent]);
+
+  // Intent mutation
+  const intentMutation = useMutation({
+    mutationFn: saveIntentToday,
+    onError: () => toast.error('Failed to save intent'),
+    onSettled: () =>
+      queryClient.invalidateQueries({ queryKey: ['intent', 'today'] }),
+  });
+
+  // Debounced autosave (800 ms)
+  useEffect(() => {
+    if (intentText === (intentData?.intent ?? '')) return;
+    const id = setTimeout(() => intentMutation.mutate(intentText), 800);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [intentText, intentData?.intent]);
+
+  // Auto-grow textarea
+  useEffect(() => {
+    const el = intentRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, [intentText]);
 
   const addMutation = useMutation({
     mutationFn: createQuickTask,
@@ -93,14 +130,16 @@ export function IntentSection() {
     <section id="intent">
       <SectionHeader marker="Today's intent" />
 
-      {/* Intent line */}
-      <button
-        type="button"
-        onClick={() => toast.info('Intent persistence ships in Phase 2.')}
-        className="font-serif italic text-faint text-[15px] hover:text-soft border-l-2 border-dashed border-hair pl-5 py-1 mb-4 transition-colors text-left block"
-      >
-        Set today's intent…
-      </button>
+      {/* Intent textarea — debounced autosave */}
+      <textarea
+        ref={intentRef}
+        value={intentText}
+        onChange={(e) => setIntentText(e.target.value)}
+        rows={1}
+        placeholder="Set today's intent…"
+        maxLength={280}
+        className="w-full resize-none border-l-2 border-dashed border-hair bg-transparent px-3 py-1 mb-4 font-serif italic text-[18px] text-strong outline-none focus:border-solid focus:border-l-2 focus:border-[hsl(var(--ring))] placeholder:text-faint"
+      />
 
       {/* Tasks ladder */}
       <div className="pl-5 space-y-0">
