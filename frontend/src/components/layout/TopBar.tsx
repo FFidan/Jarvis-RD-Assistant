@@ -16,7 +16,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
   const openShortcuts = useKeyboardShortcuts((s) => s.open);
 
   return (
-    <header className="flex h-14 items-center gap-4 border-b border-hair bg-paper px-6">
+    <header className="flex items-center gap-4 border-b border-hair bg-paper px-6 pt-[env(safe-area-inset-top)] h-[calc(3.5rem+env(safe-area-inset-top))]">
       {onMenuClick && (
         <Button variant="ghost" size="icon" onClick={onMenuClick} className="md:hidden" aria-label="Open menu">
           <Menu className="h-5 w-5" />

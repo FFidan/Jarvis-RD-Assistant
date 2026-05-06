@@ -24,6 +24,7 @@ import { useAuthStore } from '@/stores/auth-store';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { BrandMark } from '@/components/layout/BrandMark';
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
@@ -68,7 +69,7 @@ export function Sidebar() {
         {/* Header */}
         <div className="flex h-14 items-center justify-between px-4">
           {!sidebarCollapsed && (
-            <span className="text-lg font-bold">JARVIS</span>
+            <BrandMark />
           )}
           <Button variant="ghost" size="icon" onClick={toggleSidebar} className="ml-auto" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}>
             {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}

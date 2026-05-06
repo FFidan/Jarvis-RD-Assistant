@@ -74,6 +74,7 @@ export function PulseRow({ card, rank }: PulseRowProps) {
       {/* Column 3: action buttons */}
       <div className="flex flex-col gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
         <button
+          data-touch-target
           aria-label="Upvote"
           disabled={rateMutation.isPending}
           onClick={() => handleRate('up')}
@@ -82,6 +83,7 @@ export function PulseRow({ card, rank }: PulseRowProps) {
           <ThumbsUp className="h-3.5 w-3.5" />
         </button>
         <button
+          data-touch-target
           aria-label="Downvote"
           disabled={rateMutation.isPending}
           onClick={() => handleRate('down')}
@@ -90,6 +92,7 @@ export function PulseRow({ card, rank }: PulseRowProps) {
           <ThumbsDown className="h-3.5 w-3.5" />
         </button>
         <button
+          data-touch-target
           aria-label="Save for later"
           disabled={rateMutation.isPending}
           onClick={() => handleRate('save')}

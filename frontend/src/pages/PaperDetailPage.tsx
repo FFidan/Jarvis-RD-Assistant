@@ -64,7 +64,7 @@ export function PaperDetailPage() {
   if (isNaN(paperId) || paperId <= 0) {
     return (
       <div className="space-y-4">
-        <h1 className="flex items-center gap-2 text-3xl font-bold">
+        <h1 className="flex items-center gap-2 text-[32px] leading-tight tracking-tight text-strong">
           <FileText className="h-8 w-8" /> Paper Detail
         </h1>
         <p className="text-muted-foreground">
@@ -92,7 +92,7 @@ export function PaperDetailPage() {
   if (isError) {
     return (
       <div className="space-y-4">
-        <h1 className="flex items-center gap-2 text-3xl font-bold">
+        <h1 className="flex items-center gap-2 text-[32px] leading-tight tracking-tight text-strong">
           <FileText className="h-8 w-8" /> Paper Detail
         </h1>
         <p className="text-destructive">
@@ -205,7 +205,7 @@ export function PaperDetailPage() {
         {/* Desktop sidebar */}
         <aside className="hidden lg:block">
           <div className="sticky top-4">
-            <ScrollArea className="h-[calc(100vh-8rem)]">
+            <ScrollArea className="h-[calc(100dvh-8rem)]">
               <Card className="rounded-md border-hair shadow-none p-4">
                 <SectionHeader marker="ACTIONS" />
                 {sidebarContent}

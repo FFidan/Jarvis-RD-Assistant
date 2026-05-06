@@ -115,11 +115,14 @@ describe('MyDayPage', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('hides Yesterday section (no backend data in Phase 1c)', async () => {
+  it('renders Yesterday section with placeholder copy (Phase 1g)', async () => {
     renderWithProviders();
     await screen.findByText(/RESEARCH LOG/);
-    // YesterdaySection returns null when backend ships no yesterday data
-    expect(screen.queryByText(/§ Yesterday/i)).not.toBeInTheDocument();
+    // YesterdaySection now renders a placeholder section while the daily-rollup
+    // job hasn't shipped yet (Phase 1g rewire).
+    expect(
+      screen.getByText(/yesterday's carryover summary/i),
+    ).toBeInTheDocument();
   });
 
   it('renders Now section with Pulse #1 mode button', async () => {

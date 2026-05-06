@@ -3,32 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,300..700&display=swap" rel="stylesheet">
-    <script>
-      (function () {
-        var html = document.documentElement;
-        // Dark mode (existing)
-        try {
-          var raw = localStorage.getItem('jarvis-theme');
-          var parsed = raw ? JSON.parse(raw) : null;
-          var stored = parsed && parsed.state ? parsed.state.theme : null;
-          var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-          var isDark = stored === 'dark' || (stored !== 'light' && prefersDark);
-          if (isDark) html.classList.add('dark');
-        } catch (e) {}
-        // Appearance presets (new)
-        try {
-          var prefRaw = localStorage.getItem('jarvis.appearance');
-          var prefs = prefRaw ? JSON.parse(prefRaw) : {};
-          if (prefs.accent  && prefs.accent  !== 'ink-blue')   html.classList.add('accent-'  + prefs.accent);
-          if (prefs.type    && prefs.type    !== 'serif-calm') html.classList.add('type-'    + prefs.type);
-          if (prefs.density && prefs.density !== 'default')    html.classList.add('density-' + prefs.density);
-        } catch (e) {}
-      })();
-    </script>
+    <script src="/preboot.js"></script>
     <title>JARVIS RD Assistant</title>
   </head>
   <body class="min-h-screen bg-background font-sans antialiased">

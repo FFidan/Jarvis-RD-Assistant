@@ -98,7 +98,7 @@ export function DateMasthead() {
         </p>
       </div>
 
-      <div className="flex gap-5 text-right">
+      <div className="flex flex-wrap sm:flex-nowrap gap-x-5 gap-y-1 text-right justify-end max-w-full">
         <MiniStat
           value={pulseCount}
           label="pulse"

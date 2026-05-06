@@ -17,7 +17,7 @@ export function LearningCardsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
+        <h1 className="text-[32px] leading-tight tracking-tight text-strong flex items-center gap-2">
           <GraduationCap className="h-8 w-8" /> Learning Cards
         </h1>
         <div className="flex gap-2">

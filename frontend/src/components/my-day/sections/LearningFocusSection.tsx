@@ -46,8 +46,8 @@ export function LearningFocusSection() {
             <>
               {stats.due_now > 0 ? (
                 <>
-                  <div className="bg-orange-50 border border-orange-200 rounded-md p-3">
-                    <p className="text-[24px] font-bold tabular-nums text-orange-800">
+                  <div className="bg-[hsl(var(--cta-warn-bg))] border border-[hsl(var(--cta-warn-border))] rounded-md p-3">
+                    <p className="text-[24px] font-bold tabular-nums text-[hsl(var(--cta-warn-fg))]">
                       {stats.due_now}
                     </p>
                     <p className="text-[11px] font-mono uppercase tracking-wide text-orange-700">
@@ -56,7 +56,7 @@ export function LearningFocusSection() {
                   </div>
                   <button
                     onClick={() => navigate('/cards')}
-                    className="mt-3 w-full bg-orange-500 hover:bg-orange-600 text-white rounded-md py-2 text-sm font-medium transition-colors"
+                    className="mt-3 w-full bg-[hsl(var(--cta-warn-solid))] hover:bg-[hsl(var(--cta-warn-solid))] text-white rounded-md py-2 text-sm font-medium transition-colors"
                   >
                     Review now →
                   </button>

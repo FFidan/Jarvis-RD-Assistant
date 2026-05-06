@@ -32,19 +32,26 @@ export function WhyChips({ signals, reasoning, max = 3 }: WhyChipsProps) {
 
   if (ranked.length === 0 && !reasoning) return null;
 
+  if (ranked.length === 0) {
+    return <p className="font-serif italic text-[13.5px] text-soft mt-1">{reasoning}</p>;
+  }
+
   return (
-    <div className="flex items-start gap-2 flex-wrap">
-      <span className="font-mono text-[10px] text-meta uppercase tracking-[0.18em] mt-0.5 shrink-0">WHY</span>
-      <div className="flex flex-wrap gap-1.5">
-        {ranked.map((s) => (
-          <span
-            key={s.label}
-            className="inline-flex items-center rounded-full bg-[color-mix(in_srgb,var(--ink-blue)_12%,transparent)] border border-[color-mix(in_srgb,var(--ink-blue)_30%,transparent)] px-2.5 py-0.5 text-[11px] text-[var(--ink-blue)] font-medium"
-          >
-            {s.label} ({s.weight.toFixed(2)})
-          </span>
-        ))}
+    <div>
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className="font-mono text-[10px] text-meta uppercase tracking-[0.18em] mt-0.5 shrink-0">WHY</span>
+        <div className="flex flex-wrap gap-1.5">
+          {ranked.map((s) => (
+            <span
+              key={s.label}
+              className="inline-flex items-center rounded-full bg-[color-mix(in_srgb,var(--ink-blue)_12%,transparent)] border border-[color-mix(in_srgb,var(--ink-blue)_30%,transparent)] px-2.5 py-0.5 text-[11px] text-[var(--ink-blue)] font-medium"
+            >
+              {s.label} ({s.weight.toFixed(2)})
+            </span>
+          ))}
+        </div>
       </div>
+      {reasoning && <p className="font-serif italic text-[13.5px] text-soft mt-1">{reasoning}</p>}
     </div>
   );
 }

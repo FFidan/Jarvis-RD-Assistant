@@ -111,7 +111,7 @@ export function HomePage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-3xl font-bold">Dashboard</h1>
+      <h1 className="text-[32px] leading-tight tracking-tight text-strong">Dashboard</h1>
 
       <SetupBanner />
 

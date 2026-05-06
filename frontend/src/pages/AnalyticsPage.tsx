@@ -66,7 +66,7 @@ export function AnalyticsPage() {
   return (
     <div className="space-y-6 p-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Analytics</h1>
+        <h1 className="text-[28px] leading-tight tracking-tight text-strong">Analytics</h1>
       </div>
       <p className="text-muted-foreground text-sm">Track your research activity and learning progress</p>
 

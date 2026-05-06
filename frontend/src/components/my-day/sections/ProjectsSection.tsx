@@ -5,7 +5,7 @@ import type { MyDayResponse } from '@/types';
 import { SectionHeader } from './SectionHeader';
 import { GradientProgressBar } from '@/components/my-day/primitives/GradientProgressBar';
 
-const COLORS = ['#2563eb', '#16a34a', '#9333ea'];
+const COLOR_TOKENS = ['var(--project-1)', 'var(--project-2)', 'var(--project-3)'] as const;
 
 const formatDate = (iso: string | null) => {
   if (!iso) return '—';
@@ -46,6 +46,7 @@ export function ProjectsSection() {
       <SectionHeader
         marker="Projects"
         meta={`${data.project_pulse.length} active`}
+        right={<a href="/projects" className="text-meta uppercase tracking-[0.18em] text-soft hover:text-strong">all projects →</a>}
       />
 
       <div className="space-y-4">
@@ -67,7 +68,7 @@ export function ProjectsSection() {
             daysUntilDeadline !== null && daysUntilDeadline <= 7 && completionRatio < 0.5;
           const dotClass = isAtRisk ? 'bg-amber-500' : 'bg-emerald-500';
           // Use project.color if set; fall back to rotating palette for gradient bar
-          const projectColor = project.color ?? COLORS[i % COLORS.length];
+          const projectColor = project.color ?? `hsl(${COLOR_TOKENS[i % COLOR_TOKENS.length]})`;
 
           return (
             <div key={project.id} className="space-y-1.5">

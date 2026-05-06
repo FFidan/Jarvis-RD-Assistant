@@ -32,7 +32,7 @@ export function AppShell({ children }: AppShellProps) {
   }, []);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-[100dvh] overflow-hidden">
       {/* Desktop sidebar */}
       <div className="hidden md:block">
         <Sidebar />
@@ -40,7 +40,7 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* Mobile sidebar as sheet */}
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-        <SheetContent side="left" className="w-64 p-0">
+        <SheetContent side="left" className="w-64 p-0" style={{ paddingLeft: 'env(safe-area-inset-left)' }}>
           <SheetTitle className="sr-only">Navigation</SheetTitle>
           <Sidebar />
         </SheetContent>
@@ -49,10 +49,10 @@ export function AppShell({ children }: AppShellProps) {
       {/* Main content */}
       <div className="flex flex-1 flex-col overflow-hidden">
         <TopBar onMenuClick={() => setMobileOpen(true)} />
-        <main className="flex-1 overflow-y-auto p-6 bg-paper">{children}</main>
+        <main className="flex-1 overflow-y-auto bg-paper p-6 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">{children}</main>
       </div>
 
-      <Toaster position="bottom-right" />
+      <Toaster position="bottom-right" toastOptions={{ style: { paddingBottom: 'env(safe-area-inset-bottom)' } }} />
       <KeyboardCheatSheet />
     </div>
   );

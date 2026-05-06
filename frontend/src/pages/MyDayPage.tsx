@@ -9,8 +9,10 @@ import { TodaysPulseSection } from '@/components/my-day/sections/TodaysPulseSect
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import { LearningFocusSection } from '@/components/my-day/sections/LearningFocusSection';
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
+import { MyDayFooter } from '@/components/my-day/sections/MyDayFooter';
 
 export function MyDayPage() {
+  const entryNum = Math.floor((Date.now() - new Date('2026-01-01').getTime()) / 86400000);
   const { hash } = useLocation();
 
   useEffect(() => {
@@ -34,12 +36,15 @@ export function MyDayPage() {
     <div className="bg-paper min-h-screen">
       <main className="max-w-page mx-auto px-10 py-10 space-y-12">
         <DateMasthead />
+        <YesterdaySection />
         <HeroNow />
         <IntentSection />
         <ProjectsSection />
         <TodaysPulseSection />
         <TriageSection />
         <LearningFocusSection />
+        <EndOfDaySection />
+        <MyDayFooter entryNum={entryNum} />
       </main>
     </div>
   );

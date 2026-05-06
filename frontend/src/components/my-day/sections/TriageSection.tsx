@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { SectionHeader } from './SectionHeader';
 import { useJobStore } from '@/stores/job-store';
@@ -22,7 +23,7 @@ function Pill({ label, variant }: { label: string; variant: PillVariant }) {
     'text-[10px] font-mono uppercase tracking-wide px-2 py-0.5 rounded border whitespace-nowrap';
   const colors =
     variant === 'warn'
-      ? 'bg-amber-50 text-amber-800 border-amber-200'
+      ? 'bg-[hsl(var(--badge-warn-bg))] text-[hsl(var(--badge-warn-fg))] border-[hsl(var(--badge-warn-border))]'
       : 'bg-zinc-100 dark:bg-zinc-800 text-soft border-hair';
   return <span className={`${base} ${colors}`}>{label}</span>;
 }
@@ -192,12 +193,13 @@ export function TriageSection() {
         meta={`${totalCount} item${totalCount !== 1 ? 's' : ''}`}
         right={
           processableCount > 0 ? (
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleProcessAll}
-              className="text-[11px] font-mono text-[var(--ink-blue)] hover:underline"
             >
               Process all ({processableCount})
-            </button>
+            </Button>
           ) : undefined
         }
       />

@@ -201,6 +201,7 @@ from learning_engine.routers import (  # noqa: E402
     cards,
     decks,
     executive,
+    executive_intent,
     export,
     generation,
     jobs,
@@ -222,6 +223,7 @@ app.include_router(review.router)
 app.include_router(generation.router)
 app.include_router(export.router)
 app.include_router(executive.router)
+app.include_router(executive_intent.router)
 app.include_router(jobs.router)
 
 

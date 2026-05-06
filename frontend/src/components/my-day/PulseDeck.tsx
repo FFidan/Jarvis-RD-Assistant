@@ -175,10 +175,10 @@ export function PulseDeck() {
         Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
       </p>
       {deck.degraded_reason && (
-        <div className="rounded-md border border-amber-400/60 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-          <div className="font-medium text-amber-100">{deck.degraded_reason}</div>
+        <div className="rounded-md border border-amber-400/60 bg-amber-500/10 px-3 py-2 text-sm text-[hsl(var(--badge-warn-fg))]">
+          <div className="font-medium text-[hsl(var(--badge-warn-fg))]">{deck.degraded_reason}</div>
           {degradedDetails.length > 0 && (
-            <div className="mt-1 space-y-0.5 text-xs text-amber-100/80">
+            <div className="mt-1 space-y-0.5 text-xs text-[hsl(var(--badge-warn-fg))] opacity-80">
               {degradedDetails.map(([source, diagnostic]) => (
                 <div key={source}>
                   <span className="font-medium">{source}</span>: {diagnostic.message}

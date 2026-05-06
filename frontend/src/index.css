@@ -92,18 +92,33 @@
     --cta-orange-border: #ffedd5;    /* orange-100 */
     --cta-orange-text:   #9a3412;    /* orange-800 */
 
-    /* Warn banner CTA (HSL triplets so consumers can opacity-modulate via hsl(var(...) / N)) */
-    --cta-warn-bg:     33 100% 96%;
-    --cta-warn-fg:     15 79% 34%;
-    --cta-warn-border: 32 98% 83%;
-    --cta-warn-solid:  25 95% 53%;
-
     /* Project color palette */
     --project-blue:   #2563eb;
     --project-green:  #16a34a;
     --project-purple: #9333ea;
     --project-pink:   #db2777;
     --project-amber:  #d97706;
+
+    /* Timer / Pomodoro */
+    --timer-active:      218 85% 29%;   /* matches --primary default */
+    --timer-break-short: 158 64% 52%;
+    --timer-break-long:  220 80% 71%;
+
+    /* CTA — warn family (Learning Cards "Review now") */
+    --cta-warn-bg:     33 100% 96%;    /* orange-50  #fff7ed */
+    --cta-warn-fg:     15 79% 34%;     /* orange-800 #9a3412 */
+    --cta-warn-border: 32 98% 83%;     /* orange-200 #fed7aa */
+    --cta-warn-solid:  25 95% 53%;     /* orange-500 #f97316 */
+
+    /* Badge — warn family (Triage warn pill) */
+    --badge-warn-bg:     48 100% 96%;  /* amber-50  #fffbeb */
+    --badge-warn-fg:     23 83% 31%;   /* amber-800 #92400e */
+    --badge-warn-border: 48 97% 77%;   /* amber-200 #fde68a */
+
+    /* Project rotation */
+    --project-1: 218 85% 29%;          /* ink-blue (default --primary) */
+    --project-2: 151 69% 18%;          /* forest accent --primary */
+    --project-3: 294 60% 24%;          /* plum accent --primary */
   }
 
   .dark {
@@ -128,10 +143,26 @@
     --cta-orange-border: rgba(249, 115, 22, 0.25);
     --cta-orange-text:   #fdba74;    /* orange-300 */
 
-    --cta-warn-bg:     17 88% 12%;
-    --cta-warn-fg:     32 98% 78%;
-    --cta-warn-border: 17 88% 30%;
-    --cta-warn-solid:  25 95% 53%;
+    /* Timer / Pomodoro */
+    --timer-active:      220 80% 71%;   /* matches dark --primary */
+    --timer-break-short: 158 76% 67%;
+    --timer-break-long:  220 80% 71%;
+
+    /* CTA — warn family (dark) */
+    --cta-warn-bg:     17 88% 40%;     /* orange-700-ish dark bg */
+    --cta-warn-fg:     32 98% 83%;     /* orange-200 #fed7aa */
+    --cta-warn-border: 25 95% 53%;     /* orange-500 as border */
+    --cta-warn-solid:  25 95% 53%;     /* orange-500 #f97316 */
+
+    /* Badge — warn family (dark) */
+    --badge-warn-bg:     22 78% 26%;   /* amber-900 #78350f */
+    --badge-warn-fg:     48 97% 77%;   /* amber-200 #fde68a */
+    --badge-warn-border: 26 90% 37%;   /* amber-700 #b45309 */
+
+    /* Project rotation (dark) */
+    --project-1: 220 80% 71%;          /* dark ink-blue --primary */
+    --project-2: 158 76% 67%;          /* dark forest --primary */
+    --project-3: 280 96% 85%;          /* dark plum --primary */
   }
 }
 
@@ -231,4 +262,17 @@ html.density-comfortable {
 html.density-compact {
   --section-rhythm: 36px;
   font-size: 93%;
+}
+
+@media (hover: none) {
+  /* Hover-revealed action affordances must stay visible on touch devices */
+  .group:hover\:opacity-100,
+  .group-hover\:opacity-100 {
+    opacity: 0.6 !important;
+  }
+  /* Lift small icon buttons to 44pt minimum tap target */
+  [data-touch-target] {
+    min-height: 44px;
+    min-width: 44px;
+  }
 }

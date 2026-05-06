@@ -169,12 +169,13 @@ async def test_search_qdrant_returns_paper_and_chunk_metadata(monkeypatch):
 
     results = await module.search_qdrant(qdrant, [0.5, 0.1], limit=2)
 
+    # D6-A removed the [:100] content truncation so rerankers see full passage text.
     assert results == [
         {
             "paper_id": 11,
             "chunk_index": 4,
             "score": 0.91,
-            "content": "A" * 100,
+            "content": "A" * 140,
         },
         {
             "paper_id": 12,

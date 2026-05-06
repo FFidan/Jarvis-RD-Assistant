@@ -63,6 +63,7 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
 
       {/* Focus button */}
       <button
+        data-touch-target
         onClick={() =>
           usePomodoroStore.getState().startWork({ id: task.id, title: task.title, type: 'task' })
         }
@@ -75,6 +76,7 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
 
       {/* Delete button */}
       <button
+        data-touch-target
         onClick={() => deleteMutation.mutate()}
         disabled={deleteMutation.isPending}
         className="opacity-0 group-hover:opacity-100 h-6 w-6 flex items-center justify-center text-faint hover:text-red-600 transition-opacity flex-shrink-0"

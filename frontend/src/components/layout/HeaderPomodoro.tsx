@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { Pause, Play } from 'lucide-react';
+import { Clock, Pause, Play } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
@@ -15,9 +15,9 @@ const PHASE_LABELS: Record<TimerPhase, string> = {
 
 const PHASE_COLORS: Record<TimerPhase, string> = {
   idle: '',
-  work: 'text-red-500',
-  'short-break': 'text-amber-500',
-  'long-break': 'text-green-500',
+  work: 'text-[hsl(var(--timer-active))]',
+  'short-break': 'text-[hsl(var(--timer-active))]',
+  'long-break': 'text-[hsl(var(--timer-active))]',
 };
 
 function formatMMSS(totalSeconds: number): string {
@@ -60,6 +60,7 @@ export function HeaderPomodoro() {
       <Tooltip>
         <TooltipTrigger asChild>
           <div className="flex items-center gap-1 rounded-full border bg-muted/50 px-3 py-1 text-sm">
+            <Clock className="h-3.5 w-3.5 text-[hsl(var(--timer-active))]" aria-hidden />
             <button
               onClick={handleTimeClick}
               className={`font-mono tabular-nums tracking-tight font-semibold ${colorClass} hover:opacity-80 transition-opacity`}
@@ -78,6 +79,7 @@ export function HeaderPomodoro() {
               className="h-5 w-5"
               onClick={handleTogglePause}
               aria-label={isPaused ? 'Resume Pomodoro' : 'Pause Pomodoro'}
+              data-touch-target
             >
               {isPaused ? (
                 <Play className="h-3 w-3" />

@@ -30,7 +30,7 @@ export function ProjectsPage() {
   if (isLoading) {
     return (
       <div className="space-y-4">
-        <h1 className="text-3xl font-bold flex items-center gap-2">
+        <h1 className="text-[32px] leading-tight tracking-tight text-strong flex items-center gap-2">
           <FolderKanban className="h-8 w-8" /> Projects
         </h1>
         <p className="text-muted-foreground text-sm">Organize papers into research projects with tasks and milestones</p>
@@ -48,12 +48,12 @@ export function ProjectsPage() {
 
   return (
     <div className="space-y-4">
-      <h1 className="text-3xl font-bold flex items-center gap-2">
+      <h1 className="text-[32px] leading-tight tracking-tight text-strong flex items-center gap-2">
         <FolderKanban className="h-8 w-8" /> Projects
       </h1>
       <p className="text-muted-foreground text-sm">Organize papers into research projects with tasks and milestones</p>
 
-      <div className="grid h-[calc(100vh-12rem)] grid-cols-1 gap-4 lg:grid-cols-3">
+      <div className="grid h-[calc(100dvh-12rem)] grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Left column: project list */}
         <div className="rounded-md border border-hair bg-card overflow-hidden shadow-none">
           <ProjectList

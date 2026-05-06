@@ -74,7 +74,7 @@ export function CitationGraphPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <h1 className="text-2xl font-bold">Citation Graph</h1>
+      <h1 className="text-[28px] leading-tight tracking-tight text-strong">Citation Graph</h1>
       <p className="text-muted-foreground text-sm">Citation network across your paper library</p>
 
       <SectionHeader marker="SELECTION" />
