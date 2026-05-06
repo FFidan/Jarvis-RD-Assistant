@@ -24,6 +24,7 @@ export interface StreamEvent {
   type: 'token' | 'sources' | 'done' | 'error' | 'confidence';
   content?: string;
   full_answer?: string;
+  model_used?: string | null;
   sources?: Array<{
     chunk_id?: number;
     paper_id?: number;

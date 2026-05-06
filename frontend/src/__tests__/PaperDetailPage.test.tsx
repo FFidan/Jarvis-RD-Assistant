@@ -56,9 +56,11 @@ vi.mock('@/hooks/use-streaming-chat', () => ({
     messages: [],
     sources: [],
     isStreaming: false,
+    phase: 'idle',
     sendMessage: vi.fn(),
     stopStreaming: vi.fn(),
     clearChat: vi.fn(),
+    modelUsed: null,
   }),
 }));
 

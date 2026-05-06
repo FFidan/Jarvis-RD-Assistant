@@ -32,7 +32,44 @@ import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useJobStore } from '@/stores/job-store';
 import type { ConfigEntry, PulseStats, PulseDebugInfo } from '@/types';
+import { apiFetch } from '@/lib/api';
 import { RejectedTopicsPanel } from '@/components/settings/RejectedTopicsPanel';
+
+interface FeedbackSummaryItem {
+  paper_id: number;
+  title: string;
+  count: number;
+}
+
+interface FeedbackSummary {
+  top_positive: FeedbackSummaryItem[];
+  top_negative: FeedbackSummaryItem[];
+}
+
+function FavoriteTopicsPanel() {
+  const { data } = useQuery<FeedbackSummary>({
+    queryKey: ['feedback-summary'],
+    queryFn: () => apiFetch<FeedbackSummary>('/api/analytics/feedback-summary'),
+    staleTime: 5 * 60_000,
+  });
+  if (!data?.top_positive.length) return null;
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium">Papers you&apos;ve 👍 most</p>
+      <ul className="space-y-1">
+        {data.top_positive.slice(0, 5).map((item) => (
+          <li key={item.paper_id} className="flex items-center justify-between text-sm">
+            <span className="truncate text-muted-foreground">{item.title}</span>
+            <span className="ml-2 tabular-nums text-green-600">+{item.count}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-muted-foreground">
+        These papers are weighted higher in your research feed recommendations.
+      </p>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -801,6 +838,20 @@ export function PulseSection() {
             </div>
           </CardContent>
         )}
+      </Card>
+
+      {/* ── Favorite papers card ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Papers you&apos;ve liked</CardTitle>
+          <CardDescription>
+            Papers with the most 👍 feedback. These raise the weight of
+            related papers in your research feed.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <FavoriteTopicsPanel />
+        </CardContent>
       </Card>
 
       {/* ── Rejected topics card ── */}

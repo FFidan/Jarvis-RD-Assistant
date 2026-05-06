@@ -278,8 +278,34 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     setDeleteTarget(null);
   };
 
+  const setupNeeded =
+    selectedEntry !== undefined &&
+    (selectedEntry.status === 'downloadable' || selectedEntry.status === 'unfit');
+  const recommendedEntry = setupNeeded ? (pullableModels[0] ?? null) : null;
+  const hardwareLabel = detectedHardware ? detectedHardware.join(' · ') : null;
+
   return (
     <div className="space-y-2">
+      {setupNeeded && recommendedEntry && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950">
+          <p className="font-semibold text-amber-900 dark:text-amber-100">Setup needed</p>
+          <p className="text-sm text-amber-800 dark:text-amber-200">
+            <strong>{selectedEntry?.id}</strong> is not pulled yet.
+            {hardwareLabel && ` Recommended for your hardware (${hardwareLabel}):`}{' '}
+            <strong>{recommendedEntry.name}</strong>
+          </p>
+          <Button
+            type="button"
+            size="sm"
+            className="mt-2"
+            onClick={() => handlePull(recommendedEntry)}
+            disabled={pullingIds.has(recommendedEntry.id)}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Pull {recommendedEntry.name} to get started
+          </Button>
+        </div>
+      )}
       <Select value={effectiveValue} onValueChange={onChange}>
         <SelectTrigger>
           <SelectValue placeholder="Select a model" />

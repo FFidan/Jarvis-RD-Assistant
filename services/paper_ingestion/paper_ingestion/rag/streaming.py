@@ -320,6 +320,7 @@ async def stream_rag_events(
     """Stream LLM response as SSE events (token → sources → done → confidence → [DONE])."""
     litellm_config = get_litellm_config()
     full_answer = ""
+    model_used: str | None = None
     try:
         async with http_client.stream(
             "POST",
@@ -342,6 +343,8 @@ async def stream_rag_events(
                 if data_str.strip() == "[DONE]":
                     break
                 chunk = json.loads(data_str)
+                if model_used is None:
+                    model_used = chunk.get("model") or None
                 choices = chunk.get("choices")
                 if not choices:
                     continue
@@ -363,7 +366,7 @@ async def stream_rag_events(
             yield event
         return
     yield sse_event({"type": "sources", "sources": sources_list})
-    yield sse_event({"type": "done", "full_answer": full_answer})
+    yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
     # Sentence-level verification — runs after tokens have streamed (additive latency only)
     if verifier is not None and db_pool is not None:
         try:

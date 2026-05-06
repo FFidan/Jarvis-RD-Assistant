@@ -16,7 +16,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog';
-import { Send, Square, Trash2 } from 'lucide-react';
+import { AlertTriangle, Send, Square, Trash2 } from 'lucide-react';
 
 interface StreamingChatProps {
   chatId: string;
@@ -25,7 +25,7 @@ interface StreamingChatProps {
 }
 
 export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
-  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat } =
+  const { messages, sources, isStreaming, phase, sendMessage, stopStreaming, clearChat, modelUsed } =
     useStreamingChat({ chatId, scope, paperId });
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -110,6 +110,12 @@ export function StreamingChat({ chatId, scope, paperId }: StreamingChatProps) {
 
       {/* Input */}
       <div className="border-t p-4">
+        {!isStreaming && modelUsed && (
+          <div className="mb-2 flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span>Answered by fallback model: <strong>{modelUsed}</strong></span>
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="flex gap-2">
           <Textarea
             value={input}
