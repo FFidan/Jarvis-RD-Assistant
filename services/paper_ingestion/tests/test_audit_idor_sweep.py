@@ -70,6 +70,29 @@ def _make_pulse_client(user_id_override=None):
     return tc, pool, conn, app
 
 
+def _make_system_client():
+    """Minimal FastAPI app with only the system router mounted."""
+    from jarvis_common import current_user_id, verify_api_key
+    from paper_ingestion.deps import limiter
+    from paper_ingestion.routers import system as system_router
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+
+    pool, conn = _make_pool_and_conn()
+    app.state.db_pool = pool
+    app.state.http_client = MagicMock()
+
+    app.include_router(system_router.router)
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id] = lambda: None
+
+    tc = TestClient(app, raise_server_exceptions=False)
+    return tc, pool, conn, app
+
+
 def _make_papers_client(user_id_override=None):
     """Minimal FastAPI app with only the papers router mounted."""
     from jarvis_common import current_user_id_or_none, verify_api_key
@@ -100,8 +123,7 @@ def _make_papers_client(user_id_override=None):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_system_models_does_not_leak_provider_keys():
+def test_system_models_does_not_leak_provider_keys():
     """GET /api/system/models must NOT query for provider API keys.
 
     The security guarantee is that the SQL uses an IN allowlist of safe keys
@@ -111,10 +133,7 @@ async def test_system_models_does_not_leak_provider_keys():
     We verify the SQL structure directly — the mock returns only what the DB
     would actually return when constrained to the allowlist.
     """
-    from paper_ingestion.routers.system import get_system_models
-
-    pool, conn = _make_pool_and_conn()
-    mock_http = MagicMock()
+    tc, _pool, conn, app = _make_system_client()
 
     # Mock returns only allowed model-selection rows (DB would filter via IN)
     conn.fetch.return_value = [
@@ -126,24 +145,24 @@ async def test_system_models_does_not_leak_provider_keys():
     async def _no_ollama(url, **kw):
         raise RuntimeError("ollama offline")
 
-    mock_http.get.side_effect = _no_ollama
+    app.state.http_client.get.side_effect = _no_ollama
 
-    request = MagicMock()
-    request.app.state.db_pool = pool
-    request.app.state.http_client = mock_http
-
-    body = await get_system_models(request)
+    resp = tc.get("/api/system/models")
+    body = resp.json()
 
     # Verify allowlist SQL (not LIKE)
     sql: str = conn.fetch.call_args.args[0]
     assert "LIKE" not in sql, f"SQL must not use LIKE; got: {sql!r}"
-    assert "IN (" in sql or "IN(" in sql, f"SQL must use IN allowlist; got: {sql!r}"
+    # Postgres ANY($1::text[]) is equivalent to IN (...) — both enforce an allowlist
+    assert "IN (" in sql or "IN(" in sql or "ANY(" in sql, (
+        f"SQL must use IN/ANY allowlist; got: {sql!r}"
+    )
     # Provider key names must NOT appear in the SQL itself
     assert "openai_api_key" not in sql, f"Provider key name must NOT appear in SQL; got: {sql!r}"
     assert "anthropic_api_key" not in sql, f"Provider key name must NOT appear in SQL; got: {sql!r}"
 
     # Only allowlisted keys should appear in the response
-    current: dict = body.current
+    current: dict = body["current"]
     for key in current:
         assert key in ("smart_model", "fast_model", "embed_model"), (
             f"Unexpected key {key!r} in /models response current={current}"

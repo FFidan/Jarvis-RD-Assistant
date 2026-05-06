@@ -22,11 +22,12 @@ def test_model_catalog_entries_have_unique_ids_and_review_dates() -> None:
     assert all(entry.last_reviewed for entry in catalog)
 
 
-def test_advanced_embedding_candidates_are_not_assignable_by_default() -> None:
+def test_embedding_candidates_have_expected_assignability_defaults() -> None:
     catalog = {entry.id: entry for entry in load_model_catalog()}
 
     assert catalog["qwen3-embedding:0.6b"].assignable is True
     assert catalog["qwen3-embedding:0.6b"].embedding_dimension == 1024
-    assert catalog["qwen3-embedding:4b"].phase == "advanced"
-    assert catalog["qwen3-embedding:4b"].assignable is False
+    assert catalog["qwen3-embedding:4b"].phase == "default"
+    assert catalog["qwen3-embedding:4b"].assignable is True
+    assert catalog["qwen3-embedding:4b"].embedding_dimension == 2560
     assert catalog["openai/text-embedding-3-small"].assignable is False

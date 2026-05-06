@@ -21,6 +21,8 @@ vi.mock('@/lib/api', () => ({
   fetchMyDay: vi.fn(),
   createQuickTask: vi.fn(),
   updateTask: vi.fn(),
+  fetchIntentToday: vi.fn().mockResolvedValue({ intent: null, updated_at: null }),
+  saveIntentToday: vi.fn().mockResolvedValue({ intent: null, updated_at: null }),
 }));
 
 vi.mock('sonner', () => ({

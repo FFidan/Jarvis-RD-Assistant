@@ -50,7 +50,7 @@ export function LearningFocusSection() {
                     <p className="text-[24px] font-bold tabular-nums text-[hsl(var(--cta-warn-fg))]">
                       {stats.due_now}
                     </p>
-                    <p className="text-[11px] font-mono uppercase tracking-wide text-orange-700">
+                    <p className="text-[11px] font-mono uppercase tracking-wide text-[hsl(var(--cta-warn-fg))] opacity-80">
                       cards due now
                     </p>
                   </div>

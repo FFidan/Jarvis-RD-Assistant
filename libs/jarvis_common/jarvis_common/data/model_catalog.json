@@ -148,11 +148,11 @@
     "license": "Apache 2.0",
     "tier": 1,
     "description": "Advanced local embedding candidate for notation-heavy scientific retrieval.",
-    "notes": "Not assignable in Phase C. Default output dimension differs from the 1024d Qwen3-Embedding-0.6B collection and requires a deliberate MRL/custom-dimension or rebuild plan.",
-    "last_reviewed": "2026-05-06",
+    "notes": "Recommended for Tier-1+ hardware (≥4 GB VRAM). Outputs 2560-dimensional embeddings; switching from the 1024d default requires a Qdrant snapshot + reembed (see scripts/reembed.py). Validated end-to-end on RTX 5060 Ti 16GB on 2026-05-07.",
+    "last_reviewed": "2026-05-07",
     "embedding_dimension": 2560,
-    "phase": "advanced",
-    "assignable": false
+    "phase": "default",
+    "assignable": true
   },
   {
     "id": "mxbai-embed-large",

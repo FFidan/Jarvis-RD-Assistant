@@ -1,7 +1,5 @@
 """System status endpoints: setup wizard readiness + Ollama model info."""
 
-from __future__ import annotations
-
 import logging
 import os
 import re
