@@ -15,8 +15,8 @@ x-shared-env: &shared-env
   LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
   QDRANT_URL: http://qdrant:6333
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
-  EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-qwen3-embedding:0.6b}
-  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+  EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-qwen3-embedding:4b}
+  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-2560}
   # JARVIS_API_KEY is injected via Docker Secret (_FILE convention); plain env var kept as fallback
   JARVIS_API_KEY: ${JARVIS_API_KEY:-}
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
