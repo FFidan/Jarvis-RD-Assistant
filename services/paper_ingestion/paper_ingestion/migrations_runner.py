@@ -7,6 +7,7 @@ advisory transaction lock so concurrent instances don't race.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 
@@ -184,10 +185,15 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             try:
                 await conn.execute("SELECT pg_advisory_xact_lock(42)")
             except asyncpg.LockNotAvailableError:
-                logger.warning(
-                    "migration lock contended — another instance is running migrations; skipping"
-                )
-                return  # Other instance handles migrations; treat as success
+                message = "migration lock contended — another instance is running migrations"
+                if os.environ.get("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "").lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                }:
+                    logger.warning("%s; skipping because compatibility flag is set", message)
+                    return
+                raise RuntimeError(f"{message}; refusing to start with unverified schema") from None
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     version INTEGER PRIMARY KEY,

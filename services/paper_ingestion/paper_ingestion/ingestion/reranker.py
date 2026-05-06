@@ -23,6 +23,19 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def select_onnx_provider(device: str, available_providers: list[str]) -> str:
+    """Return an ONNX provider compatible with the requested device."""
+    if device == "cuda":
+        if "CUDAExecutionProvider" in available_providers:
+            return "CUDAExecutionProvider"
+        raise RuntimeError(
+            "ONNX CUDA provider is unavailable; install onnxruntime-gpu or use CPU fallback"
+        )
+    if "CPUExecutionProvider" in available_providers:
+        return "CPUExecutionProvider"
+    raise RuntimeError(f"No supported ONNX execution provider: {available_providers}")
+
+
 class Reranker:
     """Cross-encoder reranker using sentence-transformers.
 
@@ -51,22 +64,25 @@ class Reranker:
 
         cross_encoder_cls = CrossEncoder  # narrowed: not None past the guard above
 
-        _onnx_kwargs: dict[str, Any] = {
-            "backend": "onnx",
-            "model_kwargs": {"provider": "CPUExecutionProvider"},
-        }
+        onnx_providers: list[str] = []
 
         def _load(device: str, use_onnx: bool) -> Any:
-            kwargs: dict[str, Any] = (
-                {**_onnx_kwargs, "device": device} if use_onnx else {"device": device}
-            )
+            kwargs: dict[str, Any] = {"device": device}
+            if use_onnx:
+                kwargs.update(
+                    {
+                        "backend": "onnx",
+                        "model_kwargs": {"provider": select_onnx_provider(device, onnx_providers)},
+                    }
+                )
             return cross_encoder_cls(self._model_name, **kwargs)
 
         # Determine whether optimum+onnxruntime are present.
         try:
-            import onnxruntime  # noqa: F401
+            import onnxruntime
             import optimum  # noqa: F401
 
+            onnx_providers = list(onnxruntime.get_available_providers())
             _onnx_available = True
         except ImportError:
             _onnx_available = False

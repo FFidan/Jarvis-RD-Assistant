@@ -177,6 +177,7 @@ async def test_zero_candidates_sets_degraded_reason_and_source_diagnostics():
     assert "arXiv" in stats["degraded_reason"]
     persist.assert_awaited_once()
     assert persist.await_args.kwargs["degraded_reason"] == stats["degraded_reason"]
+    assert persist.await_args.kwargs["stats"]["degraded_reason"] == stats["degraded_reason"]
 
 
 @pytest.mark.asyncio

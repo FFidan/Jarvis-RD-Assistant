@@ -3,7 +3,7 @@
 **Status:** SHIPPED — live re-embed complete on the local stack
 **Date:** 2026-05-03
 **Scope:** Marathon Phase C — replace `nomic-embed-text` (768d) with Qwen3-Embedding-0.6B (1024d)
-**Part of:** [docs/plans/2026-04-30-marathon-meta.md](../plans/2026-04-30-marathon-meta.md)
+**Part of:** [docs/plans/archive/2026-04-30-marathon-meta.md](../plans/archive/2026-04-30-marathon-meta.md)
 
 ---
 
@@ -114,7 +114,7 @@ EMBEDDING_MODEL_NAME=qwen3-embedding:0.6b
 # EMBEDDING_MODEL stays "embed" — the LiteLLM alias, not the model name directly
 ```
 
-### 4.4 LiteLLM Config Update
+### 4.5 LiteLLM Config Update
 
 ```yaml
 # litellm/config.yaml — embed model block
@@ -250,8 +250,8 @@ leave old vectors absent or stale after collection recreation.
 
 **None.** This is a Qdrant-only change. No SQL schema is affected. The `paper_chunks` table in PostgreSQL stores metadata only (no vectors). The Qdrant collection recreate is an operational step, not a database migration.
 
-Migration number 052 is reserved by the B.4 (procrastinate) spec. The next
-available number for future SQL migrations is 058.
+Migration number 058 is reserved by the job terminal-outcome persistence
+closeout. The next available number for future SQL migrations is 059.
 
 ---
 

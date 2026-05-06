@@ -144,6 +144,30 @@ async def test_update_progress_coerces_int_progress_to_float() -> None:
     assert message is None
 
 
+@pytest.mark.asyncio
+async def test_record_terminal_outcome_upserts_result_and_error() -> None:
+    """Terminal outcomes are persisted without clobbering progress state."""
+    from jarvis_common._ctx_shim import make_ctx_shim
+
+    pool = AsyncMock()
+    pool.execute = AsyncMock(return_value=None)
+    shim = make_ctx_shim(None, job_id="uuid-1", pool=pool)
+
+    await shim.record_terminal_outcome(
+        result={"cards_created": 2},
+        error={"message": "ignored for success"},
+    )
+
+    pool.execute.assert_awaited_once()
+    sql, *args = pool.execute.await_args.args
+    assert "INSERT INTO job_progress" in sql
+    assert "result" in sql
+    assert "error" in sql
+    inserted_columns = sql.split("(", maxsplit=1)[1].split(")", maxsplit=1)[0]
+    assert "progress" not in inserted_columns
+    assert args == ["uuid-1", {"cards_created": 2}, {"message": "ignored for success"}]
+
+
 # ---------------------------------------------------------------------------
 # is_cancelled — should_abort bridge
 # ---------------------------------------------------------------------------

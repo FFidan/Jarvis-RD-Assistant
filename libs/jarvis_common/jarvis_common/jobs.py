@@ -219,8 +219,8 @@ def procrastinate_row_to_jarvis_row(prow: dict[str, Any]) -> dict[str, Any]:
         "progress": progress,
         "progress_message": prow.get("progress_message"),
         "payload": {k: v for k, v in args.items() if k not in {"job_id", "user_id"}},
-        "result": None,
-        "error": None,
+        "result": prow.get("result"),
+        "error": prow.get("error"),
         "created_at": prow.get("created_at"),
         "started_at": prow.get("started_at"),
         "finished_at": prow.get("finished_at"),
@@ -250,6 +250,8 @@ async def get_procrastinate_job_for_jarvis_id(
           pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
           jp.progress AS progress,
           jp.message  AS progress_message,
+          jp.result   AS result,
+          jp.error    AS error,
           (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
           (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
           (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
@@ -264,6 +266,8 @@ async def get_procrastinate_job_for_jarvis_id(
           pj.id, pj.queue_name, pj.task_name, pj.status, pj.args, pj.attempts,
           NULL::REAL AS progress,
           NULL::TEXT AS progress_message,
+          NULL::jsonb AS result,
+          NULL::jsonb AS error,
           (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
           (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id AND type = 'started') AS started_at,
           (SELECT MAX(at) FROM procrastinate_events WHERE job_id = pj.id AND type IN ('succeeded','failed','cancelled','aborted')) AS finished_at
@@ -276,9 +280,10 @@ async def get_procrastinate_job_for_jarvis_id(
         async with pool.acquire() as conn:
             try:
                 row = await conn.fetchrow(sql_with_progress, str(jarvis_job_id))
-            except asyncpg.UndefinedTableError:
+            except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
                 # job_progress missing (migration 054 not applied) — retry
-                # without the JOIN so callers still see procrastinate state.
+                # or terminal-outcome columns missing (migration 058 not applied)
+                # — retry without the JOIN so callers still see procrastinate state.
                 row = await conn.fetchrow(sql_without_progress, str(jarvis_job_id))
     except asyncpg.UndefinedTableError:
         # procrastinate_jobs missing (migration 052 not applied).
@@ -551,8 +556,8 @@ async def list_jobs(
                  WHEN 'aborted'    THEN 'cancelled'
                  ELSE 'running' END AS status,
                pj.args - 'job_id' - 'user_id' AS payload,
-               NULL::jsonb AS result,
-               NULL::jsonb AS error,
+               jp.result AS result,
+               jp.error AS error,
                COALESCE(jp.progress, 0)::float AS progress,
                jp.message AS progress_message,
                (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) AS created_at,
@@ -579,8 +584,13 @@ async def list_jobs(
     """
     query_without_progress = query_with_progress.replace(
         "COALESCE(jp.progress, 0)::float AS progress,\n"
-        "               jp.message AS progress_message,",
-        "0::float AS progress,\n               NULL::text AS progress_message,",
+        "               jp.message AS progress_message,\n"
+        "               jp.result AS result,\n"
+        "               jp.error AS error,",
+        "0::float AS progress,\n"
+        "               NULL::text AS progress_message,\n"
+        "               NULL::jsonb AS result,\n"
+        "               NULL::jsonb AS error,",
     ).replace(
         "        LEFT JOIN job_progress jp ON jp.jarvis_job_id = pj.args->>'job_id'\n",
         "",
@@ -589,6 +599,6 @@ async def list_jobs(
     async with pool.acquire() as conn:
         try:
             rows = await conn.fetch(query_with_progress, *params)
-        except asyncpg.UndefinedTableError:
+        except (asyncpg.UndefinedColumnError, asyncpg.UndefinedTableError):
             rows = await conn.fetch(query_without_progress, *params)
     return [dict(r) for r in rows]

@@ -417,6 +417,7 @@ class OpenAlexSource(PaperSource):
             try:
                 response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
                 if response.status_code in (429, 500, 502, 503, 504):
+                    self._record_transient_poll_diagnostic(response)
                     logger.warning(
                         "OpenAlex fetch_new_since returned %d; skipping query",
                         response.status_code,
@@ -424,7 +425,19 @@ class OpenAlexSource(PaperSource):
                     continue
                 response.raise_for_status()
                 data = response.json()
+                self._clear_poll_diagnostic()
             except httpx.HTTPError as exc:
+                response = getattr(exc, "response", None)
+                if response is not None:
+                    self._record_transient_poll_diagnostic(response)
+                else:
+                    self._set_poll_diagnostic(
+                        status="error",
+                        message=str(exc),
+                        status_code=None,
+                        retry_after_s=None,
+                        settings_hint=None,
+                    )
                 logger.warning("OpenAlex fetch_new_since failed: %s", exc)
                 continue
 

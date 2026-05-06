@@ -7,7 +7,7 @@ Sources are discovered via the ``@register_source`` decorator in ``registry.py``
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any
+from typing import Any, TypedDict
 
 import httpx
 
@@ -18,6 +18,16 @@ logger = logging.getLogger(__name__)
 # HTTP status codes that indicate transient server/rate-limit errors.
 # Plugins return [] / None on these codes rather than raising.
 _TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+
+class SourcePollDiagnostic(TypedDict, total=False):
+    """Structured source polling diagnostic consumed by Pulse discovery."""
+
+    status: str
+    message: str
+    status_code: int | None
+    retry_after_s: int | None
+    settings_hint: str | None
 
 
 class PaperSource(ABC):
@@ -41,6 +51,58 @@ class PaperSource(ABC):
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         self.config = config
         self.http_client = http_client
+        self._last_poll_diagnostic: SourcePollDiagnostic | None = None
+
+    @property
+    def last_poll_diagnostic(self) -> SourcePollDiagnostic | None:
+        """Most recent source-level polling diagnostic, if the last poll degraded."""
+        return self._last_poll_diagnostic
+
+    def _clear_poll_diagnostic(self) -> None:
+        self._last_poll_diagnostic = None
+
+    def _set_poll_diagnostic(
+        self,
+        *,
+        status: str,
+        message: str,
+        status_code: int | None = None,
+        retry_after_s: int | None = None,
+        settings_hint: str | None = None,
+    ) -> None:
+        self._last_poll_diagnostic = {
+            "status": status,
+            "message": message,
+            "status_code": status_code,
+            "retry_after_s": retry_after_s,
+            "settings_hint": settings_hint,
+        }
+
+    @staticmethod
+    def _retry_after_seconds(response: httpx.Response | None) -> int | None:
+        if response is None:
+            return None
+        retry_after = response.headers.get("Retry-After")
+        if retry_after is None:
+            return None
+        try:
+            return int(float(retry_after))
+        except (TypeError, ValueError):
+            return None
+
+    def _record_transient_poll_diagnostic(self, response: httpx.Response) -> None:
+        status = "rate_limit" if response.status_code == 429 else "api_error"
+        self._set_poll_diagnostic(
+            status=status,
+            message=(
+                f"{self.__class__.__name__} rate limit reached. Retry later."
+                if response.status_code == 429
+                else f"{self.__class__.__name__} upstream returned HTTP {response.status_code}."
+            ),
+            status_code=response.status_code,
+            retry_after_s=self._retry_after_seconds(response),
+            settings_hint=None,
+        )
 
     async def _safe_get(
         self,
@@ -95,11 +157,24 @@ class PaperSource(ABC):
                     url,
                     response.status_code,
                 )
+                self._record_transient_poll_diagnostic(response)
                 return None
             response.raise_for_status()
+            self._clear_poll_diagnostic()
             return response
         except httpx.HTTPError as exc:
             logger.warning("%s _safe_get %s failed: %s", self.source_type, url, exc)
+            response = getattr(exc, "response", None)
+            if response is not None:
+                self._record_transient_poll_diagnostic(response)
+            else:
+                self._set_poll_diagnostic(
+                    status="error",
+                    message=str(exc),
+                    status_code=None,
+                    retry_after_s=None,
+                    settings_hint=None,
+                )
             return None
 
     @abstractmethod

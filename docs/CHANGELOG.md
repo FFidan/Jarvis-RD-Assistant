@@ -5,6 +5,30 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 ## [1.7.2-dev] — 2026-05-06
 
 ### Fixed
+- Pulse source exhaustion is now persisted and surfaced as Degraded with
+  per-source diagnostics, including arXiv/S2/OpenAlex/PubMed 429/5xx status and
+  `Retry-After` hints when providers rate-limit.
+- arXiv Pulse polling now uses a full-minute `submittedDate` upper bound and
+  serializes requests per process, matching the public API rules instead of
+  issuing an off-spec date range after manual regenerations.
+- Procrastinate-backed jobs now persist terminal `result` and `error` payloads
+  in `job_progress`, so list/detail/SSE views can show failure diagnostics after
+  the job row reaches a terminal state.
+- `scripts/reembed.py` now waits for Qdrant upserts/deletes and removes stale
+  old-model points before marking PostgreSQL chunks as re-embedded, keeping
+  interrupted runs retryable by default.
+- Migration startup now fails closed when the advisory migration lock is
+  contended, with an explicit compatibility flag for operators who need the old
+  return-without-migrating behavior.
+- Active docs/specs now participate in `scripts/check_agent_docs.py`, preventing
+  moved archive links and stale active spec links from drifting silently.
+- Settings source configuration no longer marks PubMed's API key as missing
+  when PubMed is enabled without an optional key.
+- Settings model selectors now expose pull/delete actions for the selected
+  local catalog model instead of only explaining assignment blockers.
+- The reranker and `scripts/reembed.py` now select ONNX Runtime providers from
+  the providers actually installed; ONNX/CUDA is used only when
+  `CUDAExecutionProvider` is available.
 - Model deletion is now catalog-bound and fail-closed when active assignments
   cannot be verified; arbitrary Ollama tags are no longer deleted through the
   system API.
@@ -27,6 +51,9 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 - `python -m scripts.eval_retrieval` now bootstraps repo package paths itself,
   so the documented live retrieval-eval command no longer requires a manual
   `PYTHONPATH`.
+- `scripts/eval_retrieval.py` now supports fixed JSONL scientific eval sets,
+  reports nDCG@3 and latency, and keeps failed queries in the metric
+  denominator.
 - The `PaperSearchSelect` debounce test now uses deterministic fake timers and
   no longer races Vitest's auto-advancing timer mode.
 
@@ -54,7 +81,7 @@ All notable changes to JARVIS RD Assistant will be documented in this file.
 ### Fixed
 - OI-1 migration bootstrap: `db/init.sql` no longer blanket-seeds
   `schema_migrations` with `generate_series`; runtime replay is kept for
-  migrations 033 and 049-057.
+  migrations 033 and 049-058.
 - Migration runner now repairs known false-applied rows only when schema/data
   evidence is missing, allowing old second-machine databases to self-heal on
   startup instead of requiring manual `ALTER TABLE` repair.

@@ -38,16 +38,39 @@ Clone and bootstrap exactly like the primary machine:
     cd JARVIS_RD_Assistant
     cp .env.example .env
     bash scripts/init-secrets.sh         # generates JARVIS_API_KEY, POSTGRES_PASSWORD, etc.
-    $EDITOR .env                         # set TELEGRAM_BOT_TOKEN to a FRESH bot token
+    $EDITOR .env                         # optional: set TELEGRAM_BOT_TOKEN for Telegram
     docker compose up -d
 
-**⚠ Telegram:** Two machines must NEVER share a bot token. Telegram routes
+**Telegram is optional.** For dashboard/Pulse/RAG testing you can leave
+`TELEGRAM_BOT_TOKEN` blank and run without the Telegram profile. If you do
+enable Telegram, two machines must NEVER share a bot token. Telegram routes
 long-poll updates to whichever client polled last; sharing causes random message
 loss. Create a separate bot via @BotFather for the second machine.
 
 After the stack is healthy, open the dashboard. The setup wizard runs
 automatically on first visit (`setup.completed = false` in DB). Complete the
 wizard to configure your timezone, Pulse schedule, and Telegram pairing.
+
+### Pulse source caveats
+
+Manual Pulse regeneration can temporarily exhaust public-source rate limits.
+arXiv asks API clients to keep requests to one connection at a time and no more
+than one request every three seconds; repeated manual runs can therefore return
+HTTP 429 even when the code is working correctly. A zero-card run with
+`degraded_reason` and source diagnostics means the job completed but every
+enabled source was empty, rate-limited, unsupported for polling, or missing
+required source settings.
+
+The arXiv source uses minute-precision `submittedDate` bounds and serializes
+requests inside each `paper_ingestion` process. If arXiv reports 429 or times
+out, wait at least the `Retry-After` window or 30 seconds before another manual
+regeneration; repeated button clicks only extend the public API cooldown. Use
+Settings -> Pulse -> Diagnostics or `GET /api/pulse/debug` to confirm whether
+arXiv returned candidates, no matches, a rate limit, or a transport error.
+
+OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY` for Pulse polling in
+this stack. PubMed can run without an API key, but an NCBI key raises the rate
+limit and is recommended for frequent testing.
 
 ---
 
@@ -336,11 +359,11 @@ changed, rebuild the affected container before testing the webapp.
 `paper_ingestion` runs the migration runner on startup. The runner is
 idempotent and also repairs the known 2026-05-05 false-applied migration state
 caused by old `db/init.sql` snapshots that blanket-seeded `schema_migrations`.
-If rows for migrations 033 or 049-057 were marked applied without their schema
+If rows for migrations 033 or 049-058 were marked applied without their schema
 objects/data, startup removes only the bad marker and replays the migration.
 
 Do not manually `ALTER TABLE` for missing `user_config.encrypted_value`,
-Procrastinate objects, `job_progress`, or the 049-057 follow-up schema unless
+Procrastinate objects, `job_progress`, or the 049-058 follow-up schema unless
 the migration runner logs a real SQL failure. The normal repair path is:
 
 ```bash
@@ -429,7 +452,8 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | Pre-existing `docker-compose.override.yml` causes port conflicts after running `setup.sh` mode 2 | `setup.sh` now backs it up automatically, but old installs may still have one | `setup.sh` moves it to `docker-compose.override.yml.bak.<ts>`. Delete the backup once you're sure you don't need it. |
 | Settings → "Models & Preferences" shows "No config entries" | DB was initialized before migration 057 seeded default config rows | Restart paper_ingestion to trigger the migration runner: `docker compose restart paper_ingestion`. Verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — should return 3 rows. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Runtime LiteLLM config is mounted read-only or the selected model is not pulled/assignable | Pull the model first from Settings → Models, or restart LiteLLM with an updated config. The default smart model is `qwen3:14b`. |
-| Pulse generates a 0-card deck but Settings says the job is done | Every enabled source returned zero usable candidates, was rate-limited, or is unconfigured | Open Settings → Pulse → Diagnostics and inspect Source diagnostics. For OpenAlex set `OPENALEX_EMAIL` (and optionally `OPENALEX_API_KEY`); for arXiv wait for the retry window and avoid repeated manual regenerations; for Semantic Scholar add an API key if you hit public-rate limits. |
+| Pulse generates a 0-card deck but Settings says the job is done | Every enabled source returned zero usable candidates, was rate-limited, or is unconfigured | Open Settings → Pulse → Diagnostics and inspect Source diagnostics. For OpenAlex set `OPENALEX_EMAIL` (and optionally `OPENALEX_API_KEY`); for arXiv wait for `Retry-After` or at least 30 seconds and avoid repeated manual regenerations; for Semantic Scholar add an API key if you hit public-rate limits. |
+| Pulse diagnostics show `ArxivSource: error` or `rate_limit` | arXiv rejected or timed out the public API request, often after repeated manual runs | Wait out the cooldown, then trigger one Pulse run. If it persists, check `docker compose logs --tail=200 paper_ingestion` for the sanitized arXiv status/transport message and verify the query uses a full `submittedDate:[YYYYMMDDHHMM TO 299912312359]` range. |
 | `paper_ingestion` exits with an embedding dimension mismatch, or `/api/system/models` reports `embedding_config` | Existing `.env` or Qdrant state still points at the old 768d embedding setup while LiteLLM uses Qwen3 1024d | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:0.6b` and `EMBEDDING_DIMENSION=1024` in `.env`, pull the model, take the explicit Qdrant checkpoint, then run `REEMBED_RECREATE_COLLECTION=true python -m scripts.reembed` only if the collection is still wrong-dimension. |
 | Phase C re-embedding is too slow through LiteLLM/Ollama | `scripts/reembed.py` defaults to the runtime LiteLLM path, which is safe but HTTP-bound and sequential | Benchmark locally first: `REEMBED_BENCHMARK=true REEMBED_BACKEND=local python -m scripts.reembed`. If output count and dimension are correct, resume with `REEMBED_BACKEND=local python -m scripts.reembed`. Use `REEMBED_BACKEND=onnx` only when optional ONNX dependencies are installed and benchmarked faster on that host. |
 

@@ -98,6 +98,46 @@ class ProcrastinateJobContextShim:
                 exc_info=True,
             )
 
+    async def record_terminal_outcome(
+        self,
+        *,
+        result: dict[str, Any] | None = None,
+        error: dict[str, Any] | None = None,
+    ) -> None:
+        """UPSERT terminal result/error payloads into ``job_progress``.
+
+        Outcome persistence is best-effort for the same reason progress is:
+        losing the UI payload is bad, but it must not turn a completed handler
+        into a failed Procrastinate job.
+        """
+        if self._pool is None or not self.job_id:
+            logger.debug(
+                "ctx_shim.record_terminal_outcome no-op (pool=%s, job_id=%r)",
+                self._pool,
+                self.job_id,
+            )
+            return
+        try:
+            await self._pool.execute(
+                """
+                INSERT INTO job_progress (jarvis_job_id, result, error, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (jarvis_job_id) DO UPDATE
+                  SET result     = EXCLUDED.result,
+                      error      = EXCLUDED.error,
+                      updated_at = EXCLUDED.updated_at
+                """,
+                self.job_id,
+                result,
+                error,
+            )
+        except Exception:  # noqa: BLE001 — never let outcome reporting kill the job
+            logger.debug(
+                "ctx_shim.record_terminal_outcome UPSERT failed for job %s",
+                self.job_id,
+                exc_info=True,
+            )
+
     async def is_cancelled(self) -> bool:
         """Return True when procrastinate has flagged the job for abort.
 

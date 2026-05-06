@@ -8,7 +8,7 @@
 - The Langfuse SDK initialization in `configure_lifespan`
 
 This contract is the **evergreen counterpart** to the B.2 portion of
-[docs/specs/2026-05-02-instructor-langfuse-integration.md](../specs/2026-05-02-instructor-langfuse-integration.md). The spec describes
+[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](../specs/archive/2026-05-02-instructor-langfuse-integration.md). The spec describes
 the integration work; this contract describes the steady state.
 
 ---
@@ -255,7 +255,7 @@ The implementation MUST satisfy these. Testable.
 - **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — encrypted keys whose plaintext MUST NEVER appear in span metadata.
 - **[02-pulse.md §6.1](02-pulse.md#61-degraded-vs-fatal--the-difference-that-matters)** — `degraded_reason` field that the Pulse trace span MUST mirror as a tag.
 - **[03-llm.md §1.1](03-llm.md#11-call_llm_structured-signature-target)** — the choke-point function that gets the auto-`@observe(as_type="generation")` wrap.
-- **[docs/specs/2026-05-02-instructor-langfuse-integration.md §2 / §5](../specs/2026-05-02-instructor-langfuse-integration.md)** — implementation spec.
+- **[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md §2 / §5](../specs/archive/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec.
 
 ---
 
@@ -281,4 +281,4 @@ author re-Reads each cited file before final claim.
 | `configure_lifespan` (SDK init point) | libs/jarvis_common/jarvis_common/app_factory.py:151 | Equal-length init/teardown lifespan builder |
 | `_ENCRYPTED_KEYS` | services/paper_ingestion/paper_ingestion/routers/settings.py:101-108 | Privacy: plaintext NEVER in span metadata |
 | `mask_secret` | libs/jarvis_common/jarvis_common/crypto.py | Helper for scrubbing values before span attachment |
-| Existing impl spec | docs/specs/2026-05-02-instructor-langfuse-integration.md | Drives the integration work that produces this contract's steady state |
+| Existing impl spec | docs/specs/archive/2026-05-02-instructor-langfuse-integration.md | Drives the integration work that produces this contract's steady state |

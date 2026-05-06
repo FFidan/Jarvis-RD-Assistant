@@ -16,7 +16,7 @@ who writes it, who reads it, and current LIVE/GHOST/PARTIAL status.
 
 **Out of scope.**
 - Per-paper user state (`paper_user_state` columns) — covered by the
-  [paper-lifecycle redesign spec](../specs/2026-04-29-paper-lifecycle-redesign.md).
+  [paper-lifecycle redesign spec](../specs/archive/2026-04-29-paper-lifecycle-redesign.md).
 - Pomodoro timer settings (`usePomodoroStore` Zustand) — UI-local only,
   never persisted server-side.
 - Authentication (`JARVIS_API_KEY` in env / `auth-store`) — bootstrap, not
@@ -94,7 +94,7 @@ behavior somewhere.
 ### 2.3 GHOST keys (allowed by API; no consumer reads them)
 
 **Empty as of 2026-05-02.** All seven historical GHOST entries were resolved in
-the [Settings cleanup sprint](../plans/2026-05-02-contracts-settings-and-ux.md):
+the [Settings cleanup sprint](../plans/archive/2026-05-02-contracts-settings-and-ux.md):
 five were deleted from `_ALLOWED_CONFIG_KEYS` and the seed (see §9.1) and two
 (`fsrs.learning_steps`, `zotero.auto_push_on_star`) were promoted to LIVE in
 §2.1.
@@ -271,7 +271,7 @@ The implementation MUST satisfy these. Testable.
 
 ### 9.1 Resolved 2026-05-02 (Settings cleanup sprint)
 
-Plan: [docs/plans/2026-05-02-contracts-settings-and-ux.md](../plans/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
+Plan: [docs/plans/archive/2026-05-02-contracts-settings-and-ux.md](../plans/archive/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
 
 | Item | Disposition | Implementation |
 |---|---|---|
@@ -301,7 +301,7 @@ Plan: [docs/plans/2026-05-02-contracts-settings-and-ux.md](../plans/2026-05-02-c
 - **[02-pulse.md](02-pulse.md) §3** — the four GHOST weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed, validator-accepted, but no signal computation populates them.
 - **[03-llm.md](03-llm.md) §2** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
 - **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_SECRET_KEYS` / `_ENCRYPTED_KEYS`.
-- **[docs/specs/2026-04-29-paper-lifecycle-redesign.md](../specs/2026-04-29-paper-lifecycle-redesign.md)** — `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
+- **[docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](../specs/archive/2026-04-29-paper-lifecycle-redesign.md)** — `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
 
 ---
 

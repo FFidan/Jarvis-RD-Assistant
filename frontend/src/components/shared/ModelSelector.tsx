@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query';
-import { Cpu } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Cpu, Download, Trash2 } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 import {
   Select,
   SelectContent,
@@ -139,6 +140,7 @@ function matchesConfiguredValue(entry: ModelCatalogEntry, value: string): boolea
 }
 
 export function ModelSelector({ value, onChange, configKey: role }: ModelSelectorProps) {
+  const queryClient = useQueryClient();
   const { data, error } = useQuery<SystemModels>({
     queryKey: ['system-models'],
     queryFn: () => apiFetch<SystemModels>('/api/system/models'),
@@ -207,103 +209,157 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
     }))
     .filter((group) => group.models.length > 0);
   const detectedHardware = hardwareSummary(data?.hardware);
+  const selectedLocalTag =
+    selectedEntry && isLocalModel(selectedEntry) ? (selectedEntry.ollama_tag ?? selectedEntry.id) : '';
+  const modelPath = selectedLocalTag ? encodeURIComponent(selectedLocalTag) : '';
+  const pullMutation = useMutation({
+    mutationFn: () => apiFetch(`/api/system/models/${modelPath}/pull`, { method: 'POST' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: () => apiFetch(`/api/system/models/${modelPath}`, { method: 'DELETE' }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['system-models'] }),
+  });
+  const canPullSelected =
+    selectedEntry !== undefined &&
+    isLocalModel(selectedEntry) &&
+    selectedEntry.status === 'downloadable' &&
+    selectedEntry.fit !== 'unfit';
+  const canDeleteSelected =
+    selectedEntry !== undefined &&
+    isLocalModel(selectedEntry) &&
+    selectedEntry.pulled &&
+    !selectedEntry.active &&
+    selectedEntry.status !== 'active';
 
   return (
-    <Select value={effectiveValue} onValueChange={onChange}>
-      <SelectTrigger>
-        <SelectValue placeholder="Select a model" />
-      </SelectTrigger>
-      <SelectContent>
-        {detectedHardware && (
-          <div className="px-2 pb-2 text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Detected hardware</span>
-            <span className="ml-2 inline-flex flex-wrap gap-x-1">
-              {detectedHardware.map((part, index) => (
-                <span key={String(part)}>
-                  {index > 0 && <span aria-hidden="true">· </span>}
-                  {part}
-                </span>
-              ))}
-            </span>
-          </div>
-        )}
-        {issues.map((issue) => (
-          <div key={issue} className="px-2 pb-2 text-xs text-amber-700">
-            {issue}
-          </div>
-        ))}
-        {allModels.length === 0 ? (
-          <div className="px-2 py-4 text-center text-sm text-muted-foreground">
-            <Cpu className="mx-auto mb-2 h-5 w-5" />
-            {emptyStateContent}
-          </div>
-        ) : (
-          groupedModels.map(({ group, models: groupModels }, index) => (
-            <SelectGroup key={group}>
-              {index > 0 && <SelectSeparator />}
-              <SelectLabel>{PROVIDER_LABELS[group] ?? group}</SelectLabel>
-              {groupModels.map((m) => {
-                const blocker = assignmentBlocker(m, currentRole);
-                const canAssign = blocker === null && isEntrySelectableForRole(m, currentRole);
-                const isCurrent =
-                  m.active ||
-                  m.status === 'active' ||
-                  m.status === 'cloud_active' ||
-                  matchesConfiguredValue(m, systemDefault) ||
-                  matchesConfiguredValue(m, value);
-                const badge = statusLabel(m, isCurrent);
-                return (
-                  <SelectItem key={m.id} value={m.id} disabled={!canAssign}>
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                        <span>{m.name}</span>
-                        {m.id !== m.name && (
+    <div className="space-y-2">
+      <Select value={effectiveValue} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue placeholder="Select a model" />
+        </SelectTrigger>
+        <SelectContent>
+          {detectedHardware && (
+            <div className="px-2 pb-2 text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Detected hardware</span>
+              <span className="ml-2 inline-flex flex-wrap gap-x-1">
+                {detectedHardware.map((part, index) => (
+                  <span key={String(part)}>
+                    {index > 0 && <span aria-hidden="true">· </span>}
+                    {part}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
+          {issues.map((issue) => (
+            <div key={issue} className="px-2 pb-2 text-xs text-amber-700">
+              {issue}
+            </div>
+          ))}
+          {allModels.length === 0 ? (
+            <div className="px-2 py-4 text-center text-sm text-muted-foreground">
+              <Cpu className="mx-auto mb-2 h-5 w-5" />
+              {emptyStateContent}
+            </div>
+          ) : (
+            groupedModels.map(({ group, models: groupModels }, index) => (
+              <SelectGroup key={group}>
+                {index > 0 && <SelectSeparator />}
+                <SelectLabel>{PROVIDER_LABELS[group] ?? group}</SelectLabel>
+                {groupModels.map((m) => {
+                  const blocker = assignmentBlocker(m, currentRole);
+                  const canAssign = blocker === null && isEntrySelectableForRole(m, currentRole);
+                  const isCurrent =
+                    m.active ||
+                    m.status === 'active' ||
+                    m.status === 'cloud_active' ||
+                    matchesConfiguredValue(m, systemDefault) ||
+                    matchesConfiguredValue(m, value);
+                  const badge = statusLabel(m, isCurrent);
+                  return (
+                    <SelectItem key={m.id} value={m.id} disabled={!canAssign}>
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                          <span>{m.name}</span>
+                          {m.id !== m.name && (
+                            <span className="text-xs text-muted-foreground">
+                              {m.id}
+                            </span>
+                          )}
+                          {m.quantization && (
+                            <span className="text-xs text-muted-foreground">
+                              {m.quantization}
+                            </span>
+                          )}
+                          {m.size !== undefined && m.size > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              ({formatSize(m.size)})
+                            </span>
+                          )}
+                          {m.size === undefined && m.disk_gb > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              ({formatGb(m.disk_gb)} disk)
+                            </span>
+                          )}
+                          {m.vram_gb > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              {formatGb(m.vram_gb)} VRAM
+                            </span>
+                          )}
                           <span className="text-xs text-muted-foreground">
-                            {m.id}
+                            Requires Tier {m.tier}
                           </span>
-                        )}
-                        {m.quantization && (
-                          <span className="text-xs text-muted-foreground">
-                            {m.quantization}
-                          </span>
-                        )}
-                        {m.size !== undefined && m.size > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            ({formatSize(m.size)})
-                          </span>
-                        )}
-                        {m.size === undefined && m.disk_gb > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            ({formatGb(m.disk_gb)} disk)
-                          </span>
-                        )}
-                        {m.vram_gb > 0 && (
-                          <span className="text-xs text-muted-foreground">
-                            {formatGb(m.vram_gb)} VRAM
-                          </span>
-                        )}
-                        <span className="text-xs text-muted-foreground">
-                          Requires Tier {m.tier}
-                        </span>
-                        {badge && (
-                          <span className="text-xs font-medium text-green-600">
-                            {badge}
-                          </span>
+                          {badge && (
+                            <span className="text-xs font-medium text-green-600">
+                              {badge}
+                            </span>
+                          )}
+                        </div>
+                        {blocker && (
+                          <div className="text-xs text-amber-700">
+                            {blocker}
+                          </div>
                         )}
                       </div>
-                      {blocker && (
-                        <div className="text-xs text-amber-700">
-                          {blocker}
-                        </div>
-                      )}
-                    </div>
-                  </SelectItem>
-                );
-              })}
-            </SelectGroup>
-          ))
-        )}
-      </SelectContent>
-    </Select>
+                    </SelectItem>
+                  );
+                })}
+              </SelectGroup>
+            ))
+          )}
+        </SelectContent>
+      </Select>
+      {(canPullSelected || canDeleteSelected) && selectedEntry && (
+        <div className="flex flex-wrap gap-2">
+          {canPullSelected && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => pullMutation.mutate()}
+              disabled={pullMutation.isPending}
+              aria-label={`Pull model ${selectedEntry.name}`}
+            >
+              <Download className="mr-2 h-4 w-4" />
+              Pull
+            </Button>
+          )}
+          {canDeleteSelected && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => deleteMutation.mutate()}
+              disabled={deleteMutation.isPending}
+              aria-label={`Delete model ${selectedEntry.name}`}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Delete
+            </Button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

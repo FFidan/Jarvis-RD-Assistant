@@ -398,6 +398,25 @@ async def test_fetch_new_since_empty_topics():
     assert route.call_count == 1
 
 
+@respx.mock
+async def test_fetch_new_since_429_records_rate_limit_diagnostic():
+    """PubMed Pulse polling records transient upstream rate limits."""
+    respx.get(ESEARCH_URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "7"}))
+
+    source = _make_source()
+    papers = await source.fetch_new_since(
+        since=datetime(2026, 5, 1, tzinfo=UTC),
+        topics=[TopicRef(id=1, name="oncology", query_terms=["oncology"])],
+        limit=10,
+    )
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 429
+    assert source.last_poll_diagnostic["retry_after_s"] == 7
+
+
 # ---------------------------------------------------------------------------
 # Missing ArticleDate → year-only fallback (integration via fixture)
 # ---------------------------------------------------------------------------

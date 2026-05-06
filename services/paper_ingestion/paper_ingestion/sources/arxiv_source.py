@@ -55,6 +55,8 @@ class ArxivSource(PaperSource):
         super().__init__(config, http_client)
         # arXiv asks clients to wait 3 seconds between repeated calls.
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
+        # arXiv's legacy API asks clients to use one connection at a time.
+        self._request_lock = asyncio.Lock()
 
     async def _rate_limit(self) -> None:
         """Enforce arXiv's conservative polling cadence."""
@@ -67,9 +69,12 @@ class ArxivSource(PaperSource):
         throttle does not immediately erase the whole Pulse deck.
         """
         for attempt in range(_MAX_FETCH_ATTEMPTS):
-            await self._rate_limit()
             try:
-                response = await self.http_client.get(ARXIV_API_URL, params=params, timeout=30.0)
+                async with self._request_lock:
+                    await self._rate_limit()
+                    response = await self.http_client.get(
+                        ARXIV_API_URL, params=params, timeout=30.0
+                    )
                 if response.status_code in (429, 500, 502, 503, 504):
                     if attempt < _MAX_FETCH_ATTEMPTS - 1:
                         wait_s = _retry_after_s(response.headers.get("Retry-After")) or min(
@@ -82,6 +87,7 @@ class ArxivSource(PaperSource):
                         )
                         await asyncio.sleep(wait_s)
                         continue
+                    self._record_transient_poll_diagnostic(response)
                     logger.warning(
                         "arxiv _safe_get %s returned %d; returning None",
                         ARXIV_API_URL,
@@ -89,13 +95,42 @@ class ArxivSource(PaperSource):
                     )
                     return None
                 response.raise_for_status()
-                return safe_fromstring(response.text)
+                try:
+                    root = safe_fromstring(response.text)
+                except Exception as exc:
+                    self._set_poll_diagnostic(
+                        status="error",
+                        message=f"arXiv returned malformed XML: {exc}",
+                        status_code=200,
+                        retry_after_s=None,
+                        settings_hint=(
+                            "Try again later; arXiv may have returned a transient invalid response."
+                        ),
+                    )
+                    logger.warning(
+                        "arxiv _safe_get %s returned malformed XML: %s", ARXIV_API_URL, exc
+                    )
+                    return None
+                self._clear_poll_diagnostic()
+                return root
             except httpx.HTTPError as exc:
                 if attempt < _MAX_FETCH_ATTEMPTS - 1:
                     wait_s = min(30.0, 3.0 * (2**attempt))
                     logger.warning("arXiv fetch failed: %s; retrying in %.1fs", exc, wait_s)
                     await asyncio.sleep(wait_s)
                     continue
+                response = getattr(exc, "response", None)
+                if response is not None:
+                    self._record_transient_poll_diagnostic(response)
+                else:
+                    message = str(exc) or exc.__class__.__name__
+                    self._set_poll_diagnostic(
+                        status="error",
+                        message=f"arXiv request failed: {message}",
+                        status_code=None,
+                        retry_after_s=None,
+                        settings_hint=None,
+                    )
                 logger.warning("arxiv _safe_get %s failed: %s", ARXIV_API_URL, exc)
                 return None
         return None
@@ -282,10 +317,10 @@ class ArxivSource(PaperSource):
         # Normalise *since* to UTC, then format as arXiv date string YYYYMMDDHHMM
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         since_str = since_utc.strftime("%Y%m%d%H%M")
-        # PI-EDGE-014: arXiv submittedDate upper bound.  The API does not support
-        # an open-ended "TO ]" range; use a far-future sentinel (year 2999) instead
-        # of the ambiguous 99999999 which arXiv may reject as an invalid date.
-        date_filter = f"submittedDate:[{since_str} TO 29991231]"
+        # arXiv submittedDate ranges require minute precision on both bounds.
+        # Use a far-future minute sentinel instead of the invalid legacy 99999999
+        # or the underspecified date-only 29991231.
+        date_filter = f"submittedDate:[{since_str} TO 299912312359]"
 
         if not topics:
             # No topic filter — just poll by date

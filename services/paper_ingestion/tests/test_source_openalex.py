@@ -299,12 +299,16 @@ async def test_search_429_returns_empty():
 @respx.mock
 async def test_fetch_new_since_429_returns_empty():
     """HTTP 429 during fetch_new_since returns []."""
-    respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(429))
+    respx.get(OPENALEX_API_URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "9"}))
 
     source = _make_source()
     since = datetime(2026, 4, 1, tzinfo=UTC)
     papers = await source.fetch_new_since(since=since, topics=[], limit=10)
     assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 429
+    assert source.last_poll_diagnostic["retry_after_s"] == 9.0
 
 
 # ---------------------------------------------------------------------------

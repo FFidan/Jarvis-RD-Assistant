@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock
 
 import asyncpg
+import pytest
 
 # The real migrations directory in this repo
 _MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "db" / "migrations"
@@ -164,9 +165,8 @@ async def test_migration_uses_xact_lock():
     )
 
 
-async def test_migration_lock_timeout_returns_gracefully():
-    """LockNotAvailableError from pg_advisory_xact_lock causes run_migrations to return
-    gracefully without raising."""
+async def test_migration_lock_timeout_fails_closed_by_default():
+    """Lock contention should fail startup unless compatibility mode is explicit."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
 
@@ -177,11 +177,28 @@ async def test_migration_lock_timeout_returns_gracefully():
 
     conn.execute.side_effect = _execute_side_effect
 
-    # Must not raise — returns gracefully, letting the other instance run migrations
-    await run_migrations(pool)
+    with pytest.raises(RuntimeError, match="migration lock contended"):
+        await run_migrations(pool)
 
     # fetch (SELECT version FROM schema_migrations) must NOT have been called —
     # we bailed out before reaching it
+    conn.fetch.assert_not_awaited()
+
+
+async def test_migration_lock_timeout_can_return_gracefully_with_env_flag(monkeypatch):
+    """Compatibility mode preserves old lock-contention behavior when requested."""
+    run_migrations = _import_run_migrations()
+    pool, conn = _make_pool_and_conn()
+
+    async def _execute_side_effect(sql, *_):
+        if "pg_advisory_xact_lock" in sql:
+            raise asyncpg.LockNotAvailableError()
+
+    conn.execute.side_effect = _execute_side_effect
+    monkeypatch.setenv("JARVIS_MIGRATION_LOCK_CONTENDED_OK", "true")
+
+    await run_migrations(pool)
+
     conn.fetch.assert_not_awaited()
 
 

@@ -53,7 +53,7 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     seeded_versions = {int(value) for value in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
     assert set(range(1, 33)).issubset(seeded_versions)
     assert set(range(34, 49)).issubset(seeded_versions)
-    assert seeded_versions.isdisjoint({33, 49, 50, 51, 52, 53, 54, 55, 56, 57})
+    assert seeded_versions.isdisjoint({33, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58})
 
 
 def test_false_applied_repair_does_not_probe_mutable_config_values() -> None:

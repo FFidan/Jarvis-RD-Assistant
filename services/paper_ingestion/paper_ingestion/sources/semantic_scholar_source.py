@@ -88,8 +88,10 @@ class SemanticScholarSource(PaperSource):
         )
         if response.status_code in (429, 500, 502, 503, 504):
             logger.warning("S2 transient %d — returning empty", response.status_code)
+            self._record_transient_poll_diagnostic(response)
             return {}
         response.raise_for_status()
+        self._clear_poll_diagnostic()
         return response.json()
 
     def _parse_paper(self, data: dict[str, Any]) -> PaperCreate:

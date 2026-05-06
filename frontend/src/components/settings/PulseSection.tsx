@@ -234,11 +234,11 @@ function DiagnosticsPanel() {
               {data.source_diagnostics && Object.keys(data.source_diagnostics).length > 0 && (
                 <div>
                   <p className="text-xs font-semibold mb-1">Source diagnostics</p>
-                  <div className="space-y-1 text-xs">
+                  <div className="max-h-64 space-y-1 overflow-y-auto pr-1 text-xs">
                     {Object.entries(data.source_diagnostics).map(([src, diagnostic]) => (
                       <div key={src} className="rounded border bg-muted/20 p-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-medium">{src}</span>
+                          <span className="min-w-0 truncate font-medium">{src}</span>
                           <Badge
                             variant="outline"
                             className={
@@ -252,7 +252,9 @@ function DiagnosticsPanel() {
                             {diagnostic.status}
                           </Badge>
                         </div>
-                        <p className="mt-1 text-muted-foreground">{diagnostic.message}</p>
+                        <p className="mt-1 break-words text-muted-foreground">
+                          {diagnostic.message}
+                        </p>
                         {(diagnostic.retry_after_s || diagnostic.status_code) && (
                           <p className="mt-1 font-mono text-[11px] text-muted-foreground">
                             {diagnostic.status_code ? `HTTP ${diagnostic.status_code}` : ''}
@@ -261,7 +263,9 @@ function DiagnosticsPanel() {
                           </p>
                         )}
                         {diagnostic.settings_hint && (
-                          <p className="mt-1 text-amber-600">{diagnostic.settings_hint}</p>
+                          <p className="mt-1 break-words text-amber-600">
+                            {diagnostic.settings_hint}
+                          </p>
                         )}
                       </div>
                     ))}

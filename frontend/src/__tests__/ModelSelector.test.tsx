@@ -408,6 +408,44 @@ describe('ModelSelector', () => {
     expect(onChange).toHaveBeenCalledWith('openai/gpt-4o');
   });
 
+  it('offers a pull action for the selected downloadable local model', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    renderComponent({ value: 'qwen3:4b', configKey: 'llm.fast_model' });
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Pull model Qwen3 4B' })).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Pull model Qwen3 4B' }));
+
+    await waitFor(() => {
+      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3%3A4b/pull', {
+        method: 'POST',
+      });
+    });
+  });
+
+  it('offers a delete action for selected inactive pulled local models', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue(defaultModels);
+
+    renderComponent({ value: 'qwen3-embedding:0.6b', configKey: 'llm.embed_model' });
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }),
+      ).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Delete model Qwen3 Embedding 0.6B' }));
+
+    await waitFor(() => {
+      expect(apiFetch).toHaveBeenCalledWith('/api/system/models/qwen3-embedding%3A0.6b', {
+        method: 'DELETE',
+      });
+    });
+  });
+
   it('shows active cloud catalog entries even when provider key status is not present', async () => {
     const { apiFetch } = await import('@/lib/api');
     vi.mocked(apiFetch).mockResolvedValue({

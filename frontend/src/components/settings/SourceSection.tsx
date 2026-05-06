@@ -74,6 +74,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
 
   const config = source.config as Record<string, unknown> | null | undefined;
   const keyEnv = getConfigString(config, 'key_env');
+  const requiresKey = config?.requires_key !== false;
   const description = SOURCE_DESCRIPTIONS[source.source_type];
 
   return (
@@ -134,6 +135,8 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                     <Key className="h-4 w-4 text-muted-foreground" />
                     {source.config?.api_key ? (
                       <span className="text-xs text-green-600">API key: configured</span>
+                    ) : !requiresKey ? (
+                      <span className="text-xs text-muted-foreground">API key: optional</span>
                     ) : source.enabled ? (
                       <span className="text-xs text-amber-500">API key: not set</span>
                     ) : (
@@ -193,7 +196,9 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                   </div>
                 )}
                 <p className="text-xs text-muted-foreground mt-1">
-                  API key enables higher rate limits. Changes effective after service restart.
+                  {requiresKey
+                    ? 'API key enables higher rate limits. Changes effective after service restart.'
+                    : 'No API key required; without one this source uses its standard rate limit.'}
                 </p>
               </div>
             ) : (

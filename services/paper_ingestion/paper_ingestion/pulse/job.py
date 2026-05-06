@@ -125,6 +125,7 @@ async def run_pulse(
         "llm_calls": 0,
         "duration_s": 0.0,
         "last_error": None,
+        "degraded_reason": None,
         "source_diagnostics": {},
     }
 
@@ -180,6 +181,7 @@ async def run_pulse(
     stats["source_diagnostics"] = source_diagnostics
     if not candidates and stats["last_error"] is None:
         degraded_reason = _zero_candidate_degraded_reason(source_diagnostics)
+        stats["degraded_reason"] = degraded_reason
     logger.info("pulse.stage0", extra={"candidates": len(candidates)})
 
     # --- 3. stage 1 (embedding filter) -----------------------------------
@@ -249,11 +251,13 @@ async def run_pulse(
                 f"LLM scoring timed out at {_STAGE2_TIMEOUT_SECONDS}s; "
                 "deck used embedding-only fallback."
             )
+            stats["degraded_reason"] = degraded_reason
             logger.warning("pulse.stage2 timed out — falling back to stage1")
             stage2_out = _fallback_stage2(stage1_out)
         except Exception as exc:  # broad: stage2 calls LLM over HTTP; fallback keeps deck viable
             # B4: stage2 exception with fallback is degraded (deck still produced)
             degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"
+            stats["degraded_reason"] = degraded_reason
             logger.exception("pulse.stage2 failed — falling back to stage1")
             stage2_out = _fallback_stage2(stage1_out)
     stats["stage2_scored"] = len(stage2_out)
@@ -320,6 +324,7 @@ async def run_pulse(
         ]
     except Exception as exc:  # broad: optional Phase 2 scoring must degrade cleanly
         degraded_reason = degraded_reason or f"optional Pulse Phase 2 signals unavailable: {exc}"
+        stats["degraded_reason"] = degraded_reason
         logger.warning(
             "citation_signals failed; pulse degraded",
             exc_info=exc,
@@ -359,6 +364,7 @@ async def run_pulse(
     # Compute duration before persist so it is available even if persist fails
     stats["duration_s"] = round(time.monotonic() - start, 3)
     stats["deck_date"] = now.date().isoformat()
+    stats["degraded_reason"] = degraded_reason
 
     # --- 8. persist (upsert papers + persist deck in one transaction) ---
     try:
@@ -403,8 +409,6 @@ async def run_pulse(
         stats["card_count"] = 0
         logger.exception("pulse.persist failed")
 
-    if degraded_reason:
-        stats["degraded_reason"] = degraded_reason
     if ctx:
         try:
             await pulse_train_classifier.defer_async(job_id=str(uuid.uuid4()), user_id=None)

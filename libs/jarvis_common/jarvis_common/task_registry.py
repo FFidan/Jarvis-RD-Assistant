@@ -55,12 +55,14 @@ Connector choice: ``procrastinate.contrib.aiopg.AiopgConnector`` (matches
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 import procrastinate
 from procrastinate.contrib.aiopg import AiopgConnector
 
 from jarvis_common._ctx_shim import make_ctx_shim
+from jarvis_common.jobs import JobError
 
 if TYPE_CHECKING:
     import asyncpg
@@ -122,6 +124,34 @@ def _require_dependencies() -> tuple[asyncpg.Pool, httpx.AsyncClient]:
     return _pool, _http_client
 
 
+def _terminal_error_payload(exc: BaseException) -> dict[str, Any]:
+    """Return a JSON-safe terminal job error payload."""
+    payload: dict[str, Any] = {"message": str(exc) or exc.__class__.__name__}
+    if isinstance(exc, JobError) and exc.action_link is not None:
+        payload["action_link"] = exc.action_link
+    return payload
+
+
+async def _run_legacy_handler(
+    context: procrastinate.JobContext,
+    payload: dict[str, Any],
+    handler: Callable[
+        [asyncpg.Pool, httpx.AsyncClient, dict[str, Any], Any],
+        Awaitable[dict[str, Any]],
+    ],
+) -> dict[str, Any]:
+    """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
+    pool, http_client = _require_dependencies()
+    ctx = make_ctx_shim(context, pool=pool)
+    try:
+        result = await handler(pool, http_client, payload, ctx)
+    except Exception as exc:
+        await ctx.record_terminal_outcome(error=_terminal_error_payload(exc))
+        raise
+    await ctx.record_terminal_outcome(result=result)
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Task definitions
 # ---------------------------------------------------------------------------
@@ -140,36 +170,28 @@ def _require_dependencies() -> tuple[asyncpg.Pool, httpx.AsyncClient]:
 async def paper_process(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _paper_process_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _paper_process_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _paper_process_job)
 
 
 @app.task(name="paper.analyze", queue="paper_ingestion", pass_context=True)
 async def paper_analyze(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _paper_analyze_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _paper_analyze_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _paper_analyze_job)
 
 
 @app.task(name="paper.summarize", queue="paper_ingestion", pass_context=True)
 async def paper_summarize(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _paper_summarize_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _paper_summarize_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _paper_summarize_job)
 
 
 @app.task(name="papers.batch_process", queue="paper_ingestion", pass_context=True)
 async def papers_batch_process(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _papers_batch_process_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _papers_batch_process_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _papers_batch_process_job)
 
 
 @app.task(name="papers.batch_summarize", queue="paper_ingestion", pass_context=True)
@@ -178,18 +200,14 @@ async def papers_batch_summarize(
 ) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _papers_batch_summarize_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _papers_batch_summarize_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _papers_batch_summarize_job)
 
 
 @app.task(name="papers.scan_local", queue="paper_ingestion", pass_context=True)
 async def papers_scan_local(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _papers_scan_local_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _papers_scan_local_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _papers_scan_local_job)
 
 
 @app.task(name="citations.batch_fetch", queue="paper_ingestion", pass_context=True)
@@ -198,54 +216,42 @@ async def citations_batch_fetch(
 ) -> dict[str, Any]:
     from paper_ingestion.citations_jobs import _citations_batch_fetch_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _citations_batch_fetch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _citations_batch_fetch_job)
 
 
 @app.task(name="digest.weekly", queue="paper_ingestion", pass_context=True)
 async def digest_weekly(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.paper_jobs import _digest_weekly_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _digest_weekly_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _digest_weekly_job)
 
 
 @app.task(name="extraction.single", queue="paper_ingestion", pass_context=True)
 async def extraction_single(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.extraction.jobs import _extraction_single_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _extraction_single_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _extraction_single_job)
 
 
 @app.task(name="extraction.batch", queue="paper_ingestion", pass_context=True)
 async def extraction_batch(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.extraction.jobs import _extraction_batch_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _extraction_batch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _extraction_batch_job)
 
 
 @app.task(name="contradictions.scan", queue="paper_ingestion", pass_context=True)
 async def contradictions_scan(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.contradiction_jobs import _contradictions_scan_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _contradictions_scan_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _contradictions_scan_job)
 
 
 @app.task(name="pulse.generate", queue="paper_ingestion", pass_context=True)
 async def pulse_generate(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.pulse.job import _pulse_generate_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _pulse_generate_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _pulse_generate_job)
 
 
 @app.task(name="pulse.train_classifier", queue="paper_ingestion", pass_context=True)
@@ -254,36 +260,28 @@ async def pulse_train_classifier(
 ) -> dict[str, Any]:
     from paper_ingestion.pulse.training import _pulse_train_classifier_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _pulse_train_classifier_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _pulse_train_classifier_job)
 
 
 @app.task(name="model.pull", queue="paper_ingestion", pass_context=True)
 async def model_pull(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.services.model_lifecycle import _model_pull_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _model_pull_job(pool, http_client, payload, ctx)
+    return await _run_legacy_handler(context, payload, _model_pull_job)
 
 
 @app.task(name="zotero.push", queue="paper_ingestion", pass_context=True)
 async def zotero_push(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.integrations.zotero_service import _zotero_push_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _zotero_push_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _zotero_push_job)
 
 
 @app.task(name="zotero.resync", queue="paper_ingestion", pass_context=True)
 async def zotero_resync(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from paper_ingestion.integrations.zotero_service import _zotero_resync_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _zotero_resync_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _zotero_resync_job)
 
 
 @app.task(name="zotero.sync_from_zotero", queue="paper_ingestion", pass_context=True)
@@ -292,9 +290,7 @@ async def zotero_sync_from_zotero(
 ) -> dict[str, Any]:
     from paper_ingestion.integrations.zotero_service import _zotero_sync_from_zotero_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _zotero_sync_from_zotero_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _zotero_sync_from_zotero_job)
 
 
 @app.task(name="zotero.sync_annotations", queue="paper_ingestion", pass_context=True)
@@ -303,27 +299,21 @@ async def zotero_sync_annotations(
 ) -> dict[str, Any]:
     from paper_ingestion.integrations.zotero_service import _zotero_sync_annotations_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _zotero_sync_annotations_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _zotero_sync_annotations_job)
 
 
 @app.task(name="card.generate", queue="learning_engine", pass_context=True)
 async def card_generate(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from learning_engine.routers.generation import _card_generate_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _card_generate_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _card_generate_job)
 
 
 @app.task(name="card.generate_batch", queue="learning_engine", pass_context=True)
 async def card_generate_batch(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     from learning_engine.routers.generation import _card_generate_batch_job
 
-    pool, http_client = _require_dependencies()
-    ctx = make_ctx_shim(context, pool=pool)
-    return await _card_generate_batch_job(pool, http_client, payload, ctx)  # type: ignore[arg-type]
+    return await _run_legacy_handler(context, payload, _card_generate_batch_job)
 
 
 # ---------------------------------------------------------------------------

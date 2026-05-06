@@ -267,11 +267,24 @@ class PubMedSource(PaperSource):
             response = await self.http_client.get(ESEARCH_URL, params=params, timeout=30.0)
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning("PubMed esearch returned %d", response.status_code)
+                self._record_transient_poll_diagnostic(response)
                 return []
             response.raise_for_status()
+            self._clear_poll_diagnostic()
             root = _parse_xml(response.content)
         except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
             logger.warning("PubMed esearch failed: %s", exc)
+            response = getattr(exc, "response", None)
+            if response is not None:
+                self._record_transient_poll_diagnostic(response)
+            else:
+                self._set_poll_diagnostic(
+                    status="error",
+                    message=str(exc),
+                    status_code=None,
+                    retry_after_s=None,
+                    settings_hint=None,
+                )
             return []
 
         return [el.text for el in root.findall(".//IdList/Id") if el.text]
@@ -299,11 +312,24 @@ class PubMedSource(PaperSource):
             response = await self.http_client.get(EFETCH_URL, params=params, timeout=60.0)
             if response.status_code in (429, 500, 502, 503, 504):
                 logger.warning("PubMed efetch returned %d", response.status_code)
+                self._record_transient_poll_diagnostic(response)
                 return []
             response.raise_for_status()
+            self._clear_poll_diagnostic()
             root = _parse_xml(response.content)
         except (httpx.HTTPError, etree.XMLSyntaxError) as exc:
             logger.warning("PubMed efetch failed: %s", exc)
+            response = getattr(exc, "response", None)
+            if response is not None:
+                self._record_transient_poll_diagnostic(response)
+            else:
+                self._set_poll_diagnostic(
+                    status="error",
+                    message=str(exc),
+                    status_code=None,
+                    retry_after_s=None,
+                    settings_hint=None,
+                )
             return []
 
         papers = []

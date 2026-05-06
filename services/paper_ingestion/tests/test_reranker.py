@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.embedder import Embedder
-from paper_ingestion.reranker import Reranker, get_reranker
+from paper_ingestion.reranker import Reranker
 
 
 def test_rerank_empty_passages():
@@ -116,7 +116,7 @@ async def test_rerank_chunks_fallback_on_exception():
 
 def test_get_reranker_returns_none_without_sentence_transformers():
     """get_reranker returns None when model loading fails."""
-    import paper_ingestion.reranker as reranker_mod
+    import paper_ingestion.ingestion.reranker as reranker_mod
 
     # Reset singleton state so the load attempt runs fresh.
     original_state = reranker_mod._reranker_state
@@ -124,9 +124,13 @@ def test_get_reranker_returns_none_without_sentence_transformers():
     try:
         with (
             patch.dict("os.environ", {"RERANKER_ENABLED": "true"}),
-            patch.object(Reranker, "_load_model_if_needed", side_effect=ImportError("no module")),
+            patch.object(
+                reranker_mod.Reranker,
+                "_load_model_if_needed",
+                side_effect=ImportError("no module"),
+            ),
         ):
-            result = get_reranker()
+            result = reranker_mod.get_reranker()
     finally:
         reranker_mod._reranker_state = original_state
 
@@ -150,6 +154,7 @@ def test_load_model_passes_onnx_backend_when_optimum_present():
     # Simulate optimum + onnxruntime being importable.
     fake_optimum = MagicMock()
     fake_onnxruntime = MagicMock()
+    fake_onnxruntime.get_available_providers.return_value = ["CPUExecutionProvider"]
 
     reranker = Reranker.__new__(Reranker)
     reranker._model_name = "mixedbread-ai/mxbai-rerank-base-v2"
@@ -167,9 +172,39 @@ def test_load_model_passes_onnx_backend_when_optimum_present():
     assert call_kwargs.kwargs.get("backend") == "onnx", (
         f"Expected backend='onnx', got: {call_kwargs.kwargs}"
     )
+    assert call_kwargs.kwargs.get("device") == "cpu", (
+        f"Expected CPU device when CUDAExecutionProvider is absent, got: {call_kwargs.kwargs}"
+    )
     assert call_kwargs.kwargs.get("model_kwargs") == {"provider": "CPUExecutionProvider"}, (
         f"Expected CPUExecutionProvider, got: {call_kwargs.kwargs.get('model_kwargs')}"
     )
+
+
+def test_load_model_uses_cuda_onnx_provider_when_available():
+    """ONNX/CUDA is used only when onnxruntime exposes CUDAExecutionProvider."""
+    mock_cross_encoder_cls = MagicMock(return_value=MagicMock())
+    fake_optimum = MagicMock()
+    fake_onnxruntime = MagicMock()
+    fake_onnxruntime.get_available_providers.return_value = [
+        "CUDAExecutionProvider",
+        "CPUExecutionProvider",
+    ]
+
+    reranker = Reranker.__new__(Reranker)
+    reranker._model_name = "mixedbread-ai/mxbai-rerank-base-v2"
+    reranker._model = None
+
+    with (
+        patch("paper_ingestion.ingestion.reranker.CrossEncoder", mock_cross_encoder_cls),
+        patch.dict(sys.modules, {"optimum": fake_optimum, "onnxruntime": fake_onnxruntime}),
+    ):
+        reranker._load_model_if_needed()
+
+    call_kwargs = mock_cross_encoder_cls.call_args
+    assert call_kwargs is not None
+    assert call_kwargs.kwargs.get("backend") == "onnx"
+    assert call_kwargs.kwargs.get("device") == "cuda"
+    assert call_kwargs.kwargs.get("model_kwargs") == {"provider": "CUDAExecutionProvider"}
 
 
 def test_load_model_omits_onnx_backend_when_optimum_missing():
@@ -217,6 +252,7 @@ def test_load_model_falls_back_to_pytorch_on_onnx_export_error():
 
     fake_optimum = MagicMock()
     fake_onnxruntime = MagicMock()
+    fake_onnxruntime.get_available_providers.return_value = ["CPUExecutionProvider"]
 
     with (
         patch("paper_ingestion.ingestion.reranker.CrossEncoder", mock_cross_encoder_cls),

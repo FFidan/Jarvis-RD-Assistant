@@ -124,11 +124,11 @@ The `handoff/COMPONENT_MAP.md` "Create" list translates 1:1 to our layout. New c
 
 **Re-skinned with V5 visual language but same data hooks:**
 
-- [frontend/src/components/my-day/TaskList.tsx](../../frontend/src/components/my-day/TaskList.tsx) — rebuilt as `TaskRow.tsx` with project-color badge, hover ▶ Focus button (binds to `pomodoroStartWork({task})`), completed-today expandable footer.
+- [frontend/src/components/my-day/sections/TaskRow.tsx](../../frontend/src/components/my-day/sections/TaskRow.tsx) — rebuilt task row with project-color badge, hover Focus button, and completed-today affordances.
 
 **Deleted after Phase 1a lands:**
 
-- [frontend/src/components/my-day/DayHeader.tsx](../../frontend/src/components/my-day/DayHeader.tsx) — the old 4-tile counter row replaced by `DateMasthead.tsx` + the right-side mini-stats.
+- [frontend/src/components/my-day/sections/DateMasthead.tsx](../../frontend/src/components/my-day/sections/DateMasthead.tsx) — replaces the old 4-tile counter row with the current masthead / mini-stats treatment.
 
 **Render-artifact note:** Where the prototype JSX in `handoff/reference/` has overflow / button-shape issues (visible in some screenshots per user inspection), the implementation MUST use Shadcn primitives (`Button`, `Card`, `Tooltip`, `Tabs`) rather than literal-translating the prototype's hand-rolled inline-SVG + Tailwind. The `handoff/SPEC.md` measurements are load-bearing; the prototype's specific markup is not.
 
@@ -136,11 +136,11 @@ The `handoff/COMPONENT_MAP.md` "Create" list translates 1:1 to our layout. New c
 
 ## 6. Migration number reservations
 
-- Phase 2 of this redesign reserves migrations **050** (`tasks.color` + `projects.color` + `projects.next_milestone` + `projects.next_milestone_due`) and **051** (`journal_entries` table).
-- Marathon Phase B.1 + B.2 (per [docs/specs/2026-05-02-instructor-langfuse-integration.md](2026-05-02-instructor-langfuse-integration.md) DRAFT) does **NOT** introduce migrations — confirmed by reading that spec's §1.1 Goals, §1.2 non-goals, and §2 Architectural Choke Point. All B.1+B.2 work is library swaps + observability decorators on existing call paths.
+- Phase 2 of this redesign shipped migrations **050** (`tasks.color` + `projects.color` + `projects.next_milestone` + `projects.next_milestone_due`) and **051** (`journal_entries` table).
+- Marathon Phase B.1 + B.2 (per [docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](archive/2026-05-02-instructor-langfuse-integration.md)) did **not** introduce migrations — confirmed by reading that spec's §1.1 Goals, §1.2 non-goals, and §2 Architectural Choke Point. All B.1+B.2 work is library swaps + observability decorators on existing call paths.
 - Future workstreams should consult this section before claiming a migration number.
 
-Highest existing migration is `db/migrations/049_recommendation_feedback.sql`. Next free is 050.
+Highest existing migration is `db/migrations/058_job_terminal_outcomes.sql`. Next free is 059.
 
 ---
 
@@ -191,9 +191,9 @@ The two workstreams can execute concurrently. The only soft coupling is `pyproje
 | `handoff/DATA_CONTRACTS.md` | [handoff/DATA_CONTRACTS.md](../../handoff/DATA_CONTRACTS.md) (226 lines) | Defines `thread` entity (with manual `progress: real` and `anchor: text`), `journal_entry` (one per user per date with 3-prompt JSONB), adds `tasks.color` + `projects.color/milestone/due`, `POST /papers/process_batch`, `GET /threads/recent`, server-side `hero_default` hint on `/my-day`. |
 | `handoff/COMPONENT_MAP.md` | [handoff/COMPONENT_MAP.md](../../handoff/COMPONENT_MAP.md) (92 lines) | File-by-file create/edit/delete plan. Assumes `frontend/components/myday/` (Next.js, no hyphen). |
 | `handoff/IMPLEMENTATION_PROMPT.md` | [handoff/IMPLEMENTATION_PROMPT.md](../../handoff/IMPLEMENTATION_PROMPT.md) (58 lines) | Agent prompt; references `next/font`, `app/layout.tsx`, `_app.tsx`. Phase 1 = visual + layout (3-5 days); Phase 2 = threads, smart hero, polish (2-3 days). |
-| Marathon B.1+B.2 spec (DRAFT, untracked) | [docs/specs/2026-05-02-instructor-langfuse-integration.md](2026-05-02-instructor-langfuse-integration.md) (467 lines) | "Status: DRAFT (awaiting user review). Scope: Marathon Phase B.1 (Instructor) + B.2 (Langfuse) combined." §2 Architectural Choke Point lists `request_chat_completion_content` (kept), `call_llm` (deleted), `call_llm_json_value` (deleted), replaced by new `call_llm_structured`. Confirmed no migrations introduced. |
+| Marathon B.1+B.2 spec (archived) | [docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](archive/2026-05-02-instructor-langfuse-integration.md) (467 lines) | "Status: DRAFT (awaiting user review). Scope: Marathon Phase B.1 (Instructor) + B.2 (Langfuse) combined." §2 Architectural Choke Point lists `request_chat_completion_content` (kept), `call_llm` (deleted), `call_llm_json_value` (deleted), replaced by new `call_llm_structured`. Confirmed no migrations introduced. |
 | Current `MyDayPage.tsx` | [frontend/src/pages/MyDayPage.tsx](../../frontend/src/pages/MyDayPage.tsx) (71 lines) | The 4-column grid: `<DayHeader>` + `<PulsePreviewCard>` + `<ActionItemsCard>` + grid(`<PomodoroTimer>`, Tasks card with `<QuickAddTask>`+`<TaskList>`) + `<MissingFoundationalCard>` + grid(`<LearningCardsSummary>`, `<ProjectPulse>`). `max-w-4xl`. |
 | `frontend/src/components/my-day/` contents | [frontend/src/components/my-day/](../../frontend/src/components/my-day/) | 10 components: `ActionItemsCard`, `DayHeader`, `LearningCardsSummary`, `MissingFoundationalCard`, `PomodoroTimer`, `ProjectPulse`, `PulseDeck`, `PulsePreviewCard`, `QuickAddTask`, `TaskList`. Uses HYPHEN (`my-day`), not handoff's `myday`. |
 | `HeaderPomodoro` | [frontend/src/components/layout/HeaderPomodoro.tsx](../../frontend/src/components/layout/HeaderPomodoro.tsx) | Topbar Pomodoro chip — already exists. Verify it shows the active task title; add `max-w-[120px] truncate` to the title span if missing. |
-| Highest migration | [db/migrations/049_recommendation_feedback.sql](../../db/migrations/049_recommendation_feedback.sql) | Highest migration number is 049. Next free = 050. Redesign Phase 2 reserves 050 + 051. |
+| Highest migration | [db/migrations/058_job_terminal_outcomes.sql](../../db/migrations/058_job_terminal_outcomes.sql) | Highest migration number is 058. Next free = 059. Redesign Phase 2 shipped 050 + 051. |
 | Phase A `paper_user_state.state` collapse | [db/migrations/047_paper_user_state_collapse.sql](../../db/migrations/047_paper_user_state_collapse.sql) | Migration that introduced the single `state` ENUM with values including `'reading'`. Source of the `state='reading'` query that powers Resume Reading mode. |

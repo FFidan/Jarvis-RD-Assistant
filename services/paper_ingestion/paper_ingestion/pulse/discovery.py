@@ -90,6 +90,9 @@ def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str,
 
 
 def _diagnostic_for_empty_source(src: PaperSource) -> dict[str, Any]:
+    source_diagnostic = getattr(src, "last_poll_diagnostic", None)
+    if isinstance(source_diagnostic, dict) and source_diagnostic.get("status"):
+        return dict(source_diagnostic)
     source_type = getattr(src, "source_type", src.__class__.__name__)
     if getattr(src, "supports_pulse_polling", True) is False:
         return {

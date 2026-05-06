@@ -175,6 +175,33 @@ describe('PulseDeck', () => {
     expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
   });
 
+  it('bounds source diagnostics and shows the hidden warning count', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        card_count: 0,
+        cards: [],
+        degraded_reason: 'No Pulse candidates returned.',
+        stats: {
+          source_diagnostics: {
+            arxiv: { status: 'rate_limit', message: 'arxiv 429' },
+            openalex: { status: 'unconfigured', message: 'openalex missing key' },
+            semantic_scholar: { status: 'rate_limit', message: 's2 429' },
+            pubmed: { status: 'rate_limit', message: 'pubmed 429' },
+            local: { status: 'unsupported', message: 'local unsupported' },
+          },
+        },
+      }),
+    );
+
+    renderDeck();
+
+    expect(await screen.findByText(/arxiv 429/i)).toBeInTheDocument();
+    expect(screen.getByText(/openalex missing key/i)).toBeInTheDocument();
+    expect(screen.getByText(/s2 429/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pubmed 429/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/\+2 more source warnings/i)).toBeInTheDocument();
+  });
+
   it('shows error state when fetchPulseToday throws', async () => {
     vi.mocked(fetchPulseToday).mockRejectedValue(new Error('boom'));
     renderDeck();

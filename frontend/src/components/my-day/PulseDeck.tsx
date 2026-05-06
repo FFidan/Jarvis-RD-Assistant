@@ -146,9 +146,11 @@ export function PulseDeck() {
   }
 
   const sourceDiagnostics = sourceDiagnosticsFromStats(deck.stats);
-  const degradedDetails = Object.entries(sourceDiagnostics)
-    .filter(([, diagnostic]) => diagnostic.status !== 'ok')
-    .slice(0, 3);
+  const allDegradedDetails = Object.entries(sourceDiagnostics).filter(
+    ([, diagnostic]) => diagnostic.status !== 'ok',
+  );
+  const degradedDetails = allDegradedDetails.slice(0, 3);
+  const hiddenDegradedCount = Math.max(0, allDegradedDetails.length - degradedDetails.length);
 
   return (
     <section className="space-y-3">
@@ -183,6 +185,9 @@ export function PulseDeck() {
                   {diagnostic.settings_hint ? ` ${diagnostic.settings_hint}` : ''}
                 </div>
               ))}
+              {hiddenDegradedCount > 0 && (
+                <div className="font-medium">+{hiddenDegradedCount} more source warnings</div>
+              )}
             </div>
           )}
         </div>

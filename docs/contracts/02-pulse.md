@@ -227,14 +227,16 @@ distinct fields:
 - **`last_error`** — terminal failure. Pipeline did not complete normally.
   Typically set when Stage 1, 3, 6, 7, or 8 throws.
 - **`degraded_reason`** — Pulse completed and produced a deck, but with
-  reduced fidelity (LLM signals missing). Set in Stage 4 (timeout),
-  Stage 5 (citation/classifier failure).
+  reduced fidelity or explicit source exhaustion. Set for all-source-empty
+  discovery runs, Stage 4 LLM fallback, and Stage 5 citation/classifier
+  degradation.
 
 The 2026-05-02 "Failed" deck in the Settings screenshot was technically
 **degraded, not fatal** — a deck of 8 cards was produced from Stage 1
-scores. The "Failed" badge is currently triggered by either field being
-present (the UI does not distinguish). This is a known UX rough edge; the
-contract documents the underlying truth.
+scores. The Settings UI now distinguishes the two fields: `last_error` is
+Failed; `degraded_reason` without `last_error` is Degraded. That distinction is
+intentional for source exhaustion, where a zero-card deck can be operationally
+correct but still needs an explanation instead of looking healthy.
 
 ---
 
@@ -251,7 +253,7 @@ contract documents the underlying truth.
 | `llm_calls` | int | Number of candidates that received non-None `llm_relevance` | Stage 4 ([job.py:209](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L209)) |
 | `duration_s` | float | Wall-clock seconds for the full pipeline | Stage 7 (before persist) |
 | `last_error` | str \| null | Terminal failure description | Various |
-| `degraded_reason` | str \| null | Non-terminal degradation | Stage 4 / Stage 5 |
+| `degraded_reason` | str \| null | Non-terminal degradation, including all-source exhaustion | Stage 2 / Stage 4 / Stage 5 |
 | `deck_date` | str (ISO date) | Date of the deck just produced | Stage 7 |
 | `card_count` | int | `pulse_cards` rows actually persisted | Stage 8 |
 | `source_counts` | `dict[str, int]` | Per-source candidate count | Stage 2 |
@@ -335,8 +337,8 @@ is to surface the choices.
 - **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — `pulse.*` and `recommendation.*` user_config keys; runtime read sites.
 - **[03-llm.md §2 / §4](03-llm.md)** — Stage-2 LLM rerank is one of the 6 LLM call sites; per-site contract there governs the `PulseScoringOutput` Pydantic shape, retry policy, and timeout.
 - **[04-observability.md §2](04-observability.md)** — `run_pulse` is the canonical "one trace per Pulse run" boundary.
-- **[docs/specs/2026-05-02-instructor-langfuse-integration.md §4.1](../specs/2026-05-02-instructor-langfuse-integration.md)** — implementation spec for the Stage-2 canary refactor; transitions code to `call_llm_structured(response_model=PulseScoringOutput)`.
-- **[docs/specs/2026-04-29-paper-lifecycle-redesign.md §7](../specs/2026-04-29-paper-lifecycle-redesign.md)** — recommendation_feedback writes that feed L1/L2/L3 dampening; this contract reads the resulting state but does not own its writes.
+- **[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md §4.1](../specs/archive/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec for the Stage-2 canary refactor; transitions code to `call_llm_structured(response_model=PulseScoringOutput)`.
+- **[docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md §7](../specs/archive/2026-04-29-paper-lifecycle-redesign.md)** — archived recommendation-feedback write design that feeds L1/L2/L3 dampening; this contract reads the resulting state but does not own its writes.
 
 ---
 

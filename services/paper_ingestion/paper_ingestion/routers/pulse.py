@@ -357,6 +357,7 @@ async def debug_pulse(
 
     # Per-source candidate breakdown (from stats JSONB)
     source_counts: dict = deck_stats.get("source_counts", {})
+    source_diagnostics: dict = deck_stats.get("source_diagnostics", {}) or {}
     classifier_stats = deck_stats.get("classifier", {}) or {}
     has_model = bool(model_row) and "feature_names" in model_row
     classifier_metrics = model_row["metrics"] if has_model else {}
@@ -410,6 +411,7 @@ async def debug_pulse(
         card_count=deck_row["card_count"],
         degraded_reason=deck_row["degraded_reason"],
         source_counts=source_counts,
+        source_diagnostics=source_diagnostics,
         topic_embeddings=topic_embeddings,
         top_cards=top_cards,
         classifier_available=has_model or bool(classifier_stats.get("available")),

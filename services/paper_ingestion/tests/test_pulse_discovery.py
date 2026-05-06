@@ -69,15 +69,23 @@ def _source_row(source_type: str, rid: int = 1) -> FakeRecord:
 class _StubSource:
     """Fake PaperSource implementation for dependency injection into tests."""
 
-    def __init__(self, papers: list[PaperCreate] | None = None, raises: Exception | None = None):
+    def __init__(
+        self,
+        papers: list[PaperCreate] | None = None,
+        raises: Exception | None = None,
+        diagnostic: dict | None = None,
+    ):
         self._papers = papers or []
         self._raises = raises
+        self.last_poll_diagnostic = diagnostic
         self.fetch_new_since_calls = 0
 
     async def fetch_new_since(self, since, topics, limit=100):
         self.fetch_new_since_calls += 1
         if self._raises is not None:
             raise self._raises
+        if self._papers:
+            self.last_poll_diagnostic = None
         return list(self._papers)
 
 
@@ -441,3 +449,72 @@ async def test_include_diagnostics_reports_rate_limit_and_unsupported_sources():
         == 17
     )
     assert diagnostics["_UnsupportedSource"]["status"] == "unsupported"
+
+
+@pytest.mark.asyncio
+async def test_include_diagnostics_prefers_source_poll_diagnostic_for_empty_result():
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    stub = _StubSource(
+        diagnostic={
+            "status": "rate_limit",
+            "message": "arXiv rate limit reached. Retry later.",
+            "status_code": 429,
+            "retry_after_s": 60,
+            "settings_hint": None,
+        }
+    )
+
+    with patch(
+        "paper_ingestion.pulse.discovery.get_source_class",
+        return_value=_make_source_class(stub),
+    ):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            include_diagnostics=True,
+        )
+
+    assert result == []
+    assert source_counts == {"_StubSource": 0}
+    assert diagnostics["_StubSource"]["status"] == "rate_limit"
+    assert diagnostics["_StubSource"]["status_code"] == 429
+
+
+@pytest.mark.asyncio
+async def test_include_diagnostics_clears_stale_source_diagnostic_after_success():
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    stub = _StubSource(
+        papers=[_paper("arxiv:recovered", "Recovered")],
+        diagnostic={
+            "status": "rate_limit",
+            "message": "old throttle",
+            "status_code": 429,
+            "retry_after_s": 60,
+            "settings_hint": None,
+        },
+    )
+
+    with patch(
+        "paper_ingestion.pulse.discovery.get_source_class",
+        return_value=_make_source_class(stub),
+    ):
+        result, _source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            include_diagnostics=True,
+        )
+
+    assert [paper.external_id for paper in result] == ["arxiv:recovered"]
+    assert diagnostics["_StubSource"]["status"] == "ok"

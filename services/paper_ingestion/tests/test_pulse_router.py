@@ -312,7 +312,19 @@ def test_debug_returns_expected_shape_when_deck_exists(client):
             "deck_date": date(2026, 4, 10),
             "card_count": 2,
             "generated_at": datetime(2026, 4, 10, 4, 0, tzinfo=None),
-            "stats": {"candidate_count": 80, "source_counts": {"arxiv": 50, "pubmed": 30}},
+            "stats": {
+                "candidate_count": 80,
+                "source_counts": {"arxiv": 50, "pubmed": 30},
+                "source_diagnostics": {
+                    "ArxivSource": {
+                        "status": "rate_limit",
+                        "message": "arXiv rate limit reached. Retry later.",
+                        "status_code": 429,
+                        "retry_after_s": 60,
+                        "settings_hint": None,
+                    }
+                },
+            },
             "degraded_reason": None,
         }
     )
@@ -368,6 +380,8 @@ def test_debug_returns_expected_shape_when_deck_exists(client):
 
     assert body["card_count"] == 2
     assert body["source_counts"] == {"arxiv": 50, "pubmed": 30}
+    assert body["source_diagnostics"]["ArxivSource"]["status"] == "rate_limit"
+    assert body["source_diagnostics"]["ArxivSource"]["status_code"] == 429
 
     # Topic embedding sanity
     assert len(body["topic_embeddings"]) == 1

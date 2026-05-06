@@ -83,6 +83,27 @@ async def test_fetch_new_since_searches_topics_and_filters_recent_publications()
     assert [paper.external_id for paper in papers] == ["s2:p1"]
 
 
+@respx.mock
+async def test_fetch_new_since_429_records_rate_limit_diagnostic():
+    """S2 Pulse polling keeps returning [] on 429 but records the source cause."""
+    respx.get(f"{S2_API_URL}/paper/search").mock(
+        return_value=httpx.Response(429, headers={"Retry-After": "23"})
+    )
+
+    source = _make_source()
+    papers = await source.fetch_new_since(
+        since=datetime(2026, 5, 1, tzinfo=UTC),
+        topics=[TopicRef(id=1, name="graph neural networks", query_terms=["GNN"])],
+        limit=10,
+    )
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 429
+    assert source.last_poll_diagnostic["retry_after_s"] == 23
+
+
 # ---------------------------------------------------------------------------
 # With API key → uses POST multi-seed endpoint
 # ---------------------------------------------------------------------------

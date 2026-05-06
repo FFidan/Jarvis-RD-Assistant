@@ -93,12 +93,14 @@ def test_job_sse_payload_includes_terminal_details_only_for_terminal_rows():
             "progress": 1.0,
             "progress_message": "done",
             "result": {"ok": True},
+            "error": {"message": "boom"},
             "payload": {"paper_id": 1},
         }
     )
 
     assert "result" not in running
     assert terminal["result"] == {"ok": True}
+    assert terminal["error"] == {"message": "boom"}
     assert terminal["payload"] == {"paper_id": 1}
 
 
@@ -246,6 +248,8 @@ def test_procrastinate_row_to_jarvis_row_normalises_shape():
         "created_at": None,
         "started_at": None,
         "finished_at": None,
+        "result": {"cards_created": 3},
+        "error": None,
     }
 
     out = procrastinate_row_to_jarvis_row(prow)
@@ -257,7 +261,7 @@ def test_procrastinate_row_to_jarvis_row_normalises_shape():
     assert out["status"] == "succeeded"  # legacy enum
     assert out["progress"] == 0
     assert out["progress_message"] is None
-    assert out["result"] is None
+    assert out["result"] == {"cards_created": 3}
     assert out["error"] is None
     # payload strips reserved keys.
     assert out["payload"] == {"paper_id": 7}
@@ -527,7 +531,7 @@ async def test_list_jobs_returns_only_procrastinate_rows():
 
 
 def test_procrastinate_row_to_jarvis_row_lifts_progress_from_join():
-    """When the LEFT JOIN populates progress / progress_message, they propagate."""
+    """When the LEFT JOIN populates progress/outcomes, they propagate."""
     from jarvis_common.jobs import procrastinate_row_to_jarvis_row
 
     prow = {
@@ -538,6 +542,8 @@ def test_procrastinate_row_to_jarvis_row_lifts_progress_from_join():
         "args": {"job_id": "abc-123"},
         "progress": 0.75,
         "progress_message": "almost there",
+        "result": {"done": True},
+        "error": {"message": "ignored"},
         "created_at": None,
         "started_at": None,
         "finished_at": None,
@@ -547,6 +553,8 @@ def test_procrastinate_row_to_jarvis_row_lifts_progress_from_join():
 
     assert out["progress"] == 0.75
     assert out["progress_message"] == "almost there"
+    assert out["result"] == {"done": True}
+    assert out["error"] == {"message": "ignored"}
 
 
 def test_procrastinate_row_to_jarvis_row_defaults_when_join_missed():
@@ -567,6 +575,8 @@ def test_procrastinate_row_to_jarvis_row_defaults_when_join_missed():
 
     assert out["progress"] == 0
     assert out["progress_message"] is None
+    assert out["result"] is None
+    assert out["error"] is None
 
 
 @pytest.mark.asyncio
@@ -598,6 +608,8 @@ async def test_get_procrastinate_job_includes_progress_join():
     assert "LEFT JOIN job_progress" in sql
     assert "jp.progress" in sql
     assert "jp.message" in sql
+    assert "jp.result" in sql
+    assert "jp.error" in sql
     assert "args->>'job_id'" in sql
 
 
@@ -638,6 +650,8 @@ async def test_get_procrastinate_job_falls_back_when_progress_table_missing():
     fallback_sql = conn.fetchrow.await_args_list[1].args[0]
     assert "LEFT JOIN job_progress" not in fallback_sql
     assert "NULL::REAL AS progress" in fallback_sql
+    assert "NULL::jsonb AS result" in fallback_sql
+    assert "NULL::jsonb AS error" in fallback_sql
 
 
 @pytest.mark.asyncio

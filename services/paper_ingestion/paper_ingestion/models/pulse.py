@@ -104,6 +104,7 @@ class PulseDebugResponse(BaseModel):
     card_count: int
     degraded_reason: str | None = None
     source_counts: dict = {}
+    source_diagnostics: dict = {}
     topic_embeddings: list[PulseDebugTopicEmbedding] = []
     top_cards: list[PulseDebugTopCard] = []
     classifier_available: bool = False

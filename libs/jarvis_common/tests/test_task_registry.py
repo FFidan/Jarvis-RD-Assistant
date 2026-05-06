@@ -14,6 +14,8 @@ No DB / connector / network calls are exercised — that is Step 2 part 2.
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -130,6 +132,58 @@ def test_require_dependencies_raises_before_set() -> None:
     finally:
         task_registry._pool = saved_pool
         task_registry._http_client = saved_http
+
+
+@pytest.mark.asyncio
+async def test_run_legacy_handler_records_success_result(monkeypatch) -> None:
+    """Task dispatch persists terminal success payloads returned by handlers."""
+    import jarvis_common.task_registry as task_registry
+
+    pool = object()
+    http_client = object()
+    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+
+    async def handler(_pool, _http_client, payload, _ctx):
+        assert payload == {"paper_id": 7}
+        return {"cards_created": 2}
+
+    monkeypatch.setattr(task_registry, "_pool", pool)
+    monkeypatch.setattr(task_registry, "_http_client", http_client)
+    monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+
+    result = await task_registry._run_legacy_handler(
+        SimpleNamespace(),
+        {"paper_id": 7},
+        handler,
+    )
+
+    assert result == {"cards_created": 2}
+    ctx.record_terminal_outcome.assert_awaited_once_with(result={"cards_created": 2})
+
+
+@pytest.mark.asyncio
+async def test_run_legacy_handler_records_job_error(monkeypatch) -> None:
+    """Task dispatch persists JSON-safe JobError details before re-raising."""
+    import jarvis_common.task_registry as task_registry
+    from jarvis_common.jobs import JobError
+
+    pool = object()
+    http_client = object()
+    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+
+    async def handler(_pool, _http_client, _payload, _ctx):
+        raise JobError("No chunks", action_link={"href": "/papers/1", "label": "Open"})
+
+    monkeypatch.setattr(task_registry, "_pool", pool)
+    monkeypatch.setattr(task_registry, "_http_client", http_client)
+    monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+
+    with pytest.raises(JobError):
+        await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)
+
+    ctx.record_terminal_outcome.assert_awaited_once_with(
+        error={"message": "No chunks", "action_link": {"href": "/papers/1", "label": "Open"}}
+    )
 
 
 # ---------------------------------------------------------------------------

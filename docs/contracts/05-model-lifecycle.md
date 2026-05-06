@@ -52,7 +52,7 @@ Live proof on 2026-05-06:
 5. **Pull-on-demand lifecycle** — explicit user action with confirm dialog showing disk/VRAM cost; procrastinate `model.pull` task; progress via existing SSE jobs stream.
 6. **Delete lifecycle** — explicit user action; fails loudly if model is currently assigned.
 7. **Cloud model integration** — catalog entries for Anthropic/OpenAI cloud aliases; Settings UI fix for GHOST surface (API keys exist but no model-select UI).
-8. **Hard migration** — `nomic-embed-text` and `mistral-nemo:12b` removed from catalog and from `litellm/config.yaml` defaults. Phase C rebuilds Qdrant. No legacy user protection needed (single-user, pre-launch).
+8. **Hard migration** — `nomic-embed-text` and `mistral-nemo:12b` are removed from active `litellm/config.yaml` defaults. Phase C rebuilds Qdrant on Qwen3 embeddings. No legacy user protection needed (single-user, pre-launch).
 
 ### Non-goals (hard)
 
@@ -322,7 +322,9 @@ async def model_pull(context, *, job_id: str, user_id: int | None, ollama_tag: s
 - If unfit: "Warning: this model requires X.X GB VRAM; your system has Y.Y GB. It may run slowly via CPU offload."
 - Button: "Download" / "Cancel"
 
-No automatic pull on Settings change. No silent pull on startup.
+No automatic pull on Settings change. Docker bootstrap may still preload the
+configured default Ollama models during stack startup; that is an install
+bootstrap behavior, not a Settings lifecycle side effect.
 
 ### 5.2 Delete (remove local model)
 
@@ -463,7 +465,7 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 | Step | Action |
 |---|---|
 | Phase C | Pull `qwen3-embedding:0.6b`, rebuild `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, update `litellm/config.yaml` embed alias, and leave `kg_entities` as a separately checkpointed/rebuildable optional collection. Full spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
-| This sprint | Remove `nomic-embed-text` and `mistral-nemo:12b` from `litellm/config.yaml`. Delete their catalog entries (they were never in the catalog; they are just the current live config values). |
+| Shipped | Remove `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
 | This sprint | Set new defaults: `smart=qwen3:14b`, `fast=qwen3:4b`, `embed=qwen3-embedding:0.6b`. |
 | This sprint | Pull new smart/fast defaults on first boot if not already present — this is the ONE exception to "no auto-pull": the initial default models are pulled silently during stack startup (analogous to current behavior where `docker compose up` downloads Ollama models). Not a background job; Ollama's own `OLLAMA_PRELOAD` or startup script. |
 
@@ -505,7 +507,9 @@ Phase C (step 8) can execute before or after the UI work (steps 1–7) — the U
 
 ## Verified Identifiers
 
-Every cited identifier was confirmed against HEAD (`master @ 030ea38c`) via Read or grep in this session.
+Every cited identifier was refreshed against the 2026-05-06 closeout state via
+Read or grep. Re-run the verification table before using this contract as
+evidence for a future implementation pass.
 
 | Citation | File:line | Behavior |
 |---|---|---|

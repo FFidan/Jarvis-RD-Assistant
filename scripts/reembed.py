@@ -23,6 +23,9 @@ Environment variables (reads from .env or system environment):
     REEMBED_BACKEND     - litellm, local, or onnx (default: litellm)
     REEMBED_LOCAL_MODEL - Hugging Face model for local/onnx backends
                            (default for qwen3: Qwen/Qwen3-Embedding-0.6B)
+    REEMBED_ONNX_REQUIRE_CUDA
+                         - Set true to fail if CUDA is available to torch but
+                           onnxruntime-gpu is not installed/exposing CUDA
     REEMBED_EMBED_BATCH_SIZE
                          - Chunks per embedding batch (default: 32)
     REEMBED_BENCHMARK   - Set true to run a read-only embedding benchmark
@@ -108,6 +111,11 @@ REEMBED_LOCAL_MODEL = os.environ.get("REEMBED_LOCAL_MODEL") or (
     if EMBEDDING_MODEL_NAME == "qwen3-embedding:0.6b"
     else EMBEDDING_MODEL_NAME
 )
+REEMBED_ONNX_REQUIRE_CUDA = os.environ.get("REEMBED_ONNX_REQUIRE_CUDA", "").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 REEMBED_BENCHMARK = os.environ.get("REEMBED_BENCHMARK", "").lower() in {"1", "true", "yes"}
 REEMBED_BENCHMARK_SIZE = int(os.environ.get("REEMBED_BENCHMARK_SIZE", "128"))
 REEMBED_CONTINUE_ON_ERROR = os.environ.get("REEMBED_CONTINUE_ON_ERROR", "").lower() in {
@@ -184,14 +192,21 @@ class SentenceTransformerEmbeddingBackend:
         kwargs: dict[str, Any] = {"device": device}
         if self._use_onnx:
             try:
-                import onnxruntime  # noqa: F401
+                import onnxruntime
                 import optimum  # noqa: F401
             except ImportError as exc:
                 raise ScriptError(
                     "REEMBED_BACKEND=onnx requires optimum and onnxruntime. "
                     "Use REEMBED_BACKEND=local or install optional dependencies."
                 ) from exc
-            provider = "CUDAExecutionProvider" if device == "cuda" else "CPUExecutionProvider"
+            provider = select_onnx_provider(
+                device=device,
+                available_providers=list(onnxruntime.get_available_providers()),
+                require_cuda=REEMBED_ONNX_REQUIRE_CUDA,
+            )
+            if provider == "CPUExecutionProvider":
+                device = "cpu"
+                kwargs["device"] = device
             kwargs.update({"backend": "onnx", "model_kwargs": {"provider": provider}})
         elif device == "cuda" and torch is not None:
             kwargs["model_kwargs"] = {"torch_dtype": torch.float16}
@@ -221,6 +236,29 @@ class SentenceTransformerEmbeddingBackend:
             return [[float(value) for value in embedding] for embedding in raw]
 
         return await asyncio.to_thread(_encode)
+
+
+def select_onnx_provider(
+    *,
+    device: str,
+    available_providers: list[str],
+    require_cuda: bool,
+) -> str:
+    """Select an ONNX Runtime provider that actually exists in this environment."""
+    if device == "cuda" and "CUDAExecutionProvider" in available_providers:
+        return "CUDAExecutionProvider"
+    if device == "cuda" and require_cuda:
+        raise ScriptError(
+            "REEMBED_ONNX_REQUIRE_CUDA=true but onnxruntime does not expose "
+            "CUDAExecutionProvider. Install onnxruntime-gpu compatible with this CUDA stack "
+            "or unset REEMBED_ONNX_REQUIRE_CUDA to allow CPU ONNX fallback."
+        )
+    if "CPUExecutionProvider" in available_providers:
+        return "CPUExecutionProvider"
+    raise ScriptError(
+        "onnxruntime exposes no supported execution provider. Available providers: "
+        f"{available_providers}"
+    )
 
 
 def build_embedding_backend(name: str | None = None) -> EmbeddingBackend:
@@ -401,12 +439,30 @@ async def reembed_paper(
         await qdrant.upsert(
             collection_name=COLLECTION_NAME,
             points=points[i : i + 100],
+            wait=True,
         )
 
-    # 4. Update DB first: set new embedding_id and embedding_model.
-    #    If Qdrant upsert succeeded but DB update fails, a re-run will
-    #    re-embed (old embedding_model still in DB) and orphaned Qdrant
-    #    points are harmless.
+    # 4. Delete old Qdrant points before flipping DB rows. If cleanup fails,
+    #    the DB still says the paper needs re-embedding, so a rerun remains
+    #    deterministic and can retry the same stale IDs.
+    old_point_ids = [r["embedding_id"] for r in rows if r["embedding_id"]]
+    if old_point_ids:
+        try:
+            await qdrant.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=PointIdsList(points=old_point_ids),
+                wait=True,
+            )
+        except Exception as exc:
+            message = (
+                f"Failed to delete old Qdrant points for paper {paper_id}: "
+                f"{len(old_point_ids)} stale point(s) may remain"
+            )
+            if not REEMBED_CONTINUE_ON_ERROR:
+                raise ScriptError(message) from exc
+            logger.warning("%s; continuing because REEMBED_CONTINUE_ON_ERROR=true", message)
+
+    # 5. Update DB last: set new embedding_id and embedding_model.
     async with pool.acquire() as conn:
         async with conn.transaction():
             if hasattr(conn, "executemany"):
@@ -427,23 +483,6 @@ async def reembed_paper(
                         EMBEDDING_MODEL_NAME,
                         row_id,
                     )
-
-    # 5. Delete old Qdrant points (after new ones are in place)
-    old_point_ids = [r["embedding_id"] for r in rows if r["embedding_id"]]
-    if old_point_ids:
-        try:
-            await qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=PointIdsList(points=old_point_ids),
-            )
-        except Exception as exc:
-            message = (
-                f"Failed to delete old Qdrant points for paper {paper_id}: "
-                f"{len(old_point_ids)} stale point(s) may remain"
-            )
-            if not REEMBED_CONTINUE_ON_ERROR:
-                raise ScriptError(message) from exc
-            logger.warning("%s; continuing because REEMBED_CONTINUE_ON_ERROR=true", message)
 
     return len(rows)
 
