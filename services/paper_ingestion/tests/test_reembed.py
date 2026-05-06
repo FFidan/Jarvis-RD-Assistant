@@ -625,9 +625,11 @@ async def test_main_raises_after_non_script_error_paper_failures():
             raise RuntimeError("paper exploded")
         return 3
 
+    fake_backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
     with (
         patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(reembed_mod, "build_embedding_backend", return_value=fake_backend),
         patch.object(reembed_mod, "reembed_paper", side_effect=_fake_reembed_paper),
     ):
         with pytest.raises(reembed_mod.ScriptError, match="paper_id=1"):
@@ -728,9 +730,11 @@ async def test_main_runs_postcondition_after_successful_reembed():
     async def _fake_create_pool(*args, **kwargs):
         return pool
 
+    fake_backend = _FakeEmbeddingBackend(embedding_dim=reembed_mod.EMBEDDING_DIMENSION)
     with (
         patch.object(reembed_mod.asyncpg, "create_pool", side_effect=_fake_create_pool),
         patch.object(reembed_mod, "AsyncQdrantClient", return_value=qdrant),
+        patch.object(reembed_mod, "build_embedding_backend", return_value=fake_backend),
         patch.object(reembed_mod, "reembed_paper", AsyncMock(return_value=3)),
         patch.object(reembed_mod, "verify_postconditions", AsyncMock()) as verify_postconditions,
     ):

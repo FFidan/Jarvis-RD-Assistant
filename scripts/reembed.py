@@ -34,6 +34,9 @@ Environment variables (reads from .env or system environment):
     REEMBED_CONTINUE_ON_ERROR
                          - Set true only for debug runs that should continue after
                            per-paper failures or stale-point cleanup failures
+    REEMBED_REQUEST_TIMEOUT
+                         - HTTP timeout in seconds for each embed call (default: 120).
+                           Increase for cold-start or CPU-bound models.
 """
 
 from __future__ import annotations
@@ -168,7 +171,7 @@ class LiteLLMEmbeddingBackend:
             client,
             texts,
             model=EMBEDDING_MODEL,
-            timeout=120.0,
+            timeout=float(os.environ.get("REEMBED_REQUEST_TIMEOUT", "120")),
             config=LITELLM_CONFIG,
         )
 
@@ -663,6 +666,23 @@ async def main(argv: list[str] | None = None) -> None:
 
         failed_paper_ids: list[int] = []
         async with httpx.AsyncClient() as http_client:
+            # One-shot warmup: abort early before burning hours on the corpus
+            _warmup_t0 = time.perf_counter()
+            try:
+                await backend.embed_texts(http_client, ["warmup"])
+            except Exception as _warmup_exc:
+                raise ScriptError(
+                    f"Warmup embed failed — aborting before processing corpus. "
+                    f"Original error: {_warmup_exc}"
+                ) from _warmup_exc
+            _warmup_ms = (time.perf_counter() - _warmup_t0) * 1000
+            logger.info("Warmup embed: %.0f ms", _warmup_ms)
+            if _warmup_ms > 10_000:
+                logger.warning(
+                    "WARNING: warmup > 10s — model may be CPU-bound; "
+                    "consider checking 'docker exec ollama ollama ps'"
+                )
+
             done = 0
             total_chunks = 0
             for i in range(0, total, BATCH_SIZE):

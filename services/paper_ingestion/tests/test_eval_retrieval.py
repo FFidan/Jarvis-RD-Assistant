@@ -174,8 +174,8 @@ async def test_main_prints_retrieval_metrics(capsys):
     output = capsys.readouterr().out
     assert "Precision@1:  50.0%  (1/2)" in output
     assert "Recall@3:     100.0%  (2/2)" in output
-    assert "Total findings evaluated: 2" in output
-    assert "Failed findings skipped: 0" in output
+    assert "Total queries: 2" in output
+    assert "Failed queries: 0" in output
     pool.close.assert_awaited_once()
 
 
@@ -226,5 +226,5 @@ async def test_main_reports_all_failed_findings_without_crashing(capsys):
         await eval_mod.main()
 
     output = capsys.readouterr().out
-    assert "Total findings evaluated: 0" in output
-    assert "Failed findings skipped: 2" in output
+    assert "Total queries: 2" in output
+    assert "Failed queries: 2" in output

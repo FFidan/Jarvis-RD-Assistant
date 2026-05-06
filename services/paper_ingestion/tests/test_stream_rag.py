@@ -4,7 +4,6 @@ import json
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
-from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -223,7 +222,7 @@ async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch)
 
     assert events == [
         'data: {"type": "sources", "sources": []}\n\n',
-        'data: {"type": "done", "full_answer": ""}\n\n',
+        'data: {"type": "done", "full_answer": "", "model_used": null}\n\n',
         "data: [DONE]\n\n",
     ]
     mock_client.stream.assert_called_once_with(
@@ -248,6 +247,7 @@ async def teststream_rag_events_uses_shared_litellm_config_base_url(monkeypatch)
 
 async def testprepare_single_paper_rag_returns_messages_and_sources():
     """prepare_single_paper_rag returns (messages, sources_list) tuple."""
+    from paper_ingestion.embedder import Embedder
     from paper_ingestion.models import AskRequest
     from paper_ingestion.rag.streaming import prepare_single_paper_rag
 
@@ -306,6 +306,7 @@ async def testprepare_single_paper_rag_returns_messages_and_sources():
 
 async def testprepare_cross_paper_rag_returns_messages_and_sources():
     """prepare_cross_paper_rag returns (messages, sources) with paper attribution."""
+    from paper_ingestion.embedder import Embedder
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import prepare_cross_paper_rag
 
@@ -377,6 +378,7 @@ async def testprepare_cross_paper_rag_returns_messages_and_sources():
 
 async def testprepare_cross_paper_rag_no_chunks_returns_dict():
     """When no chunks match, prepare_cross_paper_rag returns a canned dict."""
+    from paper_ingestion.embedder import Embedder
     from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import prepare_cross_paper_rag
 
