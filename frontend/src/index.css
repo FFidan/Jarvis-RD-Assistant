@@ -92,6 +92,12 @@
     --cta-orange-border: #ffedd5;    /* orange-100 */
     --cta-orange-text:   #9a3412;    /* orange-800 */
 
+    /* Warn banner CTA (HSL triplets so consumers can opacity-modulate via hsl(var(...) / N)) */
+    --cta-warn-bg:     33 100% 96%;
+    --cta-warn-fg:     15 79% 34%;
+    --cta-warn-border: 32 98% 83%;
+    --cta-warn-solid:  25 95% 53%;
+
     /* Project color palette */
     --project-blue:   #2563eb;
     --project-green:  #16a34a;
@@ -121,6 +127,11 @@
     --cta-orange-bg:     rgba(249, 115, 22, 0.10);
     --cta-orange-border: rgba(249, 115, 22, 0.25);
     --cta-orange-text:   #fdba74;    /* orange-300 */
+
+    --cta-warn-bg:     17 88% 12%;
+    --cta-warn-fg:     32 98% 78%;
+    --cta-warn-border: 17 88% 30%;
+    --cta-warn-solid:  25 95% 53%;
   }
 }
 

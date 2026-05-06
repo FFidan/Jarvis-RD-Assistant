@@ -1,86 +1,85 @@
 # Phase D Retrieval Eval — Comparison Report
 
-**Date:** 2026-05-07 (D7 retry on Ollama 0.23.1)
+**Date:** 2026-05-07 (D7 retry on Ollama 0.23.1; D6 reranker matrix)
 **Corpus:** 84 papers, 4,888 chunks — port-Hamiltonian / Neural ODE / PINN domain
 **Eval set:** `scripts/fixtures/retrieval_eval_set.jsonl` — 27 curated cases
 **Decision threshold:** promote if nDCG@3 improves > 5% relative AND latency regression ≤ 50%
 
 ---
 
-## Baseline (production stack)
+## Six-cell matrix
 
-| Metric | Value |
-|--------|-------|
-| Embedding | `qwen3-embedding:0.6b` (1024d, Ollama) |
-| Reranker | `mixedbread-ai/mxbai-rerank-base-v2` |
-| Collection | `paper_chunks` |
-| P@1 | 44.4% (12/27) |
-| R@3 | 45.7% (24.8/27) |
-| **nDCG@3** | **64.1%** |
-| Mean latency | 205 ms/query |
-| Failed queries | 0 |
+| Cell | Embedding | Reranker | P@1 | R@3 | **nDCG@3** | Mean latency |
+|------|-----------|----------|-----|-----|------------|--------------|
+| 1 (baseline) | 0.6b | none | 44.4% | 45.7% | **64.1%** | 205 ms |
+| 2 | 0.6b | mxbai | 55.6% | 51.2% | **80.9%** | 10,507 ms |
+| 3 | 0.6b | qwen3-reranker | 40.7% | 42.0% | 48.0% ❌ | 366 ms |
+| 4 | 4b | none | 55.6% | 56.8% | **80.0%** | 86 ms |
+| 5 | 4b | mxbai | 51.9% | 53.7% | **81.5%** | 13,605 ms |
+| 6 | 4b | qwen3-reranker | 40.7% | 40.7% | 55.7% ❌ | 373 ms |
 
-Full results: `scripts/fixtures/eval_results_baseline.json`
+Result files: `scripts/fixtures/eval_results_baseline.json`, `eval_results_mxbai_06b.json`, `eval_results_qwen3rerank_06b.json`, `eval_results_4b_embedding.json`, `eval_results_mxbai_4b.json`, `eval_results_qwen3rerank_4b.json`.
 
 ---
 
-## D7 — qwen3-embedding:4b + paper_chunks_4b ✅ PROMOTED
+## Headline decisions
 
-**Status:** PASSED both gates. Recommended for production after a Qdrant snapshot.
+### Embedding: PROMOTE `qwen3-embedding:4b`
 
-**Hardware/infra change:** Ollama upgraded `0.17.7 → 0.23.1` (versions.env). The 0.17.7 release shipped with a regression that prevented qwen3-embedding GPU offload on Blackwell sm_120 GPUs ([ollama/ollama#14386](https://github.com/ollama/ollama/issues/14386)); 0.23.1 restores correct CUDA offload. Post-upgrade gate test: warm `embed-4b` returned in **107 ms**, `ollama ps` reports `100% GPU` for `qwen3-embedding:4b`.
+| Gate | Threshold | Cell 4 result |
+|------|-----------|---------------|
+| nDCG@3 lift | > 5% relative (> 67.3% absolute) | **80.0% — +24.8% relative** ✅ |
+| Latency regression | ≤ 50% (≤ 308 ms/query) | **86 ms/query — −58%** ✅ |
 
-**Re-embed (D7-int) — 2026-05-07 00:25–00:37**
-- Warmup probe: **91 ms**
-- Total runtime: **11 min 22 s** for 84 papers / 4,888 chunks (~430 chunks/min on RTX 5060 Ti 16GB)
-- Postcondition: DB chunk count == Qdrant vector count == 4,888 ✓
-- (Compare: yesterday's 0.17.7 attempt on the same model failed every paper at the 120 s timeout, ~25 min/embed CPU-bound, 0 chunks landed.)
+Both gates passed. The 4b embedding alone moves nDCG@3 from 64.1 → 80.0 % at lower mean latency than the 0.6b baseline (the 4b eval ran with the model already warm from re-embed; cold-start latency has not been measured but is bounded by the warmup probe, which finished in 91 ms after the upgrade).
 
-**Eval results (paper_chunks_4b, no reranker):**
+### Reranker: KEEP `mxbai-rerank-base-v2`, DO NOT promote `Qwen3-Reranker-0.6B`
 
-| Metric | Value | vs baseline |
-|--------|-------|-------------|
-| P@1 | 55.6% (15/27) | +25% relative |
-| R@3 | 56.8% (15.3/27) | +24% relative |
-| **nDCG@3** | **80.0%** | **+24.8% relative** |
-| Mean latency | 86.6 ms/query | −58% (faster) |
-| Failed queries | 0 | — |
+| Comparison | Δ nDCG@3 | Δ latency | Verdict |
+|------------|----------|-----------|---------|
+| Cell 5 (4b + mxbai) vs Cell 4 (4b only) | +1.9% relative | +13.5 s/query | mxbai gain is below 5% relative threshold → not worth the latency hit on the 4b stack |
+| Cell 2 (0.6b + mxbai) vs Cell 1 (0.6b baseline) | +26.2% relative | +10.3 s/query | Validates the harness rerank stage; production already uses mxbai, so this is the current production stack |
+| Cell 6 (4b + qwen3-rerank) vs Cell 4 (4b only) | **−30.4% relative** | +0.3 s/query | Qwen3-Reranker-0.6B is a sharp regression |
+| Cell 3 (0.6b + qwen3-rerank) vs Cell 1 (baseline) | **−25.1% relative** | +0.2 s/query | Same regression on 0.6b embeddings |
 
-**Notes on latency:** baseline 205 ms/query included cold-start overhead since the eval was the first thing to hit the model after stack-up. The D7 eval ran while `qwen3-embedding:4b` was already loaded on GPU from the re-embed, so per-query latency is the warm-path number. Either way the 4b stack stays comfortably under the 50% regression threshold (308 ms gate).
+`Qwen3-Reranker-0.6B` consistently degrades quality on this scientific-papers corpus, regardless of embedder. The generative `logit("yes") - logit("no")` signal does not align with paper-level relevance for our queries — a 0.6B causal LM is likely too small to score nuanced math/physics content reliably under the current zero-shot prompt template. **The adapter and harness extension remain in the codebase** so a larger Qwen3-Reranker (4B / 8B) can be evaluated later by setting `QWEN3_RERANKER_MODEL`.
 
-Full results: `scripts/fixtures/eval_results_4b_embedding.json`
+`mxbai-rerank-base-v2` does what it should — adds ~1.5–17 pp absolute nDCG@3 on top of either embedder — but the 10–13 s per-query rerank cost is heavy on this hardware, and on top of the 4b embedding the gain (+1.9% relative) is below the 5% promotion threshold.
 
 ---
 
-## D6 — Reranker comparison harness ⏳ in progress
+## Recommended production stack
 
-Eval harness extended ([scripts/eval_retrieval.py](../scripts/eval_retrieval.py)) with `EVAL_RERANKER ∈ {none, mxbai, qwen3-reranker}` and `EVAL_RERANK_K` controls, plus the new `Qwen3Reranker` adapter ([qwen3_reranker.py](../../services/paper_ingestion/paper_ingestion/ingestion/qwen3_reranker.py)) using a generative `logit("yes") - logit("no")` scorer. Six-cell matrix run pending: {0.6b, 4b} embeddings × {none, mxbai, qwen3-reranker} reranker.
+**`qwen3-embedding:4b` (2560d) + `mxbai-rerank-base-v2`**
+
+This matches what production currently runs as the *reranker*, and upgrades the embedder. The 4b-without-rerank cell is faster, but production retrieval has consumers that already depend on the rerank stage (e.g., cross-paper RAG quality on top-K wider than 3) — keeping mxbai means no behavior change beyond the embedder swap.
+
+If latency budget tightens later, dropping the reranker is now backed by data: it costs only ~1.5 pp absolute nDCG@3 on the 4b stack and gives a ~158× per-query speedup.
+
+### Promotion checklist (sequential)
+
+1. Snapshot `paper_chunks` Qdrant collection (rollback safety).
+2. Update `litellm/config.yaml`: replace the active `embed` alias with `ollama/qwen3-embedding:4b` (dimensions 2560). Keep `embed-4b` alias too if convenient for ad-hoc work.
+3. Update `.env`: `EMBEDDING_DIMENSION=2560`, `EMBEDDING_MODEL_NAME=qwen3-embedding:4b`.
+4. Run `scripts/reembed.py` against the production `paper_chunks` collection (already validated end-to-end in D7-int).
+5. Restart `paper_ingestion` and `learning_engine`.
+6. Smoke-test: cross-paper RAG query, paper-detail page, citation-graph query.
 
 ---
 
-## Decision Gate — Outcome
+## Infrastructure change (D7-1) — record
 
-| Condition | Threshold | D7 4b result |
-|-----------|-----------|--------------|
-| nDCG@3 improvement | > 5% relative (> 67.3% absolute) | **PASS** (80.0%, +24.8%) |
-| Latency regression | ≤ 50% (≤ 308 ms/query) | **PASS** (86.6 ms, −58%) |
+**Ollama upgraded `0.17.7 → 0.23.1`** ([versions.env](../../versions.env#L10)). The 0.17.7 image carried a regression that prevented `qwen3-embedding:4b` from offloading to CUDA on Blackwell sm_120 GPUs ([ollama/ollama#14386](https://github.com/ollama/ollama/issues/14386)) — yesterday's D7 attempt had the model running 100 % CPU at ~25 min/embed, crashing the corpus re-embed. After the upgrade, gate test:
 
-**Decision:** PROMOTE `qwen3-embedding:4b` to production once the D6 reranker matrix completes (so we choose the embedding+reranker pair together).
-
-### What "promote" means
-
-1. Qdrant snapshot of `paper_chunks` (production safety net before any swap).
-2. Change `litellm/config.yaml` `embed` alias from `ollama/qwen3-embedding:0.6b` to `ollama/qwen3-embedding:4b` (or rename the existing `embed-4b` alias to `embed`).
-3. Update `EMBEDDING_DIMENSION` in production `.env` from `1024` → `2560`.
-4. Update `EMBEDDING_MODEL_NAME` env var to `qwen3-embedding:4b`.
-5. Run `scripts/reembed.py` against production `paper_chunks` collection.
-6. Restart `paper_ingestion` and `learning_engine`.
+- `ollama ps` → `qwen3-embedding:4b … 100% GPU`
+- Warm `embed-4b` via LiteLLM → **107 ms** (target: < 5 s)
+- Re-embed of 84 papers / 4,888 chunks → **11 min 22 s** (target: < 1 h)
 
 ---
 
 ## Notes
 
-- D6 (reranker swap) is independent of D7 (embedding upgrade) — but the matrix run lets us pick the best pair on the same eval set.
-- The 84-paper corpus is small enough that nDCG@3 confidence intervals are wide; require at least 27 eval cases and a > 5% relative improvement to reduce the risk of noise-driven promotion. Both met for D7.
-- Baseline was run 2026-05-06 with the production `paper_chunks` collection (embedded with `qwen3-embedding:0.6b`).
-- D7 ran 2026-05-07 against Ollama 0.23.1 + RTX 5060 Ti 16GB. GPU offload confirmed via `ollama ps`.
+- The 84-paper corpus is small enough that nDCG@3 confidence intervals are wide; require at least 27 eval cases and a > 5% relative improvement to reduce noise-driven promotion. Both met for the 4b embedding.
+- D6-A (harness extension) is the durable enabler — future eval runs can swap in any reranker by setting `EVAL_RERANKER` and `EVAL_RERANK_K`.
+- The Qwen3-Reranker generative-scoring adapter ([qwen3_reranker.py](../../services/paper_ingestion/paper_ingestion/ingestion/qwen3_reranker.py)) is preserved for future revisits with larger model sizes.
+- All eval runs used `EVAL_RERANK_K=10` (top-10 candidates fetched then reranked to top-3) where a reranker was active; baselines used Qdrant `limit=3` directly.

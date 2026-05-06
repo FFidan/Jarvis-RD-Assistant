@@ -1,0 +1,380 @@
+{
+  "run_at": "2026-05-06T22:53:24.553007+00:00",
+  "collection": "paper_chunks",
+  "reranker": "qwen3-reranker",
+  "rerank_k": 10,
+  "reranker_model": "Qwen/Qwen3-Reranker-0.6B",
+  "eval_source": "fixed eval set",
+  "total_cases": 27,
+  "failed_queries": 0,
+  "p_at_1": 0.4074074074074074,
+  "r_at_3": 0.41975308641975306,
+  "ndcg_at_3": 0.4800750501624953,
+  "mean_latency_ms": 366.2234886664751,
+  "per_case": [
+    {
+      "query": "Dirac structure energy-preserving port-Hamiltonian system",
+      "expected_paper_ids": [
+        39,
+        84
+      ],
+      "p1": 0.0,
+      "r3": 0.5,
+      "ndcg3": 0.3065735963827292,
+      "latency_ms": 1122.2978839941788,
+      "embed_ms": 101.93442099262029,
+      "rerank_ms": 986.9875160075026,
+      "top_result_paper_id": 61
+    },
+    {
+      "query": "Hamiltonian neural network conservation laws energy",
+      "expected_paper_ids": [
+        93
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.0,
+      "latency_ms": 348.3367070002714,
+      "embed_ms": 51.859191997209564,
+      "rerank_ms": 278.3031949948054,
+      "top_result_paper_id": 93
+    },
+    {
+      "query": "port-Hamiltonian formulation interconnected systems bond graph",
+      "expected_paper_ids": [
+        39
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 336.1332770000445,
+      "embed_ms": 52.94499101000838,
+      "rerank_ms": 279.31704399816226,
+      "top_result_paper_id": 79
+    },
+    {
+      "query": "adjoint sensitivity method neural ODE gradient backpropagation",
+      "expected_paper_ids": [
+        73
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.0,
+      "latency_ms": 330.202826007735,
+      "embed_ms": 57.378172990866005,
+      "rerank_ms": 264.6368380083004,
+      "top_result_paper_id": 73
+    },
+    {
+      "query": "collocation loss residual boundary conditions PINN training",
+      "expected_paper_ids": [
+        90
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 332.8592880134238,
+      "embed_ms": 58.48981099552475,
+      "rerank_ms": 266.96487999288365,
+      "top_result_paper_id": 44
+    },
+    {
+      "query": "neural tangent kernel lazy training deep neural network",
+      "expected_paper_ids": [
+        58
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.0,
+      "latency_ms": 380.57494000531733,
+      "embed_ms": 53.33670700201765,
+      "rerank_ms": 280.46320100838784,
+      "top_result_paper_id": 58
+    },
+    {
+      "query": "sparse identification nonlinear dynamics SINDy library",
+      "expected_paper_ids": [
+        50
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 321.72589999390766,
+      "embed_ms": 52.43360700842459,
+      "rerank_ms": 264.89137300814036,
+      "top_result_paper_id": 68
+    },
+    {
+      "query": "graph ordinary differential equation continuous-depth GNN",
+      "expected_paper_ids": [
+        36
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.0,
+      "latency_ms": 339.62745100143366,
+      "embed_ms": 55.48761300451588,
+      "rerank_ms": 280.0614510051673,
+      "top_result_paper_id": 36
+    },
+    {
+      "query": "Hamiltonian graph network symplectic integrator leapfrog",
+      "expected_paper_ids": [
+        102
+      ],
+      "p1": 0.0,
+      "r3": 1.0,
+      "ndcg3": 0.5,
+      "latency_ms": 329.89427000575233,
+      "embed_ms": 53.60204000317026,
+      "rerank_ms": 271.9495000055758,
+      "top_result_paper_id": 84
+    },
+    {
+      "query": "port-Hamiltonian versus Hamiltonian neural network energy conservation comparison",
+      "expected_paper_ids": [
+        39,
+        84,
+        93
+      ],
+      "p1": 1.0,
+      "r3": 0.3333333333333333,
+      "ndcg3": 0.7653606369886217,
+      "latency_ms": 342.50966599211097,
+      "embed_ms": 49.225598995690234,
+      "rerank_ms": 283.1632330053253,
+      "top_result_paper_id": 93
+    },
+    {
+      "query": "neural ODE vs physics-informed neural network dynamical system learning",
+      "expected_paper_ids": [
+        73,
+        90
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 360.1833400025498,
+      "embed_ms": 54.25979998835828,
+      "rerank_ms": 302.9713400028413,
+      "top_result_paper_id": 49
+    },
+    {
+      "query": "PINN power systems electric grid stability",
+      "expected_paper_ids": [
+        52
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 319.9151629960397,
+      "embed_ms": 51.37284399825148,
+      "rerank_ms": 264.1470779926749,
+      "top_result_paper_id": 94
+    },
+    {
+      "query": "collocation loss failure NTK spectral bias PINN",
+      "expected_paper_ids": [
+        58,
+        90
+      ],
+      "p1": 1.0,
+      "r3": 0.5,
+      "ndcg3": 1.3065735963827294,
+      "latency_ms": 335.21806000499055,
+      "embed_ms": 51.096891998895444,
+      "rerank_ms": 272.78564700100105,
+      "top_result_paper_id": 58
+    },
+    {
+      "query": "Hamiltonian graph network ODE integrator molecular dynamics",
+      "expected_paper_ids": [
+        102,
+        36
+      ],
+      "p1": 0.0,
+      "r3": 0.5,
+      "ndcg3": 0.3065735963827292,
+      "latency_ms": 329.5239590079291,
+      "embed_ms": 51.4690140116727,
+      "rerank_ms": 274.6596680080984,
+      "top_result_paper_id": 83
+    },
+    {
+      "query": "data-driven dynamical system identification from time series",
+      "expected_paper_ids": [
+        50,
+        73
+      ],
+      "p1": 1.0,
+      "r3": 0.5,
+      "ndcg3": 0.9197207891481876,
+      "latency_ms": 324.3440539954463,
+      "embed_ms": 50.74656900251284,
+      "rerank_ms": 264.6850750024896,
+      "top_result_paper_id": 50
+    },
+    {
+      "query": "port-Hamiltonian learning passivity mechanical system",
+      "expected_paper_ids": [
+        84,
+        39
+      ],
+      "p1": 1.0,
+      "r3": 0.5,
+      "ndcg3": 0.6131471927654584,
+      "latency_ms": 350.94703399227,
+      "embed_ms": 54.4936799997231,
+      "rerank_ms": 285.47133499523625,
+      "top_result_paper_id": 84
+    },
+    {
+      "query": "physics-informed machine learning energy dissipation structure",
+      "expected_paper_ids": [
+        84,
+        90,
+        52
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 333.9996339927893,
+      "embed_ms": 56.64008601161186,
+      "rerank_ms": 273.4797839948442,
+      "top_result_paper_id": 81
+    },
+    {
+      "query": "Desai port Hamiltonian 2021",
+      "expected_paper_ids": [
+        84
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 327.68352900166065,
+      "embed_ms": 58.715848994324915,
+      "rerank_ms": 262.298831003136,
+      "top_result_paper_id": 66
+    },
+    {
+      "query": "Chen neural ODE continuous normalizing flow",
+      "expected_paper_ids": [
+        73
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.5,
+      "latency_ms": 340.1661609968869,
+      "embed_ms": 50.394788006087765,
+      "rerank_ms": 286.20118999970146,
+      "top_result_paper_id": 73
+    },
+    {
+      "query": "Greydanus Hamiltonian neural network separable potential",
+      "expected_paper_ids": [
+        93
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 340.0399509991985,
+      "embed_ms": 50.69848299899604,
+      "rerank_ms": 284.1762559983181,
+      "top_result_paper_id": 84
+    },
+    {
+      "query": "Raissi physics-informed neural networks Navier-Stokes",
+      "expected_paper_ids": [
+        90
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 343.30682099971455,
+      "embed_ms": 55.989596992731094,
+      "rerank_ms": 284.5285729999887,
+      "top_result_paper_id": 24
+    },
+    {
+      "query": "Brunton SINDy sparse regression",
+      "expected_paper_ids": [
+        50
+      ],
+      "p1": 0.0,
+      "r3": 1.0,
+      "ndcg3": 0.6309297535714575,
+      "latency_ms": 317.15787200664636,
+      "embed_ms": 50.89909599337261,
+      "rerank_ms": 261.14853100443725,
+      "top_result_paper_id": 68
+    },
+    {
+      "query": "energy shaping passivity-based control",
+      "expected_paper_ids": [
+        39,
+        84
+      ],
+      "p1": 1.0,
+      "r3": 0.5,
+      "ndcg3": 0.6131471927654584,
+      "latency_ms": 343.3210980001604,
+      "embed_ms": 62.99540899635758,
+      "rerank_ms": 276.38304900028743,
+      "top_result_paper_id": 84
+    },
+    {
+      "query": "symplectic integrator Hamiltonian mechanics",
+      "expected_paper_ids": [
+        93,
+        102
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 324.83175498782657,
+      "embed_ms": 50.237728995853104,
+      "rerank_ms": 271.3924490089994,
+      "top_result_paper_id": 101
+    },
+    {
+      "query": "PINN spectral bias high-frequency failure",
+      "expected_paper_ids": [
+        58
+      ],
+      "p1": 1.0,
+      "r3": 1.0,
+      "ndcg3": 1.5,
+      "latency_ms": 329.5984369906364,
+      "embed_ms": 50.14007800491527,
+      "rerank_ms": 276.6303389944369,
+      "top_result_paper_id": 58
+    },
+    {
+      "query": "graph neural ODE coupled oscillators",
+      "expected_paper_ids": [
+        36,
+        102
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 347.3444830015069,
+      "embed_ms": 49.83826700481586,
+      "rerank_ms": 291.3769810111262,
+      "top_result_paper_id": 37
+    },
+    {
+      "query": "variational autoencoders latent ODE trajectory",
+      "expected_paper_ids": [
+        73
+      ],
+      "p1": 0.0,
+      "r3": 0.0,
+      "ndcg3": 0.0,
+      "latency_ms": 336.2906340043992,
+      "embed_ms": 55.03990000579506,
+      "rerank_ms": 278.3865480014356,
+      "top_result_paper_id": 88
+    }
+  ]
+}

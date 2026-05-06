@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
+import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import { DateRangeFilter } from '@/components/analytics/DateRangeFilter';
 import { ActivityChart } from '@/components/analytics/ActivityChart';
 import { RetentionChart } from '@/components/analytics/RetentionChart';
@@ -82,9 +83,9 @@ export function AnalyticsPage() {
         </div>
       )}
 
-      {/* Row 1: Activity + Retention */}
+      <SectionHeader marker="ACTIVITY" />
       <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="text-lg">Activity Overview</CardTitle>
           </CardHeader>
@@ -101,7 +102,7 @@ export function AnalyticsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-1 text-lg">
               Retention Trend
@@ -122,9 +123,9 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      {/* Row 2: Papers by Source + Status */}
+      <SectionHeader marker="DISTRIBUTION" />
       <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="text-lg">Papers by Source</CardTitle>
           </CardHeader>
@@ -141,7 +142,7 @@ export function AnalyticsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="text-lg">Papers by Status</CardTitle>
           </CardHeader>
@@ -159,9 +160,9 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      {/* Row 3: Reviews + LLM Cost */}
+      <SectionHeader marker="REVIEWS" />
       <div className="grid gap-6 md:grid-cols-2">
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="text-lg">Reviews by Rating</CardTitle>
           </CardHeader>
@@ -178,7 +179,7 @@ export function AnalyticsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
             <CardTitle className="text-lg">LLM Cost Over Time</CardTitle>
           </CardHeader>
