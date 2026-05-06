@@ -140,6 +140,41 @@ describe('PulseDeck', () => {
     expect(screen.getByText(/2 papers/i)).toBeInTheDocument();
   });
 
+  it('shows degraded reason and source diagnostics for an empty generated deck', async () => {
+    vi.mocked(fetchPulseToday).mockResolvedValue(
+      makeDeck({
+        card_count: 0,
+        cards: [],
+        degraded_reason: 'No Pulse candidates returned; arXiv rate limit reached.',
+        stats: {
+          source_diagnostics: {
+            arxiv: {
+              status: 'rate_limit',
+              message: 'arxiv returned HTTP 429',
+              status_code: 429,
+              retry_after_s: 60,
+              settings_hint: null,
+            },
+            openalex: {
+              status: 'unconfigured',
+              message: 'OpenAlex needs contact settings.',
+              status_code: null,
+              retry_after_s: null,
+              settings_hint: 'Set OPENALEX_EMAIL for polite pool access.',
+            },
+          },
+        },
+      }),
+    );
+
+    renderDeck();
+
+    expect(await screen.findByText(/arxiv rate limit reached/i)).toBeInTheDocument();
+    expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
+    expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /regenerate/i })).toBeInTheDocument();
+  });
+
   it('shows error state when fetchPulseToday throws', async () => {
     vi.mocked(fetchPulseToday).mockRejectedValue(new Error('boom'));
     renderDeck();

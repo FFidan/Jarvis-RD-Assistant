@@ -18,6 +18,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
       card_count: 5,
       degraded_reason: null,
       source_counts: { arxiv: 12, pubmed: 8 },
+      source_diagnostics: {},
       topic_embeddings: [{ key: 'topic.1.embedding', dim: 1024, ok: true, non_null: true }],
       top_cards: [],
       classifier_available: false,
@@ -235,6 +236,50 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /generate pulse now/i })).toBeInTheDocument();
     });
+  });
+
+  it('renders source diagnostics for rate-limited and unconfigured sources', async () => {
+    const user = userEvent.setup();
+    const { fetchPulseDebug } = await import('@/lib/api');
+    vi.mocked(fetchPulseDebug).mockResolvedValueOnce({
+      deck_date: '2026-05-06',
+      card_count: 0,
+      degraded_reason: 'No Pulse candidates returned; arXiv rate limit reached.',
+      source_counts: {},
+      source_diagnostics: {
+        arxiv: {
+          status: 'rate_limit',
+          message: 'arxiv returned HTTP 429',
+          status_code: 429,
+          retry_after_s: 60,
+          settings_hint: null,
+        },
+        openalex: {
+          status: 'unconfigured',
+          message: 'OpenAlex needs contact settings.',
+          status_code: null,
+          retry_after_s: null,
+          settings_hint: 'Set OPENALEX_EMAIL for polite pool access.',
+        },
+      },
+      topic_embeddings: [],
+      top_cards: [],
+      classifier_available: false,
+      classifier_sample_count: null,
+      classifier_feature_names: [],
+      classifier_auc: null,
+      classifier_auc_degradation_reason: null,
+      classifier_degradation_reason: null,
+    });
+
+    renderSection();
+    const diagnostics = await screen.findByRole('button', { name: /diagnostics/i });
+    await user.click(diagnostics);
+
+    expect(await screen.findByText(/source diagnostics/i)).toBeInTheDocument();
+    expect(screen.getByText(/arxiv returned HTTP 429/i)).toBeInTheDocument();
+    expect(screen.getByText(/retry after 60s/i)).toBeInTheDocument();
+    expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
   });
 
   it('renders config failures explicitly and disables settings mutations', async () => {

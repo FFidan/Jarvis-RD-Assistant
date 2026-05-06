@@ -6,6 +6,7 @@ TDD: tests written before implementation.
 from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
@@ -78,6 +79,11 @@ class _StubSource:
         if self._raises is not None:
             raise self._raises
         return list(self._papers)
+
+
+class _UnsupportedSource(_StubSource):
+    source_type = "local"
+    supports_pulse_polling = False
 
 
 def _make_source_class(stub: _StubSource):
@@ -389,3 +395,49 @@ async def test_source_cache_used_when_provided():
     assert cached_stub.fetch_new_since_calls == 1
     assert len(result) == 1
     assert result[0].external_id == "arxiv:cached"
+
+
+@pytest.mark.asyncio
+async def test_include_diagnostics_reports_rate_limit_and_unsupported_sources():
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [
+        _source_row("arxiv", 1),
+        _source_row("local", 2),
+    ]
+
+    request = httpx.Request("GET", "https://export.arxiv.org/api/query")
+    response = httpx.Response(429, headers={"Retry-After": "17"}, request=request)
+    arxiv_error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    stubs = {
+        "arxiv": _StubSource(raises=arxiv_error),
+        "local": _UnsupportedSource(),
+    }
+
+    def fake_get(name):
+        return _make_source_class(stubs[name])
+
+    profile = _make_profile()
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            profile,
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+            include_diagnostics=True,
+        )
+
+    assert result == []
+    assert source_counts == {"_StubSource": 0, "_UnsupportedSource": 0}
+    assert (
+        diagnostics["ArxivSource" if "ArxivSource" in diagnostics else "_StubSource"]["status"]
+        == "rate_limit"
+    )
+    assert (
+        diagnostics["ArxivSource" if "ArxivSource" in diagnostics else "_StubSource"][
+            "retry_after_s"
+        ]
+        == 17
+    )
+    assert diagnostics["_UnsupportedSource"]["status"] == "unsupported"

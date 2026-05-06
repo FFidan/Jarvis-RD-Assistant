@@ -7,7 +7,7 @@ Rate limit: 1 request/second on the free tier.
 
 import logging
 import os
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import quote as _url_quote
 
@@ -15,7 +15,7 @@ import httpx
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
-from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType
+from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import register_source
 
@@ -275,6 +275,53 @@ class SemanticScholarSource(PaperSource):
             raise
 
         return self._parse_paper(data)
+
+    async def fetch_new_since(
+        self,
+        since: datetime,
+        topics: list[TopicRef],
+        limit: int = 100,
+    ) -> list[PaperCreate]:
+        """Fetch recent Semantic Scholar papers matching Pulse topics."""
+        since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
+        since_date = since_utc.date()
+        if not topics:
+            queries = ["science"]
+        else:
+            queries = [
+                " OR ".join(topic.query_terms if topic.query_terms else [topic.name])
+                for topic in topics
+            ]
+
+        per_query = max(1, min(100, limit // max(1, len(queries))))
+        seen_ids: set[str] = set()
+        papers: list[PaperCreate] = []
+        for query in queries:
+            if len(papers) >= limit:
+                break
+            params: dict[str, Any] = {
+                "query": query,
+                "limit": per_query,
+                "fields": S2_FIELDS,
+                "year": f"{since_date.year}-",
+            }
+            data = await self._fetch_json("/paper/search", params=params)
+            for item in data.get("data") or []:
+                pid = item.get("paperId", "")
+                if not pid or pid in seen_ids:
+                    continue
+                try:
+                    paper = self._parse_paper(item)
+                except Exception:
+                    logger.exception("Failed to parse S2 paper: %s", pid)
+                    continue
+                if paper.published_date is not None and paper.published_date < since_date:
+                    continue
+                seen_ids.add(pid)
+                papers.append(paper)
+                if len(papers) >= limit:
+                    break
+        return papers[:limit]
 
     async def fetch_citations(self, paper_id: str, limit: int = 100) -> list[dict]:
         """Fetch papers that cite the given paper.

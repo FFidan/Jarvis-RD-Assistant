@@ -79,6 +79,7 @@ cd Jarvis-RD-Assistant
 - **Upgrading:** `git pull && ./update.sh`
 - See [docs/DEPLOYMENT.md — Solo deployment](docs/DEPLOYMENT.md#solo-deployment) for the minimal bring-up path.
 - See [docs/DEPLOYMENT.md — Remote access via Tailscale](docs/DEPLOYMENT.md#remote-access-via-tailscale) for off-LAN access.
+- **Local source rebuilds:** after editing or pulling source-only changes, use `make rebuild-local` to rebuild the core app containers, or `make rebuild-dashboard` for frontend-only changes. Telegram is optional and has its own `make rebuild-telegram` target.
 
 First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
 
@@ -162,6 +163,7 @@ For reaching JARVIS from outside your LAN, see [docs/DEPLOYMENT.md — Remote ac
 | `PAPER_INGESTION_HOST_PORT` | `8010` | Host port for paper ingestion API |
 | `LEARNING_ENGINE_HOST_PORT` | `8011` | Host port for learning engine API |
 | `OPENALEX_API_KEY` | _(empty)_ | Enable OpenAlex as a paper discovery source. Free key at [openalex.org](https://openalex.org). |
+| `OPENALEX_EMAIL` | _(empty)_ | Contact email for OpenAlex polite-pool discovery. Strongly recommended for reliable Pulse candidate fetches. |
 | `PUBMED_API_KEY` | _(empty)_ | Upgrade PubMed rate limit from 3 to 10 requests per second. Free key from [NCBI](https://www.ncbi.nlm.nih.gov/home/develop/api/). |
 | `UNPAYWALL_EMAIL` | _(empty)_ | Required by [Unpaywall](https://unpaywall.org) to resolve free legal PDFs for paywalled papers. Any email address. |
 

@@ -921,11 +921,20 @@ export interface PulseTopCard {
   llm_novelty: number | null;
 }
 
+export interface PulseSourceDiagnostic {
+  status: string;
+  message: string;
+  status_code: number | null;
+  retry_after_s: number | null;
+  settings_hint: string | null;
+}
+
 export interface PulseDebugInfo {
   deck_date: string;
   card_count: number;
   degraded_reason: string | null;
   source_counts: Record<string, number>;
+  source_diagnostics: Record<string, PulseSourceDiagnostic>;
   topic_embeddings: PulseTopicEmbedding[];
   top_cards: PulseTopCard[];
   classifier_available: boolean;

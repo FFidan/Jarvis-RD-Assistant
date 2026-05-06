@@ -12,7 +12,15 @@ import {
   ratePulseCard,
 } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
-import type { PulseDeck as PulseDeckType, PulseRating } from '@/types';
+import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
+
+function sourceDiagnosticsFromStats(
+  stats: Record<string, unknown>,
+): Record<string, PulseSourceDiagnostic> {
+  const raw = stats.source_diagnostics;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return raw as Record<string, PulseSourceDiagnostic>;
+}
 
 /**
  * PulseDeck — renders today's Pulse deck header + grid of PulseCards.
@@ -137,6 +145,11 @@ export function PulseDeck() {
     );
   }
 
+  const sourceDiagnostics = sourceDiagnosticsFromStats(deck.stats);
+  const degradedDetails = Object.entries(sourceDiagnostics)
+    .filter(([, diagnostic]) => diagnostic.status !== 'ok')
+    .slice(0, 3);
+
   return (
     <section className="space-y-3">
       <div className="flex items-center gap-2">
@@ -159,6 +172,21 @@ export function PulseDeck() {
       <p className="text-sm text-muted-foreground -mt-1">
         Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
       </p>
+      {deck.degraded_reason && (
+        <div className="rounded-md border border-amber-400/60 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          <div className="font-medium text-amber-100">{deck.degraded_reason}</div>
+          {degradedDetails.length > 0 && (
+            <div className="mt-1 space-y-0.5 text-xs text-amber-100/80">
+              {degradedDetails.map(([source, diagnostic]) => (
+                <div key={source}>
+                  <span className="font-medium">{source}</span>: {diagnostic.message}
+                  {diagnostic.settings_hint ? ` ${diagnostic.settings_hint}` : ''}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       <div className="space-y-3">
         {deck.cards.map((card) => (
           <PulseCard

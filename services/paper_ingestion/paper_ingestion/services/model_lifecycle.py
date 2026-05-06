@@ -255,7 +255,9 @@ def build_model_statuses(
 
         if not entry.assignable:
             can_assign = False
-            assign_blocker = "This model is tracked for evaluation but is not assignable yet."
+            assign_blocker = (
+                entry.notes or "This model is tracked for evaluation but is not assignable yet."
+            )
         elif entry.provider == "ollama":
             can_assign = pulled or active
             if can_assign:
@@ -339,7 +341,7 @@ async def model_assignment_error(
     if entry is None:
         return f"Model {model_id!r} is not in the curated model catalog."
     if not entry.assignable:
-        return "This model is tracked for evaluation but is not assignable yet."
+        return entry.notes or "This model is tracked for evaluation but is not assignable yet."
     if entry.provider == "ollama":
         tag = normalize_model_tag(entry.ollama_tag or entry.id)
         if tag not in _installed_by_name(installed):

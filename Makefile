@@ -1,6 +1,6 @@
 SERVICES = services/paper_ingestion services/learning_engine services/telegram_bot
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build
 
 ## Create/update the root uv environment from uv.lock
 setup:
@@ -70,6 +70,23 @@ down:
 logs:
 	docker compose logs -f
 
-rebuild:
+rebuild: rebuild-dashboard
+
+rebuild-dashboard:
 	docker compose build --build-arg CACHE_BUST=$(shell date +%s) dashboard
-	docker compose up -d
+	docker compose up -d dashboard
+
+rebuild-backend:
+	docker compose build paper_ingestion learning_engine
+	docker compose up -d paper_ingestion learning_engine
+
+rebuild-telegram:
+	docker compose build telegram_bot
+	docker compose up -d telegram_bot
+
+rebuild-local:
+	docker compose build paper_ingestion learning_engine dashboard
+	docker compose up -d paper_ingestion learning_engine dashboard
+
+up-build:
+	docker compose up -d --build

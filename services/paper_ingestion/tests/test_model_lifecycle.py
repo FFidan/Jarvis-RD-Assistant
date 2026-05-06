@@ -84,7 +84,7 @@ def test_nonassignable_catalog_entries_surface_assignment_blocker() -> None:
 
     assert by_id["qwen3-embedding:4b"]["status"] == "pulled"
     assert by_id["qwen3-embedding:4b"]["can_assign"] is False
-    assert "not assignable yet" in by_id["qwen3-embedding:4b"]["assign_blocker"]
+    assert "Not assignable in Phase C" in by_id["qwen3-embedding:4b"]["assign_blocker"]
     assert by_id["openai/text-embedding-3-small"]["can_assign"] is False
 
 

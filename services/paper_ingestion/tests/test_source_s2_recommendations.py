@@ -8,12 +8,14 @@ Fixture: tests/fixtures/s2_recommendations_multi.json
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
 import respx
-from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.models import PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources.semantic_scholar_source import (
+    S2_API_URL,
     S2_RECOMMENDATIONS_URL,
     SemanticScholarSource,
 )
@@ -31,6 +33,54 @@ def _make_source(api_key: str | None = None) -> SemanticScholarSource:
     )
     client = httpx.AsyncClient()
     return SemanticScholarSource(config, client)
+
+
+@respx.mock
+async def test_fetch_new_since_searches_topics_and_filters_recent_publications():
+    route = respx.get(f"{S2_API_URL}/paper/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "paperId": "p1",
+                        "title": "New Neural CDE Paper",
+                        "authors": [{"name": "A", "authorId": "1"}],
+                        "abstract": "Recent work",
+                        "year": 2026,
+                        "publicationDate": "2026-05-02",
+                        "url": "https://www.semanticscholar.org/paper/p1",
+                        "citationCount": 5,
+                        "externalIds": {"ArXiv": "2605.00001"},
+                    },
+                    {
+                        "paperId": "old",
+                        "title": "Old Paper",
+                        "authors": [{"name": "B"}],
+                        "abstract": "Old work",
+                        "year": 2025,
+                        "publicationDate": "2025-01-01",
+                        "url": "https://www.semanticscholar.org/paper/old",
+                        "citationCount": 1,
+                        "externalIds": {},
+                    },
+                ]
+            },
+        )
+    )
+
+    source = _make_source()
+    papers = await source.fetch_new_since(
+        since=datetime(2026, 5, 1, tzinfo=UTC),
+        topics=[TopicRef(id=1, name="Neural CDE", query_terms=["Neural CDE", "NCDE"])],
+        limit=10,
+    )
+
+    assert route.call_count == 1
+    params = dict(route.calls[0].request.url.params)
+    assert params["query"] == "Neural CDE OR NCDE"
+    assert params["year"] == "2026-"
+    assert [paper.external_id for paper in papers] == ["s2:p1"]
 
 
 # ---------------------------------------------------------------------------

@@ -138,11 +138,18 @@ fi
 # -----------------------------------------------------------------------------
 # 4b. Locally-built services — rebuild if the user wants to pick up code changes.
 # -----------------------------------------------------------------------------
-# These services build from this repo. `git pull` may have changed their source
-# without changing versions.env, so we always offer to rebuild them.
-LOCAL_SERVICES=(paper_ingestion learning_engine telegram_bot dashboard)
+# These core services build from this repo. `git pull` may have changed their
+# source without changing versions.env, so we always offer to rebuild them.
+# Telegram is optional and intentionally excluded from the default path because
+# testing installs often do not set TELEGRAM_BOT_TOKEN.
+LOCAL_SERVICES=(paper_ingestion learning_engine dashboard)
+LOCAL_LABEL="paper_ingestion, learning_engine, dashboard"
+if [ -f .env ] && grep -Eq '^TELEGRAM_BOT_TOKEN=.+$' .env; then
+  LOCAL_SERVICES+=(telegram_bot)
+  LOCAL_LABEL="${LOCAL_LABEL}, telegram_bot"
+fi
 printf '\n'
-read -rp "Rebuild locally-built services (paper_ingestion, learning_engine, telegram_bot, dashboard) to pick up code changes? (y/N): " reply
+read -rp "Rebuild locally-built services (${LOCAL_LABEL}) to pick up code changes? (y/N): " reply
 case "$reply" in
   [yY]|[yY][eE][sS])
     info "Building local images..."

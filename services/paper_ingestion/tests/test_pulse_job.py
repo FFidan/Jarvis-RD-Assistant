@@ -118,7 +118,6 @@ async def test_happy_path_end_to_end(patch_pipeline):
     mocks["assemble_deck"].assert_called_once()
     assert mocks["upsert_paper"].await_count == len(patch_pipeline["deck"])
     mocks["persist_deck"].assert_awaited_once()
-
     persist_call = mocks["persist_deck"].await_args
     assert persist_call.kwargs.get("deck_date") == now.date() or (
         len(persist_call.args) >= 2 and persist_call.args[1] == now.date()
@@ -129,6 +128,55 @@ async def test_happy_path_end_to_end(patch_pipeline):
     assert stats["stage2_scored"] == len(patch_pipeline["stage2"])
     assert stats["duration_s"] >= 0
     assert stats["last_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_zero_candidates_sets_degraded_reason_and_source_diagnostics():
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool, _conn = _make_pool_and_conn()
+    diagnostics = {
+        "ArxivSource": {
+            "status": "rate_limit",
+            "message": "arXiv rate limit reached.",
+            "status_code": 429,
+            "retry_after_s": 60,
+            "settings_hint": None,
+        },
+        "OpenAlexSource": {
+            "status": "unconfigured",
+            "message": "OpenAlex requires OPENALEX_EMAIL or OPENALEX_API_KEY.",
+            "status_code": None,
+            "retry_after_s": None,
+            "settings_hint": "Set OPENALEX_EMAIL or OPENALEX_API_KEY.",
+        },
+    }
+
+    with (
+        patch("paper_ingestion.pulse.job.load_profile", AsyncMock(return_value=_make_profile())),
+        patch(
+            "paper_ingestion.pulse.job.discover_candidates",
+            AsyncMock(return_value=([], {"ArxivSource": 0, "OpenAlexSource": 0}, diagnostics)),
+        ),
+        patch("paper_ingestion.pulse.job.stage1_embedding_filter", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.stage3_combine", AsyncMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.assemble_deck", MagicMock(return_value=[])),
+        patch("paper_ingestion.pulse.job.persist_deck", AsyncMock(return_value=0)) as persist,
+    ):
+        stats = await run_pulse(
+            pool,
+            MagicMock(),
+            MagicMock(),
+            now=datetime(2026, 5, 6, 4, 0, tzinfo=UTC),
+        )
+
+    assert stats["candidate_count"] == 0
+    assert stats["last_error"] is None
+    assert stats["source_diagnostics"] == diagnostics
+    assert stats["degraded_reason"].startswith("No Pulse candidates returned")
+    assert "arXiv" in stats["degraded_reason"]
+    persist.assert_awaited_once()
+    assert persist.await_args.kwargs["degraded_reason"] == stats["degraded_reason"]
 
 
 @pytest.mark.asyncio

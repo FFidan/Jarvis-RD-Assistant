@@ -206,14 +206,14 @@ function DiagnosticsPanel() {
           {data && (
             <>
               <div>
-                <p className="text-xs font-semibold text-muted-foreground mb-1">
+                <div className="text-xs font-semibold text-muted-foreground mb-1">
                   Deck: {data.deck_date} — {data.card_count} cards
                   {data.degraded_reason && (
                     <Badge variant="outline" className="ml-2 text-amber-600 border-amber-400">
                       {data.degraded_reason}
                     </Badge>
                   )}
-                </p>
+                </div>
               </div>
 
               {/* Per-source counts */}
@@ -225,6 +225,44 @@ function DiagnosticsPanel() {
                       <div key={src} className="flex justify-between">
                         <span className="text-muted-foreground">{src}</span>
                         <span className="font-mono">{count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {data.source_diagnostics && Object.keys(data.source_diagnostics).length > 0 && (
+                <div>
+                  <p className="text-xs font-semibold mb-1">Source diagnostics</p>
+                  <div className="space-y-1 text-xs">
+                    {Object.entries(data.source_diagnostics).map(([src, diagnostic]) => (
+                      <div key={src} className="rounded border bg-muted/20 p-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">{src}</span>
+                          <Badge
+                            variant="outline"
+                            className={
+                              diagnostic.status === 'ok'
+                                ? 'border-green-500 text-green-600'
+                                : diagnostic.status === 'rate_limit'
+                                  ? 'border-amber-500 text-amber-600'
+                                  : 'border-muted-foreground text-muted-foreground'
+                            }
+                          >
+                            {diagnostic.status}
+                          </Badge>
+                        </div>
+                        <p className="mt-1 text-muted-foreground">{diagnostic.message}</p>
+                        {(diagnostic.retry_after_s || diagnostic.status_code) && (
+                          <p className="mt-1 font-mono text-[11px] text-muted-foreground">
+                            {diagnostic.status_code ? `HTTP ${diagnostic.status_code}` : ''}
+                            {diagnostic.status_code && diagnostic.retry_after_s ? ' · ' : ''}
+                            {diagnostic.retry_after_s ? `retry after ${diagnostic.retry_after_s}s` : ''}
+                          </p>
+                        )}
+                        {diagnostic.settings_hint && (
+                          <p className="mt-1 text-amber-600">{diagnostic.settings_hint}</p>
+                        )}
                       </div>
                     ))}
                   </div>

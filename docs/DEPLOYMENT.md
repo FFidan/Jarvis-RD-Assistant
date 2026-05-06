@@ -311,11 +311,25 @@ What `update.sh` does (see the top of `update.sh` for the full flow):
 1. Loads pinned image versions from `versions.env`.
 2. Diffs running vs pinned images for `postgres`, `ollama`, `qdrant`, `litellm`, `n8n`, `cloudflared`. Prints a status table.
 3. Prompts to `docker compose pull && up -d` the stale services.
-4. Separately prompts to rebuild `paper_ingestion`, `learning_engine`, `telegram_bot`, `dashboard` from local source (these are the services you care about after a `git pull`).
+4. Separately prompts to rebuild `paper_ingestion`, `learning_engine`, and `dashboard` from local source. It includes `telegram_bot` only when `.env` contains `TELEGRAM_BOT_TOKEN`.
 5. Waits up to 180 s per updated service for its HEALTHCHECK to report healthy.
 6. If any service fails to become healthy, prints the exact rollback command: `git checkout HEAD~1 -- versions.env && ./update.sh`.
 
 `update.sh` never auto-rollbacks — the operator decides. Logs for the failed service: `docker compose logs --tail=200 <svc>`.
+
+For local development or same-commit smoke tests, the Makefile exposes focused
+rebuild targets:
+
+```bash
+make rebuild-dashboard   # frontend-only changes
+make rebuild-backend     # paper_ingestion + learning_engine
+make rebuild-local       # core app containers: backend + dashboard
+make rebuild-telegram    # optional bot, requires TELEGRAM_BOT_TOKEN
+make up-build            # full docker compose up -d --build
+```
+
+Host Python/npm packages do not make Docker images current. If source code
+changed, rebuild the affected container before testing the webapp.
 
 ### Database migration repair after updates
 
@@ -415,6 +429,7 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | Pre-existing `docker-compose.override.yml` causes port conflicts after running `setup.sh` mode 2 | `setup.sh` now backs it up automatically, but old installs may still have one | `setup.sh` moves it to `docker-compose.override.yml.bak.<ts>`. Delete the backup once you're sure you don't need it. |
 | Settings → "Models & Preferences" shows "No config entries" | DB was initialized before migration 057 seeded default config rows | Restart paper_ingestion to trigger the migration runner: `docker compose restart paper_ingestion`. Verify: `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT key FROM user_config WHERE key LIKE 'llm.%';"` — should return 3 rows. |
 | Selecting a model returns HTTP 400 "LiteLLM config is read-only" | Runtime LiteLLM config is mounted read-only or the selected model is not pulled/assignable | Pull the model first from Settings → Models, or restart LiteLLM with an updated config. The default smart model is `qwen3:14b`. |
+| Pulse generates a 0-card deck but Settings says the job is done | Every enabled source returned zero usable candidates, was rate-limited, or is unconfigured | Open Settings → Pulse → Diagnostics and inspect Source diagnostics. For OpenAlex set `OPENALEX_EMAIL` (and optionally `OPENALEX_API_KEY`); for arXiv wait for the retry window and avoid repeated manual regenerations; for Semantic Scholar add an API key if you hit public-rate limits. |
 | `paper_ingestion` exits with an embedding dimension mismatch, or `/api/system/models` reports `embedding_config` | Existing `.env` or Qdrant state still points at the old 768d embedding setup while LiteLLM uses Qwen3 1024d | Set `EMBEDDING_MODEL_NAME=qwen3-embedding:0.6b` and `EMBEDDING_DIMENSION=1024` in `.env`, pull the model, take the explicit Qdrant checkpoint, then run `REEMBED_RECREATE_COLLECTION=true python -m scripts.reembed` only if the collection is still wrong-dimension. |
 | Phase C re-embedding is too slow through LiteLLM/Ollama | `scripts/reembed.py` defaults to the runtime LiteLLM path, which is safe but HTTP-bound and sequential | Benchmark locally first: `REEMBED_BENCHMARK=true REEMBED_BACKEND=local python -m scripts.reembed`. If output count and dimension are correct, resume with `REEMBED_BACKEND=local python -m scripts.reembed`. Use `REEMBED_BACKEND=onnx` only when optional ONNX dependencies are installed and benchmarked faster on that host. |
 

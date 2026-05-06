@@ -24,6 +24,7 @@ class LocalSource(PaperSource):
     """
 
     source_type = "local"
+    supports_pulse_polling = False
 
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         super().__init__(config, http_client)

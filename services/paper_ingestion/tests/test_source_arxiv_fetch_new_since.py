@@ -100,6 +100,34 @@ async def test_fetch_new_since_http_error_returns_empty():
     assert papers == []
 
 
+@respx.mock
+async def test_fetch_new_since_retries_429_with_retry_after(monkeypatch):
+    """arXiv 429 should retry after Retry-After before degrading to []."""
+    fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
+    route = respx.get(ARXIV_API_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "2"}),
+            httpx.Response(200, content=fixture),
+        ]
+    )
+    sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+    topics = [TopicRef(id=1, name="ML", query_terms=["machine learning"])]
+
+    papers = await source.fetch_new_since(since=since, topics=topics, limit=10)
+
+    assert route.call_count == 2
+    assert 2 in sleeps
+    assert len(papers) == 5
+
+
 # ---------------------------------------------------------------------------
 # Rate limiter is called for each request
 # ---------------------------------------------------------------------------

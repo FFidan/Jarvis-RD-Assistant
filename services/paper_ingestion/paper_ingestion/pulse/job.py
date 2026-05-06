@@ -67,6 +67,24 @@ def _fallback_stage2(stage1_out: list[ScoredCandidate]) -> list[ScoredCandidate]
     return fallback
 
 
+def _zero_candidate_degraded_reason(source_diagnostics: dict[str, dict[str, Any]]) -> str:
+    if not source_diagnostics:
+        return "No Pulse candidates returned; no enabled discovery source produced candidates."
+    parts: list[str] = []
+    for source_name, diagnostic in source_diagnostics.items():
+        status = diagnostic.get("status")
+        if status == "ok":
+            continue
+        message = str(diagnostic.get("message") or "").rstrip(".")
+        if message:
+            parts.append(message)
+        else:
+            parts.append(f"{source_name}: {status}")
+    if not parts:
+        return "No Pulse candidates returned; enabled discovery sources returned empty results."
+    return "No Pulse candidates returned; " + "; ".join(parts[:4]) + "."
+
+
 @observe()
 async def run_pulse(
     db_pool: Any,
@@ -107,6 +125,7 @@ async def run_pulse(
         "llm_calls": 0,
         "duration_s": 0.0,
         "last_error": None,
+        "source_diagnostics": {},
     }
 
     # --- 1. profile ------------------------------------------------------
@@ -137,20 +156,30 @@ async def run_pulse(
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
     source_counts: dict[str, int] = {}
+    source_diagnostics: dict[str, dict[str, Any]] = {}
     try:
-        candidates, source_counts = await discover_candidates(
+        discovery_result = await discover_candidates(
             db_pool,
             http_client,
             profile,
             since=now - timedelta(days=7),
             source_cache=source_cache,
+            include_diagnostics=True,
         )
+        if len(discovery_result) == 2:
+            candidates, source_counts = discovery_result
+            source_diagnostics = {}
+        else:
+            candidates, source_counts, source_diagnostics = discovery_result
     except Exception as exc:  # broad: fan-out over heterogeneous source plugins; degrade to []
         stats["last_error"] = f"discover_candidates: {exc}"
         logger.exception("pulse.discover failed")
         candidates = []
     stats["candidate_count"] = len(candidates)
     stats["source_counts"] = source_counts
+    stats["source_diagnostics"] = source_diagnostics
+    if not candidates and stats["last_error"] is None:
+        degraded_reason = _zero_candidate_degraded_reason(source_diagnostics)
     logger.info("pulse.stage0", extra={"candidates": len(candidates)})
 
     # --- 3. stage 1 (embedding filter) -----------------------------------

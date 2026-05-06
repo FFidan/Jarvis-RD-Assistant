@@ -32,6 +32,8 @@ from paper_ingestion.sources.registry import get_source_class
 
 logger = logging.getLogger(__name__)
 
+SourceDiagnostics = dict[str, dict[str, Any]]
+
 
 def _title_hash(title: str) -> str:
     normalized = " ".join(title.lower().split())
@@ -54,13 +56,81 @@ def _dedupe_key(paper: PaperCreate) -> tuple[str, str]:
     return ("title", _title_hash(paper.title))
 
 
+def _retry_after_seconds(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    retry_after = response.headers.get("Retry-After")
+    if retry_after is None:
+        return None
+    try:
+        return int(float(retry_after))
+    except (TypeError, ValueError):
+        return None
+
+
+def _diagnostic_for_exception(source_name: str, exc: BaseException) -> dict[str, Any]:
+    response = getattr(exc, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code == 429:
+        return {
+            "status": "rate_limit",
+            "message": f"{source_name} rate limit reached. Retry later.",
+            "status_code": status_code,
+            "retry_after_s": _retry_after_seconds(exc),
+            "settings_hint": None,
+        }
+    return {
+        "status": "api_error" if status_code else "error",
+        "message": str(exc),
+        "status_code": status_code,
+        "retry_after_s": _retry_after_seconds(exc),
+        "settings_hint": None,
+    }
+
+
+def _diagnostic_for_empty_source(src: PaperSource) -> dict[str, Any]:
+    source_type = getattr(src, "source_type", src.__class__.__name__)
+    if getattr(src, "supports_pulse_polling", True) is False:
+        return {
+            "status": "unsupported",
+            "message": f"{src.__class__.__name__} does not support Pulse polling.",
+            "status_code": None,
+            "retry_after_s": None,
+            "settings_hint": None,
+        }
+    if source_type == "openalex":
+        has_openalex_key = bool(getattr(src, "_api_key", None) or getattr(src, "_email", None))
+        if not has_openalex_key:
+            return {
+                "status": "unconfigured",
+                "message": (
+                    "OpenAlex requires OPENALEX_EMAIL or OPENALEX_API_KEY for Pulse polling."
+                ),
+                "status_code": None,
+                "retry_after_s": None,
+                "settings_hint": "Set OPENALEX_EMAIL or OPENALEX_API_KEY, or disable OpenAlex.",
+            }
+    return {
+        "status": "empty",
+        "message": f"{src.__class__.__name__} returned no candidates.",
+        "status_code": None,
+        "retry_after_s": None,
+        "settings_hint": None,
+    }
+
+
 async def discover_candidates(
     db_pool: Any,
     http_client: httpx.AsyncClient,
     profile: UserProfile,
     since: datetime,
     source_cache: dict | None = None,
-) -> tuple[list[PaperCreate], dict[str, int]]:
+    include_diagnostics: bool = False,
+) -> (
+    tuple[list[PaperCreate], dict[str, int]]
+    | tuple[list[PaperCreate], dict[str, int], SourceDiagnostics]
+):
     """Fan out to all enabled sources and return a deduplicated candidate list.
 
     Parameters
@@ -95,7 +165,7 @@ async def discover_candidates(
         )
 
     if not source_rows:
-        return [], {}
+        return ([], {}, {}) if include_diagnostics else ([], {})
 
     sources: list[PaperSource] = []
     for row in source_rows:
@@ -120,7 +190,7 @@ async def discover_candidates(
             logger.exception("pulse.discover: failed to instantiate source %s", source_type)
 
     if not sources:
-        return [], {}
+        return ([], {}, {}) if include_diagnostics else ([], {})
 
     per_source_cap = max(
         10,
@@ -144,6 +214,7 @@ async def discover_candidates(
     candidates: list[PaperCreate] = []
     seen: set[tuple[str, str]] = set()
     source_counts: dict[str, int] = {}
+    source_diagnostics: SourceDiagnostics = {}
     total_raw = 0
     for src, result in zip(sources, results, strict=False):
         plugin_name = src.__class__.__name__
@@ -154,8 +225,20 @@ async def discover_candidates(
                 result,
             )
             source_counts[plugin_name] = 0
+            source_diagnostics[plugin_name] = _diagnostic_for_exception(plugin_name, result)
             continue
         source_counts[plugin_name] = len(result)
+        source_diagnostics[plugin_name] = (
+            {
+                "status": "ok",
+                "message": f"{plugin_name} returned {len(result)} candidates.",
+                "status_code": None,
+                "retry_after_s": None,
+                "settings_hint": None,
+            }
+            if result
+            else _diagnostic_for_empty_source(src)
+        )
         total_raw += len(result)
         for paper in result:
             key = _dedupe_key(paper)
@@ -169,4 +252,6 @@ async def discover_candidates(
         total_raw,
         len(candidates),
     )
+    if include_diagnostics:
+        return candidates, source_counts, source_diagnostics
     return candidates, source_counts

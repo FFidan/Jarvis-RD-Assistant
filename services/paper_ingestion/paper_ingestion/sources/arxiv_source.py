@@ -1,9 +1,10 @@
 """arXiv paper source implementation.
 
 Uses the arXiv Atom API (https://export.arxiv.org/api/query).
-Rate limit: 3 requests/second per arXiv Terms of Use.
+Rate limit: repeated calls should wait at least 3 seconds per arXiv API guidance.
 """
 
+import asyncio
 import logging
 import re
 from datetime import UTC, date, datetime
@@ -24,8 +25,18 @@ ATOM_NS = "http://www.w3.org/2005/Atom"
 ARXIV_NS = "http://arxiv.org/schemas/atom"
 
 ARXIV_API_URL = "https://export.arxiv.org/api/query"
-RATE_LIMIT_DELAY = 0.34  # seconds between requests (~3 req/sec)
+RATE_LIMIT_DELAY = 3.0
+_MAX_FETCH_ATTEMPTS = 3
 _ARXIV_FIELD_PREFIX = re.compile(r"\b(ti|au|abs|co|jr|cat|rn|id|all):")
+
+
+def _retry_after_s(value: str | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 @register_source
@@ -42,25 +53,52 @@ class ArxivSource(PaperSource):
 
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         super().__init__(config, http_client)
-        # rate: 1/RATE_LIMIT_DELAY req/s (arXiv 3 req/s limit)
+        # arXiv asks clients to wait 3 seconds between repeated calls.
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 
     async def _rate_limit(self) -> None:
-        """Enforce arXiv 3 req/sec rate limit."""
+        """Enforce arXiv's conservative polling cadence."""
         await self._rate_limiter.acquire()
 
     async def _fetch_xml(self, params: dict) -> Any | None:
         """Rate-limited GET to the arXiv API; returns parsed XML or None on transient errors.
 
-        Uses :meth:`PaperSource._safe_get` so that 429 / 5xx responses degrade
-        gracefully (return ``None``) instead of raising to callers.  Non-transient
-        error codes (e.g. 403) still raise :class:`httpx.HTTPStatusError`.
+        Retries 429 / 5xx responses with bounded backoff so a transient arXiv
+        throttle does not immediately erase the whole Pulse deck.
         """
-        await self._rate_limit()
-        response = await self._safe_get(ARXIV_API_URL, params=params, timeout=30.0)
-        if response is None:
-            return None
-        return safe_fromstring(response.text)
+        for attempt in range(_MAX_FETCH_ATTEMPTS):
+            await self._rate_limit()
+            try:
+                response = await self.http_client.get(ARXIV_API_URL, params=params, timeout=30.0)
+                if response.status_code in (429, 500, 502, 503, 504):
+                    if attempt < _MAX_FETCH_ATTEMPTS - 1:
+                        wait_s = _retry_after_s(response.headers.get("Retry-After")) or min(
+                            30.0, 3.0 * (2**attempt)
+                        )
+                        logger.warning(
+                            "arXiv fetch returned %d; retrying in %.1fs",
+                            response.status_code,
+                            wait_s,
+                        )
+                        await asyncio.sleep(wait_s)
+                        continue
+                    logger.warning(
+                        "arxiv _safe_get %s returned %d; returning None",
+                        ARXIV_API_URL,
+                        response.status_code,
+                    )
+                    return None
+                response.raise_for_status()
+                return safe_fromstring(response.text)
+            except httpx.HTTPError as exc:
+                if attempt < _MAX_FETCH_ATTEMPTS - 1:
+                    wait_s = min(30.0, 3.0 * (2**attempt))
+                    logger.warning("arXiv fetch failed: %s; retrying in %.1fs", exc, wait_s)
+                    await asyncio.sleep(wait_s)
+                    continue
+                logger.warning("arxiv _safe_get %s failed: %s", ARXIV_API_URL, exc)
+                return None
+        return None
 
     def _parse_entry(self, entry: Any) -> PaperCreate:
         """Parse a single Atom ``<entry>`` element into a PaperCreate model.

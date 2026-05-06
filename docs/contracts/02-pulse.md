@@ -37,7 +37,7 @@ wrapped in `try/except` so any one stage can degrade without crashing the run.
 | # | Stage | File:line | Output | Failure handling |
 |---|---|---|---|---|
 | 1 | Profile load | [job.py:114-129](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L114-L129) | `UserProfile` | **Fatal.** Sets `last_error`; returns immediately with `duration_s` populated. |
-| 2 | Discovery (source fan-out) | [job.py:137-151](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151) | `list[PaperCreate]` + per-source counts | Degraded. Empty candidate list; pipeline continues. |
+| 2 | Discovery (source fan-out) | [job.py:137-151](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L137-L151) | `list[PaperCreate]` + per-source counts + `source_diagnostics` | Degraded. Empty candidate list; pipeline continues. If every enabled source is empty, rate-limited, unsupported, or unconfigured, `degraded_reason` is set even when the job itself did not fail. |
 | 3 | Stage 1 — embedding filter | [job.py:158-170](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L158-L170); [scoring.py:94-217](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L94-L217) | top-`stage2_top_k` `ScoredCandidate`s | Degraded. Empty `stage1_out`; Stage 2 short-circuits. |
 | 4 | Stage 2 — LLM rerank | [job.py:177-224](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L177-L224); [scoring.py:225-334](../../services/paper_ingestion/paper_ingestion/pulse/scoring.py#L225-L334) | `ScoredCandidate`s with LLM signals filled | **Degraded.** On `TimeoutError` (600s cap) OR any exception, `_fallback_stage2` clears LLM signals. `degraded_reason` set. |
 | 5 | Optional citation + classifier signals | [job.py:231-294](../../services/paper_ingestion/paper_ingestion/pulse/job.py#L231-L294) | `signals` dict augmented with `citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier` | Degraded. Failures preserve LLM signals; `degraded_reason` set if no prior reason. |
@@ -206,6 +206,7 @@ becomes a tighter constraint, not a looser one.
 |---|---|---|---|
 | Profile load throws | 1 | **Fatal.** `last_error` set; pipeline returns immediately. Pulse run does NOT produce a deck. | Settings → Pulse "Last run: Failed" badge |
 | Discovery throws | 2 | Empty candidate list. `last_error` set; pipeline continues; Stage 1 will get nothing → empty Stage 2 → empty deck. | Last-run badge "Failed" iff this set `last_error`; otherwise just zero candidates |
+| Discovery exhausts all sources without throwing | 2 | Empty candidate list. `last_error` remains null; `source_diagnostics` records each source status and `degraded_reason` explains the zero-card deck. | Settings → Pulse shows "Degraded"; Pulse deck shows the reason and top source messages. |
 | Embedder throws | 3 | All Stage 1 candidates get zero signals (`embedding=0`, `topic=0`, etc.) but all candidates are RETURNED. They will rank purely on weights of zeros (i.e., their `final_score` will be ~0). | Diagnostics shows `stage1_survivors` ≠ 0 with all-zero scores |
 | Stage 2 LLM `TimeoutError` (600 s) | 4 | `_fallback_stage2` clones every Stage 1 survivor with `llm_relevance=None`, `llm_novelty=None`, `reasoning=None`. `degraded_reason = "LLM scoring timed out at 600s; deck used embedding-only fallback."` Deck is still produced from Stage 1 scores only. | Last-run badge: "Failed" (because `last_error` is sometimes also set on tail exceptions). Diagnostics shows `degraded_reason`. |
 | Stage 2 LLM other exception | 4 | Same as TimeoutError but `degraded_reason = f"stage2 error (embedding-only fallback used): {exc}"` | Same |
@@ -254,6 +255,7 @@ contract documents the underlying truth.
 | `deck_date` | str (ISO date) | Date of the deck just produced | Stage 7 |
 | `card_count` | int | `pulse_cards` rows actually persisted | Stage 8 |
 | `source_counts` | `dict[str, int]` | Per-source candidate count | Stage 2 |
+| `source_diagnostics` | `dict[str, {status, message, status_code, retry_after_s, settings_hint}>` | Per-source operational state for rate limits, unconfigured sources, unsupported sources, and empty results | Stage 2 |
 | `classifier` | dict | Classifier metadata (`available`, `degradation_reason`, `sample_count`) | Stage 5 |
 | `classifier_training_enqueued` | bool | Whether the post-run training job was enqueued | End of pipeline |
 
@@ -303,6 +305,10 @@ The implementation MUST satisfy these. Testable.
 8. **Diagnostics completeness.** Every key listed in §7 MUST be present in
    the `stats` dict at run-end (with `null` rather than absent for keys with
    no value). The Settings UI assumes shape stability.
+9. **Zero-card decks are explicit.** A completed run with zero cards and no
+   `last_error` MUST carry a `degraded_reason` when source diagnostics show
+   rate limits, unconfigured enabled sources, unsupported source modes, or no
+   source candidates. The UI MUST NOT render this state as a plain empty deck.
 
 ---
 
