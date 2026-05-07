@@ -34,6 +34,8 @@ export function SearchPreviewDrawer({
 
   const sourceLabel = SOURCE_LABELS[paper.source_type] ?? paper.source_type;
   const isSaved = paper.library_match?.paper_id != null;
+  const isValidUrl =
+    paper.url && (paper.url.startsWith('http://') || paper.url.startsWith('https://'));
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -73,11 +75,13 @@ export function SearchPreviewDrawer({
             >
               {isSaved ? 'Open Paper Detail' : 'Save to Library'}
             </Button>
-            <Button variant="outline" asChild>
-              <a href={paper.url} target="_blank" rel="noreferrer">
-                Open original
-              </a>
-            </Button>
+            {isValidUrl && (
+              <Button variant="outline" asChild>
+                <a href={paper.url} target="_blank" rel="noreferrer">
+                  Open original
+                </a>
+              </Button>
+            )}
           </div>
         </div>
       </SheetContent>

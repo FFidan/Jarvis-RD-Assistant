@@ -79,14 +79,17 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+
+    await query.answer()
 
     if not query.data or not (match := re.search(r"paper_detail_(\d+)", query.data)):
         return
@@ -216,14 +219,17 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+
+    await query.answer()
 
     if not query.data or not (match := re.search(r"project_detail_(\d+)", query.data)):
         return
@@ -270,7 +276,12 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
+
+    config = get_config(context)
+    db_pool = get_db(context)
+    if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
+        return
 
     # Guard against InaccessibleMessage — can arrive when the message is older
     # than 48 hours.  A bare assignment silently casts the wrong type; instead
@@ -279,10 +290,7 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
         await query.answer("This message is no longer accessible", show_alert=True)
         return
 
-    config = get_config(context)
-    db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
-        return
+    await query.answer()
 
     # Delegate to review_start, passing the callback message explicitly so that
     # update.message is never mutated (Update fields are conceptually immutable
@@ -296,14 +304,17 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     query = update.callback_query
     if query is None:
         return
-    await query.answer()
     if not isinstance(query.message, Message):
+        await query.answer()
         return
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
+        await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+
+    await query.answer()
 
     if not query.data or not (match := re.search(r"task_done_(\d+)", query.data)):
         return

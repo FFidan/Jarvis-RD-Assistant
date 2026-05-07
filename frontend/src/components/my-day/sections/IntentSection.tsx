@@ -138,6 +138,7 @@ export function IntentSection() {
         rows={1}
         placeholder="Set today's intent…"
         maxLength={280}
+        aria-label="Today's intent"
         className="w-full resize-none border-l-2 border-dashed border-hair bg-transparent px-3 py-1 mb-4 font-serif italic text-[18px] text-strong outline-none focus:border-solid focus:border-l-2 focus:border-[hsl(var(--ring))] placeholder:text-faint"
       />
 

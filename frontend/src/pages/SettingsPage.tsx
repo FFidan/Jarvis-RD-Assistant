@@ -1,6 +1,5 @@
 import { useSearchParams } from 'react-router-dom';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import { TopicSection } from '@/components/settings/TopicSection';
 import { SourcesList } from '@/components/settings/SourcesList';
 import { AuthorSection } from '@/components/settings/AuthorSection';
@@ -64,47 +63,38 @@ export function SettingsPage() {
         </TabsList>
 
         <TabsContent value="topics">
-          <SectionHeader marker="TOPICS" />
           <TopicSection />
         </TabsContent>
 
         <TabsContent value="sources">
-          <SectionHeader marker="SOURCES" />
           <SourcesList />
         </TabsContent>
 
         <TabsContent value="authors">
-          <SectionHeader marker="AUTHORS" />
           <AuthorSection />
         </TabsContent>
 
         <TabsContent value="ingestion">
-          <SectionHeader marker="INGESTION" />
           <IngestionSection />
         </TabsContent>
 
         <TabsContent value="automation">
-          <SectionHeader marker="AUTOMATION" />
           <AutomationSection />
         </TabsContent>
 
         <TabsContent value="extraction">
-          <SectionHeader marker="EXTRACTION TEMPLATES" />
           <ExtractionTemplateSection />
         </TabsContent>
 
         <TabsContent value="pulse">
-          <SectionHeader marker="PULSE" />
           <PulseSection />
         </TabsContent>
 
         <TabsContent value="timer">
-          <SectionHeader marker="TIMER" />
           <TimerSection />
         </TabsContent>
 
         <TabsContent value="providers">
-          <SectionHeader marker="PROVIDERS" />
           <div className="space-y-6">
             <ProvidersSection />
             <LangfuseLinkCard />
@@ -116,7 +106,6 @@ export function SettingsPage() {
         </TabsContent>
 
         <TabsContent value="integrations">
-          <SectionHeader marker="INTEGRATIONS" />
           <div className="space-y-8">
             <div className="space-y-4">
               <div>
@@ -127,8 +116,12 @@ export function SettingsPage() {
               </div>
               <PairTelegram />
             </div>
-            <SectionHeader marker="ZOTERO" />
-            <ZoteroSection />
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold">Zotero</h2>
+              </div>
+              <ZoteroSection />
+            </div>
           </div>
         </TabsContent>
       </Tabs>

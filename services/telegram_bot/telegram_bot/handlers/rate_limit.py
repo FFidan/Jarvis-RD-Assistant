@@ -36,7 +36,11 @@ def rate_limit(
     def decorator(func):  # type: ignore[no-untyped-def]
         @wraps(func)
         async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Any:
-            chat_id = str(update.effective_chat.id if update.effective_chat else "unknown")
+            if update.effective_chat is None:
+                # Anonymous update — no chat to scope a bucket to; bypass the
+                # rate limiter so all anonymous traffic doesn't share one slot.
+                return await func(update, context)
+            chat_id = str(update.effective_chat.id)
             key = f"{chat_id}:{func.__name__}"
             now = time.monotonic()
             horizon = max(window_seconds, cooldown_seconds)

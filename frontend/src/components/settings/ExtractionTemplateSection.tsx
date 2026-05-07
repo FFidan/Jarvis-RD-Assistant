@@ -171,6 +171,7 @@ export function ExtractionTemplateSection() {
                 <Button
                   size="icon"
                   variant="ghost"
+                  aria-label={`Edit template ${tmpl.name}`}
                   onClick={() => startEdit(tmpl)}
                 >
                   <Pencil className="h-4 w-4" />
@@ -178,6 +179,7 @@ export function ExtractionTemplateSection() {
                 <Button
                   size="icon"
                   variant="ghost"
+                  aria-label={`Delete template ${tmpl.name}`}
                   onClick={() => handleDelete(tmpl.id)}
                 >
                   <Trash2 className="h-4 w-4" />

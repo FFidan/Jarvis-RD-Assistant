@@ -738,3 +738,66 @@ def test_start_review_not_registered_in_callback_handler():
         f"start_review should NOT be registered via register_callback_handlers "
         f"(ConversationHandler owns it). Found patterns: {registered_patterns}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Tests: W4-4 — auth_check before query.answer in all 3 unauthenticated paths
+# ---------------------------------------------------------------------------
+
+
+def _make_unauthed_callback(callback_data: str) -> tuple:
+    """Build (update, context, mock_db) for an unauthorised caller (chat_id != 12345)."""
+    update, context, mock_db, _ = _make_callback_update_and_context(callback_data, chat_id=99999)
+    # auth_check DB path returns None → no paired owner → denied
+    mock_db.fetchval.return_value = None
+    return update, context, mock_db
+
+
+@pytest.mark.asyncio
+async def test_paper_detail_unauthed_acks_before_returning():
+    """W4-4: paper_detail_callback acks the query even when auth fails.
+
+    auth_check is now evaluated BEFORE query.answer; on failure we still call
+    query.answer once (H1) so Telegram stops the spinner.
+    """
+    update, context, _ = _make_unauthed_callback("paper_detail_42")
+
+    await paper_detail_callback(update, context)
+
+    # Must answer exactly once (H1) even on the rejection path
+    assert update.callback_query.answer.call_count == 1
+    # No paper details are fetched on rejection path
+    update.callback_query.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_project_detail_unauthed_acks_before_returning():
+    """W4-4: project_detail_callback acks the query even when auth fails."""
+    update, context, _ = _make_unauthed_callback("project_detail_3")
+
+    await project_detail_callback(update, context)
+
+    assert update.callback_query.answer.call_count == 1
+    update.callback_query.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_task_done_unauthed_acks_before_returning():
+    """W4-4: task_done_callback acks the query even when auth fails."""
+    update, context, _ = _make_unauthed_callback("task_done_10")
+
+    await task_done_callback(update, context)
+
+    assert update.callback_query.answer.call_count == 1
+    update.callback_query.message.reply_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_start_review_unauthed_acks_before_returning():
+    """W4-4: start_review_callback acks the query even when auth fails."""
+    update, context, _ = _make_unauthed_callback("start_review")
+
+    with patch("telegram_bot.handlers.callback_handler.review_start", new_callable=AsyncMock):
+        await start_review_callback(update, context)
+
+    assert update.callback_query.answer.call_count == 1

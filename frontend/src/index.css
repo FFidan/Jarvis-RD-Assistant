@@ -241,6 +241,7 @@ html.dark.accent-plum {
 /* ── Type pairing presets ───────────────────────────── */
 /* Default (serif-calm) is already :root — no class needed */
 html.type-sans-modern {
+  --font-sans:  "Geist", "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-mono:  "IBM Plex Mono", ui-monospace, monospace;
 }

@@ -163,6 +163,49 @@ async def test_rate_limit_notifies_via_callback_answer_when_message_is_none():
 
 
 @pytest.mark.asyncio
+async def test_rate_limit_anonymous_update_bypasses_bucket():
+    """W4-4: effective_chat is None — anonymous update bypasses the rate limiter.
+
+    Without this guard, all anonymous traffic would share a single global
+    bucket keyed by 'unknown:<func_name>', making it trivial to accidentally
+    rate-limit unrelated anonymous events or exhaust the bucket.
+
+    The bypass also means anonymous updates never mutate _timestamps, so they
+    cannot be used to exhaust the bucket for real users.
+    """
+    _timestamps.clear()
+
+    call_count = 0
+
+    @rate_limit(max_calls=1, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        nonlocal call_count
+        call_count += 1
+        return "ok"
+
+    context = _make_context()
+
+    # Build an anonymous update (no effective_chat)
+    anon_update = MagicMock()
+    anon_update.effective_chat = None
+    anon_update.message = MagicMock()
+    anon_update.message.reply_text = AsyncMock()
+
+    # Two consecutive anonymous calls must both reach the handler even though
+    # max_calls=1 — they bypass the rate limiter.
+    result1 = await _guarded(anon_update, context)
+    result2 = await _guarded(anon_update, context)
+
+    assert result1 == "ok"
+    assert result2 == "ok"
+    assert call_count == 2, f"Both anonymous calls must reach handler, got call_count={call_count}"
+    # The in-memory bucket must remain empty — anonymous calls don't consume slots.
+    assert len(_timestamps) == 0 or all(len(v) == 0 for v in _timestamps.values()), (
+        "Anonymous calls must not write to _timestamps"
+    )
+
+
+@pytest.mark.asyncio
 async def test_rate_limit_cooldown_branch_uses_callback_answer_when_message_is_none():
     # Sprint 7 B11: covers the cooldown elif branch (the sliding-window
     # fallback was already covered above). When a callback handler is

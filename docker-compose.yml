@@ -369,9 +369,9 @@ services:
       - litellm_master_key
     mem_limit: 1g
     healthcheck:
-      test: ["CMD", "python3", "-c", "import os; os.kill(1, 0)"]
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8002/health\", timeout=5).read()'"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
       start_period: 30s
     depends_on:
@@ -473,7 +473,7 @@ services:
       - jarvis
 
   langfuse:
-    image: langfuse/langfuse:latest
+    image: langfuse/langfuse:2
     profiles: [observability]
     restart: unless-stopped
     ports:
@@ -529,6 +529,13 @@ services:
     depends_on:
       dashboard:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    mem_limit: 256m
     logging:
       driver: json-file
       options:

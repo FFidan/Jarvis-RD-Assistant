@@ -32,7 +32,6 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 // ─── surface definitions ────────────────────────────────────────────────────
 
@@ -411,7 +410,6 @@ export function ResearchFeedPage() {
       {/* Inbox */}
       {surface === 'inbox' && (
         <div>
-          <SectionHeader marker="INBOX" />
           <SectionInfo>Unread papers from your configured sources — mark as read, view, or filter.</SectionInfo>
           <FeedView surface="inbox" filter={filter} sourceTypes={inboxSource ?? null} />
         </div>
@@ -420,7 +418,6 @@ export function ResearchFeedPage() {
       {/* Library */}
       {surface === 'library' && (
         <div>
-          <SectionHeader marker="LIBRARY" />
           <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
           <FeedView surface="library" filter={filter} />
         </div>
@@ -429,7 +426,6 @@ export function ResearchFeedPage() {
       {/* Trash */}
       {surface === 'trash' && (
         <div>
-          <SectionHeader marker="TRASH" />
           <SectionInfo>Papers you have archived or removed from your active library.</SectionInfo>
           <div
             className="rounded border p-3 text-sm mb-3"
@@ -449,7 +445,6 @@ export function ResearchFeedPage() {
       {/* Search */}
       {surface === 'search' && (
         <div className="space-y-4">
-          <SectionHeader marker="DISCOVER" />
           <SectionInfo>Search external databases live and save new papers to your library.</SectionInfo>
           <div>
             <h2 className="text-sm font-medium">Discover New Papers</h2>
@@ -514,7 +509,6 @@ export function ResearchFeedPage() {
       {/* Ask */}
       {surface === 'ask' && (
         <div className="flex flex-col">
-          <SectionHeader marker="ASK" />
           <SectionInfo>Ask AI questions answered from your indexed paper library.</SectionInfo>
           <div className="mb-3">
             <h2 className="text-sm font-medium">Ask Questions</h2>

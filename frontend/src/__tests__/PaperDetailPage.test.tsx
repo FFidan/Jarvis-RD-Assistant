@@ -46,7 +46,6 @@ vi.mock('@/lib/api', async () => {
     downloadPdf: vi.fn(),
     processPdf: vi.fn(),
     summarizePaper: vi.fn(),
-    generateCards: vi.fn(),
   };
 });
 

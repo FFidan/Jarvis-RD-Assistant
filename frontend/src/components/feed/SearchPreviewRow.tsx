@@ -74,6 +74,8 @@ export function SearchPreviewRow({
   const isSavedWithoutProjects = isSaved && !isSavedWithZotero && !hasProjectLinks;
   const isSavedWithProjects = isSaved && !isSavedWithZotero && hasProjectLinks;
   const isZoteroBusy = pendingAction !== null || activeJobExists;
+  const isValidUrl =
+    paper.url && (paper.url.startsWith('http://') || paper.url.startsWith('https://'));
 
   async function handleZoteroAction(action: ZoteroAction) {
     if (paperId == null) return;
@@ -181,12 +183,14 @@ export function SearchPreviewRow({
             </DropdownMenuItem>
           )}
 
-          <DropdownMenuItem asChild>
-            <a href={paper.url} target="_blank" rel="noreferrer">
-              Open original
-              <ExternalLink className="ml-auto h-4 w-4" />
-            </a>
-          </DropdownMenuItem>
+          {isValidUrl && (
+            <DropdownMenuItem asChild>
+              <a href={paper.url} target="_blank" rel="noreferrer">
+                Open original
+                <ExternalLink className="ml-auto h-4 w-4" />
+              </a>
+            </DropdownMenuItem>
+          )}
 
           {isSavedWithoutProjects && (
             <DropdownMenuItem asChild>

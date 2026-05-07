@@ -146,6 +146,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
+                      aria-label="Edit API key"
                       onClick={() => {
                         setEditingKey(true);
                         setApiKey('');
@@ -167,6 +168,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
+                      aria-label="Save API key"
                       onClick={() =>
                         updateMut.mutate(
                           {
@@ -189,6 +191,7 @@ export function SourceSection({ source, displayIdx }: SourceSectionProps) {
                       size="icon"
                       variant="ghost"
                       className="h-7 w-7"
+                      aria-label="Cancel API key edit"
                       onClick={() => setEditingKey(false)}
                     >
                       <X className="h-3.5 w-3.5" />

@@ -221,6 +221,12 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             parse_mode="HTML",  # noqa: E501
         )
         return
+    if minutes <= 0:
+        await update.message.reply_text(
+            "Duration must be at least 1 minute. Usage: <code>/focus [minutes]</code> (1–480).",
+            parse_mode="HTML",
+        )
+        return
 
     chat_id = update.effective_chat.id
 

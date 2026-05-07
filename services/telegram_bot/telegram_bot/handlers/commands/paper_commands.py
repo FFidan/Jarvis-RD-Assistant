@@ -9,6 +9,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import (
+    _BIDI_ZW_RE,
     format_morning_briefing,
     format_paper_card,
     format_pulse_card,
@@ -62,7 +63,7 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     """Handle ``/papers [query]`` — search paper_ingestion API or list Library papers."""
     if update.message is None:
         return
-    query = (" ".join(context.args) if context.args else "")[:500]
+    query = _BIDI_ZW_RE.sub("", (" ".join(context.args) if context.args else "")[:500])
 
     http = get_http(context)
     config = get_config(context)

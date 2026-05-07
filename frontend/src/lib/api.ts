@@ -166,7 +166,6 @@ import type {
   Card,
   ReviewResponse,
   RetentionStats,
-  GenerateCardsResponse,
   FeedResponse,
   DiscoveryResult,
   PaperDetail,
@@ -424,13 +423,6 @@ export const generateCardsJob = (paperId: number, deckId: number, maxCards = 5) 
     method: 'POST',
     body: JSON.stringify({ paper_id: paperId, deck_id: deckId, max_cards: maxCards }),
   });
-
-/** Kept as a deprecated alias so callers that haven't migrated yet still compile. */
-export const generateCards = generateCardsJob as unknown as (
-  paperId: number,
-  deckId: number,
-  maxCards?: number,
-) => Promise<GenerateCardsResponse>;
 
 function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);

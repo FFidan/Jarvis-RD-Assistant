@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
+from telegram_bot.handlers import rate_limit as _rate_limit_mod
 from telegram_bot.handlers.commands import (  # noqa: E402
     briefing_command,
     done_command,
@@ -23,6 +24,26 @@ from telegram_bot.handlers.commands import (  # noqa: E402
     tasks_command,
 )
 from telegram_bot.handlers.commands.paper_commands import _inbox_keyboard
+from telegram_bot.handlers.commands.system_commands import focus_command
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
+    """Clear the rate-limiter's in-memory timestamp store before every test.
+
+    Command handlers decorated with @rate_limit share a module-level
+    defaultdict keyed by ``chat_id:func_name``.  Without this fixture, tests
+    sharing the same chat_id accumulate timestamps and can trip the limit mid
+    suite.
+    """
+    _rate_limit_mod._timestamps.clear()
+    yield
+    _rate_limit_mod._timestamps.clear()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -487,3 +508,104 @@ async def test_post_init_calls_set_my_commands():
     bot_mock.set_my_commands.assert_awaited_once()
     commands = bot_mock.set_my_commands.call_args[0][0]
     assert len(commands) >= 12, f"Expected ≥12 commands, got {len(commands)}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: /focus — W4-4 clamp guard
+# ---------------------------------------------------------------------------
+
+
+def _make_focus_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
+    """Build a mock Update + Context for focus_command (includes job_queue)."""
+    update, context, mock_db, mock_http = _make_update_and_context(args=args, chat_id=chat_id)
+    context.job_queue = MagicMock()
+    context.job_queue.get_jobs_by_name = MagicMock(return_value=[])
+    context.job_queue.run_once = MagicMock()
+    return update, context, mock_db, mock_http
+
+
+@pytest.mark.asyncio
+async def test_focus_negative_minutes_rejected_with_help():
+    """/focus -1 is rejected with help text; timer must NOT be started."""
+    update, context, _, _ = _make_focus_update_and_context(args=["-1"])
+
+    await focus_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "minute" in text.lower() or "focus" in text.lower()
+    context.job_queue.run_once.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_focus_zero_minutes_rejected_with_help():
+    """/focus 0 is rejected with help text; timer must NOT be started."""
+    update, context, _, _ = _make_focus_update_and_context(args=["0"])
+
+    await focus_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "minute" in text.lower() or "focus" in text.lower()
+    context.job_queue.run_once.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_focus_positive_minutes_accepted():
+    """/focus 25 proceeds normally — timer is scheduled."""
+    update, context, _, _ = _make_focus_update_and_context(args=["25"])
+
+    await focus_command(update, context)
+
+    context.job_queue.run_once.assert_called_once()
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "25" in text
+
+
+# ---------------------------------------------------------------------------
+# Tests: /papers bidi sanitisation — W4-4
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_papers_search_strips_bidi_chars():
+    """W4-4: inbound search text must have bidi/zero-width chars stripped before forwarding."""
+    # U+202E (RTL OVERRIDE) embedded in the query string
+    bidi_query = "neural‮nets"
+    clean_query = "neuralnets"
+
+    update, context, _, mock_http = _make_update_and_context(args=[bidi_query])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = []
+    mock_http.post.return_value = mock_resp
+
+    await papers_command(update, context)
+
+    mock_http.post.assert_awaited_once()
+    call_kwargs = mock_http.post.await_args[1]
+    sent_query = call_kwargs["json"]["query"]
+    assert "‮" not in sent_query, "RTL override must be stripped before forwarding"
+    assert clean_query == sent_query, f"Expected {clean_query!r}, got {sent_query!r}"
+
+
+@pytest.mark.asyncio
+async def test_papers_search_strips_zero_width_space():
+    """W4-4: U+200B (ZERO WIDTH SPACE) must be stripped from inbound search text."""
+    query_with_zwsp = "machine​learning"
+    clean_query = "machinelearning"
+
+    update, context, _, mock_http = _make_update_and_context(args=[query_with_zwsp])
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = []
+    mock_http.post.return_value = mock_resp
+
+    await papers_command(update, context)
+
+    mock_http.post.assert_awaited_once()
+    call_kwargs = mock_http.post.await_args[1]
+    sent_query = call_kwargs["json"]["query"]
+    assert "​" not in sent_query, "Zero-width space must be stripped before forwarding"
+    assert sent_query == clean_query
