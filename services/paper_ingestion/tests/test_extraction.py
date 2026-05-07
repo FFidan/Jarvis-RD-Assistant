@@ -784,3 +784,112 @@ async def test_extract_fields_no_verifier_returns_zero_confidence():
         f"PI-CORE-007: confidence must be 0.0 when verifier=None (got {ef.confidence}). "
         "A quote without a verifier is unverified and must never receive 0.5."
     )
+
+
+# ---------------------------------------------------------------------------
+# W1-24: whitespace-only quote with a verifier configured must yield 0.0
+# (the old `elif verifier and quote: confidence = 0.5` branch is gone).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_confidence_whitespace_only_quote_returns_zero():
+    """W1-24: whitespace-only quote skips verifier — computed confidence must be 0.0, not 0.5.
+
+    Inspects the `extraction_json` payload passed to the INSERT call (the
+    actual value the code computed) rather than the mocked DB round-trip,
+    which would otherwise echo back whatever fixture we choose.
+    """
+    from paper_ingestion.extraction import extract_fields_for_paper
+    from paper_ingestion.extraction.dynamic_models import (
+        ExtractedFieldOutput,
+        _build_extraction_response_model,
+    )
+
+    mock_conn = AsyncMock()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__.return_value = mock_conn
+    mock_cm.__aexit__.return_value = False
+    mock_pool = MagicMock()
+    mock_pool.acquire.return_value = mock_cm
+
+    # A configured verifier whose verify_quote MUST NOT be called for a
+    # whitespace-only quote (the `quote.strip()` guard skips it).
+    mock_verifier = MagicMock()
+    mock_verifier.verify_quote = MagicMock(
+        side_effect=AssertionError("verify_quote must not be called for whitespace-only quotes")
+    )
+
+    mock_conn.fetchrow.side_effect = [
+        # Template lookup
+        {
+            "id": 1,
+            "name": "Test",
+            "fields": [
+                {"name": "methodology", "label": "Methodology", "description": "d", "type": "text"}
+            ],
+            "is_default": True,
+        },
+        # Paper lookup
+        {"id": 10, "title": "Test Paper"},
+        # INSERT RETURNING — round-trip is irrelevant; we assert on the
+        # `extraction_json` argument captured below, not on result.extractions.
+        {
+            "id": 1,
+            "paper_id": 10,
+            "template_id": 1,
+            "extractions": {
+                "methodology": {
+                    "value": "survey",
+                    "quote": "   ",
+                    "verified": False,
+                    "confidence": 0.0,
+                    "chunk_id": None,
+                    "page_number": None,
+                }
+            },
+            "extraction_model": "smart",
+            "created_at": datetime.now(tz=UTC),
+        },
+    ]
+    mock_conn.fetch.return_value = [
+        {"id": 100, "chunk_index": 0, "content": "We used a survey methodology.", "page_number": 1},
+    ]
+
+    response_model_cls = _build_extraction_response_model(("methodology",))
+    # LLM returns a non-null value with a whitespace-only quote — the verifier
+    # is configured but the strip() guard short-circuits and skips verification.
+    mock_llm_result = response_model_cls(
+        methodology=ExtractedFieldOutput(value="survey", quote="   ")
+    )
+
+    mock_http = AsyncMock()
+
+    with patch(
+        "paper_ingestion.extraction.core.call_llm_structured",
+        AsyncMock(return_value=mock_llm_result),
+    ):
+        await extract_fields_for_paper(
+            mock_http,
+            mock_pool,
+            10,
+            1,
+            verifier=mock_verifier,
+            openai_client=MagicMock(),
+        )
+
+    # Sanity: the verifier must never have been invoked for a whitespace quote.
+    mock_verifier.verify_quote.assert_not_called()
+
+    # Locate the INSERT call — third fetchrow invocation, signature is
+    # (sql, paper_id, template_id, extraction_json, model, raw_json).
+    insert_call = mock_conn.fetchrow.await_args_list[2]
+    extraction_json = insert_call.args[3]
+    methodology = extraction_json["methodology"]
+
+    assert methodology["verified"] is False, "Whitespace-only quote can never be verified"
+    assert methodology["confidence"] == 0.0, (
+        f"W1-24: whitespace-only quote must produce confidence 0.0 "
+        f"(got {methodology['confidence']!r}). The old "
+        "`elif verifier and quote: 0.5` branch must be gone."
+    )

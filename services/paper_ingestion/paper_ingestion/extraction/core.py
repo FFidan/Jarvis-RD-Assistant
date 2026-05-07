@@ -228,18 +228,18 @@ async def extract_fields_for_paper(
                 value = None
                 quote = None
 
-        # PI-CORE-007: when there is no verifier, confidence is always 0.0
-        # regardless of whether a quote was supplied — unverified quotes must
-        # not receive a non-zero confidence score. Discarded values (set to
-        # None above when verification fails) cannot carry a non-zero
-        # confidence either, even with a quote that the user-facing UI would
-        # otherwise show as "verified-but-empty".
+        # PI-CORE-007 + W1-24: confidence is binary — 1.0 when the quote was
+        # verified end-to-end, 0.0 otherwise. There is no "partially trusted"
+        # middle ground: an unverified quote (no verifier configured, verifier
+        # crashed, verification failed, or the quote was whitespace-only and
+        # the verifier was skipped) must carry confidence 0.0 so downstream
+        # consumers using `confidence ≥ 0.5` cannot silently accept
+        # hallucinated content. Previously, a whitespace-only quote with a
+        # configured verifier produced confidence=0.5 — that branch is gone.
         if value is None:
             confidence = 0.0
         elif verified:
             confidence = 1.0
-        elif verifier and quote:
-            confidence = 0.5
         else:
             confidence = 0.0
         extractions[field_name] = ExtractedField(
