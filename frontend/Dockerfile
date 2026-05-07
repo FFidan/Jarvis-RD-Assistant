@@ -15,5 +15,6 @@ COPY scripts/generate-certs.sh /docker-entrypoint.d/00-generate-certs.sh
 RUN chmod +x /docker-entrypoint.d/00-generate-certs.sh
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
+COPY nginx-rate-limit.conf /etc/nginx/conf.d/nginx-rate-limit.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 3000
