@@ -13,6 +13,7 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.jobs import JobContext, JobError
 
 from paper_ingestion._state import svc
@@ -77,6 +78,10 @@ async def _paper_process_job(
     from paper_ingestion.services.pdf_workflow import run_process_pdf
 
     paper_id: int = payload["paper_id"]
+    user_id: int | None = payload.get("user_id")
+    async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+
     force: bool = bool(payload.get("force", False))
 
     # Load paper row to get pdf_local_path
@@ -141,6 +146,9 @@ async def _paper_analyze_job(
     from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_id: int = payload["paper_id"]
+    user_id: int | None = payload.get("user_id")
+    async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
 
     # Load paper row once
     async with pool.acquire() as conn:
@@ -233,7 +241,11 @@ async def _paper_summarize_job(
     """Generate a quote-verified summary for a single paper."""
     from paper_ingestion.services.summarization import generate_paper_summary
 
-    paper_id = int(payload["paper_id"])
+    paper_id: int = int(payload["paper_id"])
+    user_id: int | None = payload.get("user_id")
+    async with pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+
     verifier = svc.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")

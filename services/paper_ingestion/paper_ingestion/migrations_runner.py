@@ -162,7 +162,9 @@ def _strip_outer_transaction_control(sql: str) -> str:
     return "".join(out)
 
 
-async def _repair_false_applied_migrations(conn: asyncpg.Connection) -> None:
+async def _repair_false_applied_migrations(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
+) -> None:
     """Remove known false-applied markers when their schema probe fails."""
     probe_versions = [version for version, _, _ in _MIGRATION_SCHEMA_PROBES]
     applied = {

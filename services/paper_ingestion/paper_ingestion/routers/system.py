@@ -11,6 +11,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import JobCreateResponse, current_user_id
+from jarvis_common.model_catalog import Role
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -22,7 +23,6 @@ from paper_ingestion.ingestion.embedder import (
 from paper_ingestion.models import SystemModelsResponse
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
-    Role,
     build_model_statuses,
     catalog_entry_for_model,
     get_cached_hardware,

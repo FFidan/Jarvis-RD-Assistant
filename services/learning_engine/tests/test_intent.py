@@ -7,6 +7,7 @@ Covers:
 - POST with empty string — clears intent (DELETE)
 - POST with intent > 280 chars — 422 (Pydantic max_length)
 - GET without X-API-Key — 401 (no key configured, no DEV_MODE)
+- [live_pg] Migration 060: daily_intent.user_id is INTEGER NULL post-migration
 """
 
 from __future__ import annotations
@@ -240,3 +241,80 @@ async def test_get_intent_without_api_key_returns_401(monkeypatch):
         # Restore override-free state — other tests may run after this
         app.dependency_overrides.clear()
         refresh_api_key_cache()
+
+
+# ---------------------------------------------------------------------------
+# Live-PG migration test (gated by JARVIS_RUN_LIVE_PG=1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_migration_060_daily_intent_user_id_is_integer(live_pg_dsn: str) -> None:
+    """Migration 060 changes daily_intent.user_id from TEXT NOT NULL to INTEGER NULL.
+
+    Verifies:
+    - The column data_type is 'integer' post-migration.
+    - The column is_nullable is 'YES'.
+    - The NULLS NOT DISTINCT unique index on (user_id, intent_date) exists.
+    - An upsert with user_id=NULL round-trips correctly.
+    """
+    from pathlib import Path
+
+    import asyncpg
+    from paper_ingestion.migrations_runner import run_migrations
+
+    repo_root = Path(__file__).resolve().parents[3]
+    init_sql = repo_root / "db" / "init.sql"
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(init_sql.read_text(encoding="utf-8"))
+        await run_migrations(pool)
+
+        async with pool.acquire() as conn:
+            # Verify column type and nullability
+            row = await conn.fetchrow(
+                """
+                SELECT data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = 'daily_intent' AND column_name = 'user_id'
+                """,
+            )
+        assert row is not None, "daily_intent.user_id column not found"
+        assert row["data_type"] == "integer", f"Expected INTEGER, got {row['data_type']!r}"
+        assert row["is_nullable"] == "YES", (
+            f"Expected nullable, got is_nullable={row['is_nullable']!r}"
+        )
+
+        async with pool.acquire() as conn:
+            # Verify the NULLS NOT DISTINCT unique index exists
+            idx_row = await conn.fetchrow(
+                """
+                SELECT indexname FROM pg_indexes
+                WHERE tablename = 'daily_intent'
+                  AND indexname = 'daily_intent_user_date_uniq'
+                """,
+            )
+        assert idx_row is not None, "daily_intent_user_date_uniq index not found"
+
+        async with pool.acquire() as conn:
+            # Upsert with NULL user_id then read back
+            await conn.execute(
+                """
+                INSERT INTO daily_intent (user_id, intent_date, intent_text, updated_at)
+                VALUES (NULL, CURRENT_DATE, 'migration-060-test', NOW())
+                ON CONFLICT (user_id, intent_date) DO UPDATE
+                  SET intent_text = EXCLUDED.intent_text,
+                      updated_at  = NOW()
+                """,
+            )
+            result = await conn.fetchrow(
+                "SELECT intent_text FROM daily_intent"
+                " WHERE user_id IS NULL AND intent_date = CURRENT_DATE",
+            )
+        assert result is not None, "Upserted row not found"
+        assert result["intent_text"] == "migration-060-test"
+    finally:
+        await pool.close()
