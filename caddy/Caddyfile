@@ -2,10 +2,11 @@
 	email {$LETSENCRYPT_EMAIL}
 }
 
+# Inner Caddy → nginx hop is HTTP-only by design: Caddy already terminates
+# public TLS via Let's Encrypt; an inner mTLS layer would add complexity
+# without buying anything for a single-machine compose stack. If a future
+# multi-host deployment needs inner mTLS, see W1-4 in
+# docs/plans/2026-05-07-post-audit-fix-sweep.md.
 {$LETSENCRYPT_DOMAIN} {
-	reverse_proxy https://dashboard:3000 {
-		transport http {
-			tls_insecure_skip_verify
-		}
-	}
+	reverse_proxy http://dashboard:3000
 }

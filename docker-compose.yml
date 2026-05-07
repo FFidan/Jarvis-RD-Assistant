@@ -405,7 +405,7 @@ services:
       - dashboard_certs:/etc/nginx/certs
     mem_limit: 256m
     healthcheck:
-      test: ["CMD-SHELL", "curl -ksf https://127.0.0.1:3000/ > /dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ > /dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
