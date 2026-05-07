@@ -28,8 +28,9 @@ if TYPE_CHECKING:
     import openai
 
 
+from jarvis_common.verify import QuoteVerifier
+
 from paper_ingestion.converters import row_to_chunk_response
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import (
     ChunkResponse,
     PaperContradictionResponse,

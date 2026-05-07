@@ -7,21 +7,13 @@ This shim is preserved so the 9+ paper_ingestion test files importing
 Eventually remove once those tests migrate to the new import path.
 """
 
-from jarvis_common.migrations import (
-    _MIGRATION_SCHEMA_PROBES as _MIGRATION_SCHEMA_PROBES,
-)
-from jarvis_common.migrations import (
-    _TXN_LINE_RE as _TXN_LINE_RE,
-)
-from jarvis_common.migrations import (
-    _repair_false_applied_migrations as _repair_false_applied_migrations,
-)
-from jarvis_common.migrations import (
-    _strip_outer_transaction_control as _strip_outer_transaction_control,
-)
-from jarvis_common.migrations import (
-    run_migrations as run_migrations,
-)
+from jarvis_common import migrations as _migrations
+
+_MIGRATION_SCHEMA_PROBES = _migrations._MIGRATION_SCHEMA_PROBES
+_TXN_LINE_RE = _migrations._TXN_LINE_RE
+_repair_false_applied_migrations = _migrations._repair_false_applied_migrations
+_strip_outer_transaction_control = _migrations._strip_outer_transaction_control
+run_migrations = _migrations.run_migrations
 
 __all__ = [
     "_MIGRATION_SCHEMA_PROBES",

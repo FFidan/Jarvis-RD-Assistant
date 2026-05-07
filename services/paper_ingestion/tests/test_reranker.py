@@ -114,6 +114,42 @@ async def test_rerank_chunks_fallback_on_exception():
     assert result == chunks[:5]
 
 
+@pytest.mark.parametrize(
+    "backend,getter_path,expected_class_name",
+    [
+        (
+            "cross-encoder",
+            "paper_ingestion.ingestion.reranker.get_reranker",
+            "Reranker",
+        ),
+        (
+            "qwen3",
+            "paper_ingestion.ingestion.qwen3_reranker.get_qwen3_reranker",
+            "Qwen3Reranker",
+        ),
+    ],
+)
+async def test_rerank_chunks_switches_on_backend(
+    monkeypatch, backend, getter_path, expected_class_name
+):
+    """rerank_chunks instantiates the correct backend based on RERANKER_BACKEND env var."""
+    monkeypatch.setenv("RERANKER_BACKEND", backend)
+
+    embedder = Embedder(AsyncMock(), AsyncMock())
+    chunks = [{"content": f"chunk {i}"} for i in range(6)]
+
+    mock_reranker = MagicMock()
+    mock_reranker.rerank.return_value = [(i, float(6 - i)) for i in range(5)]
+
+    with patch(getter_path, return_value=mock_reranker):
+        result = await embedder.rerank_chunks("query", chunks, top_k=5)
+
+    assert mock_reranker.rerank.called, (
+        f"Expected {expected_class_name}.rerank to be called for backend={backend!r}"
+    )
+    assert len(result) == 5
+
+
 def test_get_reranker_returns_none_without_sentence_transformers():
     """get_reranker returns None when model loading fails."""
     import paper_ingestion.ingestion.reranker as reranker_mod

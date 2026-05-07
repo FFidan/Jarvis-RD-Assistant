@@ -4,6 +4,11 @@ Back-compat re-exports: callers using ``from paper_ingestion.extraction import X
 continue to work via this ``__init__.py``.
 """
 
+from jarvis_common.verify import (
+    FUZZY_THRESHOLD,
+    QuoteVerifier,
+)
+
 from paper_ingestion.extraction.core import (
     batch_extract,
     build_extraction_prompt,
@@ -17,10 +22,6 @@ from paper_ingestion.extraction.entities import (
     extract_entities_for_paper,
     get_knowledge_graph,
     query_knowledge_graph,
-)
-from paper_ingestion.extraction.verify import (
-    FUZZY_THRESHOLD,
-    QuoteVerifier,
 )
 
 __all__ = [

@@ -18,6 +18,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     request_chat_completion_content,
 )
+from jarvis_common.verify import QuoteVerifier
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -27,7 +28,6 @@ from paper_ingestion.deps import (
     get_verifier,
     limiter,
 )
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import (
     AskRequest,
     AskResponse,

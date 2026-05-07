@@ -19,8 +19,8 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 import asyncpg
+from jarvis_common.verify import FUZZY_THRESHOLD, QuoteVerifier
 
-from paper_ingestion.extraction.verify import FUZZY_THRESHOLD, QuoteVerifier
 from paper_ingestion.models.papers import ChunkResponse
 
 if TYPE_CHECKING:

@@ -32,8 +32,8 @@ from jarvis_common.llm_client import (
 )
 from jarvis_common.prompt_safety import escape_llm_text
 from jarvis_common.time_utils import utc_now_iso
+from jarvis_common.verify import QuoteVerifier
 
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.weekly_summary_models import WeeklyDigestOutput
 
 if TYPE_CHECKING:

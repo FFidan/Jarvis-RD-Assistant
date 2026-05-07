@@ -27,7 +27,8 @@ from paper_ingestion.rag.decomposition import decompose_query
 from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 if TYPE_CHECKING:
-    from paper_ingestion.extraction.verify import QuoteVerifier
+    from jarvis_common.verify import QuoteVerifier
+
     from paper_ingestion.ingestion.embedder import Embedder
 
 

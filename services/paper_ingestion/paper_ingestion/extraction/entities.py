@@ -15,10 +15,10 @@ import httpx
 from jarvis_common import escape_like, get_fast_model
 from jarvis_common.llm_client import ChatCompletionOptions, call_llm_structured, observe
 from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.extraction.kg_models import KGExtractionOutput
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.ingestion.embedder import (
     extract_qdrant_collection_dimension,
     raise_for_collection_dimension_mismatch,

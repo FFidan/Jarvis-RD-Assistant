@@ -1,6 +1,7 @@
 # Phase D Retrieval Eval — Comparison Report
 
 **Date:** 2026-05-07 (D7 retry on Ollama 0.23.1; D6 reranker matrix)
+**Status:** **SHIPPED 2026-05-07** — `qwen3-embedding:4b` is now the active production embedder.
 **Corpus:** 84 papers, 4,888 chunks — port-Hamiltonian / Neural ODE / PINN domain
 **Eval set:** `scripts/fixtures/retrieval_eval_set.jsonl` — 27 curated cases
 **Decision threshold:** promote if nDCG@3 improves > 5% relative AND latency regression ≤ 50%

@@ -73,8 +73,15 @@ def test_catalog_lookup_accepts_ollama_latest_suffix() -> None:
 
 
 def test_nonassignable_catalog_entries_surface_assignment_blocker() -> None:
+    """Catalog still ships at least one Ollama-installed but non-assignable
+    embedding entry so this guard remains meaningful. Pre-2026-05-07 the
+    fixture used ``qwen3-embedding:4b``; that entry was promoted to
+    assignable=true when the production embed stack was upgraded.
+    ``mxbai-embed-large`` and ``openai/text-embedding-3-small`` remain
+    phase=future / assignable=false in the catalog and exercise the same code
+    path."""
     statuses = build_model_statuses(
-        installed=[{"name": "qwen3-embedding:4b", "size": 1, "details": {}}],
+        installed=[{"name": "mxbai-embed-large", "size": 1, "details": {}}],
         current={},
         embedding_model_name="qwen3-embedding:0.6b",
         hardware=_hardware(tier=2),
@@ -82,9 +89,8 @@ def test_nonassignable_catalog_entries_surface_assignment_blocker() -> None:
     )
     by_id = {item["id"]: item for item in statuses}
 
-    assert by_id["qwen3-embedding:4b"]["status"] == "pulled"
-    assert by_id["qwen3-embedding:4b"]["can_assign"] is False
-    assert by_id["qwen3-embedding:4b"]["can_assign"] is False
+    assert by_id["mxbai-embed-large"]["status"] == "pulled"
+    assert by_id["mxbai-embed-large"]["can_assign"] is False
     assert by_id["openai/text-embedding-3-small"]["can_assign"] is False
 
 

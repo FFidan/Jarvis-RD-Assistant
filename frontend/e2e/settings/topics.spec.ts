@@ -9,6 +9,24 @@ test.describe('Settings - Topics', () => {
     await page.getByRole('tab', { name: 'Topics' }).click();
   });
 
+  test('does not render redundant § TOPICS marker (W4-2 regression guard)', async ({ page }) => {
+    // Wait for tab content to settle
+    await expect(page.getByText('Loading topics...')).not.toBeVisible({ timeout: 10000 });
+    // No § TOPICS, § SOURCES, § AUTHORS, § INGESTION, § AUTOMATION, § PULSE,
+    // § TIMER, § PROVIDERS, § INTEGRATIONS, § EXTRACTION TEMPLATES, § APPEARANCE.
+    // Locator is anchored to the Settings page main; sidebar/MyDay markers
+    // (§ Yesterday etc.) are unaffected.
+    const main = page.getByRole('main');
+    const forbidden = [
+        '§ TOPICS', '§ SOURCES', '§ AUTHORS', '§ INGESTION', '§ AUTOMATION',
+        '§ PULSE', '§ TIMER', '§ PROVIDERS', '§ INTEGRATIONS',
+        '§ EXTRACTION TEMPLATES', '§ APPEARANCE',
+    ];
+    for (const marker of forbidden) {
+        await expect(main.locator(`text="${marker}"`)).toHaveCount(0);
+    }
+  });
+
   test('topics list loads', async ({ page }) => {
     // Either we see topics listed or an empty state
     const topicCards = page.locator('[class*="card"]').filter({ hasText: /Enabled|Disabled/ });

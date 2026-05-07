@@ -16,7 +16,8 @@ import asyncio
 import datetime as _dt
 import logging
 
-from paper_ingestion.extraction.verify import QuoteVerifier
+from jarvis_common.verify import QuoteVerifier
+
 from paper_ingestion.models.papers import ChunkResponse
 from paper_ingestion.rag.verification import RagConfidence
 

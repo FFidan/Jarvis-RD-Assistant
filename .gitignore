@@ -88,3 +88,6 @@ inspection/
 
 # Knowledge graph outputs
 graphify-out/
+
+# CodeBoarding scratch outputs
+.codeboarding/

@@ -23,6 +23,8 @@ Notes
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -74,6 +76,7 @@ class RerankerSettings(BaseSettings):
     model_config = _COMMON_CONFIG
 
     reranker_enabled: bool = False
+    reranker_backend: Literal["cross-encoder", "qwen3"] = "cross-encoder"
 
 
 class JobsSettings(BaseSettings):

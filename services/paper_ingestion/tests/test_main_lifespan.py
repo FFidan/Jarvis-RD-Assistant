@@ -278,3 +278,74 @@ async def test_autoconfigure_models_hook_is_idempotent() -> None:
 
     # No INSERT should have been executed (idempotent early-return).
     conn.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_litellm_aliases_skips_no_db_connected(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When LiteLLM returns HTTP 400 No DB Connected, rehydrate logs and skips."""
+    import logging
+    from unittest.mock import AsyncMock, MagicMock
+
+    from paper_ingestion.main import _rehydrate_litellm_aliases
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # Return a row for every key so update_litellm_model is actually called.
+    conn.fetchrow.return_value = {"value": "qwen3:4b"}
+
+    no_db_exc = RuntimeError(
+        "LiteLLM /config/update failed for alias 'smart': HTTP 400 No DB Connected"
+    )
+
+    with (
+        caplog.at_level(logging.INFO, logger="paper_ingestion.main"),
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=AsyncMock(side_effect=no_db_exc),
+        ),
+    ):
+        # Must NOT raise.
+        await _rehydrate_litellm_aliases(pool)
+
+    assert any(
+        "no admin db attached" in record.message.lower()
+        for record in caplog.records
+        if record.levelno == logging.INFO
+    ), f"Expected INFO log about 'no admin db attached'; got: {[r.message for r in caplog.records]}"
+
+
+@pytest.mark.asyncio
+async def test_rehydrate_litellm_aliases_reraises_502() -> None:
+    """Non-400 / non-'No DB Connected' RuntimeErrors propagate unchanged."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from paper_ingestion.main import _rehydrate_litellm_aliases
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    conn.fetchrow.return_value = {"value": "qwen3:4b"}
+
+    gateway_exc = RuntimeError(
+        "LiteLLM /config/update failed for alias 'smart': HTTP 502 Bad Gateway"
+    )
+
+    with (
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=AsyncMock(side_effect=gateway_exc),
+        ),
+        pytest.raises(RuntimeError, match="HTTP 502"),
+    ):
+        await _rehydrate_litellm_aliases(pool)

@@ -176,11 +176,18 @@ async def test_set_config_rejects_unpulled_catalog_model(_app):
 
 @pytest.mark.asyncio
 async def test_set_config_rejects_nonassignable_embedding_candidate(_app):
-    """Advanced/future embedding catalog entries cannot be assigned by accident."""
+    """Advanced/future embedding catalog entries cannot be assigned by accident.
+
+    Uses ``mxbai-embed-large`` as the non-assignable test subject — flipped to
+    phase=future after qwen3-embedding:4b was promoted to assignable=true on
+    2026-05-07. Catalog still ships at least one Ollama-installed but
+    intentionally non-assignable embedding entry so this guard remains
+    meaningful.
+    """
     app, conn, mock_http = _app
     mock_http.get.return_value = MagicMock(
         status_code=200,
-        json=MagicMock(return_value={"models": [{"name": "qwen3-embedding:4b"}]}),
+        json=MagicMock(return_value={"models": [{"name": "mxbai-embed-large"}]}),
     )
 
     async with httpx.AsyncClient(
@@ -188,7 +195,7 @@ async def test_set_config_rejects_nonassignable_embedding_candidate(_app):
     ) as client:
         resp = await client.put(
             "/api/config/llm.embed_model",
-            json={"key": "llm.embed_model", "value": "qwen3-embedding:4b"},
+            json={"key": "llm.embed_model", "value": "mxbai-embed-large"},
         )
 
     assert resp.status_code == 422

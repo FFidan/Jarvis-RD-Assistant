@@ -633,7 +633,7 @@ class Embedder:
         chunks: list[dict],
         top_k: int = 5,
     ) -> list[dict]:
-        """Rerank retrieved chunks using a cross-encoder model.
+        """Rerank retrieved chunks using the configured reranker backend.
 
         Falls back to returning the input chunks (truncated to top_k)
         if the reranker is unavailable.
@@ -653,10 +653,22 @@ class Embedder:
         list[dict]
             Reranked chunks, limited to top_k.
         """
-        from paper_ingestion.ingestion.reranker import get_reranker
+        from jarvis_common.settings import get_reranker_settings
 
-        reranker = get_reranker()
-        if reranker is None or len(chunks) <= top_k:
+        if len(chunks) <= top_k:
+            return chunks[:top_k]
+
+        backend = get_reranker_settings().reranker_backend
+        if backend == "qwen3":
+            from paper_ingestion.ingestion.qwen3_reranker import get_qwen3_reranker
+
+            reranker = get_qwen3_reranker()
+        else:
+            from paper_ingestion.ingestion.reranker import get_reranker
+
+            reranker = get_reranker()
+
+        if reranker is None:
             return chunks[:top_k]
 
         passages = [c.get("content", "") for c in chunks]

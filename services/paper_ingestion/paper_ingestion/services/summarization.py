@@ -22,6 +22,7 @@ from jarvis_common.llm_client import (
     observe,
 )
 from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion._state import svc
 from paper_ingestion.converters import (
@@ -29,7 +30,6 @@ from paper_ingestion.converters import (
     row_to_chunk_response,
     row_to_summary_response,
 )
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import (
     Confidence,

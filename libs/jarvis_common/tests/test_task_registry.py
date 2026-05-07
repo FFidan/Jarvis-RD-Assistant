@@ -26,11 +26,16 @@ import pytest
 
 def test_all_tasks_registered() -> None:
     """``app.tasks`` should contain exactly the ``JOB_HANDLER_OWNER`` keys
-    (filtering out procrastinate's two builtin ``remove_old_jobs`` aliases)."""
+    (filtering out procrastinate's two builtin ``remove_old_jobs`` aliases
+    and the test-only ``noop.test`` task that exists for CI smoke testing)."""
     from jarvis_common.jobs import JOB_HANDLER_OWNER
     from jarvis_common.task_registry import app
 
-    user_task_names = {name for name, task in app.tasks.items() if task.queue != "builtin"}
+    # noop.test is unconditionally @app.task-registered for test infrastructure;
+    # its conditional KIND_TO_TASK gating is what controls production exposure.
+    user_task_names = {
+        name for name, task in app.tasks.items() if task.queue != "builtin" and name != "noop.test"
+    }
     expected = set(JOB_HANDLER_OWNER.keys())
 
     assert user_task_names == expected, (
@@ -53,6 +58,8 @@ def test_queue_assignments_match_owner_map() -> None:
     for name, task in app.tasks.items():
         if task.queue == "builtin":
             continue  # procrastinate's auto-registered remove_old_jobs
+        if name == "noop.test":
+            continue  # test-only smoke task; gated separately via test_jobs_enabled
         assert name in JOB_HANDLER_OWNER, f"task {name!r} not in JOB_HANDLER_OWNER"
         expected_queue = JOB_HANDLER_OWNER[name]
         assert task.queue == expected_queue, (

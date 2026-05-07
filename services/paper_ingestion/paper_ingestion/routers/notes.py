@@ -6,10 +6,10 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update
 from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
 from paper_ingestion.deps import get_db_pool, get_verifier, limiter
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
 
 logger = logging.getLogger(__name__)

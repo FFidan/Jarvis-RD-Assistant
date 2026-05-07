@@ -9,6 +9,9 @@ inside ``paper_ingestion`` still import from this path.
     removed once all callers have been migrated.
 """
 
-from jarvis_common.verify import FUZZY_THRESHOLD, QuoteVerifier
+from jarvis_common import verify as _verify
+
+FUZZY_THRESHOLD = _verify.FUZZY_THRESHOLD
+QuoteVerifier = _verify.QuoteVerifier
 
 __all__ = ["FUZZY_THRESHOLD", "QuoteVerifier"]

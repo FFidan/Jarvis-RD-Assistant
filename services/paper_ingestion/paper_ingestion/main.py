@@ -37,12 +37,12 @@ from jarvis_common import (
 )
 from jarvis_common.llm_client import get_litellm_config
 from jarvis_common.settings import get_core_settings
+from jarvis_common.verify import QuoteVerifier
 from qdrant_client import AsyncQdrantClient
 
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
 from paper_ingestion.deps import limiter
-from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
 from paper_ingestion.migrations_runner import run_migrations
@@ -231,7 +231,17 @@ async def _rehydrate_litellm_aliases(pool: Any) -> None:
         if row is None:
             continue
         model_id: str = row["value"]
-        await update_litellm_model(config_key, model_id)
+        try:
+            await update_litellm_model(config_key, model_id)
+        except RuntimeError as exc:
+            if "HTTP 400" in str(exc) and "No DB Connected" in str(exc):
+                logger.info(
+                    "LiteLLM has no admin DB attached; skipping %s rehydration "
+                    "(this is expected when STORE_MODEL_IN_DB is unset).",
+                    config_key,
+                )
+                continue
+            raise
 
 
 async def _autoconfigure_models_hook(app: FastAPI) -> None:

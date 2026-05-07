@@ -39,7 +39,7 @@ def get_verifier(request: Request):
     """
     verifier = getattr(request.app.state, "verifier", None)
     if verifier is None:
-        from paper_ingestion.extraction.verify import QuoteVerifier  # noqa: PLC0415
+        from jarvis_common.verify import QuoteVerifier  # noqa: PLC0415
 
         verifier = QuoteVerifier()
         request.app.state.verifier = verifier
