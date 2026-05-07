@@ -104,35 +104,33 @@ async def update_card(
 ) -> CardResponse:
     """Update a card's content (does not affect FSRS state)."""
     async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT id FROM cards WHERE id = $1", card_id)
-        if not existing:
-            raise HTTPException(status_code=404, detail="Card not found")
-
-        update_dict: dict = {}
-        if body.front is not None:
-            update_dict["front"] = body.front
-        if body.back is not None:
-            update_dict["back"] = body.back
-        if body.card_type is not None:
-            update_dict["card_type"] = body.card_type.value
-        if body.evidence is not None:
-            update_dict["evidence"] = body.evidence.model_dump()
-
-        if not update_dict:
-            row = await conn.fetchrow("SELECT * FROM cards WHERE id = $1", card_id)
-            if not row:
+        async with conn.transaction():
+            existing = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
+            if not existing:
                 raise HTTPException(status_code=404, detail="Card not found")
-            return row_to_card_response(row)
 
-        row = await dynamic_update(
-            conn,
-            table="cards",
-            record_id=card_id,
-            updates=update_dict,
-            allowed_columns=_CARD_ALLOWED_COLUMNS,
-            jsonb_columns=_CARD_JSONB_COLUMNS,
-            extra_sets=["updated_at = NOW()"],
-        )
+            update_dict: dict = {}
+            if body.front is not None:
+                update_dict["front"] = body.front
+            if body.back is not None:
+                update_dict["back"] = body.back
+            if body.card_type is not None:
+                update_dict["card_type"] = body.card_type.value
+            if body.evidence is not None:
+                update_dict["evidence"] = body.evidence.model_dump()
+
+            if not update_dict:
+                return row_to_card_response(existing)
+
+            row = await dynamic_update(
+                conn,
+                table="cards",
+                record_id=card_id,
+                updates=update_dict,
+                allowed_columns=_CARD_ALLOWED_COLUMNS,
+                jsonb_columns=_CARD_JSONB_COLUMNS,
+                extra_sets=["updated_at = NOW()"],
+            )
     if not row:
         raise HTTPException(status_code=404, detail="Card not found")
     return row_to_card_response(row)

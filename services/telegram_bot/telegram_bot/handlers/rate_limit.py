@@ -41,7 +41,7 @@ def rate_limit(
                 # rate limiter so all anonymous traffic doesn't share one slot.
                 return await func(update, context)
             chat_id = str(update.effective_chat.id)
-            key = f"{chat_id}:{func.__name__}"
+            key = f"{chat_id}:{func.__module__}.{func.__qualname__}"
             now = time.monotonic()
             horizon = max(window_seconds, cooldown_seconds)
 

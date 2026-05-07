@@ -55,8 +55,8 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     assert set(range(34, 49)).issubset(seeded_versions)
     # 33 is intentionally absent (false-applied, repaired at runtime).
     assert 33 not in seeded_versions
-    # 49-51 and 54-60 are now baked into init.sql.
-    assert {49, 50, 51, 54, 55, 56, 57, 58, 59, 60}.issubset(seeded_versions)
+    # 49-51 and 54-61 are now baked into init.sql.
+    assert {49, 50, 51, 54, 55, 56, 57, 58, 59, 60, 61}.issubset(seeded_versions)
     # 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT baked into
     # init.sql; the runtime runner applies them on first boot.
     assert seeded_versions.isdisjoint({52, 53})
@@ -94,7 +94,11 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
 
     max_migration = max(file_versions)
     # Versions intentionally deferred to the runtime runner (not baked into init.sql).
-    deferred = {33, 52, 53}
+    # 33: false-applied, repaired at runtime.
+    # 52, 53: procrastinate schema / drop legacy jobs — never baked into init.sql.
+    # 62: daily_log user_id (Group 1D Wave-1); applied by the runtime runner on
+    #     first boot against existing installs; not yet baked into init.sql.
+    deferred = {33, 52, 53, 62}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (
@@ -107,16 +111,47 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
 def test_schema_probes_cover_recent_migrations() -> None:
     """Probes for the most recent schema/state-affecting migrations must exist.
 
-    W3-DRY-12: migrations 56 (pulse.stage2_top_k canonicalised from 50→40) and
-    59 (daily_intent table; INTEGER user_id post-060) both have observable
-    effects, so the runner can detect false-applied markers and replay the
-    SQL when the schema/state does not match the recorded version. Migration
-    56's probe inspects user_config state — the historically-applied version
-    is the only false-applied case it has to detect, and the row's value is
-    the most direct evidence of whether the migration ran.
+    W3-DRY-12: migrations 56 (pulse.stage2_top_k canonicalised from 50→40),
+    59 (daily_intent table; TEXT user_id as initially created), 60 (user_id
+    converted to INTEGER), and 61 (created_at column added) all have observable
+    schema effects that the repair loop can detect and replay.
     """
     versions = {v for v, _, _ in _MIGRATION_SCHEMA_PROBES}
-    assert {56, 59} <= versions
+    assert {56, 59, 60, 61} <= versions
+
+
+def test_migration_059_probe_checks_text_not_integer() -> None:
+    """Probe for mig-59 must check that user_id is TEXT (original state), not INTEGER.
+
+    Mig-59 creates daily_intent with user_id TEXT. Mig-60 converts it to INTEGER.
+    If the probe tested for INTEGER it would always pass after mig-60 runs, making
+    it impossible to detect a false-applied mig-59 marker on a schema that was
+    never actually migrated through mig-59.
+    """
+    probes = {v: sql for v, _, sql in _MIGRATION_SCHEMA_PROBES}
+    assert 59 in probes
+    assert "'text'" in probes[59].lower() or "= 'text'" in probes[59]
+
+
+def test_strip_outer_transaction_control_same_line_dollar_quote() -> None:
+    """BEGIN/COMMIT outside dollar-quoted blocks are stripped even when a $$-pair
+    opens and closes on the same line as other SQL.
+
+    Regression for the old per-line count approach: it correctly toggled twice and
+    ended up with in_dollar=False, but the check was done *after* toggling, meaning
+    a lone BEGIN on a subsequent line would still be stripped correctly. The new
+    state machine must handle same-line open+close without leaking text.
+    """
+    from paper_ingestion.migrations_runner import _strip_outer_transaction_control
+
+    sql = "BEGIN;\nDO $$ BEGIN RAISE NOTICE 'hello'; END $$;\nSELECT 1;\nCOMMIT;\n"
+    result = _strip_outer_transaction_control(sql)
+    # Transaction control lines must be gone
+    assert "BEGIN;" not in result
+    assert "COMMIT;" not in result
+    # The inline DO block content must be preserved
+    assert "RAISE NOTICE" in result
+    assert "SELECT 1;" in result
 
 
 class _FakeConnection:

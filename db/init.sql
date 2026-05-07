@@ -505,13 +505,15 @@ CREATE INDEX IF NOT EXISTS idx_project_papers_paper   ON project_papers(paper_id
 
 CREATE TABLE daily_log (
     id              SERIAL PRIMARY KEY,
-    log_date        DATE NOT NULL UNIQUE,
+    user_id         INTEGER,
+    log_date        DATE NOT NULL,
     tasks_completed INTEGER DEFAULT 0,
     cards_reviewed  INTEGER DEFAULT 0,
     papers_read     INTEGER DEFAULT 0,
     focus_hours     FLOAT DEFAULT 0,
     notes           TEXT,
-    created_at      TIMESTAMPTZ DEFAULT NOW()
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT daily_log_user_id_log_date_key UNIQUE NULLS NOT DISTINCT (user_id, log_date)
 );
 
 COMMENT ON TABLE daily_log IS 'Daily activity summary for analytics and streaks.';
@@ -992,9 +994,9 @@ INSERT INTO schema_migrations (version) VALUES
     -- 33 is intentionally absent: it is false-applied and repaired at runtime.
     (34), (35), (36), (37), (38), (39), (40), (41),
     (42), (43), (44), (45), (46), (47), (48),
-    -- 49-51, 54-60 are baked into this snapshot.
+    -- 49-51, 54-61 are baked into this snapshot.
     -- 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT in init.sql;
     -- the runtime runner will apply them on first boot.
     (49), (50), (51),
-    (54), (55), (56), (57), (58), (59), (60)
+    (54), (55), (56), (57), (58), (59), (60), (61)
 ON CONFLICT (version) DO NOTHING;

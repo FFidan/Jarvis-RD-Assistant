@@ -94,7 +94,7 @@ interface ModelCatalogEntry {
 /** Find the largest snap-step (power of 2) that stays within 85% VRAM threshold. */
 function largestFittingCtxForEntry(fitDetail: ModelFitDetail, vramGb: number): number {
   const STOPS = [2048, 4096, 8192, 16384, 32768, 65536];
-  let best = STOPS[0];
+  let best: number = STOPS[0] ?? 2048;
   for (const stop of STOPS) {
     if (stop > fitDetail.max_num_ctx) break;
     const kvBytes = fitDetail.kv_cache_bytes_per_token ?? 1024;

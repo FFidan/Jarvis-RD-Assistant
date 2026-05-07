@@ -7,6 +7,10 @@ TMP_DIR="$(mktemp -d)"
 PROJECT_NAME="${COMPOSE_PROJECT_NAME:-jarvis_rd_smoke_$RANDOM}"
 OVERRIDE_FILE="$TMP_DIR/docker-compose.smoke-secrets.yml"
 
+# Use a non-default host port for Ollama so the smoke stack can coexist with
+# any other Ollama instance (e.g. claude-context-local) bound to 11434.
+export OLLAMA_HOST_PORT="${OLLAMA_HOST_PORT:-11440}"
+
 cleanup() {
   COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker compose \
     -f "$ROOT_DIR/docker-compose.yml" \
@@ -20,6 +24,8 @@ printf '%s\n' "smoke-postgres-password" > "$TMP_DIR/postgres_password.txt"
 printf '%s\n' "smoke-jarvis-api-key" > "$TMP_DIR/jarvis_api_key.txt"
 printf '%s\n' "smoke-telegram-token" > "$TMP_DIR/telegram_bot_token.txt"
 printf '%s\n' "smoke-qdrant-api-key" > "$TMP_DIR/qdrant_api_key.txt"
+printf '%s\n' "test-litellm-master-key" > "$TMP_DIR/litellm_master_key.txt"
+printf '%s\n' "$(openssl rand -base64 32)" > "$TMP_DIR/jarvis_config_key.txt"
 
 cat > "$OVERRIDE_FILE" <<YAML
 secrets:
@@ -31,6 +37,10 @@ secrets:
     file: $TMP_DIR/telegram_bot_token.txt
   qdrant_api_key:
     file: $TMP_DIR/qdrant_api_key.txt
+  litellm_master_key:
+    file: $TMP_DIR/litellm_master_key.txt
+  jarvis_config_key:
+    file: $TMP_DIR/jarvis_config_key.txt
 YAML
 
 compose() {
@@ -59,7 +69,7 @@ assert_route_bodies() {
   local service="$1"
   shift
 
-  compose exec -T "$service" python - "$@" <<'PY'
+  compose exec -T "$service" python - "$service" "$@" <<'PY'
 import sys
 
 if sys.argv[1] == "paper_ingestion":
@@ -151,7 +161,7 @@ compose up -d --wait --timeout 180 \
 echo "=== Boot smoke: probing health endpoints ==="
 probe "paper_ingestion" "http://127.0.0.1:${PAPER_INGESTION_HOST_PORT:-8010}/health"
 probe "learning_engine" "http://127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}/health"
-probe "dashboard" "https://127.0.0.1:${DASHBOARD_HOST_PORT:-3001}/"
+probe "dashboard" "http://127.0.0.1:${DASHBOARD_HOST_PORT:-3001}/"
 
 echo "=== Boot smoke: checking Docker route-body contracts ==="
 assert_route_bodies paper_ingestion \

@@ -103,6 +103,7 @@ async def _handle_pairing(
         await message.reply_text("Pairing failed — please try again from the dashboard.")
 
 
+@rate_limit(max_calls=10, window_seconds=60)
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/start`` — pairing deep-link or welcome message.
 
@@ -242,9 +243,13 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             http = get_http(context)
             config = get_config(context)
+            headers: dict[str, str] = {}
+            if config.jarvis_api_key:
+                headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
             await http.post(
                 f"{config.learning_engine_url}/api/executive/focus/log",
                 json={"duration_hours": data_minutes / 60},
+                headers=headers,
                 timeout=10.0,
             )
         except Exception:

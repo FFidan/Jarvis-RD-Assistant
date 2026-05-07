@@ -157,13 +157,35 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
     ),
     (
         59,
-        "daily_intent table exists with user_id INTEGER nullable",
+        "daily_intent table exists with user_id TEXT",
         """
         SELECT to_regclass('public.daily_intent') IS NOT NULL
            AND (SELECT data_type FROM information_schema.columns
                  WHERE table_schema='public'
                    AND table_name='daily_intent'
-                   AND column_name='user_id') = 'integer'
+                   AND column_name='user_id') = 'text'
+        """,
+    ),
+    (
+        60,
+        "daily_intent.user_id is INTEGER",
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_name = 'daily_intent'
+        ) AND (
+            SELECT data_type FROM information_schema.columns
+            WHERE table_name = 'daily_intent' AND column_name = 'user_id'
+        ) = 'integer'
+        """,
+    ),
+    (
+        61,
+        "daily_intent.created_at exists NOT NULL",
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'daily_intent' AND column_name = 'created_at' AND is_nullable = 'NO'
+        )
         """,
     ),
 )
@@ -175,18 +197,35 @@ def _strip_outer_transaction_control(sql: str) -> str:
     PL/pgSQL function bodies (`CREATE FUNCTION ... AS $$ BEGIN ... END $$`) and
     DO blocks (`DO $$ BEGIN ... END $$`) have their own bare `BEGIN`/`END;` that
     must not be stripped — only the outer transaction-control statements should.
+
+    Uses a character-level state machine so that a ``$$`` open and close on the
+    same line (e.g. ``DO $$ BEGIN END $$;``) toggles the flag twice and ends up
+    outside a dollar-quoted block — the old line-count approach got this right
+    by accident only when the line had an even number of ``$$`` tokens, but
+    split the "chunk outside dollar" check from the "line-to-filter" decision
+    in a way that could incorrectly suppress transaction-control keywords that
+    appear in the same source line as an inline dollar-quoted block.
     """
-    out: list[str] = []
+    lines: list[str] = []
     in_dollar = False
-    for line in sql.splitlines(keepends=True):
-        # Toggle on every `$$` occurrence in the line. Migrations in this repo
-        # use bare `$$` (no tagged dollar-quotes); revisit if `$tag$` appears.
-        for _ in range(line.count("$$")):
+    i = 0
+    while i < len(sql):
+        dollar_idx = sql.find("$$", i)
+        if dollar_idx == -1:
+            chunk = sql[i:]
+            i = len(sql)
+        else:
+            chunk = sql[i:dollar_idx]
+            i = dollar_idx + 2
+        if not in_dollar:
+            for line in chunk.split("\n"):
+                if not _TXN_LINE_RE.match(line):
+                    lines.append(line)
+        else:
+            lines.extend(chunk.split("\n"))
+        if dollar_idx != -1:
             in_dollar = not in_dollar
-        if not in_dollar and _TXN_LINE_RE.match(line):
-            continue
-        out.append(line)
-    return "".join(out)
+    return "\n".join(lines)
 
 
 async def _repair_false_applied_migrations(

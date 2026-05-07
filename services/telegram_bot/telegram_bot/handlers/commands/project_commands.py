@@ -7,7 +7,7 @@ import logging
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from telegram_bot.formatters import escape, truncate
+from telegram_bot.formatters import _BIDI_ZW_RE, escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
@@ -70,7 +70,7 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Usage: /newproject &lt;name&gt;", parse_mode="HTML")
         return
 
-    name = " ".join(context.args)[:200]
+    name = _BIDI_ZW_RE.sub("", " ".join(context.args)[:200])
     db = get_db(context)
     try:
         pm = ProjectManager(db)

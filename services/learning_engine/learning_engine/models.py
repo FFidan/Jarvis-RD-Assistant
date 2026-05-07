@@ -255,7 +255,7 @@ class TaskResponse(BaseModel):
 
 class MilestoneCreate(BaseModel):
     name: str = Field(..., max_length=255)
-    deadline: date | None = None
+    deadline: datetime = Field(...)
     description: str | None = None
 
 
@@ -271,7 +271,7 @@ class MilestoneResponse(BaseModel):
     id: int
     project_id: int
     name: str
-    deadline: date | None = None
+    deadline: datetime | None = None
     description: str | None = None
     completed: bool = False
     completed_at: datetime | None = None

@@ -140,12 +140,12 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     query = update.callback_query
     if query is None or context.user_data is None:
         return ConversationHandler.END
-    await query.answer()
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
+    await query.answer()
 
     card = context.user_data.get("current_card")
     if not card:
@@ -170,12 +170,12 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     if query is None or query.data is None or context.user_data is None:
         return ConversationHandler.END
-    await query.answer()
 
     config = get_config(context)
     db_pool = get_db(context)
     if not await auth_check(update, config, db_pool):
         return ConversationHandler.END
+    await query.answer()
 
     rating = int(query.data.split("_")[1])
     label = RATING_LABELS.get(rating, str(rating))

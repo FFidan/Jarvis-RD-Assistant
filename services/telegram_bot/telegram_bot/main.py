@@ -70,6 +70,7 @@ async def post_init(application: Application) -> None:
             BotCommand("papers", "List recent papers"),
             BotCommand("briefing", "Daily briefing"),
             BotCommand("next", "Next paper recommendation"),
+            BotCommand("inbox", "Show your unread papers"),
             BotCommand("pulse_now", "Run Pulse discovery now"),
             BotCommand("review", "Start flashcard review"),
             BotCommand("stats", "Learning statistics"),

@@ -81,7 +81,7 @@ cd Jarvis-RD-Assistant
 - See [docs/DEPLOYMENT.md — Remote access via Tailscale](docs/DEPLOYMENT.md#remote-access-via-tailscale) for off-LAN access.
 - **Local source rebuilds:** after editing or pulling source-only changes, use `make rebuild-local` to rebuild the core app containers, or `make rebuild-dashboard` for frontend-only changes. Telegram is optional and has its own `make rebuild-telegram` target.
 
-First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard uses HTTPS with a self-signed cert on first boot — click through the browser warning.
+First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard is served over plain HTTP on port 3001 by default (direct access). For public HTTPS, use Caddy with Let's Encrypt (`--profile letsencrypt`).
 
 ### GPU Acceleration (optional)
 
@@ -100,7 +100,7 @@ source versions.env    # optional — docker-compose.yml has fallbacks
 docker compose up -d
 ```
 
-Then open the dashboard URL (default `https://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
+Then open the dashboard URL (default `http://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
 
 ## Database upgrade notes
 

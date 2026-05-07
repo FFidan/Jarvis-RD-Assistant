@@ -70,7 +70,7 @@ if printf '%s\n' "$INIT_SQL_NO_COMMENTS" | grep -q "generate_series"; then
 fi
 
 BOOTSTRAP_SQL=$(printf '%s\n' "$INIT_SQL_NO_COMMENTS" | sed -n '/CREATE TABLE IF NOT EXISTS schema_migrations/,$p')
-RUNTIME_REPLAY_VERSIONS=(33 49 50 51 52 53 54 55 56 57 58)
+RUNTIME_REPLAY_VERSIONS=(33 52 53)
 
 for version in "${RUNTIME_REPLAY_VERSIONS[@]}"; do
   if printf '%s\n' "$BOOTSTRAP_SQL" | grep -qE "\\($version\\)"; then

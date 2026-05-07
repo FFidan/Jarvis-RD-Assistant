@@ -125,12 +125,12 @@ async def test_list_cards_builds_query_with_filters():
 
 @pytest.mark.asyncio
 async def test_update_card_returns_existing_row_when_body_is_empty():
-    """update_card is a no-op when no fields change: first fetchrow checks existence,
-    second fetchrow returns the full row."""
+    """update_card is a no-op when no fields change: one fetchrow FOR UPDATE returns
+    the full row, which is returned directly without a second query."""
     pool, conn = _make_pool_and_conn()
     card_row = _make_card_row(id=9)
-    # First call: SELECT id (existence check), second call: SELECT * (no-op fetch)
-    conn.fetchrow.side_effect = [card_row, card_row]
+    # Single call: SELECT * ... FOR UPDATE (existence check + full row)
+    conn.fetchrow.return_value = card_row
 
     response = await cards.update_card.__wrapped__(
         MagicMock(),
@@ -140,7 +140,7 @@ async def test_update_card_returns_existing_row_when_body_is_empty():
     )
 
     assert response.id == 9
-    assert conn.fetchrow.await_count == 2
+    assert conn.fetchrow.await_count == 1
 
 
 @pytest.mark.asyncio

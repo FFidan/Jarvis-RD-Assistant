@@ -123,6 +123,23 @@ def assert_multi_tenant_not_implemented() -> None:
     raise NotImplementedError("multi-tenant auth not yet implemented; use Wave-6 ownership helpers")
 
 
+def single_tenant_user_id() -> None:
+    """Return the implicit user-id for single-tenant (pre-Wave-4) callers.
+
+    In the current single-tenant deployment every authenticated request belongs
+    to the one configured owner, which is represented in the DB as ``None`` for
+    ``user_id`` columns (matched via ``IS NOT DISTINCT FROM NULL``).
+
+    Returns
+    -------
+    None
+        Always ``None`` — the single-tenant sentinel value. Wave-4 will replace
+        calls to this function with real user-id resolution from the pairing table.
+    """
+    # allow-user-id-none: pre-Wave-4 single-tenant
+    return None
+
+
 def validate_production_config() -> None:
     """Crash at startup if production config is unsafe.
 

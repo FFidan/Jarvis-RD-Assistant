@@ -58,12 +58,14 @@ async def test_rate_limit_gc_always_prunes_stale_timestamps():
     # that are far outside the window.
     stale_count = 5
     far_past = time.monotonic() - (window_seconds * 10)  # 10x outside window
-    key = f"{chat_id}:_noop_handler"
-    _timestamps[key] = [far_past] * stale_count
 
     @rate_limit(max_calls=3, window_seconds=window_seconds)
     async def _noop_handler(update, context):  # type: ignore[no-untyped-def]
         return "ok"
+
+    # Key format uses __module__.__qualname__ since W4-8; @wraps copies both to the wrapper.
+    key = f"{chat_id}:{_noop_handler.__module__}.{_noop_handler.__qualname__}"
+    _timestamps[key] = [far_past] * stale_count
 
     update = _make_update(chat_id=chat_id)
     context = _make_context()

@@ -4,6 +4,7 @@ import logging
 
 import asyncpg
 import httpx
+from jarvis_common.auth import single_tenant_user_id
 from telegram import Bot
 
 from telegram_bot.config import BotConfig
@@ -294,4 +295,4 @@ async def run_paper_digest(
     # Fallback to simple digest
     logger.warning("Falling back to simple digest (API returned no data)")
     # TODO multi-tenant: resolve db_user_id via Telegram chat → DB user pairing
-    await _simple_digest(db_pool, bot, config, owner, db_user_id=None)
+    await _simple_digest(db_pool, bot, config, owner, db_user_id=single_tenant_user_id())

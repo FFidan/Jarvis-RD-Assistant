@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -154,13 +154,17 @@ export function ResearchFeedPage() {
   const { data: counts } = useFeedCounts();
 
   // ── default-landing redirect ───────────────────────────────────────────────
+  // Ref prevents a second redirect if counts changes identity after the first
+  // redirect fires (e.g. React Query background refetch returns a new object).
+  const hasRedirectedRef = useRef(false);
   useEffect(() => {
+    if (hasRedirectedRef.current) return;
     if (!searchParams.get('surface') && counts) {
+      hasRedirectedRef.current = true;
       const target = (counts.inbox ?? 0) > 0 ? 'inbox' : 'library';
       setSearchParams({ surface: target }, { replace: true });
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [counts]);
+  }, [counts, searchParams, setSearchParams]);
 
   // ── legacy ?tab=pulse redirect → /my-day ───────────────────────────────────
   useEffect(() => {

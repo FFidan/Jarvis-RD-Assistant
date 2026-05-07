@@ -19,6 +19,8 @@ import type { ConfigEntry, ModelFitDetail } from '@/types';
 
 /** Power-of-2 snap steps for the num_ctx slider (§10.2). */
 const NUM_CTX_STOPS = [2048, 4096, 8192, 16384, 32768, 65536] as const;
+type NumCtx = (typeof NUM_CTX_STOPS)[number];
+const isNumCtx = (n: number): n is NumCtx => (NUM_CTX_STOPS as readonly number[]).includes(n);
 
 interface HardwareInfoApi {
   vram_gb?: number;
@@ -79,7 +81,7 @@ function largestFittingStop(
   vramGb: number,
   stops: readonly number[],
 ): number {
-  let best = stops[0];
+  let best: number = stops[0] ?? 2048;
   for (const stop of stops) {
     if (stop > fitDetail.max_num_ctx) break;
     const req = computeRequiredVram(fitDetail, stop);
@@ -101,11 +103,11 @@ function clampToNonUnfit(
   const allowed = stops.filter(
     (s) => s <= fitDetail.max_num_ctx && fitStatus(computeRequiredVram(fitDetail, s), vramGb) !== 'unfit',
   );
-  if (allowed.length === 0) return stops[0];
+  if (allowed.length === 0) return stops[0] ?? 2048;
   // If current value is allowed, keep it; otherwise clamp to max allowed
   if (allowed.includes(value)) return value;
   const sorted = [...allowed].sort((a, b) => a - b);
-  return sorted[sorted.length - 1];
+  return sorted[sorted.length - 1] ?? 2048;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +277,7 @@ function NumCtxSlider({
 
   // Local slider state (index into stops array)
   const [sliderIndex, setSliderIndex] = useState<number>(() => {
-    const idx = stops.indexOf(initialStop);
+    const idx = isNumCtx(initialStop) ? stops.indexOf(initialStop) : -1;
     return idx >= 0 ? idx : 0;
   });
 
@@ -315,9 +317,10 @@ function NumCtxSlider({
     const rawStop = stops[idx] ?? stops[0];
 
     // Clamp: block unfit stops (§10.3)
-    let clampedStop = rawStop;
+    let clampedStop: NumCtx = rawStop;
     if (fitDetail && vramGb > 0) {
-      clampedStop = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+      const clamped = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+      clampedStop = isNumCtx(clamped) ? clamped : rawStop;
     }
     const clampedIdx = stops.indexOf(clampedStop);
     setSliderIndex(clampedIdx >= 0 ? clampedIdx : 0);
@@ -326,9 +329,10 @@ function NumCtxSlider({
   const handleSliderCommit = (values: number[]) => {
     const idx = values[0] ?? 0;
     const rawStop = stops[idx] ?? stops[0];
-    let clampedStop = rawStop;
+    let clampedStop: NumCtx = rawStop;
     if (fitDetail && vramGb > 0) {
-      clampedStop = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+      const clamped = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+      clampedStop = isNumCtx(clamped) ? clamped : rawStop;
     }
     saveMut.mutate({ key: numCtxKey, value: clampedStop });
   };

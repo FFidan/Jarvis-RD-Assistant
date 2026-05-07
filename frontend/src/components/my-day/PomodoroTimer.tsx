@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -41,6 +41,11 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
     mutationFn: logFocusSession,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-day'] }),
   });
+  // Ref so effects and callbacks always call the current mutation handle without
+  // being listed as deps (adding logMutation to deps would re-fire on every
+  // React Query internal mutation-handle refresh, which is undesired).
+  const logMutationRef = useRef(logMutation);
+  logMutationRef.current = logMutation;
 
   // Recover wall-clock time after page refresh
   useEffect(() => {
@@ -54,13 +59,12 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
     } else {
       s.tick();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run once on mount
+  }, []); // Run once on mount — all store reads go through getState(), no closure deps
 
   // Auto-log completed sessions (Bug #1)
   useEffect(() => {
     if (!completedSession) return;
-    logMutation.mutate({
+    logMutationRef.current.mutate({
       duration_hours: completedSession.durationSeconds / 3600,
       task_id: completedSession.taskId,
       paper_id: completedSession.paperId,
@@ -69,7 +73,6 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
       new Notification('Pomodoro Complete!', { body: 'Time for a break.' });
     }
     clearCompletedSession();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completedSession, clearCompletedSession]);
 
   // Request notification permission on first Start Focus (Bug #7)
@@ -84,13 +87,12 @@ export function PomodoroTimer({ todayFocusHours, focusStreakDays }: PomodoroTime
   const handleStopAndLog = useCallback(() => {
     const result = stopAndLog();
     if (result && result.durationSeconds > 0) {
-      logMutation.mutate({
+      logMutationRef.current.mutate({
         duration_hours: result.durationSeconds / 3600,
         task_id: result.taskId,
         paper_id: result.paperId,
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopAndLog]);
 
   // Format seconds to MM:SS

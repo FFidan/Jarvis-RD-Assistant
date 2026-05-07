@@ -533,7 +533,7 @@ fi
 # -----------------------------------------------------------------------------
 # 12. Summary (only reached when all mandatory services are healthy)
 # -----------------------------------------------------------------------------
-DASHBOARD_URL="https://localhost:3001"
+DASHBOARD_URL="http://localhost:3001"
 case "$ACCESS_MODE_LABEL" in
   lan)
     if [ -n "$LAN_IP" ]; then

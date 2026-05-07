@@ -13,3 +13,11 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+  - repo: local
+    hooks:
+      - id: check-migrations-no-tx
+        name: Check migrations don't use outer transactions / pre-seed RUNTIME_REPLAY_VERSIONS
+        entry: bash scripts/check-migrations-no-tx.sh
+        language: system
+        pass_filenames: false
+        files: ^(db/migrations/|db/init\.sql|scripts/check-migrations-no-tx\.sh)

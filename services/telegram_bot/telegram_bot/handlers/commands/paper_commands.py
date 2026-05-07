@@ -139,9 +139,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     http = get_http(context)
     config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/stats",
+            headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -163,6 +167,9 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db = get_db(context)
     http = get_http(context)
     config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
 
     # New papers in last 24 hours
     since = datetime.now(UTC) - timedelta(hours=24)
@@ -172,7 +179,11 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Due cards from learning engine
     due_cards = 0
     try:
-        resp = await http.get(f"{config.learning_engine_url}/api/stats", timeout=15.0)
+        resp = await http.get(
+            f"{config.learning_engine_url}/api/stats",
+            headers=headers,
+            timeout=15.0,
+        )
         resp.raise_for_status()
         stats = resp.json()
         due_cards = stats.get("due_now", 0)

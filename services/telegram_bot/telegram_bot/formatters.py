@@ -465,9 +465,7 @@ def format_weekly_digest(digest: dict) -> str:
                 lines.append(f"  \u2022 {title} {conf}")
 
     result = "\n".join(lines)
-    if len(result) > 4000:
-        result = result[:3997] + "..."
-    return result
+    return truncate(result)
 
 
 def format_author_alert(author_name: str, papers: list[dict]) -> str:
@@ -505,6 +503,7 @@ def format_help() -> str:
         "/papers — Recent papers or search\n"
         "/briefing — Morning briefing\n"
         "/next — Next paper recommendation\n"
+        "/inbox — Show your unread papers\n"
         "/pulse_now — Run Pulse discovery now\n\n"
         "<b>Learning:</b>\n"
         "/review — Start flashcard review\n"

@@ -49,6 +49,7 @@ async def get_my_day(
             WHERE (t.status = 'todo'
                    AND (t.deadline IS NULL OR t.deadline < CURRENT_DATE + INTERVAL '1 day'))
                OR (t.status = 'done' AND t.completed_at::date = CURRENT_DATE)
+               OR t.status IN ('in_progress', 'blocked')
             ORDER BY t.status ASC, t.priority ASC, t.deadline ASC NULLS LAST
             LIMIT 20
             """
@@ -208,10 +209,13 @@ async def log_focus_session(
                     user_id,
                 )
             # Atomic upsert — ON CONFLICT handles concurrent inserts safely.
+            _user_id = await current_user_id_or_none(request)
             await conn.execute(
-                """INSERT INTO daily_log (log_date, focus_hours)
-                VALUES (CURRENT_DATE, $1)
-                ON CONFLICT (log_date) DO UPDATE SET focus_hours = daily_log.focus_hours + $1""",
+                """INSERT INTO daily_log (user_id, log_date, focus_hours)
+                VALUES ($1, CURRENT_DATE, $2)
+                ON CONFLICT (user_id, log_date)
+                DO UPDATE SET focus_hours = daily_log.focus_hours + $2""",
+                _user_id,
                 payload.duration_hours,
             )
 
