@@ -132,7 +132,7 @@ async def test_fan_out_calls_every_enabled_source():
     profile = _make_profile()
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, source_counts = await discover_candidates(
+        result, source_counts, _ = await discover_candidates(
             pool, http_client, profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -165,7 +165,7 @@ async def test_graceful_source_failure():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, source_counts = await discover_candidates(
+        result, source_counts, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -200,7 +200,7 @@ async def test_dedup_by_doi():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -236,7 +236,7 @@ async def test_dedup_by_arxiv_id():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -267,7 +267,7 @@ async def test_dedup_by_title_hash():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -284,7 +284,7 @@ async def test_empty_when_no_enabled_sources():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
-        result, source_counts = await discover_candidates(
+        result, source_counts, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
         m.assert_not_called()
@@ -312,7 +312,7 @@ async def test_unknown_source_class_is_skipped():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -390,7 +390,7 @@ async def test_source_cache_used_when_provided():
 
     profile = _make_profile()
     with patch("paper_ingestion.pulse.discovery.get_source_class") as m:
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool,
             MagicMock(),
             profile,

@@ -136,15 +136,30 @@ async def _validate_pdf_url(url: str) -> None:
     """
     parsed = urlparse(url)
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
-    allowed_schemes = ("https", "http") if dev_mode else ("https",)
-    if parsed.scheme not in allowed_schemes:
-        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}. HTTPS required.")
+
+    # Per-domain HTTP allowlist for development environments.
+    # In dev mode, http:// is accepted for these local service hostnames
+    # and for domains in ALLOWED_PDF_DOMAINS (to support local testing).
+    # Production always requires HTTPS.
+    DEV_HTTP_ALLOWLIST = {"localhost", "127.0.0.1", "host.docker.internal"}
 
     hostname = parsed.hostname
+
+    # Scheme check first so non-http/https schemes get the scheme error message
+    if (
+        parsed.scheme == "http"
+        and dev_mode
+        and hostname is not None
+        and (hostname in DEV_HTTP_ALLOWLIST or hostname in ALLOWED_PDF_DOMAINS)
+    ):
+        pass  # allowed in dev mode
+    elif parsed.scheme != "https":
+        raise ValueError(f"Unsupported URL scheme: {parsed.scheme}. HTTPS required.")
+
     if not hostname:
         raise ValueError("URL has no hostname")
 
-    if hostname not in ALLOWED_PDF_DOMAINS:
+    if hostname not in ALLOWED_PDF_DOMAINS and hostname not in DEV_HTTP_ALLOWLIST:
         raise ValueError(f"Domain '{hostname}' is not allowed for PDF downloads")
 
     # Resolve hostname and block private IPs

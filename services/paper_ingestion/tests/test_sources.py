@@ -134,7 +134,7 @@ async def test_discovery_fetch_sources_uses_display_order_ordering():
         recent_negative_titles=[],
     )
     async with httpx.AsyncClient() as http_client:
-        result, source_counts = await discover_candidates(
+        result, source_counts, _ = await discover_candidates(
             db_pool=pool,
             http_client=http_client,
             profile=profile,

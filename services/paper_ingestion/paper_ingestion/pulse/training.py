@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import pickle
+from datetime import UTC, datetime
 from typing import Any
 
 from jarvis_common.jobs import JobContext
+
+logger = logging.getLogger(__name__)
 
 FEATURE_NAMES: list[str] = [
     "embedding",
@@ -37,6 +41,7 @@ async def train_classifier_model(
 ) -> dict[str, Any]:
     """Train and persist an active logistic classifier when enough ratings exist."""
     try:
+        import sklearn
         from sklearn.linear_model import LogisticRegression
         from sklearn.metrics import roc_auc_score
     except ImportError:
@@ -124,7 +129,13 @@ async def train_classifier_model(
     else:
         metrics["auc"] = None
         metrics["auc_degradation_reason"] = "validation split lacks both classes"
-    blob = pickle.dumps(model)
+    blob = pickle.dumps(
+        {
+            "model": model,
+            "sklearn_version": sklearn.__version__,
+            "trained_at": datetime.now(UTC).isoformat(),
+        }
+    )
 
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -177,7 +188,23 @@ async def load_active_classifier(
     if row is None:
         return None, {"available": False, "degradation_reason": "no active model"}
     try:
-        model = pickle.loads(bytes(row["model_blob"]))
+        raw = pickle.loads(bytes(row["model_blob"]))
+        # Support both legacy format (bare model) and new format (dict with metadata)
+        if isinstance(raw, dict) and "model" in raw:
+            import sklearn
+
+            model = raw["model"]
+            saved_version = raw.get("sklearn_version")
+            if saved_version and saved_version != sklearn.__version__:
+                logger.warning(
+                    "load_active_classifier: sklearn version mismatch — "
+                    "model trained with %s, current %s; predictions may differ",
+                    saved_version,
+                    sklearn.__version__,
+                )
+        else:
+            # Legacy: bare model pickle (no version metadata)
+            model = raw
     except Exception:
         return None, {"available": False, "degradation_reason": "active model could not be loaded"}
     return model, {

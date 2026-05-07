@@ -364,33 +364,60 @@ class Embedder:
         ------
         RuntimeError
             If the embedding service times out, is unreachable, or returns
-            an HTTP error.
+            an HTTP error after up to 3 attempts (5xx / timeout are retried).
         """
         if not texts:
             return []
 
         litellm_config = get_litellm_config()
-        try:
-            response = await self.http_client.post(
-                f"{litellm_config.base_url}/v1/embeddings",
-                json={"model": EMBEDDING_MODEL, "input": texts},
-                headers=build_litellm_headers(litellm_config),
-                timeout=60.0,
-            )
-            response.raise_for_status()
-        except httpx.TimeoutException as e:
-            logger.error("Embedding service timed out: %r", e, exc_info=True)
-            raise RuntimeError("Embedding service timed out") from e
-        except httpx.ConnectError as e:
-            logger.error("Embedding service unavailable: %r", e, exc_info=True)
-            raise RuntimeError("Embedding service unavailable") from e
-        except httpx.HTTPStatusError as e:
-            body_preview = _sanitize_embedding_error_detail(e.response.text or "")
-            logger.error("Embedding service HTTP %d: %s", e.response.status_code, body_preview)
-            detail = f"Embedding service error (HTTP {e.response.status_code})"
-            if body_preview:
-                detail = f"{detail}: {body_preview}"
-            raise RuntimeError(detail) from e
+        last_exc: Exception | None = None
+        for attempt in range(3):
+            try:
+                response = await self.http_client.post(
+                    f"{litellm_config.base_url}/v1/embeddings",
+                    json={"model": EMBEDDING_MODEL, "input": texts},
+                    headers=build_litellm_headers(litellm_config),
+                    timeout=60.0,
+                )
+                response.raise_for_status()
+                break
+            except httpx.TimeoutException as exc:
+                if attempt < 2:
+                    last_exc = exc
+                    logger.warning(
+                        "Embedding service timed out (attempt %d/3): %r", attempt + 1, exc
+                    )
+                    await asyncio.sleep(2**attempt)
+                    continue
+                logger.error("Embedding service timed out: %r", exc, exc_info=True)
+                raise RuntimeError("Embedding service timed out") from exc
+            except httpx.ConnectError as exc:
+                logger.error("Embedding service unavailable: %r", exc, exc_info=True)
+                raise RuntimeError("Embedding service unavailable") from exc
+            except httpx.HTTPStatusError as exc:
+                is_retryable = exc.response.status_code >= 500
+                if attempt < 2 and is_retryable:
+                    last_exc = exc
+                    logger.warning(
+                        "Embedding service HTTP %d (attempt %d/3), retrying",
+                        exc.response.status_code,
+                        attempt + 1,
+                    )
+                    await asyncio.sleep(2**attempt)
+                    continue
+                body_preview = _sanitize_embedding_error_detail(exc.response.text or "")
+                logger.error(
+                    "Embedding service HTTP %d: %s", exc.response.status_code, body_preview
+                )
+                detail = f"Embedding service error (HTTP {exc.response.status_code})"
+                if body_preview:
+                    detail = f"{detail}: {body_preview}"
+                raise RuntimeError(detail) from exc
+        else:
+            # All 3 retry attempts exhausted (timeout or 5xx path)
+            msg = f"Embedding service failed after 3 attempts: {last_exc}"
+            raise RuntimeError(msg) from last_exc
+
         data = response.json()
 
         # Sort by index to maintain order

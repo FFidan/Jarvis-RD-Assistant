@@ -52,6 +52,7 @@ def _block_sklearn_import(monkeypatch: pytest.MonkeyPatch) -> None:
 def _install_fake_sklearn(monkeypatch: pytest.MonkeyPatch) -> None:
     sklearn_mod = ModuleType("sklearn")
     sklearn_mod.__path__ = []  # type: ignore[attr-defined]
+    sklearn_mod.__version__ = "0.0.0-fake"  # type: ignore[attr-defined]
     linear_model_mod = ModuleType("sklearn.linear_model")
     metrics_mod = ModuleType("sklearn.metrics")
     linear_model_mod.LogisticRegression = FakeLogisticRegression  # type: ignore[attr-defined]
@@ -159,7 +160,11 @@ async def test_train_classifier_persists_active_fake_model(monkeypatch: pytest.M
     stored_feature_names = insert_call.args[3]
     metrics = insert_call.args[4]
 
-    model = pickle.loads(model_blob)
+    raw = pickle.loads(model_blob)
+    # New format: dict with model + metadata
+    assert isinstance(raw, dict)
+    model = raw["model"]
+    assert raw["sklearn_version"] == "0.0.0-fake"
     assert isinstance(model, FakeLogisticRegression)
     # 6 balanced rows → 20% val split takes 1 positive + 1 negative → 4 train rows.
     assert model.fitted_rows == 4
@@ -340,7 +345,9 @@ async def test_train_classifier_binary_signal_label_mapping(
     insert_call = conn.execute.await_args_list[1]
     # args[1] = user_id (new param from Group B user_id threading)
     model_blob = insert_call.args[2]
-    model = pickle.loads(model_blob)
+    raw = pickle.loads(model_blob)
+    assert isinstance(raw, dict)
+    model = raw["model"]
     assert isinstance(model, FakeLogisticRegression)
     assert set(model.labels) == {0, 1}, (
         "Labels must be binary {0, 1} — old 5-state mapping ('up'/'save'/'open') must be gone"

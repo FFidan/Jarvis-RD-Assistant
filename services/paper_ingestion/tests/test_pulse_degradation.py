@@ -93,7 +93,7 @@ async def test_no_openalex_key_baseline_arxiv_only():
         return _cls(arxiv_stub) if name == "arxiv" else None
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -125,7 +125,7 @@ async def test_s2_rate_limited_skipped():
         return _cls(stubs[name])
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
@@ -152,7 +152,7 @@ async def test_openalex_5xx_skipped():
         return _cls(stubs[name])
 
     with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
-        result, _ = await discover_candidates(
+        result, _, _ = await discover_candidates(
             pool, MagicMock(), _profile(), since=datetime(2026, 1, 1, tzinfo=UTC)
         )
     assert len(result) == 1

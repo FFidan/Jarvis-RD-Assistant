@@ -20,11 +20,28 @@ _DEFAULT_PROXY_CIDRS = [
     "192.168.0.0/16",
 ]
 
-_TRUSTED_PROXIES: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
-    ipaddress.ip_network(c.strip())
-    for c in (os.environ.get("TRUSTED_PROXY_CIDRS", "").split(",") + _DEFAULT_PROXY_CIDRS)
-    if c.strip()
-]
+
+def _build_trusted_proxies() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Build the trusted proxy network list from env + defaults."""
+    return [
+        ipaddress.ip_network(c.strip())
+        for c in (os.environ.get("TRUSTED_PROXY_CIDRS", "").split(",") + _DEFAULT_PROXY_CIDRS)
+        if c.strip()
+    ]
+
+
+_TRUSTED_PROXIES: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = _build_trusted_proxies()
+
+
+def refresh_trusted_proxies() -> None:
+    """Re-build the trusted proxy list from the current environment.
+
+    Tests that monkeypatch TRUSTED_PROXY_CIDRS after import must call this so
+    the module-level cache reflects the new environment.  Mirrors the
+    ``auth.refresh_api_key_cache()`` pattern.
+    """
+    global _TRUSTED_PROXIES
+    _TRUSTED_PROXIES = _build_trusted_proxies()
 
 
 def _is_trusted(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:

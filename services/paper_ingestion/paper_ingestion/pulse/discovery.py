@@ -131,11 +131,8 @@ async def discover_candidates(
     profile: UserProfile,
     since: datetime,
     source_cache: dict | None = None,
-    include_diagnostics: bool = False,
-) -> (
-    tuple[list[PaperCreate], dict[str, int]]
-    | tuple[list[PaperCreate], dict[str, int], SourceDiagnostics]
-):
+    include_diagnostics: bool = True,
+) -> tuple[list[PaperCreate], dict[str, int], SourceDiagnostics]:
     """Fan out to all enabled sources and return a deduplicated candidate list.
 
     Parameters
@@ -154,14 +151,18 @@ async def discover_candidates(
         instance (e.g. ``app.state.sources``).  When provided, cached instances
         are preferred so rate-limiter state persists across Pulse runs.  A new
         instance is created only for source types absent from the cache.
+    include_diagnostics:
+        Deprecated parameter; diagnostics are always returned.  Kept for
+        backward compatibility; ignored.
 
     Returns
     -------
-    tuple[list[PaperCreate], dict[str, int]]
-        A 2-tuple of:
+    tuple[list[PaperCreate], dict[str, int], SourceDiagnostics]
+        A 3-tuple of:
         - Deduplicated candidates, first-occurrence wins.  Returns ``[]`` if no
           sources are enabled or if every source fails.
         - Per-plugin raw fetch counts keyed by source class name.
+        - Per-plugin diagnostic dicts keyed by source class name.
     """
     async with db_pool.acquire() as conn:
         source_rows = await conn.fetch(
@@ -170,7 +171,7 @@ async def discover_candidates(
         )
 
     if not source_rows:
-        return ([], {}, {}) if include_diagnostics else ([], {})
+        return ([], {}, {})
 
     sources: list[PaperSource] = []
     for row in source_rows:
@@ -195,7 +196,7 @@ async def discover_candidates(
             logger.exception("pulse.discover: failed to instantiate source %s", source_type)
 
     if not sources:
-        return ([], {}, {}) if include_diagnostics else ([], {})
+        return ([], {}, {})
 
     per_source_cap = max(
         10,
@@ -257,6 +258,4 @@ async def discover_candidates(
         total_raw,
         len(candidates),
     )
-    if include_diagnostics:
-        return candidates, source_counts, source_diagnostics
-    return candidates, source_counts
+    return candidates, source_counts, source_diagnostics

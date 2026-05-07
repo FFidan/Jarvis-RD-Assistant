@@ -39,9 +39,10 @@ FUZZY_THRESHOLD = 97  # Minimum fuzz.partial_ratio score (tightened for anti-hal
 class Confidence(StrEnum):
     """Summary confidence level based on quote verification pass rate.
 
-    HIGH = 100% of quotes verified, MEDIUM = >50%, LOW = <=50%.
+    NONE = no findings to verify, HIGH = 100% verified, MEDIUM = >50%, LOW = <=50%.
     """
 
+    NONE = "NONE"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"
@@ -216,7 +217,7 @@ class QuoteVerifier:
                 verified_count=0,
                 failed_count=0,
                 pass_rate=0.0,
-                confidence=Confidence.LOW,
+                confidence=Confidence.NONE,
                 results=[],
             )
 

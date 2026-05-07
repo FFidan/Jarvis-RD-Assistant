@@ -10,6 +10,10 @@ The public surface — ``__init__(model_name)`` + ``rerank(query, passages,
 top_k) -> list[tuple[int, float]]`` — is duck-type-compatible with
 :class:`~paper_ingestion.ingestion.reranker.Reranker` so the eval harness
 (D6-A) can swap them transparently.
+
+**GPU requirement:** This module requires a CUDA-capable GPU for practical
+inference.  CPU inference is supported but very slow for large passage sets.
+Inputs are capped at ``MAX_PASSAGES`` passages per call to bound latency.
 """
 
 from __future__ import annotations
@@ -17,13 +21,25 @@ from __future__ import annotations
 import logging
 import os
 
-import torch
-from transformers import (
-    AutoModelForCausalLM,  # pyright: ignore[reportPrivateImportUsage]
-    AutoTokenizer,  # pyright: ignore[reportPrivateImportUsage]
-)
+try:
+    import torch
+    from transformers import (
+        AutoModelForCausalLM,  # pyright: ignore[reportPrivateImportUsage]
+        AutoTokenizer,  # pyright: ignore[reportPrivateImportUsage]
+    )
+
+    _HAS_QWEN3 = True
+except ImportError:
+    torch = None  # type: ignore[assignment]
+    AutoModelForCausalLM = None  # type: ignore[assignment]
+    AutoTokenizer = None  # type: ignore[assignment]
+    _HAS_QWEN3 = False
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of passages accepted per rerank() call.
+# Bounds GPU memory usage and per-call latency on large result sets.
+MAX_PASSAGES = 50
 
 # ---------------------------------------------------------------------------
 # Prompt template (per Qwen3-Reranker model card)
@@ -58,8 +74,8 @@ class Qwen3Reranker:
 
     def __init__(self, model_name: str = "Qwen/Qwen3-Reranker-0.6B") -> None:
         self._model_name = model_name
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._dtype = torch.float16 if self._device == "cuda" else torch.float32
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"  # type: ignore[union-attr]
+        self._dtype = torch.float16 if self._device == "cuda" else torch.float32  # type: ignore[union-attr]
 
         logger.info(
             "Loading Qwen3Reranker model %s on %s (%s)",
@@ -67,8 +83,8 @@ class Qwen3Reranker:
             self._device,
             self._dtype,
         )
-        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self._model = AutoModelForCausalLM.from_pretrained(
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name)  # type: ignore[union-attr]
+        self._model = AutoModelForCausalLM.from_pretrained(  # type: ignore[union-attr]
             model_name,
             torch_dtype=self._dtype,
         ).to(self._device)
@@ -99,7 +115,8 @@ class Qwen3Reranker:
         query:
             The search query.
         passages:
-            List of passage texts to rerank.
+            List of passage texts to rerank.  Silently truncated to
+            ``MAX_PASSAGES`` entries to bound GPU memory and latency.
         top_k:
             Number of top results to return.
 
@@ -113,13 +130,21 @@ class Qwen3Reranker:
         if not passages:
             return []
 
+        if len(passages) > MAX_PASSAGES:
+            logger.warning(
+                "Qwen3Reranker.rerank: truncating %d passages to MAX_PASSAGES=%d",
+                len(passages),
+                MAX_PASSAGES,
+            )
+            passages = passages[:MAX_PASSAGES]
+
         indexed_scores: list[tuple[int, float]] = []
 
         # Determinism note: with do_sample=False and a fixed model checkpoint,
         # each forward pass over the same token sequence is fully deterministic
         # (no temperature sampling, no random dropout in eval() mode).  No
         # manual seed is required.
-        with torch.inference_mode():
+        with torch.inference_mode():  # type: ignore[union-attr]
             for idx, passage in enumerate(passages):
                 prompt = _PROMPT_TEMPLATE.format(query=query, passage=passage)
                 inputs = self._tokenizer(
@@ -163,6 +188,8 @@ def get_qwen3_reranker() -> Qwen3Reranker | None:
 
     Tests can reset by setting ``qwen3_reranker._instance = None``.
     """
+    if not _HAS_QWEN3:
+        return None
     global _instance
     if _instance is not None:
         return _instance

@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import os
 from pathlib import Path
 
 import asyncpg
@@ -29,6 +30,12 @@ from paper_ingestion.services.pdf_workflow import run_process_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
+
+
+def _is_dev_mode() -> bool:
+    """Return True when DEV_MODE=true (case-insensitive)."""
+    return os.environ.get("DEV_MODE", "false").lower() == "true"
+
 
 # ---------------------------------------------------------------------------
 # POST /api/download-pdf/{paper_id}
@@ -176,16 +183,17 @@ async def process_pdf(
         )
     except RuntimeError as exc:
         request_id = getattr(request.state, "request_id", None) or str(paper_id)
-        logger.exception("PDF processing failed", extra={"request_id": request_id})
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "detail": "PDF processing failed",
+        if _is_dev_mode():
+            detail: dict = {
+                "detail": str(exc),
                 "error_type": type(exc).__name__,
                 "error_detail": str(exc)[:200],
                 "request_id": request_id,
-            },
-        ) from exc
+            }
+        else:
+            logger.exception("PDF process 502", extra={"request_id": request_id, "exc": str(exc)})
+            detail = {"detail": "PDF processing failed", "request_id": request_id}
+        raise HTTPException(status_code=502, detail=detail) from exc
 
 
 # ---------------------------------------------------------------------------

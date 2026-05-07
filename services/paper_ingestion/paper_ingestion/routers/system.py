@@ -375,6 +375,7 @@ async def get_model_recommendations(
 
 
 @router.post("/models/{tag:path}/pull")
+@limiter.limit("3/minute")
 async def pull_system_model(
     tag: str,
     request: Request,
@@ -402,6 +403,7 @@ async def pull_system_model(
 
 
 @router.delete("/models/{tag:path}", status_code=204, response_class=Response)
+@limiter.limit("3/minute")
 async def delete_system_model(tag: str, request: Request) -> Response:
     """Delete an inactive Ollama model tag."""
     if not _TAG_RE.match(tag):
