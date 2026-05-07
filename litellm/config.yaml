@@ -27,7 +27,13 @@ model_list:
       model: "ollama/qwen3:14b"
       api_base: "http://ollama:11434"
       temperature: 0.2
-      num_ctx: 32768
+      # 32k context inflated the KV cache to ~10 GB and pushed the 14B model
+      # off the 16 GB GPU (offloaded 11/41 layers → 76% CPU, observed via
+      # `ollama logs`). 8k fits the model at full GPU and is plenty for RAG
+      # prompts. Bump up only if a workflow actually needs more context.
+      num_ctx: 8192
+      extra_body:
+        think: false                  # Ollama-native; LiteLLM forwards verbatim
 
   # --- "fast" alias: cheaper/faster model for simple tasks (relevance scoring, etc.) ---
 
@@ -47,6 +53,8 @@ model_list:
       api_base: "http://ollama:11434"
       temperature: 0.1
       num_ctx: 4096
+      extra_body:
+        think: false
 
   # --- "embed" alias: embedding model for paper chunk vectors ---
   # WARNING: Embedding models are NOT interchangeable — latency routing must
