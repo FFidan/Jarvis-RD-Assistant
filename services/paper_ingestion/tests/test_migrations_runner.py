@@ -53,7 +53,55 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
     seeded_versions = {int(value) for value in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
     assert set(range(1, 33)).issubset(seeded_versions)
     assert set(range(34, 49)).issubset(seeded_versions)
-    assert seeded_versions.isdisjoint({33, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58})
+    # 33 is intentionally absent (false-applied, repaired at runtime).
+    assert 33 not in seeded_versions
+    # 49-51 and 54-60 are now baked into init.sql.
+    assert {49, 50, 51, 54, 55, 56, 57, 58, 59, 60}.issubset(seeded_versions)
+    # 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT baked into
+    # init.sql; the runtime runner applies them on first boot.
+    assert seeded_versions.isdisjoint({52, 53})
+
+
+def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
+    """The schema_migrations seed list must cover all migration versions that
+    are baked into init.sql.  As a lightweight regression guard, assert that
+    the highest version in the seed list is >= the highest version present in
+    db/migrations/ (minus the versions intentionally deferred to the runner).
+
+    Specifically: versions 52 and 53 are deferred; everything else up to the
+    latest migration file should appear in the seed.
+    """
+    repo_root = Path(__file__).resolve().parents[3]
+    migrations_dir = repo_root / "db" / "migrations"
+    init_sql = (repo_root / "db" / "init.sql").read_text(encoding="utf-8")
+
+    bootstrap_sql = init_sql.split("SCHEMA-MIGRATIONS BOOTSTRAP", maxsplit=1)[1]
+    executable_bootstrap_sql = "\n".join(
+        line for line in bootstrap_sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    seeded_versions = {int(v) for v in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
+
+    # Collect all migration versions from db/migrations/*.sql
+    file_versions: list[int] = []
+    for sql_file in migrations_dir.glob("*.sql"):
+        try:
+            file_versions.append(int(sql_file.name.split("_")[0]))
+        except (ValueError, IndexError):
+            continue
+
+    if not file_versions:
+        return  # nothing to check
+
+    max_migration = max(file_versions)
+    # Versions intentionally deferred to the runtime runner (not baked into init.sql).
+    deferred = {33, 52, 53}
+    required = {v for v in range(1, max_migration + 1) if v not in deferred}
+    missing = required - seeded_versions
+    assert not missing, (
+        f"init.sql seed list is missing versions that should be baked in: {sorted(missing)}. "
+        f"Either bake their schema into init.sql and add them to the seed list, or add them "
+        f"to `deferred` in this test if they are intentionally applied by the runtime runner."
+    )
 
 
 def test_false_applied_repair_does_not_probe_mutable_config_values() -> None:

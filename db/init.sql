@@ -764,7 +764,7 @@ CREATE INDEX IF NOT EXISTS idx_pulse_cards_user ON pulse_cards(user_id) WHERE us
 CREATE TABLE IF NOT EXISTS recommendation_feedback (
     id              BIGSERIAL PRIMARY KEY,
     paper_id        BIGINT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
-    user_id         BIGINT,                                       -- NULL = single-tenant
+    user_id         INTEGER,                                      -- NULL = single-tenant
     signal          TEXT NOT NULL CHECK (signal IN ('positive', 'negative')),
     source          TEXT NOT NULL CHECK (source IN (
         'pulse_thumbs',          -- 👍/👎 on Pulse Deck card
@@ -877,6 +877,62 @@ CREATE INDEX IF NOT EXISTS idx_audit_log_user ON audit_log(user_id, timestamp DE
 CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action, timestamp DESC);
 
 -- =============================================================================
+-- MODULE: JOURNAL ENTRIES (migration 051)
+-- End-of-day reflection prompts. user_id follows INTEGER NULL convention.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id          SERIAL PRIMARY KEY,
+    user_id     INTEGER,
+    date        DATE NOT NULL DEFAULT CURRENT_DATE,
+    prompts     JSONB NOT NULL DEFAULT '{}',
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Per-user-per-date uniqueness (NULLS NOT DISTINCT so single-tenant NULL rows
+-- still deduplicate correctly).
+DO $$ BEGIN
+    ALTER TABLE journal_entries
+        ADD CONSTRAINT journal_entries_user_id_date_key
+        UNIQUE NULLS NOT DISTINCT (user_id, date);
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- =============================================================================
+-- MODULE: JOB PROGRESS (migration 054 + 058)
+-- Persistent progress + terminal outcome storage for procrastinate-backed jobs.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS job_progress (
+    jarvis_job_id TEXT PRIMARY KEY,
+    progress      REAL NOT NULL DEFAULT 0,
+    message       TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    -- Migration 058: terminal result/error payloads.
+    result        JSONB,
+    error         JSONB
+);
+
+CREATE INDEX IF NOT EXISTS ix_job_progress_updated_at ON job_progress(updated_at);
+
+-- =============================================================================
+-- MODULE: DAILY INTENT (migrations 059 + 060)
+-- Today's Intent persistence with INTEGER NULL user_id convention (post-060).
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS daily_intent (
+    user_id     INTEGER NULL,
+    intent_date DATE NOT NULL,
+    intent_text TEXT NOT NULL,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS daily_intent_user_date_uniq
+    ON daily_intent (user_id, intent_date) NULLS NOT DISTINCT;
+
+-- =============================================================================
 -- DB-004: shared updated_at trigger (migration 042)
 -- Keeps updated_at current on every UPDATE for tables that have the column.
 -- =============================================================================
@@ -933,6 +989,12 @@ INSERT INTO schema_migrations (version) VALUES
     (9), (10), (11), (12), (13), (14), (15), (16),
     (17), (18), (19), (20), (21), (22), (23), (24),
     (25), (26), (27), (28), (29), (30), (31), (32),
+    -- 33 is intentionally absent: it is false-applied and repaired at runtime.
     (34), (35), (36), (37), (38), (39), (40), (41),
-    (42), (43), (44), (45), (46), (47), (48)
+    (42), (43), (44), (45), (46), (47), (48),
+    -- 49-51, 54-60 are baked into this snapshot.
+    -- 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT in init.sql;
+    -- the runtime runner will apply them on first boot.
+    (49), (50), (51),
+    (54), (55), (56), (57), (58), (59), (60)
 ON CONFLICT (version) DO NOTHING;
