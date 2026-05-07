@@ -20,7 +20,10 @@ except Exception:
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
-from paper_ingestion.pulse.scoring import ScoredCandidate, stage2_llm_rerank
+from paper_ingestion.pulse.scoring import (
+    ScoredCandidate,
+    stage2_llm_rerank,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -465,3 +468,23 @@ async def test_stage2_passes_negative_topics_and_authors_to_prompt():
     )
     assert list(captured_kwargs["negative_topics"]) == ["Computer Vision", "NLP"]
     assert list(captured_kwargs["negative_authors"]) == ["Spam Author"]
+
+
+@pytest.mark.asyncio
+async def test_stage2_raises_sentinel_when_openai_client_none():
+    """stage2_llm_rerank raises Stage2ClientUnavailableError (not silent fallback) when openai_client=None.
+
+    W3-DRY-3: The caller (run_pulse) is responsible for logging + degraded-marking,
+    so the function must raise an explicit sentinel rather than silently returning stage1 output.
+
+    Note: import inside the function body to survive importlib.reload() in sibling tests
+    that reload paper_ingestion.pulse.scoring (which creates a new class object).
+    """
+    import paper_ingestion.pulse.scoring as _scoring
+
+    paper = _make_paper(0)
+    stage1_out = [_make_scored(paper)]
+    profile = _make_profile()
+
+    with pytest.raises(_scoring.Stage2ClientUnavailableError):
+        await _scoring.stage2_llm_rerank(stage1_out, profile, MagicMock(), openai_client=None)

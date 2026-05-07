@@ -908,3 +908,30 @@ async def test_run_pulse_logs_warn_on_zero_card_deck(patch_pipeline, caplog):
     assert any("catastrophic db error" in m for m in zero_card_warnings), (
         f"Expected last_error in 0-card-deck WARNING; got: {zero_card_warnings}"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_catches_stage2_client_unavailable(patch_pipeline):
+    """run_pulse catches Stage2ClientUnavailableError, sets degraded_reason, and still produces a deck.
+
+    W3-DRY-3: when openai_client is None at stage2 entry, the sentinel is raised and
+    run_pulse must degrade gracefully (stage1 fallback) rather than crash.
+    """
+    from paper_ingestion.pulse.job import run_pulse
+    from paper_ingestion.pulse.scoring import Stage2ClientUnavailableError
+
+    async def raise_sentinel(*_a, **_kw):
+        raise Stage2ClientUnavailableError("openai_client is None")
+
+    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = raise_sentinel
+
+    pool, _conn = _make_pool_and_conn()
+    stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    # Deck must still be produced (stage1 fallback)
+    patch_pipeline["mocks"]["persist_deck"].assert_awaited_once()
+    # Sentinel is non-fatal — last_error stays None
+    assert stats.get("last_error") is None
+    # degraded_reason must be set and reference the sentinel
+    assert stats.get("degraded_reason") is not None
+    assert "openai_client" in stats["degraded_reason"]

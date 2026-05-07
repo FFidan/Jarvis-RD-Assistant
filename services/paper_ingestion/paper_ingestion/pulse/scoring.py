@@ -43,6 +43,11 @@ from paper_ingestion.rag.verification import RagConfidence
 
 logger = logging.getLogger(__name__)
 
+
+class Stage2ClientUnavailableError(RuntimeError):
+    """openai_client is None at stage2 entry — caller should mark deck degraded."""
+
+
 _LLM_CONCURRENCY = 8
 _LLM_MODEL = os.environ.get("PULSE_STAGE2_MODEL", "fast").strip() or "fast"
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
@@ -290,11 +295,9 @@ async def stage2_llm_rerank(
         return []
 
     if openai_client is None:
-        logger.warning(
-            "stage2_llm_rerank: openai_client is None — returning stage1 output unscored; "
-            "deck will be degraded (no LLM relevance/novelty signals)"
+        raise Stage2ClientUnavailableError(
+            "Pulse Stage-2 invoked without openai_client; deck cannot be reranked"
         )
-        return stage1_out
 
     semaphore = asyncio.Semaphore(_LLM_CONCURRENCY)
 

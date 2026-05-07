@@ -38,6 +38,7 @@ from paper_ingestion.pulse.discovery import discover_candidates
 from paper_ingestion.pulse.profile import load_profile
 from paper_ingestion.pulse.scoring import (
     ScoredCandidate,
+    Stage2ClientUnavailableError,
     stage1_embedding_filter,
     stage2_llm_rerank,
     stage3_combine,
@@ -233,6 +234,14 @@ async def run_pulse(
             )
             # Count actual LLM calls: candidates where llm_relevance was set
             stats["llm_calls"] = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
+        except Stage2ClientUnavailableError:
+            # W3-DRY-3: explicit sentinel — openai_client was None at stage2 entry
+            degraded_reason = "stage2 skipped: openai_client unavailable"
+            stats["degraded_reason"] = degraded_reason
+            logger.warning(
+                "pulse.stage2 skipped — openai_client is None; deck degraded to stage1 results"
+            )
+            stage2_out = _fallback_stage2(stage1_out)
         except TimeoutError:
             # B4: LLM timeout is degraded (deck still produced), not fatal
             degraded_reason = (
