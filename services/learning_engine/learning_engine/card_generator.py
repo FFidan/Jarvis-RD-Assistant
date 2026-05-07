@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import logging
 import os
-import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -27,6 +26,7 @@ from jarvis_common.llm_client import (
     observe,
 )
 from jarvis_common.prompt_safety import wrap_delimited
+from jarvis_common.verify import DictChunk, QuoteVerifier
 
 from learning_engine.card_models import CardGenerationOutput, CardOutput
 
@@ -75,36 +75,6 @@ Respond in this exact JSON format:
     ]
 }}
 """
-
-
-def _normalize(text: str) -> str:
-    """Normalize text for fuzzy matching: lowercase, collapse whitespace, strip accents."""
-    text = unicodedata.normalize("NFKD", text)
-    text = text.lower()
-    # Collapse all whitespace (including newlines) to single spaces
-    return " ".join(text.split())
-
-
-def _verify_quote(quote: str, source_text: str, _normalized_source: str | None = None) -> bool:
-    """Check if a quote appears in source text via normalized substring match."""
-    if not quote or not source_text:
-        return False
-    norm_quote = _normalize(quote)
-    norm_source = _normalized_source if _normalized_source is not None else _normalize(source_text)
-    # Direct substring match after normalization
-    return norm_quote in norm_source
-
-
-def _find_chunk_id(
-    quote: str, chunks: list[dict], _normalized_chunks: list[str] | None = None
-) -> int | None:
-    """Find which chunk contains the quote, return its DB id."""
-    norm_quote = _normalize(quote)
-    for i, chunk in enumerate(chunks):
-        norm_content = _normalized_chunks[i] if _normalized_chunks else _normalize(chunk["content"])
-        if norm_quote in norm_content:
-            return chunk.get("id")
-    return None
 
 
 def _empty_result() -> dict:
@@ -169,10 +139,8 @@ class CardGenerator:
         post-hoc clamp is needed here.
         """
         verified_cards: list[dict] = []
-
-        # Pre-normalize once for all card verifications
-        normalized_full = _normalize(full_text)
-        normalized_chunks = [_normalize(c["content"]) for c in chunks]
+        verifier = QuoteVerifier()
+        chunk_objects = [DictChunk(c) for c in chunks]
 
         # Rule 7: snapshot path base
         snapshot_base = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")
@@ -180,11 +148,12 @@ class CardGenerator:
 
         for card in raw_cards:
             quote = card.evidence_quote
-            if not _verify_quote(quote, full_text, _normalized_source=normalized_full):
+            vr = verifier.verify_quote(quote, full_text, chunk_objects)
+            if not vr.verified:
                 logger.info("Discarding card with unverified quote: %.60s...", quote)
                 continue
 
-            chunk_id = _find_chunk_id(quote, chunks, _normalized_chunks=normalized_chunks)
+            chunk_id = vr.chunk_id
             page_num: int | None = card.page_number
 
             # Validate page_number against chunk data — don't trust LLM blindly

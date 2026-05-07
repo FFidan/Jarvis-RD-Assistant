@@ -63,7 +63,7 @@ class TestFuzzyBestMatch:
         # Provide realistic scores: chunk_0 near-match (97), chunk_1 exact (100).
         # The conftest rapidfuzz stub returns a flat 80, so we override here.
         with patch(
-            "paper_ingestion.extraction.verify.fuzz.partial_ratio",
+            "jarvis_common.verify.fuzz.partial_ratio",
             side_effect=[97, 100],
         ):
             result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])
@@ -106,7 +106,7 @@ class TestFuzzyBestMatch:
             return 100.0
 
         with patch(
-            "paper_ingestion.extraction.verify.fuzz.partial_ratio",
+            "jarvis_common.verify.fuzz.partial_ratio",
             side_effect=counting_partial_ratio,
         ):
             result = verifier.verify_quote(quote, full_text, [chunk_0, chunk_1])

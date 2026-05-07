@@ -16,6 +16,7 @@ dependencies = [
     "langfuse>=2.50",
     "openai>=1.50",
     "pydantic-settings>=2.0",
+    "rapidfuzz>=3.0.0",
     "slowapi>=0.1.9",
 ]
 
