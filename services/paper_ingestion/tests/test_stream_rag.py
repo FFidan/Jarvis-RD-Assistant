@@ -169,7 +169,9 @@ async def teststream_rag_events_token_parsing():
         elif parsed.get("type") == "done":
             assert parsed["full_answer"] == "The answer is 42."
 
-    assert tokens == ["The", " answer", " is", " 42."]
+    # Token boundaries may shift slightly due to carry-buffering in the <think> filter;
+    # verify the concatenated text is correct rather than exact per-chunk boundaries.
+    assert "".join(tokens) == "The answer is 42."
 
 
 # ---------------------------------------------------------------------------
@@ -436,6 +438,53 @@ async def teststream_rag_events_sse_termination():
 # ---------------------------------------------------------------------------
 # Test 8: confidence event emitted between done and [DONE] when verifier provided
 # ---------------------------------------------------------------------------
+
+
+async def teststream_rag_events_think_blocks_filtered():
+    """Think-block tokens are stripped from token events and full_answer (W0-2 defense-in-depth)."""
+    from paper_ingestion.rag.streaming import stream_rag_events
+
+    # Simulate a provider that emits <think>...</think> CoT wrappers across SSE chunks.
+    # The open-tag is intentionally split across two chunks to exercise boundary buffering.
+    sse_lines = [
+        'data: {"choices": [{"delta": {"content": "Answer: "}}]}',
+        # Open tag split: "<thi" ends chunk, "nk>secret thought</think>" starts next.
+        'data: {"choices": [{"delta": {"content": "<thi"}}]}',
+        'data: {"choices": [{"delta": {"content": "nk>secret thought</think>"}}]}',
+        'data: {"choices": [{"delta": {"content": "visible text."}}]}',
+        "data: [DONE]",
+    ]
+
+    mock_client = AsyncMock(spec=httpx.AsyncClient)
+    mock_client.stream.return_value = FakeStreamResponse(sse_lines)
+
+    messages = [{"role": "user", "content": "question"}]
+    sources = [{"content": "some source", "page_number": 1, "score": 0.9}]
+
+    token_contents: list[str] = []
+    full_answer: str = ""
+    async for event in stream_rag_events(mock_client, messages, sources):
+        data_str = event.replace("data: ", "", 1).strip()
+        if data_str == "[DONE]":
+            continue
+        parsed = json.loads(data_str)
+        if parsed.get("type") == "token":
+            token_contents.append(parsed["content"])
+        elif parsed.get("type") == "done":
+            full_answer = parsed["full_answer"]
+
+    # No token event payload should contain <think> content.
+    for token in token_contents:
+        assert "<think>" not in token, f"<think> leaked into token: {token!r}"
+        assert "secret thought" not in token, f"CoT content leaked into token: {token!r}"
+
+    # The full_answer accumulated in the done event must not contain think markup.
+    assert "<think>" not in full_answer
+    assert "secret thought" not in full_answer
+
+    # Visible text must be present.
+    assert "Answer:" in full_answer
+    assert "visible text." in full_answer
 
 
 async def teststream_rag_events_confidence_event_emitted_before_done():

@@ -122,6 +122,43 @@ def strip_think_blocks(raw: str) -> str:
     return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
 
+def _strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:
+    """Stateful streaming filter that drops <think>...</think> blocks across chunks.
+
+    Tokens may split arbitrarily across SSE deltas (e.g. ``<th`` + ``ink>``).
+    Caller threads (in_think, carry) across calls; carry holds a partial
+    open/close tag that straddles the chunk boundary.
+
+    Returns (visible_text, new_in_think_state, new_carry).
+    """
+    buf = carry + chunk
+    out: list[str] = []
+    i = 0
+    open_tag, close_tag = "<think>", "</think>"
+    while i < len(buf):
+        if in_think:
+            j = buf.find(close_tag, i)
+            if j == -1:
+                # Possible partial close-tag at end of buffer — hold up to len(close_tag)-1 chars.
+                # Anything before tail_keep is definitely inside the think block; drop it.
+                # Anything in [tail_keep, len(buf)) might be the start of close_tag; carry it.
+                tail_keep = max(0, len(buf) - (len(close_tag) - 1))
+                return "".join(out), True, buf[tail_keep:]
+            i = j + len(close_tag)
+            in_think = False
+        else:
+            j = buf.find(open_tag, i)
+            if j == -1:
+                # No open-tag in remainder. Hold a tail in case it's a partial open_tag.
+                tail_keep = max(i, len(buf) - (len(open_tag) - 1))
+                out.append(buf[i:tail_keep])
+                return "".join(out), False, buf[tail_keep:]
+            out.append(buf[i:j])
+            i = j + len(open_tag)
+            in_think = True
+    return "".join(out), in_think, ""
+
+
 async def request_chat_completion_content(
     http_client: httpx.AsyncClient,
     *,

@@ -15,6 +15,7 @@ import httpx
 from fastapi import HTTPException
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
+    _strip_think_streaming,
     build_litellm_headers,
     get_litellm_config,
     observe,
@@ -321,6 +322,8 @@ async def stream_rag_events(
     litellm_config = get_litellm_config()
     full_answer = ""
     model_used: str | None = None
+    in_think = False
+    think_carry = ""
     try:
         async with http_client.stream(
             "POST",
@@ -349,9 +352,14 @@ async def stream_rag_events(
                 if not choices:
                     continue
                 content = choices[0].get("delta", {}).get("content", "")
-                if content:
-                    full_answer += content
-                    yield sse_event({"type": "token", "content": content})
+                if not content:
+                    continue
+                visible, in_think, think_carry = _strip_think_streaming(
+                    content, in_think, think_carry
+                )
+                if visible:
+                    full_answer += visible
+                    yield sse_event({"type": "token", "content": visible})
     except Exception as e:
         _err_msgs = {
             httpx.TimeoutException: "LLM request timed out. Please try again.",
@@ -365,6 +373,10 @@ async def stream_rag_events(
         async for event in sse_error_stream(msg):
             yield event
         return
+    # Flush any non-think carry buffered at the chunk boundary
+    if not in_think and think_carry:
+        full_answer += think_carry
+        yield sse_event({"type": "token", "content": think_carry})
     yield sse_event({"type": "sources", "sources": sources_list})
     yield sse_event({"type": "done", "full_answer": full_answer, "model_used": model_used})
     # Sentence-level verification — runs after tokens have streamed (additive latency only)
