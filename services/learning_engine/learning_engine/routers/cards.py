@@ -4,7 +4,8 @@ from datetime import datetime
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse
+from jarvis_common import ErrorResponse, log_audit
+from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import dynamic_update
 
 from learning_engine.card_store import insert_card
@@ -149,3 +150,10 @@ async def delete_card(
         result = await conn.execute("DELETE FROM cards WHERE id = $1", card_id)
         if result == "DELETE 0":
             raise HTTPException(status_code=404, detail="Card not found")
+    user_id = await current_user_id_or_none(request)
+    await log_audit(
+        db_pool,
+        action="delete",
+        resource=f"card:{card_id}",
+        user_id=str(user_id) if user_id is not None else None,
+    )

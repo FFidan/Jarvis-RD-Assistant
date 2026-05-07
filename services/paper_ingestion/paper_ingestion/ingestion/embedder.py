@@ -43,6 +43,7 @@ CHUNK_OVERLAP_TOKENS = 50
 _KNOWN_EMBEDDING_DIMENSIONS: dict[str, int] = {
     "nomic-embed-text": 768,
     "qwen3-embedding:0.6b": 1024,
+    "qwen3-embedding:4b": 2560,
 }
 
 _SENSITIVE_ERROR_RE = re.compile(

@@ -2,7 +2,8 @@
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import delete_or_404, dynamic_update
+from jarvis_common import delete_or_404, dynamic_update, log_audit
+from jarvis_common.auth import current_user_id_or_none
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
@@ -139,4 +140,11 @@ async def delete_milestone(
         "DELETE FROM milestones WHERE id = $1",
         milestone_id,
         detail="Milestone not found",
+    )
+    user_id = await current_user_id_or_none(request)
+    await log_audit(
+        db_pool,
+        action="delete",
+        resource=f"milestone:{milestone_id}",
+        user_id=str(user_id) if user_id is not None else None,
     )

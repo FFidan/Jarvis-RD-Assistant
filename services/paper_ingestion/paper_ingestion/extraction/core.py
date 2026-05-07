@@ -230,8 +230,13 @@ async def extract_fields_for_paper(
 
         # PI-CORE-007: when there is no verifier, confidence is always 0.0
         # regardless of whether a quote was supplied — unverified quotes must
-        # not receive a non-zero confidence score.
-        if verified:
+        # not receive a non-zero confidence score. Discarded values (set to
+        # None above when verification fails) cannot carry a non-zero
+        # confidence either, even with a quote that the user-facing UI would
+        # otherwise show as "verified-but-empty".
+        if value is None:
+            confidence = 0.0
+        elif verified:
             confidence = 1.0
         elif verifier and quote:
             confidence = 0.5

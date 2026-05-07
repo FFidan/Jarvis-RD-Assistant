@@ -6,6 +6,8 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
+from jarvis_common import log_audit
+from jarvis_common.auth import current_user_id_or_none
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
@@ -145,3 +147,10 @@ async def unlink_paper(
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Link not found")
+    user_id = await current_user_id_or_none(request)
+    await log_audit(
+        db_pool,
+        action="delete",
+        resource=f"project_paper:{project_id}:{paper_id}",
+        user_id=str(user_id) if user_id is not None else None,
+    )
