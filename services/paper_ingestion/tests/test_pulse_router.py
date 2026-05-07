@@ -301,8 +301,9 @@ def test_generate_rate_limited():
 # ---------------------------------------------------------------------------
 
 
-def test_debug_returns_expected_shape_when_deck_exists(client):
+def test_debug_returns_expected_shape_when_deck_exists(client, monkeypatch):
     """GET /debug returns 200 with source_counts, topic_embeddings, top_cards."""
+    monkeypatch.setenv("DEV_MODE", "true")  # W1-5: endpoint is dev-only
     tc, pool, conn = client
     from datetime import date, datetime
 
@@ -401,12 +402,39 @@ def test_debug_returns_expected_shape_when_deck_exists(client):
     assert card["final_score"] == pytest.approx(0.92)
 
 
-def test_debug_404_when_no_deck(client):
+def test_debug_404_when_no_deck(client, monkeypatch):
     """GET /debug returns 404 when no deck exists."""
+    monkeypatch.setenv("DEV_MODE", "true")  # W1-5: endpoint is dev-only
     tc, pool, conn = client
     conn.fetchrow.return_value = None
     resp = tc.get("/api/pulse/debug")
     assert resp.status_code == 404
+
+
+def test_debug_404_when_dev_mode_false(client, monkeypatch):
+    """W1-5: GET /debug returns 404 in production (DEV_MODE != 'true').
+
+    The endpoint exposes classifier feature names, AUC, per-card signal
+    weights, and topic-embedding internals — a model-inversion vector.
+    Gating it behind DEV_MODE prevents disclosure even of the endpoint's
+    existence in production deployments.
+    """
+    monkeypatch.delenv("DEV_MODE", raising=False)
+    tc, pool, conn = client
+    resp = tc.get("/api/pulse/debug")
+    assert resp.status_code == 404
+    # No DB query should fire when the gate trips.
+    conn.fetchrow.assert_not_awaited()
+    conn.fetch.assert_not_awaited()
+
+
+def test_debug_404_when_dev_mode_explicit_false(client, monkeypatch):
+    """W1-5: DEV_MODE=false (explicit) also yields 404 — case-insensitive."""
+    monkeypatch.setenv("DEV_MODE", "FALSE")
+    tc, pool, conn = client
+    resp = tc.get("/api/pulse/debug")
+    assert resp.status_code == 404
+    conn.fetchrow.assert_not_awaited()
 
 
 def test_today_surfaces_degraded_reason_at_top_level(client):

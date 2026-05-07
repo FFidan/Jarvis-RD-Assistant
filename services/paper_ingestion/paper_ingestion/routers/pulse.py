@@ -13,6 +13,7 @@ preserved as the contract-test gate.
 """
 
 import logging
+import os
 import uuid
 
 import asyncpg
@@ -52,6 +53,11 @@ router = APIRouter(
         500: {"model": ErrorResponse},
     },
 )
+
+
+def _is_dev_mode() -> bool:
+    """Return True when DEV_MODE=true (case-insensitive)."""
+    return os.environ.get("DEV_MODE", "false").lower() == "true"
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +303,14 @@ async def debug_pulse(
     * Per-source candidate counts from the latest deck's ``stats`` JSONB.
     * Topic-embedding sanity check (non-null, correct dimension).
     * Top-10 card signal breakdown (paper_id, title, signals, final_score).
+
+    SEC (Wave-3/W1-5): The diagnostics body exposes classifier feature names,
+    AUC, per-card signal weights, and topic-embedding internals — a model-
+    inversion vector. The endpoint is gated behind ``DEV_MODE=true``; in
+    production it returns 404 to avoid disclosing existence.
     """
+    if not _is_dev_mode():
+        raise HTTPException(status_code=404)
     caller_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # Fetch the most recent deck row for this caller
@@ -338,6 +351,10 @@ async def debug_pulse(
         )
 
         # Topic-embedding sanity check
+        # NOTE: user_config pulse.* / topic.* keys are intentionally global
+        # single-tenant (one operator per JARVIS instance). Wave-4 multi-tenant:
+        # re-key as `pulse.<user_id>.weights`, `topic.<user_id>.<n>.embedding`,
+        # etc. and add a `WHERE user_id IS NOT DISTINCT FROM $1` filter here.
         embed_rows = await conn.fetch(
             """
             SELECT key, value
@@ -345,6 +362,10 @@ async def debug_pulse(
             WHERE key LIKE 'topic.%.embedding'
             """
         )
+        # NOTE: pulse_models classifier is global per deployment (one classifier
+        # per JARVIS instance, trained on aggregated feedback). No user_id
+        # scoping required today. Wave-4 multi-tenant: add a `user_id` column
+        # to pulse_models + filter here if per-user classifiers ship.
         model_row = await conn.fetchrow(
             """
             SELECT feature_names, metrics, trained_at

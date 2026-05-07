@@ -405,8 +405,11 @@ def test_pulse_stats_idor_user_id_filter():
     )
 
 
-def test_pulse_debug_idor_user_id_filter():
+def test_pulse_debug_idor_user_id_filter(monkeypatch):
     """GET /api/pulse/debug SQL must include IS NOT DISTINCT FROM for user_id."""
+    # W1-5: debug endpoint is dev-mode-gated; force DEV_MODE=true to exercise
+    # the SQL-emitting path under test.
+    monkeypatch.setenv("DEV_MODE", "true")
     tc, pool, conn, app = _make_pulse_client(user_id_override=None)
 
     # debug_pulse does fetchrow (deck), then fetch (cards), fetch (embed_rows), fetchrow (model)

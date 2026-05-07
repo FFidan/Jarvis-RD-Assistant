@@ -67,6 +67,9 @@ out, wait at least the `Retry-After` window or 30 seconds before another manual
 regeneration; repeated button clicks only extend the public API cooldown. Use
 Settings -> Pulse -> Diagnostics or `GET /api/pulse/debug` to confirm whether
 arXiv returned candidates, no matches, a rate limit, or a transport error.
+The `/api/pulse/debug` endpoint is dev-mode only (returns 404 unless
+`DEV_MODE=true`); use the user-facing `source_diagnostics` payload on
+`GET /api/pulse/today` for production troubleshooting.
 
 OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY` for Pulse polling in
 this stack. PubMed can run without an API key, but an NCBI key raises the rate
