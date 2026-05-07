@@ -13,6 +13,7 @@ import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
 import { createJob as apiCreateJob, listJobs as apiListJobs, cancelJob as apiCancelJob, getJob as apiGetJob } from '@/lib/api';
 import { queryClient } from '@/lib/query-client';
+import { getNavigate } from '@/lib/navigate-bridge';
 
 /**
  * Per-kind query invalidation: when a job of the given kind reaches
@@ -225,7 +226,12 @@ export const useJobStore = create<JobStore>()(
                   label: actionLink.label,
                   onClick: () => {
                     if (actionLink.href.startsWith('/') && !actionLink.href.startsWith('//')) {
-                      window.location.href = actionLink.href;
+                      const nav = getNavigate();
+                      if (nav) {
+                        nav(actionLink.href);
+                      } else {
+                        window.location.href = actionLink.href;
+                      }
                     } else {
                       console.warn('Refusing non-relative action_link:', actionLink.href);
                     }

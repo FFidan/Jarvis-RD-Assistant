@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { DateMasthead } from '@/components/my-day/sections/DateMasthead';
-import { YesterdaySection } from '@/components/my-day/sections/YesterdaySection';
+// YesterdaySection hidden until daily-rollup job ships (W2-19); re-add when job is live
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
 import { IntentSection } from '@/components/my-day/sections/IntentSection';
 import { ProjectsSection } from '@/components/my-day/sections/ProjectsSection';
@@ -36,7 +36,7 @@ export function MyDayPage() {
     <div className="bg-paper min-h-screen">
       <main className="max-w-page mx-auto px-10 py-10 space-y-12">
         <DateMasthead />
-        <YesterdaySection />
+        {/* YesterdaySection removed until daily-rollup job ships — see W2-19 */}
         <HeroNow />
         <IntentSection />
         <ProjectsSection />

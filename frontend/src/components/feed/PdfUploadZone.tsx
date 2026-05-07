@@ -41,7 +41,8 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
           status: 'queued',
         });
         setFiles(s => s.map((f, si) => (si === index ? { ...f, status: 'done' as FileStatus } : f)));
-        queryClient.invalidateQueries({ queryKey: ['feed'] });
+        queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
+        queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
         onComplete?.();
       } catch (err) {
         setFiles(s =>
@@ -87,7 +88,8 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
             );
           }
         }
-        queryClient.invalidateQueries({ queryKey: ['feed'] });
+        queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
+        queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
         onComplete?.();
       })();
       return [...prev, ...entries];

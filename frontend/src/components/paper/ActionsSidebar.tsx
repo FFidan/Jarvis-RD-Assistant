@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/select';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
-import type { RecentFeedback } from '@/types';
+import type { RecentFeedback, PartialGenJob } from '@/types';
 
 const ACTION_TOOLTIPS: Record<string, string> = {
   analyze:
@@ -87,7 +87,7 @@ export function ActionsSidebar({
   const [failedStage, setFailedStage] = useState<'downloading' | 'processing' | 'summarizing' | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [genJob, setGenJob] = useState<Job | null>(null);
+  const [genJob, setGenJob] = useState<Job | PartialGenJob | null>(null);
 
   useEffect(() => () => {
     if (abortRef.current) {
@@ -266,7 +266,7 @@ export function ActionsSidebar({
     mutationFn: () => generateCardsJob(paperId, Number(deckId), Number(maxCards)),
     onSuccess: (data) => {
       setActionResult(null);
-      setGenJob({ status: 'queued' } as unknown as Job);
+      setGenJob({ status: 'queued' } satisfies PartialGenJob);
       startGenPoll(data.job_id);
     },
     onError: (err) => {
@@ -511,9 +511,9 @@ export function ActionsSidebar({
           {genJob && !TERMINAL_STATUSES.includes(genJob.status) && (
             <div className="space-y-1">
               <p className="text-xs text-muted-foreground">
-                {genJob.progress_message ?? (genJob.status === 'queued' ? 'Queued…' : 'Generating…')}
+                {('progress_message' in genJob ? genJob.progress_message : null) ?? (genJob.status === 'queued' ? 'Queued…' : 'Generating…')}
               </p>
-              {genJob.progress != null && (
+              {'progress' in genJob && genJob.progress != null && (
                 <div className="h-1 w-full rounded-full bg-muted">
                   <div
                     className="h-1 rounded-full bg-primary transition-all"

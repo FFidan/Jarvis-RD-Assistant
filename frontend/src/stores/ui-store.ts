@@ -3,17 +3,21 @@ import { persist } from 'zustand/middleware';
 
 export const UI_STORE_KEY = 'jarvis-ui';
 
+export type HeroMode = 'pulse' | 'task' | 'reading';
+
 interface UIState {
   sidebarCollapsed: boolean;
   selectedPaperId: number | null;
   checklistDismissed: boolean;
   paperDetailNoteDismissed: boolean;
   setupBannerDismissed: boolean;
+  heroMode: HeroMode;
   toggleSidebar: () => void;
   setSelectedPaperId: (id: number | null) => void;
   dismissChecklist: () => void;
   setPaperDetailNoteDismissed: (value: boolean) => void;
   dismissSetupBanner: () => void;
+  setHeroMode: (mode: HeroMode) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -24,6 +28,7 @@ export const useUIStore = create<UIState>()(
       checklistDismissed: false,
       paperDetailNoteDismissed: false,
       setupBannerDismissed: false,
+      heroMode: 'pulse',
 
       toggleSidebar() {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -40,6 +45,9 @@ export const useUIStore = create<UIState>()(
       dismissSetupBanner() {
         set({ setupBannerDismissed: true });
       },
+      setHeroMode(mode: HeroMode) {
+        set({ heroMode: mode });
+      },
     }),
     {
       name: UI_STORE_KEY,
@@ -47,6 +55,7 @@ export const useUIStore = create<UIState>()(
         checklistDismissed: state.checklistDismissed,
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,
         setupBannerDismissed: state.setupBannerDismissed,
+        heroMode: state.heroMode,
       }),
     },
   ),

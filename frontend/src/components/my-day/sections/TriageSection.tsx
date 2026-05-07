@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { useJobStore } from '@/stores/job-store';
 import {
   fetchFeedPapers,

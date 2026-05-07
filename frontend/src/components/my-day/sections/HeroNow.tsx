@@ -1,20 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { HeroPulse } from './HeroPulse';
 import { HeroTask } from './HeroTask';
 import { HeroResumeReading } from './HeroResumeReading';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
+import { useUIStore, type HeroMode } from '@/stores/ui-store';
 import { fetchFeed } from '@/lib/api';
 import type { FeedResponse } from '@/types';
-
-type HeroMode = 'pulse' | 'task' | 'reading';
-
-const STORAGE_KEY = 'myday.heroMode';
-
-function isHeroMode(value: string): value is HeroMode {
-  return value === 'pulse' || value === 'task' || value === 'reading';
-}
 
 interface ModePickerProps {
   mode: HeroMode;
@@ -30,10 +23,12 @@ function ModePicker({ mode, onChange, hasTask, hasReading }: ModePickerProps) {
     { value: 'reading', label: 'Resume reading', show: hasReading },
   ];
   return (
-    <div className="bg-zinc-100/80 dark:bg-zinc-800/60 rounded-md p-0.5 flex gap-0.5">
+    <div role="tablist" aria-label="Now mode" className="bg-zinc-100/80 dark:bg-zinc-800/60 rounded-md p-0.5 flex gap-0.5">
       {tabs.filter((t) => t.show).map((t) => (
         <button
           key={t.value}
+          role="tab"
+          aria-selected={mode === t.value}
           onClick={() => onChange(t.value)}
           className={`h-6 px-2.5 rounded text-[10.5px] font-mono transition-colors ${
             mode === t.value
@@ -49,7 +44,8 @@ function ModePicker({ mode, onChange, hasTask, hasReading }: ModePickerProps) {
 }
 
 export function HeroNow() {
-  const [mode, setMode] = useState<HeroMode>('pulse');
+  const mode = useUIStore((s) => s.heroMode);
+  const setHeroMode = useUIStore((s) => s.setHeroMode);
   const phase = usePomodoroStore((s) => s.phase);
   const hasTask = phase !== 'idle';
 
@@ -61,35 +57,18 @@ export function HeroNow() {
 
   const hasReading = (readingData?.papers ?? []).some((p) => p.state === 'reading');
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved !== null) {
-        const validMode = isHeroMode(saved) ? saved : 'pulse';
-        setMode(validMode);
-      }
-    } catch {
-      /* ignore — blocked storage or SSR */
-    }
-  }, []);
-
   // If task tab disappears (Pomodoro ended), fall back to pulse
   useEffect(() => {
-    if (!hasTask && mode === 'task') setMode('pulse');
-  }, [hasTask, mode]);
+    if (!hasTask && mode === 'task') setHeroMode('pulse');
+  }, [hasTask, mode, setHeroMode]);
 
   // If reading tab disappears, fall back to pulse
   useEffect(() => {
-    if (!hasReading && mode === 'reading') setMode('pulse');
-  }, [hasReading, mode]);
+    if (!hasReading && mode === 'reading') setHeroMode('pulse');
+  }, [hasReading, mode, setHeroMode]);
 
   const handleChange = (next: HeroMode) => {
-    setMode(next);
-    try {
-      localStorage.setItem(STORAGE_KEY, next);
-    } catch {
-      /* ignore */
-    }
+    setHeroMode(next);
   };
 
   return (

@@ -160,17 +160,21 @@ export function PulseCard({
             <InfoTooltip
               content={`Composite score: ${card.score.toFixed(2)}`}
             />
-            {card.paper_url && (
-              <a
-                href={card.paper_url}
-                target="_blank"
-                rel="noreferrer"
-                onClick={stop}
-                className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
-              >
-                source
-              </a>
-            )}
+            {(() => {
+              const safePaperUrl = card.paper_url && (card.paper_url.startsWith('http://') || card.paper_url.startsWith('https://'))
+                ? card.paper_url : null;
+              return safePaperUrl ? (
+                <a
+                  href={safePaperUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={stop}
+                  className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                >
+                  source
+                </a>
+              ) : null;
+            })()}
           </div>
           <h3 className="text-lg font-semibold leading-tight">
             {card.paper_title}

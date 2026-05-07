@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import type { ReactNode } from 'react';
-import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { setNavigate } from '@/lib/navigate-bridge';
 import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
@@ -71,6 +72,12 @@ function SetupGate({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function NavigateBridgeRegistrar() {
+  const navigate = useNavigate();
+  useEffect(() => { setNavigate(navigate); }, [navigate]);
+  return null;
+}
+
 export function App() {
   const { isAuthenticated, checkSession } = useAuthStore();
   const authed = isAuthenticated && checkSession();
@@ -86,6 +93,7 @@ export function App() {
   return (
     <ErrorBoundary>
       <SetupGate>
+        <NavigateBridgeRegistrar />
         <PomodoroAutoLogger />
         <Routes>
           <Route path="/setup" element={<RouteErrorBoundary><SetupWizard /></RouteErrorBoundary>} />

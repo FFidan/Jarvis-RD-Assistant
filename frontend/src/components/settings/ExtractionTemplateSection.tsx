@@ -19,6 +19,30 @@ import { Trash2, Plus, Pencil, TableProperties } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import type { ExtractionTemplate } from '@/types';
 
+interface TemplateField {
+  name: string | undefined;
+  label: string | undefined;
+  description: string | undefined;
+  type: string;
+}
+
+function parseTemplateFields(text: string): TemplateField[] {
+  return text
+    .trim()
+    .split('\n')
+    .map((line) => {
+      const parts = line.split('|').map((p) => p.trim());
+      if (parts.length < 3) return null;
+      return {
+        name: parts[0],
+        label: parts[1],
+        description: parts[2],
+        type: parts[3] || 'text',
+      };
+    })
+    .filter((f): f is TemplateField => f !== null);
+}
+
 export function ExtractionTemplateSection() {
   const queryClient = useQueryClient();
   const { isOpen, confirm, handleConfirm, handleCancel } = useConfirm();
@@ -73,20 +97,7 @@ export function ExtractionTemplateSection() {
 
   const handleEditSave = () => {
     if (!editTemplate || !editName.trim() || !editFields.trim()) return;
-    const parsedFields = editFields
-      .trim()
-      .split('\n')
-      .map((line) => {
-        const parts = line.split('|').map((p) => p.trim());
-        if (parts.length < 3) return null;
-        return {
-          name: parts[0],
-          label: parts[1],
-          description: parts[2],
-          type: parts[3] || 'text',
-        };
-      })
-      .filter(Boolean);
+    const parsedFields = parseTemplateFields(editFields);
 
     if (parsedFields.length === 0) return;
 
@@ -111,20 +122,7 @@ export function ExtractionTemplateSection() {
 
   const handleAdd = () => {
     if (!addForm.name.trim() || !addForm.fields.trim()) return;
-    const parsedFields = addForm.fields
-      .trim()
-      .split('\n')
-      .map((line) => {
-        const parts = line.split('|').map((p) => p.trim());
-        if (parts.length < 3) return null;
-        return {
-          name: parts[0],
-          label: parts[1],
-          description: parts[2],
-          type: parts[3] || 'text',
-        };
-      })
-      .filter(Boolean);
+    const parsedFields = parseTemplateFields(addForm.fields);
 
     if (parsedFields.length === 0) return;
 

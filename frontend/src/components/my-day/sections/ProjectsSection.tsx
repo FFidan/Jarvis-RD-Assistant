@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { fetchMyDay } from '@/lib/api';
 import type { MyDayResponse } from '@/types';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { GradientProgressBar } from '@/components/my-day/primitives/GradientProgressBar';
 
 const COLOR_TOKENS = ['var(--project-1)', 'var(--project-2)', 'var(--project-3)'] as const;

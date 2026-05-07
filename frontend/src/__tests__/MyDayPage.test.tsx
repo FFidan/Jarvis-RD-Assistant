@@ -115,21 +115,20 @@ describe('MyDayPage', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('renders Yesterday section with placeholder copy (Phase 1g)', async () => {
+  it('does not render Yesterday section (removed pending daily-rollup job, W2-19)', async () => {
     renderWithProviders();
     await screen.findByText(/RESEARCH LOG/);
-    // YesterdaySection now renders a placeholder section while the daily-rollup
-    // job hasn't shipped yet (Phase 1g rewire).
+    // YesterdaySection was removed from MyDayPage until the daily-rollup job ships.
     expect(
-      screen.getByText(/yesterday's carryover summary/i),
-    ).toBeInTheDocument();
+      screen.queryByText(/yesterday's carryover summary/i),
+    ).not.toBeInTheDocument();
   });
 
-  it('renders Now section with Pulse #1 mode button', async () => {
+  it('renders Now section with Pulse #1 mode tab', async () => {
     renderWithProviders();
     expect(await screen.findByText(/§ Now/i)).toBeInTheDocument();
-    // ModePicker uses plain buttons; Pulse #1 is always visible
-    expect(screen.getByRole('button', { name: 'Pulse #1' })).toBeInTheDocument();
+    // ModePicker uses role="tab" buttons (W2-18 ARIA enhancement); Pulse #1 is always visible
+    expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
     // Continue task only shows with an active Pomodoro (none in this test)
   });
 

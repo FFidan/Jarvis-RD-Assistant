@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { getJournalEntry, upsertJournalEntry } from '@/lib/api';
 import type { JournalPrompts } from '@/types';
 
@@ -66,10 +66,11 @@ export function JournalSection() {
       <div className="space-y-3">
         {/* Primary prompt: First move tomorrow */}
         <div>
-          <label className="block font-mono text-[10px] text-meta mb-1">
+          <label htmlFor="journal-first-move" className="block font-mono text-[10px] text-meta mb-1">
             First move tomorrow?
           </label>
           <textarea
+            id="journal-first-move"
             value={prompts.first_move ?? ''}
             onChange={(e) => update('first_move', e.target.value)}
             placeholder="What's the one thing you'll do first tomorrow?"
@@ -93,10 +94,11 @@ export function JournalSection() {
         {expanded && (
           <>
             <div>
-              <label className="block font-mono text-[10px] text-meta mb-1">
+              <label htmlFor="journal-worked" className="block font-mono text-[10px] text-meta mb-1">
                 What worked?
               </label>
               <textarea
+                id="journal-worked"
                 value={prompts.worked ?? ''}
                 onChange={(e) => update('worked', e.target.value)}
                 placeholder="What went well today?"
@@ -106,10 +108,11 @@ export function JournalSection() {
             </div>
 
             <div>
-              <label className="block font-mono text-[10px] text-meta mb-1">
+              <label htmlFor="journal-blocked" className="block font-mono text-[10px] text-meta mb-1">
                 What's blocked you?
               </label>
               <textarea
+                id="journal-blocked"
                 value={prompts.blocked ?? ''}
                 onChange={(e) => update('blocked', e.target.value)}
                 placeholder="Any blockers or friction worth noting?"

@@ -5,7 +5,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { fetchMyDay, createQuickTask, updateTask, fetchIntentToday, saveIntentToday } from '@/lib/api';
 import type { MyDayTask } from '@/types';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { TaskRow } from './TaskRow';
 
 function CompletedRow({ task }: { task: MyDayTask }) {
@@ -57,7 +57,7 @@ export function IntentSection() {
   });
 
   // Intent query
-  const { data: intentData } = useQuery({
+  const { data: intentData, isError: isIntentError } = useQuery({
     queryKey: ['intent', 'today'],
     queryFn: fetchIntentToday,
   });
@@ -130,6 +130,11 @@ export function IntentSection() {
     <section id="intent">
       <SectionHeader marker="Today's intent" />
 
+      {/* Intent sub-query error state */}
+      {isIntentError && (
+        <p className="text-[11px] font-mono text-destructive pl-0 mb-2">Couldn't load saved intent</p>
+      )}
+
       {/* Intent textarea — debounced autosave */}
       <textarea
         ref={intentRef}
@@ -171,6 +176,7 @@ export function IntentSection() {
             <div className="h-3.5 w-3.5 rounded-full border-[1.5px] border-hair flex-shrink-0" />
             <input
               autoFocus
+              aria-label="Task title"
               value={addTitle}
               onChange={(e) => setAddTitle(e.target.value)}
               onKeyDown={(e) => {

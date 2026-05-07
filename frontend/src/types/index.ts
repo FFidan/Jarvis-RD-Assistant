@@ -979,3 +979,13 @@ export interface FetchAndProcessFoundationalResponse {
   job_id: string | null;
   message: string | null;
 }
+
+/**
+ * Minimal job shape used for local optimistic state before a full Job row
+ * is available from the server (e.g. right after mutationFn resolves).
+ * Avoids `as unknown as Job` casts in ActionsSidebar / CreateCardForm.
+ */
+export interface PartialGenJob {
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  error?: { message: string };
+}

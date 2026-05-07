@@ -25,7 +25,7 @@ import { SOURCE_LABELS } from '@/components/feed/source-labels';
 import { FeedView } from '@/components/feed/FeedView';
 import { CountsBadge } from '@/components/feed/CountsBadge';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
-import { BookOpen, Star, BookOpen as BookOpenIcon, Library as LibraryIcon, CheckCircle } from 'lucide-react';
+import { BookOpen as BookOpenIcon, Star, Library as LibraryIcon, CheckCircle } from 'lucide-react';
 import {
   Tooltip,
   TooltipContent,
@@ -319,7 +319,7 @@ export function ResearchFeedPage() {
   return (
     <div className="space-y-6">
       <h1 className="flex items-center gap-2 text-[32px] leading-tight tracking-tight text-strong">
-        <BookOpen className="h-8 w-8" />
+        <BookOpenIcon className="h-8 w-8" />
         Research Feed
       </h1>
       <p className="text-muted-foreground text-sm">

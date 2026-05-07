@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Skeleton } from '@/components/ui/skeleton';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { PulseRow } from './PulseRow';
 import { ApiError, fetchPulseToday } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';

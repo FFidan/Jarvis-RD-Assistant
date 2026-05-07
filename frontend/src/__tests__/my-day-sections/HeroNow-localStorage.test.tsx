@@ -1,3 +1,9 @@
+/**
+ * HeroNow — Zustand ui-store persistence tests.
+ * W4-23: heroMode moved from raw localStorage ('myday.heroMode') to
+ * Zustand persist store (UI_STORE_KEY = 'jarvis-ui'). These tests verify
+ * the Zustand-based persistence behavior.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -48,6 +54,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const { fetchPulseToday } = await import('@/lib/api');
+const { useUIStore } = await import('@/stores/ui-store');
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -70,10 +77,12 @@ function renderWithProviders() {
 // Tests
 // ---------------------------------------------------------------------------
 
-describe('HeroNow — localStorage persistence', () => {
+describe('HeroNow — Zustand ui-store persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
+    // Reset Zustand ui-store to default state
+    useUIStore.setState({ heroMode: 'pulse' });
     // Default: Pomodoro active so both mode buttons are visible
     pomodoroState = {
       phase: 'work',
@@ -84,43 +93,43 @@ describe('HeroNow — localStorage persistence', () => {
     vi.mocked(fetchPulseToday).mockResolvedValue(null);
   });
 
-  it('hydrates from localStorage "task" and shows Continue task as active mode', async () => {
-    // Pre-set before render so useEffect picks it up
-    localStorage.setItem('myday.heroMode', 'task');
+  it('hydrates from ui-store "task" heroMode and shows Continue task as active mode', async () => {
+    // Pre-set heroMode in Zustand store before render
+    useUIStore.setState({ heroMode: 'task' });
 
     renderWithProviders();
 
-    // Continue task button should be present (active Pomodoro)
-    const taskBtn = await screen.findByRole('button', { name: 'Continue task' });
+    // Continue task tab should be present (active Pomodoro)
+    const taskBtn = await screen.findByRole('tab', { name: 'Continue task' });
     expect(taskBtn).toBeInTheDocument();
-    // Pulse #1 button should also be present
-    expect(screen.getByRole('button', { name: 'Pulse #1' })).toBeInTheDocument();
+    // Pulse #1 tab should also be present
+    expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
   });
 
-  it('switching from pulse to task updates localStorage to "task"', async () => {
+  it('switching from pulse to task updates ui-store heroMode to "task"', async () => {
     const user = userEvent.setup();
-    localStorage.setItem('myday.heroMode', 'pulse');
+    useUIStore.setState({ heroMode: 'pulse' });
 
     renderWithProviders();
 
     // Wait for render
     await screen.findByText(/No Pulse for today yet/i);
 
-    // Both buttons present (active Pomodoro)
-    const taskBtn = screen.getByRole('button', { name: 'Continue task' });
+    // Both tabs present (active Pomodoro)
+    const taskBtn = screen.getByRole('tab', { name: 'Continue task' });
     await user.click(taskBtn);
 
-    expect(localStorage.getItem('myday.heroMode')).toBe('task');
+    expect(useUIStore.getState().heroMode).toBe('task');
   });
 
-  it('falls back to "pulse" when localStorage has stale "resume" value', async () => {
-    // "resume" was the old Phase 1b tab value — should fall back to "pulse"
-    localStorage.setItem('myday.heroMode', 'resume');
+  it('defaults to "pulse" when ui-store heroMode is at its default', async () => {
+    // Default state — heroMode = 'pulse'
+    useUIStore.setState({ heroMode: 'pulse' });
 
     renderWithProviders();
 
-    // Pulse content renders (fallback to pulse mode), not a crash or empty state
+    // Pulse content renders (default pulse mode)
     expect(await screen.findByText(/No Pulse for today yet/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pulse #1' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
   });
 });

@@ -101,9 +101,11 @@ export function useStreamingChat({ chatId, scope, paperId }: UseStreamingChatOpt
           }
         }
       } catch (err) {
-        const isAbort = (err as Error).name === 'AbortError';
+        const isAbort = (err != null && typeof err === 'object' && 'name' in err)
+          ? (err as { name: unknown }).name === 'AbortError'
+          : false;
         if (!isAbort) {
-          appendToLastMessage(chatId, `\n\n**Error:** ${(err as Error).message}`);
+          appendToLastMessage(chatId, `\n\n**Error:** ${err instanceof Error ? err.message : String(err)}`);
         }
         // D.2 — if stopped before any token arrived, discard the empty placeholder
         // (cast: TS narrows phaseRef.current to its initial 'idle' literal from useRef<Phase>(phase) inference)

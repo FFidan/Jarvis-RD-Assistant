@@ -4,7 +4,7 @@ import { Clock } from 'lucide-react';
 import { getStats, fetchMyDay } from '@/lib/api';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
 import { Progress } from '@/components/ui/progress';
-import { SectionHeader } from './SectionHeader';
+import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import type { RetentionStats, MyDayResponse } from '@/types';
 
 export function LearningFocusSection() {
@@ -55,6 +55,7 @@ export function LearningFocusSection() {
                     </p>
                   </div>
                   <button
+                    aria-label={`Review ${stats.due_now} cards now`}
                     onClick={() => navigate('/cards')}
                     className="mt-3 w-full bg-[hsl(var(--cta-warn-solid))] hover:bg-[hsl(var(--cta-warn-solid))] text-white rounded-md py-2 text-sm font-medium transition-colors"
                   >
@@ -86,6 +87,7 @@ export function LearningFocusSection() {
               Focus today
             </h3>
             <button
+              aria-label={`Start 25-minute focus session${phase !== 'idle' ? ' (timer running)' : ''}`}
               onClick={() => usePomodoroStore.getState().startWork()}
               disabled={phase !== 'idle'}
               className="text-[11px] font-mono text-white bg-[var(--ink-blue)] hover:opacity-90 px-2 py-1 rounded disabled:opacity-40 transition-opacity"

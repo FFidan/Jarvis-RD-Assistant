@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { Sparkles } from 'lucide-react';
 import { createCard, generateCardsJob, getJob, fetchDecks } from '@/lib/api';
 import type { Job } from '@/stores/job-store';
+import type { PartialGenJob } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -151,7 +152,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   const [deckId, setDeckId] = useState<string>(defaultDeckId ? String(defaultDeckId) : '');
   const [maxCards, setMaxCards] = useState('5');
   const [jobId, setJobId] = useState<string | null>(null);
-  const [job, setJob] = useState<Job | null>(null);
+  const [job, setJob] = useState<Job | PartialGenJob | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const { data: decks = [] } = useQuery({
@@ -206,7 +207,7 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
     },
     onError: (err) => {
       const msg = err instanceof Error ? err.message : 'Generation failed';
-      setJob({ status: 'failed', error: { message: msg } } as unknown as Job);
+      setJob({ status: 'failed', error: { message: msg } } satisfies PartialGenJob);
     },
   });
 
@@ -225,19 +226,19 @@ export function GenerateCardsDialog({ open, onOpenChange, defaultDeckId }: Gener
   const progressLabel = isQueued
     ? 'Queued…'
     : isRunning
-    ? (job?.progress_message ?? 'Generating…')
+    ? ((job && 'progress_message' in job ? job.progress_message : null) ?? 'Generating…')
     : null;
 
-  const progressPct = isRunning && job?.progress != null
+  const progressPct = isRunning && job && 'progress' in job && job.progress != null
     ? Math.round(job.progress * 100)
     : null;
 
-  const successMsg = isDone && job?.status === 'succeeded' && job.result
+  const successMsg = isDone && job?.status === 'succeeded' && job && 'result' in job && job.result
     ? `Generated ${(job.result as { cards_created?: number }).cards_created ?? '?'} cards (confidence: ${(job.result as { confidence?: string }).confidence ?? '?'})`
     : null;
 
-  const errorPayload = isDone && job?.status === 'failed'
-    ? (job.error ?? { message: 'Unknown error' })
+  const errorPayload = isDone && job?.status === 'failed' && job
+    ? (job.error as Job['error'] ?? { message: 'Unknown error' })
     : null;
 
   return (

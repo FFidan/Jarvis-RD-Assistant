@@ -8,11 +8,19 @@ import type { FeedResponse, FeedPaper } from '@/types';
 export function HeroResumeReading() {
   const navigate = useNavigate();
 
-  const { data, isLoading } = useQuery<FeedResponse>({
+  const { data, isLoading, isError } = useQuery<FeedResponse>({
     queryKey: ['feed', 'reading', 'hero'],
     queryFn: () => fetchFeed({ view: 'library', filter: 'reading', limit: 20 }),
     staleTime: 60_000,
   });
+
+  if (isError) {
+    return (
+      <p className="text-faint italic font-serif text-center py-8">
+        Couldn't load reading list — check your connection.
+      </p>
+    );
+  }
 
   if (isLoading) {
     return (

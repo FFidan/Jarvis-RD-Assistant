@@ -161,7 +161,7 @@ test.describe('My Day v5 redesign — smoke', () => {
     // LearningFocusSection always renders (shows stats skeleton then data).
 
     const alwaysVisible = [
-      '§ Yesterday',
+      // '§ Yesterday' removed — YesterdaySection hidden until daily-rollup job ships (W2-19)
       '§ Now',
       "§ Today's intent",
       '§ Projects',
