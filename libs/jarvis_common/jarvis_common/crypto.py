@@ -11,6 +11,8 @@ from typing import Any
 import asyncpg
 from cryptography.fernet import Fernet, MultiFernet
 
+from jarvis_common.secrets import read_secret
+
 logger = logging.getLogger(__name__)
 
 
@@ -20,8 +22,9 @@ def _load_fernet() -> Fernet | MultiFernet:
 
     Reads ``JARVIS_CONFIG_KEY`` (the *current* / write key) plus the optional
     ``JARVIS_CONFIG_KEY_OLD`` (a previous key kept for read-only decryption
-    during a rotation window). When ``OLD`` is set, returns a
-    :class:`MultiFernet([new, old])` so:
+    during a rotation window). Both honour the Docker Secret ``_FILE``
+    convention via :func:`jarvis_common.secrets.read_secret`. When ``OLD`` is
+    set, returns a :class:`MultiFernet([new, old])` so:
 
     * ``encrypt`` always uses the new key (first in the list),
     * ``decrypt`` accepts ciphertexts produced under either key.
@@ -34,7 +37,7 @@ def _load_fernet() -> Fernet | MultiFernet:
     :func:`reload_fernet_on_sighup`).
     Raises RuntimeError if the new key is unset or malformed.
     """
-    raw_new = os.environ.get("JARVIS_CONFIG_KEY", "")
+    raw_new = read_secret("JARVIS_CONFIG_KEY")
     if not raw_new:
         raise RuntimeError(
             "JARVIS_CONFIG_KEY is not set. "
@@ -48,7 +51,7 @@ def _load_fernet() -> Fernet | MultiFernet:
             f"JARVIS_CONFIG_KEY is malformed (expected urlsafe base64-encoded 32-byte key): {exc}"
         ) from exc
 
-    raw_old = os.environ.get("JARVIS_CONFIG_KEY_OLD", "")
+    raw_old = read_secret("JARVIS_CONFIG_KEY_OLD")
     if not raw_old:
         return new_fernet
     try:

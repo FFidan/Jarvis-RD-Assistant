@@ -32,6 +32,26 @@ die() {
   exit 1
 }
 
+# require_langfuse_secrets — precondition guard for --profile observability.
+# The Langfuse image does NOT honour the Docker Secrets _FILE convention, so
+# the three secrets are sourced from .env (mirrored to ./secrets/ for parity
+# with the rest of the stack).  Compose has no ``:-default`` on these vars
+# and will fail-fast if any is unset; we surface a friendlier error here when
+# the caller asks for the observability profile without first running
+# ``scripts/init-secrets.sh``.
+require_langfuse_secrets() {
+  local missing=()
+  for v in LANGFUSE_NEXTAUTH_SECRET LANGFUSE_SALT LANGFUSE_PG_PASSWORD; do
+    if ! grep -qE "^${v}=.+" .env 2>/dev/null; then
+      missing+=("$v")
+    fi
+  done
+  if [ "${#missing[@]}" -gt 0 ]; then
+    die "Cannot start --profile observability: missing Langfuse secrets in .env: ${missing[*]}" \
+        "Run: bash scripts/init-secrets.sh"
+  fi
+}
+
 # wait_healthy <svc> [budget_seconds]
 # Poll Docker healthcheck for <svc> until healthy or timeout.
 # Returns 0 on healthy, 1 on unhealthy or timeout.
@@ -447,6 +467,13 @@ if [ "$USE_TUNNEL_PROFILE" -eq 1 ]; then
 fi
 if [ "$USE_TELEGRAM_PROFILE" -eq 1 ]; then
   PROFILE_ARGS+=(--profile telegram)
+fi
+# USE_OBSERVABILITY_PROFILE is opt-in (env-driven, defaults to 0).  Guard
+# against the common footgun where a user runs ``USE_OBSERVABILITY_PROFILE=1
+# ./setup.sh`` without first generating Langfuse secrets via init-secrets.sh.
+if [ "${USE_OBSERVABILITY_PROFILE:-0}" -eq 1 ]; then
+  require_langfuse_secrets
+  PROFILE_ARGS+=(--profile observability)
 fi
 
 printf '\n'

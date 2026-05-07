@@ -1,7 +1,5 @@
 """Today's Intent persistence — single row per (user, day)."""
 
-from __future__ import annotations
-
 from typing import TypedDict
 
 
@@ -10,11 +8,12 @@ class IntentRow(TypedDict):
     updated_at: str | None
 
 
-async def get_today(pool, user_id: str) -> IntentRow:
+async def get_today(pool, user_id: int | None) -> IntentRow:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT intent_text, updated_at FROM daily_intent "
-            "WHERE user_id = $1 AND intent_date = CURRENT_DATE",
+            "WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)"
+            " AND intent_date = CURRENT_DATE",
             user_id,
         )
     if not row:
@@ -25,7 +24,7 @@ async def get_today(pool, user_id: str) -> IntentRow:
     }
 
 
-async def upsert_today(pool, user_id: str, intent: str) -> IntentRow:
+async def upsert_today(pool, user_id: int | None, intent: str) -> IntentRow:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -45,9 +44,11 @@ async def upsert_today(pool, user_id: str, intent: str) -> IntentRow:
     }
 
 
-async def delete_today(pool, user_id: str) -> None:
+async def delete_today(pool, user_id: int | None) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
-            "DELETE FROM daily_intent WHERE user_id = $1 AND intent_date = CURRENT_DATE",
+            "DELETE FROM daily_intent"
+            " WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)"
+            " AND intent_date = CURRENT_DATE",
             user_id,
         )

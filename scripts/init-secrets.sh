@@ -82,13 +82,22 @@ sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
 
-# JARVIS_CONFIG_KEY is a Fernet key passed as a plain env var — no secrets file needed.
-if ! grep -q '^JARVIS_CONFIG_KEY=.\+' .env 2>/dev/null; then
-  echo "JARVIS_CONFIG_KEY=$(openssl rand -base64 32)" >> .env
-  ok "JARVIS_CONFIG_KEY generated and appended to .env."
-else
-  info "JARVIS_CONFIG_KEY already in .env — skipping."
-fi
+# JARVIS_CONFIG_KEY is the Fernet write-key for the user_config table.
+# sync_secret preserves any existing .env value verbatim; rotating this key
+# would render every encrypted user_config row unreadable, so we never
+# regenerate when an existing value is present.  ``Fernet.generate_key()``
+# emits the same shape as ``openssl rand -base64 32`` (32 bytes urlsafe-b64).
+sync_secret JARVIS_CONFIG_KEY  jarvis_config_key.txt  "openssl rand -base64 32 | tr -d '\\n'"
+
+# ---------------------------------------------------------------------------
+# Langfuse observability (--profile observability)
+# ---------------------------------------------------------------------------
+# Langfuse's image does not honour the _FILE convention, so we still write
+# these into .env (sync_secret does that on the first leg) and ALSO mirror
+# them to ./secrets/ for parity with the other secrets.
+sync_secret LANGFUSE_NEXTAUTH_SECRET langfuse_nextauth_secret.txt "openssl rand -hex 32"
+sync_secret LANGFUSE_SALT            langfuse_salt.txt            "openssl rand -hex 16"
+sync_secret LANGFUSE_PG_PASSWORD     langfuse_pg_password.txt     "openssl rand -hex 24"
 
 # ---------------------------------------------------------------------------
 # Manual secrets (cannot be auto-generated)

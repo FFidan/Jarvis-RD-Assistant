@@ -63,6 +63,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
         _langfuse_lifespan_hook,
         get_litellm_config,
     )
+    from jarvis_common.secrets import read_secret  # noqa: PLC0415
 
     from learning_engine._state import svc  # noqa: PLC0415
 
@@ -71,7 +72,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
     openai_client = instructor.from_openai(
         openai.AsyncOpenAI(
             base_url=f"{litellm_config.base_url}/v1",
-            api_key=os.environ.get("LITELLM_MASTER_KEY") or "dummy",
+            api_key=read_secret("LITELLM_MASTER_KEY") or "dummy",
         ),
         mode=instructor.Mode.JSON,
     )

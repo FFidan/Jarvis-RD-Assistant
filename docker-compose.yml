@@ -11,14 +11,16 @@ x-shared-env: &shared-env
   # DATABASE_URL is NOT set here — each service's entrypoint.sh reads
   # /run/secrets/postgres_password and constructs it at container start.
   LITELLM_BASE_URL: http://litellm:4000
-  # master_key for LiteLLM admin endpoints; propagated to all services that call LiteLLM.
-  LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-}
+  # master_key for LiteLLM admin endpoints is mounted as a Docker Secret
+  # (_FILE convention) at /run/secrets/litellm_master_key.  Each service that
+  # calls LiteLLM declares ``- litellm_master_key`` under its ``secrets:`` list.
+  LITELLM_MASTER_KEY_FILE: /run/secrets/litellm_master_key
   QDRANT_URL: http://qdrant:6333
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-embed}
   EMBEDDING_MODEL_NAME: ${EMBEDDING_MODEL_NAME:-qwen3-embedding:4b}
   EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-2560}
-  # JARVIS_API_KEY is injected via Docker Secret (_FILE convention); plain env var kept as fallback
-  JARVIS_API_KEY: ${JARVIS_API_KEY:-}
+  # JARVIS_API_KEY is injected via Docker Secret (_FILE convention) only — no
+  # plaintext env var fallback so ``docker inspect`` cannot leak the key.
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -208,9 +210,24 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-}
-    command: ["--config", "/app/config.yaml"]
-    # master_key is set in litellm/config.yaml via os.environ/LITELLM_MASTER_KEY.
+    secrets:
+      - litellm_master_key
+    # litellm/config.yaml uses ``master_key: os.environ/LITELLM_MASTER_KEY`` and
+    # the upstream image does not honour the ``_FILE`` convention.  This shim
+    # reads the secret file into LITELLM_MASTER_KEY at container start and
+    # refuses to start when the file is empty (W1-2 + W1-5).  Both
+    # ``entrypoint`` and ``command`` are overridden — the upstream image sets
+    # entrypoint=["litellm"], so without overriding it our ``sh`` would be
+    # passed as a positional arg to litellm.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ ! -s /run/secrets/litellm_master_key ]; then
+          echo 'FATAL: /run/secrets/litellm_master_key is empty or missing.' >&2
+          exit 1
+        fi
+        export LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
+        exec litellm --config /app/config.yaml
     # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
     mem_limit: 4g
     healthcheck:
@@ -248,12 +265,15 @@ services:
       # QDRANT_API_KEY is injected via Docker Secret (_FILE convention)
       QDRANT_API_KEY_FILE: /run/secrets/qdrant_api_key
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
-      JARVIS_CONFIG_KEY: ${JARVIS_CONFIG_KEY:-}
+      # JARVIS_CONFIG_KEY (Fernet) is injected via Docker Secret (_FILE convention)
+      JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
     secrets:
       - jarvis_api_key
       - postgres_password
       - telegram_bot_token
       - qdrant_api_key
+      - litellm_master_key
+      - jarvis_config_key
     volumes:
       - ./shared/pdf_storage:/data/pdfs
       - ./shared/snapshots:/data/snapshots
@@ -302,9 +322,12 @@ services:
       - "127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}:8001"
     environment:
       <<: *shared-env
+      JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
     secrets:
       - jarvis_api_key
       - postgres_password
+      - litellm_master_key
+      - jarvis_config_key
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
@@ -343,6 +366,7 @@ services:
       - jarvis_api_key
       - postgres_password
       - telegram_bot_token
+      - litellm_master_key
     mem_limit: 1g
     healthcheck:
       test: ["CMD", "python3", "-c", "import os; os.kill(1, 0)"]
@@ -434,7 +458,9 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: langfuse
-      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:-langfuse_dev_password}
+      # No ``:-default`` — compose fail-fasts when LANGFUSE_PG_PASSWORD is unset.
+      # ``scripts/init-secrets.sh`` provisions the value into .env on first run.
+      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:?LANGFUSE_PG_PASSWORD is required for the observability profile — run scripts/init-secrets.sh}
       POSTGRES_DB: langfuse
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
@@ -453,10 +479,13 @@ services:
     ports:
       - "${LANGFUSE_BIND_HOST:-127.0.0.1}:${LANGFUSE_HOST_PORT:-3002}:3000"
     environment:
-      DATABASE_URL: postgres://langfuse:${LANGFUSE_PG_PASSWORD:-langfuse_dev_password}@langfuse-postgres:5432/langfuse
+      # No ``:-default`` on the Langfuse secrets — compose fail-fasts when any
+      # of these are unset.  ``scripts/init-secrets.sh`` provisions all three
+      # into .env on first run.
+      DATABASE_URL: postgres://langfuse:${LANGFUSE_PG_PASSWORD:?LANGFUSE_PG_PASSWORD is required for the observability profile — run scripts/init-secrets.sh}@langfuse-postgres:5432/langfuse
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:-changeme_nextauth_secret}
-      SALT: ${LANGFUSE_SALT:-changeme_salt_32chars_minimum_len}
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET is required for the observability profile — run scripts/init-secrets.sh}
+      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT is required for the observability profile — run scripts/init-secrets.sh}
       TELEMETRY_ENABLED: "false"
     depends_on:
       langfuse-postgres:
@@ -534,3 +563,7 @@ secrets:
     file: ./secrets/telegram_bot_token.txt
   qdrant_api_key:
     file: ./secrets/qdrant_api_key.txt
+  litellm_master_key:
+    file: ./secrets/litellm_master_key.txt
+  jarvis_config_key:
+    file: ./secrets/jarvis_config_key.txt

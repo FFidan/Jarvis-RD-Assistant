@@ -37,11 +37,32 @@ def test_build_litellm_headers_returns_empty_when_key_unset(monkeypatch):
 
 def test_build_litellm_headers_returns_bearer_when_key_set(monkeypatch):
     """build_litellm_headers returns Authorization: Bearer <key> when LITELLM_MASTER_KEY is set."""
+    monkeypatch.delenv("LITELLM_MASTER_KEY_FILE", raising=False)
     monkeypatch.setenv("LITELLM_MASTER_KEY", "test-secret-key-abc123")
     config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
 
     assert llm_client.build_litellm_headers(config) == {
         "Authorization": "Bearer test-secret-key-abc123"
+    }
+
+
+def test_build_litellm_headers_reads_key_from_file_var(monkeypatch, tmp_path):
+    """W1-2: LITELLM_MASTER_KEY_FILE must be honoured ahead of the plain env var.
+
+    When ``LITELLM_MASTER_KEY_FILE`` points to a non-empty file, the resolved
+    key (whitespace-stripped) is used in the Bearer header even if the legacy
+    ``LITELLM_MASTER_KEY`` env var holds something different.  This is the
+    behaviour Docker Secrets relies on.
+    """
+    secret_file = tmp_path / "litellm_master_key.txt"
+    secret_file.write_text("file-bearer-secret-xyz\n")
+    monkeypatch.setenv("LITELLM_MASTER_KEY_FILE", str(secret_file))
+    # Plain env var should be ignored when _FILE is present.
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "this-should-not-win")
+    config = llm_client.LiteLLMConfig(base_url="http://litellm.test:4000")
+
+    assert llm_client.build_litellm_headers(config) == {
+        "Authorization": "Bearer file-bearer-secret-xyz"
     }
 
 
