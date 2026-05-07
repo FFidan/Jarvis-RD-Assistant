@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import socket
+
+from jarvis_common.model_catalog import ModelCatalogEntry
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
     _model_pull_job,
     build_model_statuses,
     catalog_entry_for_model,
+    compute_vram_fit,
+    detect_hardware,
     recommendations_for_role,
 )
 
@@ -154,3 +159,161 @@ async def test_model_pull_job_stops_when_cancelled_mid_stream() -> None:
         raise AssertionError("model pull should stop on cancellation")
 
     assert ctx.messages[-1][0] < 1.0
+
+
+# ---------------------------------------------------------------------------
+# compute_vram_fit tests (W3-SMOKE-03 regression + edge cases)
+# ---------------------------------------------------------------------------
+
+
+def _hw_16gb() -> HardwareInfo:
+    return HardwareInfo(
+        vram_gb=16.0,
+        vram_source="nvidia-smi",
+        tier=2,
+        detected_at="2026-05-07T00:00:00+00:00",
+        machine_id="test-host",
+    )
+
+
+def _hw_zero() -> HardwareInfo:
+    """Simulates a probe failure (CPU-only / no GPU detected)."""
+    return HardwareInfo(
+        vram_gb=0.0,
+        vram_source="cpu",
+        tier=0,
+        detected_at="2026-05-07T00:00:00+00:00",
+        machine_id="test-host",
+    )
+
+
+def test_compute_vram_fit_qwen3_14b_unfit_at_32768_on_16gb() -> None:
+    """W3-SMOKE-03 regression: qwen3:14b at 32768 ctx should be unfit on 16 GB."""
+    entry = catalog_entry_for_model("qwen3:14b")
+    assert entry is not None, "qwen3:14b must be in the catalog"
+
+    result = compute_vram_fit(entry, 32768, _hw_16gb())
+
+    # Contract §4 sanity table: required ~19.83 GB > 1.20 * 16 = 19.2 GB → unfit
+    assert result["default"] == "unfit", (
+        f"Expected 'unfit' but got {result['default']!r}; "
+        f"required_vram_gb={result['required_vram_gb']}"
+    )
+    assert result["at_num_ctx"] == 32768
+    assert result["required_vram_gb"] is not None
+    assert result["required_vram_gb"] > 19.0  # sanity: well above threshold
+
+
+def test_compute_vram_fit_qwen3_14b_fits_at_8192_on_16gb() -> None:
+    """W3-SMOKE-03 mitigation: qwen3:14b at 8192 ctx should fit on 16 GB."""
+    entry = catalog_entry_for_model("qwen3:14b")
+    assert entry is not None
+
+    result = compute_vram_fit(entry, 8192, _hw_16gb())
+
+    # Contract §4 sanity table: required ~10.0 GB ≤ 0.85 * 16 = 13.6 GB → fits
+    assert result["default"] == "fits", (
+        f"Expected 'fits' but got {result['default']!r}; "
+        f"required_vram_gb={result['required_vram_gb']}"
+    )
+    assert result["at_num_ctx"] == 8192
+    assert result["required_vram_gb"] is not None
+    assert result["required_vram_gb"] < 13.6
+
+
+def test_compute_vram_fit_falls_back_to_vram_gb_when_field_absent() -> None:
+    """Entries without min_vram_gb_at_default_ctx fall back to entry.vram_gb."""
+    # Build a minimal catalog entry with no hardware-aware fields set
+    entry = ModelCatalogEntry(
+        id="test/model",
+        name="Test Model",
+        provider="ollama",
+        ollama_tag="test-model",
+        roles=("smart",),
+        vram_gb=8.0,
+        disk_gb=5.0,
+        context_tokens=16384,
+        license="MIT",
+        tier=2,
+        description="test",
+        notes="",
+        last_reviewed="2026-05-07",
+        # No hardware-aware fields → all None / defaults
+    )
+
+    result = compute_vram_fit(entry, 8192, _hw_16gb())
+
+    # Falls back to vram_gb=8.0, default_ctx=min(8192,16384)=8192
+    # required = 8.0 + max(0, 8192-8192) * 1024 / 1e9 = 8.0 GB
+    # 8.0 ≤ 0.85 * 16 = 13.6 → fits
+    assert result["default"] == "fits"
+    assert result["required_vram_gb"] == 8.0
+    assert result["default_num_ctx"] == 8192
+    assert result["kv_cache_bytes_per_token"] is None  # entry has None → returned as-is
+
+
+def test_compute_vram_fit_skips_cloud_models() -> None:
+    """Cloud models (provider != 'ollama') should return status 'cloud'."""
+    entry = catalog_entry_for_model("anthropic/claude-sonnet-4-6")
+    assert entry is not None, "anthropic/claude-sonnet-4-6 must be in the catalog"
+    assert entry.provider == "anthropic"
+
+    result = compute_vram_fit(entry, 8192, _hw_16gb())
+
+    assert result["default"] == "cloud"
+    assert result["required_vram_gb"] is None
+    assert result["at_num_ctx"] == 8192
+
+
+def test_compute_vram_fit_handles_zero_vram_probe_failure() -> None:
+    """vram_gb == 0.0 (probe failure / CPU-only) → status 'unknown' for local models."""
+    entry = catalog_entry_for_model("qwen3:14b")
+    assert entry is not None
+
+    result = compute_vram_fit(entry, 8192, _hw_zero())
+
+    assert result["default"] == "unknown"
+    assert result["required_vram_gb"] is None
+
+
+def test_machine_id_uses_hostname() -> None:
+    """detect_hardware() must populate machine_id with socket.gethostname()."""
+    hw = detect_hardware()
+    assert hw.machine_id == socket.gethostname()
+
+
+def test_build_model_statuses_includes_fit_detail() -> None:
+    """Every entry in build_model_statuses output must carry a fit_detail dict."""
+    statuses = build_model_statuses(
+        installed=[{"name": "qwen3:4b", "size": 1, "details": {}}],
+        current={"smart_model": "qwen3:4b"},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hw_16gb(),
+        cloud_api_keys={},
+    )
+    for item in statuses:
+        assert "fit_detail" in item, f"Entry {item.get('id')} missing fit_detail"
+        fd = item["fit_detail"]
+        assert "default" in fd
+        assert fd["default"] in ("fits", "partial", "unfit", "cloud", "unknown")
+        assert "at_num_ctx" in fd
+
+
+def test_build_model_statuses_uses_num_ctx_per_role() -> None:
+    """fit_detail.at_num_ctx reflects the per-role override when provided."""
+    entry = catalog_entry_for_model("qwen3:14b")
+    assert entry is not None
+
+    # Provide a large num_ctx that pushes qwen3:14b into unfit territory
+    statuses = build_model_statuses(
+        installed=[{"name": "qwen3:14b", "size": 1, "details": {}}],
+        current={"smart_model": "qwen3:14b"},
+        embedding_model_name="qwen3-embedding:0.6b",
+        hardware=_hw_16gb(),
+        cloud_api_keys={},
+        num_ctx_per_role={"smart": 32768},
+    )
+    by_id = {item["id"]: item for item in statuses}
+    fd = by_id["qwen3:14b"]["fit_detail"]
+    assert fd["at_num_ctx"] == 32768
+    assert fd["default"] == "unfit"

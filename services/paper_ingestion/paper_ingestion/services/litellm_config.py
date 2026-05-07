@@ -107,10 +107,48 @@ ROLE_TO_ALIAS: dict[str, str] = {
 }
 
 
+async def _get_thinking_disabled(
+    model_name: str,
+    machine_id: str,
+    db_pool: Any,
+) -> bool:
+    """Return True if the user has disabled thinking mode for *model_name* on *machine_id*.
+
+    Reads ``llm.{machine_id}.thinking_disabled.{model_name}`` from user_config.
+    Returns False if the key is absent, db_pool is None, or any error occurs.
+    """
+    if not machine_id or db_pool is None:
+        return False
+    config_key = f"llm.{machine_id}.thinking_disabled.{model_name}"
+    try:
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1",
+                config_key,
+            )
+        if row is None:
+            return False
+        val = row["value"]
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.lower() in ("true", "1", "yes")
+        return bool(val)
+    except Exception:
+        logger.warning(
+            "Could not read thinking_disabled key for %r on machine %r",
+            model_name,
+            machine_id,
+            exc_info=True,
+        )
+        return False
+
+
 async def update_litellm_model(
     config_key: str,
     model_name: str,
     db_pool: Any = None,
+    machine_id: str = "",
 ) -> bool:
     """Route an alias to a new model, injecting cloud API keys when needed.
 
@@ -130,7 +168,14 @@ async def update_litellm_model(
         or ``'anthropic/claude-sonnet-4-5'``.
     db_pool : asyncpg Pool, optional
         Required when *model_name* has a cloud-provider prefix so that the
-        encrypted API key can be fetched.
+        encrypted API key can be fetched, or when thinking-mode propagation
+        is desired.
+    machine_id : str, optional
+        The current machine's hostname.  When provided together with *db_pool*,
+        ``update_litellm_model`` reads the
+        ``llm.{machine_id}.thinking_disabled.{model_name}`` user_config flag for
+        thinking-capable models and includes ``extra_body: {think: false}`` in
+        the LiteLLM params when that flag is set.
 
     Returns
     -------
@@ -172,6 +217,34 @@ async def update_litellm_model(
     _validate_model_name(model_suffix)
 
     # -------------------------------------------------------------------------
+    # Thinking-mode propagation.
+    # For thinking-capable models (supports_thinking=True in catalog), read the
+    # per-machine thinking_disabled flag and build an extra_body override when set.
+    # -------------------------------------------------------------------------
+    extra_body: dict[str, Any] | None = None
+    # Import here to avoid circular import at module level
+    from jarvis_common.model_catalog import ModelCatalogEntry, load_model_catalog  # noqa: PLC0415
+
+    catalog = load_model_catalog()
+    catalog_entry: ModelCatalogEntry | None = None
+    bare_model = model_name.split("/", 1)[-1] if "/" in model_name else model_name
+    for _entry in catalog:
+        entry_bare = (_entry.ollama_tag or _entry.id).split("/")[-1]
+        if entry_bare == bare_model or _entry.id == model_name:
+            catalog_entry = _entry
+            break
+    if catalog_entry is not None and catalog_entry.supports_thinking:
+        thinking_disabled = await _get_thinking_disabled(model_name, machine_id, db_pool)
+        if thinking_disabled:
+            extra_body = {"think": False}
+            logger.info(
+                "Thinking mode disabled for model %r on machine %r (alias %r)",
+                model_name,
+                machine_id,
+                alias,
+            )
+
+    # -------------------------------------------------------------------------
     # Cloud-provider path: POST to /config/update (never touch the YAML file).
     # -------------------------------------------------------------------------
     if cloud_provider is not None:
@@ -193,7 +266,7 @@ async def update_litellm_model(
                 )
                 cloud_provider = None  # fall through to YAML path below
             else:
-                return await _post_config_update(alias, model_name, api_key)
+                return await _post_config_update(alias, model_name, api_key, extra_body=extra_body)
 
     # -------------------------------------------------------------------------
     # Local / Ollama path: update the YAML file on disk.
@@ -206,6 +279,7 @@ async def update_litellm_model(
 
     config = yaml.safe_load(LITELLM_CONFIG_PATH.read_text())
     updated = False
+    new_model = model_name  # fallback; set in loop below when alias found
     for entry in config.get("model_list", []):
         if entry.get("model_name") == alias:
             existing_model = (entry.get("litellm_params") or {}).get("model", "")
@@ -220,20 +294,30 @@ async def update_litellm_model(
             else:
                 new_model = f"ollama/{model_name}"
 
-            if existing_model != new_model:
-                # A2: guard litellm_params null in YAML.
-                params = entry.get("litellm_params")
-                if params is None:
-                    params = {}
-                    entry["litellm_params"] = params
+            # A2: guard litellm_params null in YAML.
+            params = entry.get("litellm_params")
+            if params is None:
+                params = {}
+                entry["litellm_params"] = params
+
+            model_changed = existing_model != new_model
+            if model_changed:
                 params["model"] = new_model
-                updated = True
                 logger.info(
                     "Updated LiteLLM alias %r: %s -> %s",
                     alias,
                     existing_model,
                     new_model,
                 )
+
+            # Propagate thinking-mode override regardless of model change.
+            if extra_body is not None:
+                params["extra_body"] = extra_body
+                updated = True
+                logger.info("Injected extra_body=%r into LiteLLM alias %r", extra_body, alias)
+
+            if model_changed:
+                updated = True
             break
 
     if updated:
@@ -243,12 +327,17 @@ async def update_litellm_model(
             )
         except OSError:
             logger.warning("LiteLLM config is :ro; falling back to in-memory /config/update")
-            return await _post_ollama_alias_update(alias, new_model)
+            return await _post_ollama_alias_update(alias, new_model, extra_body=extra_body)
 
     return updated
 
 
-async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool:
+async def _post_config_update(
+    alias: str,
+    model_name: str,
+    api_key: str,
+    extra_body: dict[str, Any] | None = None,
+) -> bool:
     """POST a model alias update to LiteLLM's /config/update endpoint.
 
     The API key is injected into the in-memory litellm_params dict and is
@@ -256,14 +345,17 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
 
     Returns True on success (HTTP < 400), False otherwise.
     """
+    litellm_params: dict[str, Any] = {
+        "model": model_name,
+        "api_key": api_key,
+    }
+    if extra_body is not None:
+        litellm_params["extra_body"] = extra_body
     payload: dict[str, Any] = {
         "model_list": [
             {
                 "model_name": alias,
-                "litellm_params": {
-                    "model": model_name,
-                    "api_key": api_key,
-                },
+                "litellm_params": litellm_params,
             }
         ]
     }
@@ -292,16 +384,23 @@ async def _post_config_update(alias: str, model_name: str, api_key: str) -> bool
         raise RuntimeError(f"Could not push cloud alias {alias!r} to LiteLLM: {exc}") from exc
 
 
-async def _post_ollama_alias_update(alias: str, litellm_model_string: str) -> bool:
+async def _post_ollama_alias_update(
+    alias: str,
+    litellm_model_string: str,
+    extra_body: dict[str, Any] | None = None,
+) -> bool:
     """Push an Ollama alias update to LiteLLM /config/update in-memory (no api_key needed)."""
+    litellm_params: dict[str, Any] = {
+        "model": litellm_model_string,
+        "api_base": "http://ollama:11434",
+    }
+    if extra_body is not None:
+        litellm_params["extra_body"] = extra_body
     payload: dict[str, Any] = {
         "model_list": [
             {
                 "model_name": alias,
-                "litellm_params": {
-                    "model": litellm_model_string,
-                    "api_base": "http://ollama:11434",
-                },
+                "litellm_params": litellm_params,
             }
         ]
     }

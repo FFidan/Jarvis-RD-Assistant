@@ -3,6 +3,7 @@
 import contextlib
 import logging
 import os
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -85,6 +86,44 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "llm.google.api_key",
     }
 )
+
+# ---------------------------------------------------------------------------
+# Dynamic config key patterns for per-machine hardware-aware settings.
+# These cannot be expressed as a literal set because they contain the machine
+# hostname as a segment.
+#
+# Accepted:
+#   llm.<hostname>.<role>_num_ctx      e.g. llm.host-rtx5060.smart_num_ctx
+#   llm.<hostname>.thinking_disabled.<model_id>
+#                                      e.g. llm.host.thinking_disabled.qwen3:14b
+#
+# <hostname>  = [a-zA-Z0-9.-]{1,64}   (strict; rejects wildcards, slashes, etc.)
+# <role>      = smart | fast | embed
+# <model_id>  = [a-z0-9_./:-]+        (catalog ID character set)
+# ---------------------------------------------------------------------------
+
+_MACHINE_ID_RE = re.compile(r"^[a-zA-Z0-9.\-]{1,64}$")
+_ROLE_RE = re.compile(r"^(smart|fast|embed)$")
+_MODEL_ID_RE = re.compile(r"^[a-z0-9_./:\-]+$")
+
+# e.g. llm.host-rtx5060.smart_num_ctx
+_NUM_CTX_PATTERN = re.compile(r"^llm\.([a-zA-Z0-9.\-]{1,64})\.(smart|fast|embed)_num_ctx$")
+# e.g. llm.host-rtx5060.thinking_disabled.qwen3:14b
+_THINKING_DISABLED_PATTERN = re.compile(
+    r"^llm\.([a-zA-Z0-9.\-]{1,64})\.thinking_disabled\.([a-z0-9_./:\-]+)$"
+)
+
+
+def _is_allowed_config_key(key: str) -> bool:
+    """Return True if *key* is either a known static key or a valid dynamic pattern."""
+    if key in _ALLOWED_CONFIG_KEYS:
+        return True
+    if _NUM_CTX_PATTERN.fullmatch(key):
+        return True
+    if _THINKING_DISABLED_PATTERN.fullmatch(key):
+        return True
+    return False
+
 
 _SECRET_KEYS: frozenset[str] = frozenset(
     {
@@ -449,7 +488,7 @@ async def get_config(
     key: str,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ConfigEntry:
-    if key not in _ALLOWED_CONFIG_KEYS:
+    if not _is_allowed_config_key(key):
         raise HTTPException(404, f"Config key '{key}' not found")
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -470,8 +509,23 @@ async def set_config(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     scheduler=Depends(get_scheduler),
 ) -> ConfigEntry:
-    if key not in _ALLOWED_CONFIG_KEYS:
+    if not _is_allowed_config_key(key):
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
+
+    # Dynamic-key validators (num_ctx and thinking_disabled patterns).
+    # These are checked before the static _CONFIG_VALIDATORS dict lookup since
+    # dynamic keys are never present in that dict.
+    if _NUM_CTX_PATTERN.fullmatch(key):
+        try:
+            _validate_positive_int(body.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif _THINKING_DISABLED_PATTERN.fullmatch(key):
+        try:
+            _validate_bool(body.value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     validator = _CONFIG_VALIDATORS.get(key)
     if validator is not None:
         try:

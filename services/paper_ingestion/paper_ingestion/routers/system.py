@@ -298,12 +298,36 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
 
     hardware: HardwareInfo = get_cached_hardware(request.app.state)
     result["hardware"].update(hardware.to_dict())
+
+    # Fetch per-machine num_ctx overrides so fit_detail reflects the user's chosen context.
+    num_ctx_per_role: dict[str, int] = {}
+    machine_id = hardware.machine_id
+    if machine_id:
+        num_ctx_keys = [f"llm.{machine_id}.{role}_num_ctx" for role in ("smart", "fast", "embed")]
+        try:
+            async with request.app.state.db_pool.acquire() as conn:
+                num_ctx_rows = await conn.fetch(
+                    "SELECT key, value FROM user_config WHERE key = ANY($1::text[])",
+                    num_ctx_keys,
+                )
+            for row in num_ctx_rows:
+                raw_key = row["key"]  # e.g. "llm.host.smart_num_ctx"
+                role_part = raw_key.split(".")[-1].replace("_num_ctx", "")
+                raw_val = row["value"]
+                try:
+                    num_ctx_per_role[role_part] = int(raw_val)
+                except (TypeError, ValueError):
+                    pass
+        except Exception:
+            logger.warning("Could not load per-machine num_ctx config", exc_info=True)
+
     result["catalog"] = build_model_statuses(
         installed=result["installed"],
         current=result["current"],
         embedding_model_name=EMBEDDING_MODEL_NAME,
         hardware=hardware,
         cloud_api_keys=cloud_api_keys,
+        num_ctx_per_role=num_ctx_per_role,
     )
     result["recommendations"] = {
         role: recommendations_for_role(

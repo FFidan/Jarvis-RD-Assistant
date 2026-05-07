@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import platform
+import socket
 import subprocess
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -46,6 +47,7 @@ class HardwareInfo:
     vram_source: Literal["nvidia-smi", "macos-approx", "cpu"]
     tier: int
     detected_at: str
+    machine_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -142,6 +144,7 @@ def detect_hardware() -> HardwareInfo:
         vram_source=source,
         tier=hardware_tier(rounded),
         detected_at=datetime.now(UTC).isoformat(),
+        machine_id=socket.gethostname(),
     )
 
 
@@ -213,6 +216,94 @@ def _fit_for_entry(
     return "unfit"
 
 
+# Default KV cache marginal cost per token (bytes).  Conservatively ~1 KB/token
+# covers most FP16 KV cache configurations. Catalog entries may override this
+# with a measured value via the kv_cache_bytes_per_token field.
+_DEFAULT_KV_CACHE_BYTES_PER_TOKEN = 1024
+
+# Default context window when catalog entry has no default_num_ctx set.
+_DEFAULT_NUM_CTX_FALLBACK = 8192
+
+
+def compute_vram_fit(
+    entry: ModelCatalogEntry,
+    num_ctx: int,
+    hardware: HardwareInfo,
+) -> dict[str, Any]:
+    """Compute VRAM fit for an entry at a given num_ctx on this machine.
+
+    Returns a dict matching contract §5.1 fit_detail shape:
+      {"default": "fits"|"partial"|"unfit"|"cloud"|"unknown",
+       "at_num_ctx": int, "required_vram_gb": float | None,
+       "default_num_ctx": int, "max_num_ctx": int,
+       "kv_cache_bytes_per_token": int | None}
+    """
+    # Resolve catalog-derived defaults (same values the frontend uses for what-if)
+    resolved_default_ctx = (
+        entry.default_num_ctx
+        if entry.default_num_ctx is not None
+        else min(_DEFAULT_NUM_CTX_FALLBACK, entry.context_tokens)
+    )
+    resolved_max_ctx = entry.max_num_ctx if entry.max_num_ctx is not None else entry.context_tokens
+    resolved_kv = (
+        entry.kv_cache_bytes_per_token
+        if entry.kv_cache_bytes_per_token is not None
+        else _DEFAULT_KV_CACHE_BYTES_PER_TOKEN
+    )
+
+    # Cloud models: skip math entirely
+    if entry.provider != "ollama":
+        return {
+            "default": "cloud",
+            "at_num_ctx": num_ctx,
+            "required_vram_gb": None,
+            "default_num_ctx": resolved_default_ctx,
+            "max_num_ctx": resolved_max_ctx,
+            "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
+        }
+
+    # Hardware probe failed or CPU-only: cannot determine fit
+    if hardware.vram_gb == 0.0:
+        return {
+            "default": "unknown",
+            "at_num_ctx": num_ctx,
+            "required_vram_gb": None,
+            "default_num_ctx": resolved_default_ctx,
+            "max_num_ctx": resolved_max_ctx,
+            "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
+        }
+
+    # Resolve base VRAM: prefer min_vram_gb_at_default_ctx, fall back to vram_gb
+    min_vram = (
+        entry.min_vram_gb_at_default_ctx
+        if entry.min_vram_gb_at_default_ctx is not None
+        else entry.vram_gb
+    )
+
+    # VRAM required at requested num_ctx
+    extra_tokens = max(0, num_ctx - resolved_default_ctx)
+    required_vram_gb = min_vram + extra_tokens * resolved_kv / 1e9
+
+    vram_85 = hardware.vram_gb * 0.85
+    vram_120 = hardware.vram_gb * 1.20
+
+    if required_vram_gb <= vram_85:
+        status = "fits"
+    elif required_vram_gb <= vram_120:
+        status = "partial"
+    else:
+        status = "unfit"
+
+    return {
+        "default": status,
+        "at_num_ctx": num_ctx,
+        "required_vram_gb": round(required_vram_gb, 3),
+        "default_num_ctx": resolved_default_ctx,
+        "max_num_ctx": resolved_max_ctx,
+        "kv_cache_bytes_per_token": entry.kv_cache_bytes_per_token,
+    }
+
+
 def build_model_statuses(
     *,
     installed: list[dict[str, Any]],
@@ -220,10 +311,21 @@ def build_model_statuses(
     embedding_model_name: str,
     hardware: HardwareInfo | None = None,
     cloud_api_keys: dict[str, bool] | None = None,
+    num_ctx_per_role: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Combine catalog, installed Ollama models, active assignments, and hardware."""
+    """Combine catalog, installed Ollama models, active assignments, and hardware.
+
+    Parameters
+    ----------
+    num_ctx_per_role:
+        Per-role num_ctx overrides keyed by role name (``"smart"``, ``"fast"``,
+        ``"embed"``).  When provided, ``fit_detail`` is computed at the
+        user's chosen context length; absent roles fall back to the catalog
+        default.  Pass ``None`` (default) to always use catalog defaults.
+    """
     hw = hardware or detect_hardware()
     cloud_keys = cloud_api_keys or {}
+    ctx_per_role = num_ctx_per_role or {}
     installed_names = _installed_by_name(installed)
     active_ids = _active_model_ids(current, embedding_model_name)
 
@@ -274,6 +376,22 @@ def build_model_statuses(
                 else (f"Configure the {entry.provider} API key before assigning this model.")
             )
 
+        # Determine the effective num_ctx for fit calculation.  Use the
+        # most permissive (max) user-specified value across all roles this
+        # entry supports; fall back to the catalog default when absent.
+        role_ctxs = [ctx_per_role[r] for r in entry.roles if r in ctx_per_role]
+        effective_num_ctx: int
+        if role_ctxs:
+            effective_num_ctx = max(role_ctxs)
+        else:
+            effective_num_ctx = (
+                entry.default_num_ctx
+                if entry.default_num_ctx is not None
+                else min(_DEFAULT_NUM_CTX_FALLBACK, entry.context_tokens)
+            )
+
+        fit_detail = compute_vram_fit(entry, effective_num_ctx, hw)
+
         payload.update(
             {
                 "active": active,
@@ -285,6 +403,7 @@ def build_model_statuses(
                 "status": status,
                 "can_assign": can_assign,
                 "assign_blocker": assign_blocker,
+                "fit_detail": fit_detail,
             }
         )
         statuses.append(payload)
