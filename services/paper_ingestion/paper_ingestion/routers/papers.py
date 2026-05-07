@@ -9,6 +9,11 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
 from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.paper_state import (  # noqa: I001
+    assert_paper_in_states as _assert_paper_in_states,
+    trash_paper as _trash_paper,
+    upsert_paper_user_state as _upsert_paper_user_state,
+)
 
 from paper_ingestion.converters import (
     row_to_chunk_response,
@@ -35,8 +40,6 @@ from paper_ingestion.models import (
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
 from paper_ingestion.routers._paper_helpers import (
-    _assert_paper_in_states,
-    _trash_paper,
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )
@@ -754,22 +757,8 @@ async def star_paper(
         # A CTE snapshots the previous starred value before the upsert so we
         # can determine whether this is a genuine transition without a separate
         # pre-flight SELECT (which would have a TOCTOU race window).
-        upsert_result = await conn.fetchrow(
-            """
-            WITH before AS (
-                SELECT starred FROM paper_user_state
-                WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2
-            )
-            INSERT INTO paper_user_state (paper_id, user_id, starred)
-            VALUES ($1, $2, TRUE)
-            ON CONFLICT (paper_id, user_id) DO UPDATE
-                SET starred = TRUE
-            RETURNING
-                (xmax = 0) AS is_new_row,
-                (SELECT COALESCE(starred, FALSE) FROM before) AS prev_starred
-            """,
-            paper_id,
-            user_id,
+        upsert_result = await _upsert_paper_user_state(
+            conn, paper_id, user_id, on_conflict="update_starred_only"
         )
         if upsert_result is not None:
             was_new_star = bool(upsert_result["is_new_row"]) or not bool(
@@ -926,26 +915,14 @@ async def annotate_paper(
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
-            row = await conn.fetchrow(
-                """INSERT INTO paper_user_state
-                       (paper_id, user_id, rating, user_notes, flagged)
-                   VALUES ($1, $2, $3, $4, COALESCE($5, FALSE))
-                   ON CONFLICT (paper_id, user_id) DO UPDATE SET
-                       rating     = COALESCE($3, paper_user_state.rating),
-                       user_notes = COALESCE($4, paper_user_state.user_notes),
-                       flagged    = COALESCE($5, paper_user_state.flagged)
-                   RETURNING
-                       COALESCE(state, 'inbox') AS state,
-                       state_before_trash,
-                       COALESCE(starred, FALSE) AS starred,
-                       rating, user_notes,
-                       COALESCE(flagged, FALSE) AS flagged,
-                       updated_at""",
+            row = await _upsert_paper_user_state(
+                conn,
                 paper_id,
                 user_id,
-                body.rating,
-                body.user_notes,
-                body.flagged,
+                rating=body.rating,
+                user_notes=body.user_notes,
+                flagged=body.flagged,
+                on_conflict="update_partial",
             )
         except asyncpg.ForeignKeyViolationError as e:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found") from e

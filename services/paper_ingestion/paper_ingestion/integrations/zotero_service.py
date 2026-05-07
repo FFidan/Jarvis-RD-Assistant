@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
+from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from jarvis_common.task_registry import paper_analyze, zotero_sync_annotations
 
 from paper_ingestion.models.papers import PaperCreate, SourceType
@@ -530,12 +531,13 @@ async def poll_zotero_library(
                 paper_id: int = row["id"]
                 # First-sync wins: INSERT to_read state but never overwrite
                 # existing user state (user may have trashed the paper).
-                await conn.execute(
-                    """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
-                       VALUES ($1, $2, 'to_read', FALSE)
-                       ON CONFLICT (paper_id, user_id) DO NOTHING""",
+                await _upsert_paper_user_state(
+                    conn,
                     paper_id,
                     None,  # single-tenant; multi-tenant deferred per spec §10
+                    state="to_read",
+                    starred=False,
+                    on_conflict="do_nothing",
                 )
                 # Store the Zotero item key on the paper row.
                 if item_key:

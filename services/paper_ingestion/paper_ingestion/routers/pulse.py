@@ -18,6 +18,7 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
+from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.task_registry import pulse_generate
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -36,7 +37,6 @@ from paper_ingestion.models import (
 from paper_ingestion.pulse.deck import load_history, load_today
 from paper_ingestion.pulse.training import FEATURE_NAMES
 from paper_ingestion.routers._paper_helpers import (
-    _trash_paper,
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )

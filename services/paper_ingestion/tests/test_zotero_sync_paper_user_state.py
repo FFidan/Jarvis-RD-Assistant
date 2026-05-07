@@ -181,14 +181,19 @@ async def test_fresh_sync_inserts_to_read_state() -> None:
     assert "ON CONFLICT (paper_id, user_id) DO NOTHING" in sql, (
         "SQL must contain ON CONFLICT (paper_id, user_id) DO NOTHING"
     )
-    assert "'to_read'" in sql, "SQL must hard-code 'to_read' as the state literal"
-    assert "FALSE" in sql, "SQL must hard-code FALSE as the starred literal"
+    # W2-26: state and starred are now passed as positional parameters ($3, $4)
+    # rather than hardcoded SQL literals — verify values via params instead.
 
-    # Parameter assertions: $1 = paper_id (42), $2 = user_id (None)
+    # Parameter assertions: $1 = paper_id (42), $2 = user_id (None),
+    # $3 = state ('to_read'), $4 = starred (False)
     params = insert_call.args[1:]
-    assert len(params) == 2, f"Expected 2 params ($1 paper_id, $2 user_id), got {params}"
+    assert len(params) == 4, (
+        f"Expected 4 params ($1 paper_id, $2 user_id, $3 state, $4 starred), got {params}"
+    )
     assert params[0] == 42, f"$1 must be paper_id=42, got {params[0]}"
     assert params[1] is None, f"$2 must be user_id=None (single-tenant), got {params[1]}"
+    assert params[2] == "to_read", f"$3 must be state='to_read', got {params[2]}"
+    assert params[3] is False, f"$4 must be starred=False, got {params[3]}"
 
 
 # ---------------------------------------------------------------------------

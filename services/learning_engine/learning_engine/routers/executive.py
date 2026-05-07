@@ -4,6 +4,7 @@ from typing import Any
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from pydantic import BaseModel, Field
 
 from learning_engine.deps import get_db_pool, limiter
@@ -199,14 +200,12 @@ async def log_focus_session(
                 )
             if payload.paper_id is not None:
                 user_id = await current_user_id_or_none(request)
-                await conn.execute(
-                    """INSERT INTO paper_user_state (paper_id, user_id, state)
-                       VALUES ($1, $2, 'reading')
-                       ON CONFLICT (paper_id, user_id) DO UPDATE
-                          SET state = 'reading'
-                        WHERE paper_user_state.state IN ('inbox', 'to_read')""",
+                await _upsert_paper_user_state(
+                    conn,
                     payload.paper_id,
                     user_id,
+                    state="reading",
+                    on_conflict="update_state_when_inbox_or_to_read",
                 )
             # Atomic upsert — ON CONFLICT handles concurrent inserts safely.
             _user_id = await current_user_id_or_none(request)

@@ -108,6 +108,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "services/paper_ingestion/paper_ingestion/pdf_processor.py" = ["E501", "N806"]
 "services/paper_ingestion/paper_ingestion/verification.py" = ["E501", "N806"]
 "services/paper_ingestion/paper_ingestion/models/papers.py" = ["UP042"]
+# W2-26: jarvis_common.paper_state aliases (as _xxx) trigger ruff isort split; suppress I001.
+"services/paper_ingestion/paper_ingestion/routers/papers.py" = ["I001"]
 "services/paper_ingestion/paper_ingestion/sources/registry.py" = ["UP047"]
 "libs/jarvis_common/jarvis_common/llm_client.py" = ["UP047"]
 "services/learning_engine/learning_engine/converters.py" = ["E501"]

@@ -3,10 +3,16 @@
 These helpers are used by both ``routers/papers.py`` and ``routers/pulse.py``
 and are intentionally kept here (rather than inlined) to maintain a single
 source of truth and avoid cross-router circular imports.
+
+The three paper_user_state helpers have been promoted to
+``jarvis_common.paper_state``; the private names below are compatibility
+re-exports so existing call sites keep working without changes.
 """
 
 import asyncpg
-from fastapi import HTTPException
+from jarvis_common.paper_state import (
+    upsert_paper_user_state as _upsert_paper_user_state,
+)
 
 
 async def _upsert_state_and_starred(
@@ -19,86 +25,12 @@ async def _upsert_state_and_starred(
 ) -> None:
     """Upsert paper_user_state, writing only the fields explicitly supplied.
 
-    Fields left as ``None`` are preserved on conflict.
+    Delegates to :func:`jarvis_common.paper_state.upsert_paper_user_state`
+    with ``on_conflict="update_dynamic"``.
     """
-    if state is None and starred is None:
-        return
-    cols = ["paper_id", "user_id"]
-    placeholders = ["$1", "$2"]
-    values: list[object] = [paper_id, user_id]
-    updates: list[str] = []
-    if state is not None:
-        cols.append("state")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(state)
-        updates.append(f"state = ${len(values)}")
-    if starred is not None:
-        cols.append("starred")
-        placeholders.append(f"${len(values) + 1}")
-        values.append(starred)
-        updates.append(f"starred = ${len(values)}")
-    sql = (
-        f"INSERT INTO paper_user_state ({', '.join(cols)}) "  # noqa: S608
-        f"VALUES ({', '.join(placeholders)}) "
-        f"ON CONFLICT (paper_id, user_id) DO UPDATE SET {', '.join(updates)}"
+    await _upsert_paper_user_state(
+        conn, paper_id, user_id, state=state, starred=starred, on_conflict="update_dynamic"
     )
-    await conn.execute(sql, *values)
-
-
-async def _trash_paper(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-) -> None:
-    """Atomic move to Trash: ``state_before_trash := state; state := 'trash'``.
-
-    For a paper without a ``paper_user_state`` row, the INSERT branch
-    initialises ``state_before_trash`` to ``'inbox'`` (the implicit default
-    per spec §2.3). For an existing row, the UPDATE preserves the prior
-    state into ``state_before_trash`` so :func:`_restore_paper` can return
-    the paper to where it came from.
-
-    **Idempotent on re-trash**: when the row is already in ``'trash'``, the
-    CASE expression keeps the existing ``state_before_trash`` value unchanged,
-    avoiding a CHECK-constraint violation (``state_before_trash`` cannot be
-    ``'trash'`` per the schema).
-    """
-    await conn.execute(
-        """INSERT INTO paper_user_state (paper_id, user_id, state, state_before_trash)
-           VALUES ($1, $2, 'trash', 'inbox')
-           ON CONFLICT (paper_id, user_id) DO UPDATE
-             SET state_before_trash = CASE
-                     WHEN paper_user_state.state = 'trash' THEN paper_user_state.state_before_trash
-                     ELSE paper_user_state.state
-                 END,
-                 state = 'trash'""",
-        paper_id,
-        user_id,
-    )
-
-
-async def _assert_paper_in_states(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-    *,
-    allowed: tuple[str, ...],
-) -> None:
-    """Raise 409 if the current state is not in ``allowed``. Treats missing rows as 'inbox'."""
-    current = (
-        await conn.fetchval(
-            """SELECT COALESCE(state, 'inbox') FROM paper_user_state
-           WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
-            paper_id,
-            user_id,
-        )
-        or "inbox"
-    )
-    if current not in allowed:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Paper must be in one of {sorted(allowed)}; currently '{current}'",
-        )
 
 
 async def _upsert_recommendation_feedback(
