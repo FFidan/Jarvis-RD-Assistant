@@ -82,7 +82,7 @@ class TestConfigureLifespan:
     async def test_configure_lifespan_runs_custom_init_and_teardown_tasks_in_order(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Custom hooks fire in declared order, init before yield, teardown after."""
+        """Custom hooks fire in declared order, init before yield, teardown after in LIFO order."""
         monkeypatch.setenv("DATABASE_URL", "postgresql://test/test")
 
         call_log: list[str] = []
@@ -135,8 +135,10 @@ class TestConfigureLifespan:
                 # Inside the context: init hooks have run, teardown hooks have not.
                 assert call_log == ["init_a", "init_b"]
 
-        # After exit: both teardown hooks have run, in order.
-        assert call_log == ["init_a", "init_b", "teardown_a", "teardown_b"]
+        # After exit: both teardown hooks have run in LIFO (reverse-init) order.
+        # AsyncExitStack runs teardowns LIFO, so teardown_b (pushed last) runs
+        # before teardown_a.
+        assert call_log == ["init_a", "init_b", "teardown_b", "teardown_a"]
         fake_http_client.aclose.assert_awaited_once()
         fake_pool.close.assert_awaited_once()
 

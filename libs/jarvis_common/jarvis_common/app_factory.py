@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -139,8 +139,9 @@ class ServiceLifespanConfig:
     custom_teardown_tasks:
         Async callables run BEFORE the http client and DB pool are closed
         (the jobs worker is already stopped by the time these run).  Useful
-        for shutting down APScheduler, Qdrant clients, etc.  Run in declared
-        order.
+        for shutting down APScheduler, Qdrant clients, etc.  Run in reverse
+        (LIFO) order relative to their corresponding init hooks, matching the
+        standard resource-stack cleanup convention.
     """
 
     service_name: str
@@ -196,13 +197,14 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
     3. ``httpx.AsyncClient`` creation with the service-specific timeout
     4. ``validate_encrypted_config_rows`` so encrypted secrets fail-fast on boot
        (before any custom hook runs; schema-missing errors are downgraded to a warning)
-    5. each ``custom_init_tasks`` hook in order; if a hook raises, already-completed
-       hooks have their corresponding ``custom_teardown_tasks`` entry called in reverse
-       order before the exception propagates
+    5. each ``custom_init_tasks`` hook in order; each hook's teardown
+       counterpart is registered on an ``AsyncExitStack`` immediately after the
+       hook succeeds — if a hook raises, only teardowns for completed inits run
+       (LIFO), eliminating the previous double-execution bug
     6. auth-config status log line
     7. yield
-    8. each ``custom_teardown_tasks`` hook in order
-    11. http client + db pool close
+    8. each registered teardown in LIFO order (last-init = first-torn-down)
+    9. http client close, then DB pool close
 
     Custom hooks may raise to abort startup.
     """
@@ -214,16 +216,20 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         # a full process restart.  No-op on platforms without SIGHUP.
         reload_fernet_on_sighup()
 
-        db_pool = None
-        http_client = None
-        try:
+        # AsyncExitStack guarantees LIFO cleanup of every resource pushed onto
+        # it, regardless of where startup fails.  Only resources that were
+        # successfully acquired are cleaned up — there is no double-execution
+        # risk and no need for a manual compensating-teardown path.
+        async with AsyncExitStack() as stack:
             database_url = build_database_url()
             pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
             db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
+            stack.push_async_callback(db_pool.close)
             app.state.db_pool = db_pool
 
             http_kwargs = {**_HTTP_CLIENT_DEFAULTS, **config.http_client_kwargs}
             http_client = httpx.AsyncClient(**http_kwargs)
+            stack.push_async_callback(http_client.aclose)
             app.state.http_client = http_client
 
             # Validate encrypted config rows BEFORE custom hooks so a bad
@@ -236,62 +242,34 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
                     " (fresh DB before migrations run)"
                 )
 
-            # Run custom init hooks.  If one raises, compensate by running the
-            # teardown counterparts for every hook that already succeeded.
-            completed_hooks: list[LifespanHook] = []
-            # Equal-length contract: each init hook MUST have a corresponding teardown
-            # hook at the same index (use None as a placeholder for hooks without a
-            # teardown). zip() would silently truncate on mismatch and lose teardown
-            # hooks; assert eagerly to surface the bug at startup.
+            # Equal-length contract: each init hook MUST have a corresponding
+            # teardown hook at the same index (use None as a placeholder for
+            # hooks without a teardown).  zip() would silently truncate on
+            # mismatch; assert eagerly to surface the bug at startup.
             if len(config.custom_init_tasks) != len(config.custom_teardown_tasks):
                 raise ValueError(
                     f"custom_init_tasks ({len(config.custom_init_tasks)}) and "
                     f"custom_teardown_tasks ({len(config.custom_teardown_tasks)}) "
                     f"must have equal length; pad with None for hooks without teardown."
                 )
-            teardown_map = dict(
-                zip(config.custom_init_tasks, config.custom_teardown_tasks, strict=True)
-            )
-            try:
-                for hook in config.custom_init_tasks:
-                    await hook(app)
-                    completed_hooks.append(hook)
-            except Exception:
-                for done in reversed(completed_hooks):
-                    compensate = teardown_map.get(done)
-                    if compensate is not None:
-                        try:
-                            await compensate(app)
-                        except Exception:  # noqa: BLE001
-                            logger.exception("compensating teardown failed for %s", done)
-                raise
+
+            # Run each custom init hook; immediately register its teardown
+            # counterpart on the stack so cleanup is paired at each step.
+            # If any init hook raises, only already-registered teardowns run
+            # (LIFO via AsyncExitStack) — no double-execution, no skipped cleanup.
+            for init_hook, teardown_hook in zip(
+                config.custom_init_tasks, config.custom_teardown_tasks, strict=True
+            ):
+                await init_hook(app)
+                if teardown_hook is not None:
+                    stack.push_async_callback(teardown_hook, app)
 
             _log_auth_status()
 
             logger.info("%s started", config.service_name)
             yield
-        finally:
-            for hook in config.custom_teardown_tasks:
-                if hook is None:
-                    continue
-                try:
-                    await hook(app)
-                except Exception:  # noqa: BLE001
-                    logger.exception(
-                        "Custom teardown hook failed during %s shutdown", config.service_name
-                    )
 
-            if http_client is not None:
-                try:
-                    await http_client.aclose()
-                except Exception:  # noqa: BLE001
-                    logger.warning("http_client.aclose() failed", exc_info=True)
-            if db_pool is not None:
-                try:
-                    await db_pool.close()
-                except Exception:  # noqa: BLE001
-                    logger.warning("db_pool.close() failed", exc_info=True)
-            logger.info("%s stopped", config.service_name)
+        logger.info("%s stopped", config.service_name)
 
     return lifespan
 
