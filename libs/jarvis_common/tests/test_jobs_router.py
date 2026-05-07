@@ -725,3 +725,61 @@ async def test_create_job_route_dispatches_to_task_registry():
     assert "job_id" in call_kwargs
     assert call_kwargs["user_id"] == 7
     assert call_kwargs["paper_id"] == 42
+
+
+# ---------------------------------------------------------------------------
+# W3-DRY-5 — noop.test is a valid job kind when JARVIS_ENABLE_TEST_JOBS=1
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_job_noop_test_returns_201(monkeypatch):
+    """W3-DRY-5: kind='noop.test' is accepted and dispatched when JARVIS_ENABLE_TEST_JOBS=1.
+
+    _public_kinds_now() adds 'noop.test' to the allowlist when the env toggle
+    is on.  KIND_TO_TASK must also map 'noop.test' to a callable task so that
+    create_job does not raise HTTP 400 after the allowlist check passes.
+    """
+    monkeypatch.setenv("JARVIS_ENABLE_TEST_JOBS", "1")
+
+    # Build the router with JARVIS_ENABLE_TEST_JOBS already set so that
+    # _public_kinds_now() includes 'noop.test' at request time.
+    _router, request_model, pool, handlers = _build_factory(kinds=frozenset())
+
+    fake_task = AsyncMock()
+    fake_task.defer_async = AsyncMock(return_value=None)
+    fake_kind_to_task = {"noop.test": fake_task}
+
+    with patch("jarvis_common.task_registry.KIND_TO_TASK", fake_kind_to_task):
+        result = await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="noop.test"),
+            db_pool=pool,
+            user_id=None,
+        )
+
+    assert result.status == "queued"
+    assert isinstance(result.job_id, str)
+    # defer_async must be called with the reserved keys.
+    call_kwargs = fake_task.defer_async.await_args.kwargs
+    assert "job_id" in call_kwargs
+    assert call_kwargs["user_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_job_noop_test_rejected_when_flag_off(monkeypatch):
+    """W3-DRY-5 inverse: kind='noop.test' is rejected when JARVIS_ENABLE_TEST_JOBS is unset."""
+    monkeypatch.delenv("JARVIS_ENABLE_TEST_JOBS", raising=False)
+
+    _router, request_model, pool, handlers = _build_factory(kinds=frozenset())
+
+    with pytest.raises(HTTPException) as exc:
+        await handlers["create_job"](
+            request=MagicMock(),
+            body=request_model(kind="noop.test"),
+            db_pool=pool,
+            user_id=None,
+        )
+
+    assert exc.value.status_code == 400
+    assert "noop.test" in exc.value.detail

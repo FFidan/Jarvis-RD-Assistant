@@ -18,8 +18,13 @@ if [ "${JARVIS_SKIP_SELFSIGNED_GEN:-false}" = "true" ]; then
     exit 0
 fi
 if [ -f "$CERT_FILE" ] && [ -f "$KEY_FILE" ]; then
-    echo "TLS certificates already exist, skipping generation."
-    exit 0
+    # Reuse existing cert if it is valid for more than 30 days; otherwise regenerate.
+    if openssl x509 -checkend $((30*86400)) -noout -in "$CERT_FILE" 2>/dev/null; then
+        echo "[generate-certs] existing cert valid for >30 days; skipping regen"
+        exit 0
+    else
+        echo "[generate-certs] existing cert expires in <=30 days; regenerating"
+    fi
 fi
 
 mkdir -p "$CERT_DIR"
@@ -28,7 +33,7 @@ mkdir -p "$CERT_DIR"
 SAN="${JARVIS_CERT_SAN:-DNS:localhost,IP:127.0.0.1}"
 
 echo "Generating self-signed TLS certificate for JARVIS dashboard (SAN: ${SAN})..."
-openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
+openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout "$KEY_FILE" \
     -out "$CERT_FILE" \
     -subj "/CN=jarvis-dashboard" \

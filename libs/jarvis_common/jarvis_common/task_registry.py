@@ -63,6 +63,7 @@ from procrastinate.contrib.aiopg import AiopgConnector
 
 from jarvis_common._ctx_shim import make_ctx_shim
 from jarvis_common.jobs import JobError
+from jarvis_common.settings import get_jobs_settings
 
 if TYPE_CHECKING:
     import asyncpg
@@ -319,6 +320,23 @@ async def card_generate_batch(context: procrastinate.JobContext, **payload: Any)
 
 
 # ---------------------------------------------------------------------------
+# Test-only: noop.test
+# ---------------------------------------------------------------------------
+#
+# Registered only when JARVIS_ENABLE_TEST_JOBS=1. Mirrors the legacy
+# @job_handler("noop.test") in jobs.py but dispatches through procrastinate
+# so the unified job surface (procrastinate_jobs) is exercisable in CI.
+# The task does not call _run_legacy_handler — there is no cross-service
+# import needed; the body is self-contained.
+
+
+@app.task(name="noop.test", queue="paper_ingestion", pass_context=True)
+async def noop_task(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
+    """No-op smoke-test task. Gated on JARVIS_ENABLE_TEST_JOBS=1."""
+    return {"ok": True, "echo": payload}
+
+
+# ---------------------------------------------------------------------------
 # KIND_TO_TASK mapping — used by create_job for procrastinate dispatch
 # ---------------------------------------------------------------------------
 #
@@ -327,8 +345,7 @@ async def card_generate_batch(context: procrastinate.JobContext, **payload: Any)
 # of inserting a legacy row, so GET/stream/cancel routes (now backed by
 # ``get_unified``) can find the job in ``procrastinate_jobs``.
 #
-# ``noop.test`` is intentionally absent — the noop handler is a legacy-only
-# test helper and falls through to the legacy ``enqueue`` path.
+# ``noop.test`` is conditionally added below when JARVIS_ENABLE_TEST_JOBS=1.
 
 KIND_TO_TASK: dict[str, Any] = {
     "paper.process": paper_process,
@@ -352,6 +369,10 @@ KIND_TO_TASK: dict[str, Any] = {
     "card.generate": card_generate,
     "card.generate_batch": card_generate_batch,
 }
+
+# Gate noop.test on the test-jobs toggle so production envs are unaffected.
+if get_jobs_settings().test_jobs_enabled:
+    KIND_TO_TASK["noop.test"] = noop_task
 
 # ---------------------------------------------------------------------------
 # Public exports
