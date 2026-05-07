@@ -373,7 +373,10 @@ async def test_create_milestone_returns_201(_app):
     conn.fetchrow.return_value = _make_milestone_row(id=50, project_id=1, name="Submit paper")
 
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        resp = await c.post("/api/projects/1/milestones", json={"name": "Submit paper"})
+        resp = await c.post(
+            "/api/projects/1/milestones",
+            json={"name": "Submit paper", "deadline": "2026-06-01T12:00:00+00:00"},
+        )
 
     assert resp.status_code == 201
     body = resp.json()

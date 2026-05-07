@@ -13,6 +13,8 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
+from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.jobs import JobContext, JobError
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -272,10 +274,13 @@ async def generate_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, body.paper_id, user_id)
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["card.generate"].defer_async(
         job_id=jarvis_job_id,
-        user_id=None,
+        user_id=user_id,
         paper_id=body.paper_id,
         deck_id=body.deck_id,
         max_cards=body.max_cards,
@@ -291,6 +296,9 @@ async def batch_generate_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue batch card generation; returns 202 immediately with a *job_id* to poll."""
+    # TODO(multi-tenant): decks table has no user_id column yet — add assert_deck_ownership
+    # once the decks table gains a user_id column (Wave-2 multi-tenant prep).
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", body.deck_id)
         if not deck:
@@ -299,7 +307,7 @@ async def batch_generate_cards(
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["card.generate_batch"].defer_async(
         job_id=jarvis_job_id,
-        user_id=None,
+        user_id=user_id,
         deck_id=body.deck_id,
         max_per_paper=body.max_per_paper,
     )

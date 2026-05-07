@@ -79,4 +79,33 @@ for version in "${RUNTIME_REPLAY_VERSIONS[@]}"; do
   fi
 done
 
+# ---------------------------------------------------------------------------
+# Check 4: ADD CONSTRAINT (migrations 044+) must be inside a DO $$ ... EXCEPTION
+# ... END $$ block. Bare ADD CONSTRAINT crashes on re-apply when init.sql has
+# pre-seeded the constraint. Pre-044 migrations are exempt (historical reasons).
+# ---------------------------------------------------------------------------
+for f in db/migrations/*.sql; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    num="${base%%_*}"
+    case "$num" in (''|*[!0-9]*) continue ;; esac
+    if [ "$num" -lt 51 ]; then continue; fi  # 001-050 pre-date the DO $$...EXCEPTION convention
+    if grep -qE 'ADD CONSTRAINT' "$f" && ! grep -q 'EXCEPTION' "$f"; then
+        echo "FAIL: $f: ADD CONSTRAINT without DO \$\$...EXCEPTION guard. See migrations/051 for the canonical pattern." >&2
+        exit 1
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Check 5: No tagged dollar-quotes ($tag$...$tag$) in migrations.
+# The migration scanner's _strip_outer_transaction_control only handles $$ literals.
+# ---------------------------------------------------------------------------
+for f in db/migrations/*.sql; do
+    [ -f "$f" ] || continue
+    if grep -qE '\$[A-Za-z_][A-Za-z0-9_]*\$' "$f"; then
+        echo "FAIL: $f: tagged dollar-quote (\$tag\$) detected; only \$\$ is supported by the migration scanner." >&2
+        exit 1
+    fi
+done
+
 exit 0

@@ -107,17 +107,24 @@ class ProcrastinateJobContextShim:
     ) -> None:
         """UPSERT terminal result/error payloads into ``job_progress``.
 
-        Outcome persistence is best-effort for the same reason progress is:
-        losing the UI payload is bad, but it must not turn a completed handler
-        into a failed Procrastinate job.
+        Outcome persistence is best-effort: losing the UI payload is bad, but
+        it must not turn a completed handler into a failed Procrastinate job.
 
-        Progress semantics on terminal:
-        - **Success** (``is_error=False``): write ``progress=1.0`` to signal
-          completion in the UI regardless of any prior in-flight value.
-        - **Error** (``is_error=True``): write ``progress=0.0`` to signal that
-          the job did not finish normally (e.g. cancelled or exception).
-        - The terminal call is authoritative over any prior ``update_progress``
-          value.
+        Progress semantics on terminal write:
+        - **New row** (no prior ``update_progress`` call): ``progress`` is
+          written as ``1.0`` on success or ``0.0`` on error — determined by
+          the ``CASE WHEN $4`` in the ``INSERT VALUES``.
+        - **Existing row** (a prior ``update_progress(p)`` wrote a non-NULL
+          value): the ``ON CONFLICT UPDATE`` arm uses
+          ``COALESCE(job_progress.progress, EXCLUDED.progress)`` to **preserve
+          the in-flight value**.  The terminal call is **NOT** authoritative
+          on ``progress`` for existing rows.
+
+        Rationale: the last ``update_progress()`` call is the most recent
+        user-visible signal.  Overwriting it with ``1.0``/``0.0`` on terminal
+        would stutter the UI for long-running jobs.  Renderers that want
+        "100% on success" should derive that from the ``is_error`` and
+        ``result``/``error`` columns, not from ``progress``.
         """
         if self._pool is None or not self.job_id:
             logger.debug(
@@ -132,7 +139,7 @@ class ProcrastinateJobContextShim:
                 INSERT INTO job_progress (jarvis_job_id, progress, result, error, updated_at)
                 VALUES ($1, CASE WHEN $4 THEN 0.0 ELSE 1.0 END, $2, $3, NOW())
                 ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = CASE WHEN $4 THEN 0.0 ELSE 1.0 END,
+                  SET progress   = COALESCE(job_progress.progress, EXCLUDED.progress),
                       result     = EXCLUDED.result,
                       error      = EXCLUDED.error,
                       updated_at = EXCLUDED.updated_at

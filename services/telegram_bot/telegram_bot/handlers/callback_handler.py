@@ -266,12 +266,14 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
 @rate_limit(max_calls=5, window_seconds=60)
 async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle ``start_review`` — sent by the review reminder inline button.
+    """Intentionally NOT registered with the dispatcher.
 
-    Bootstraps the review flow by fetching the first due card directly, since
-    ConversationHandler entry cannot be triggered from a callback query.  The
-    user is then prompted to type /review for subsequent cards (or to continue
-    the session).
+    The /review command flow is owned by review_handler.ConversationHandler
+    (TG-003). This function exists as test-covered scaffolding so the auth +
+    rate-limit + ack pattern can be regression-tested without depending on the
+    ConversationHandler. If a future contributor wires this into
+    register_callback_handlers, they must first remove the ConversationHandler
+    to avoid dual-dispatch.
     """
     query = update.callback_query
     if query is None:
@@ -354,5 +356,6 @@ def register_callback_handlers(app: Application) -> None:
     )
     app.add_handler(CallbackQueryHandler(project_detail_callback, pattern=r"^project_detail_\d+$"))
     app.add_handler(CallbackQueryHandler(task_done_callback, pattern=r"^task_done_\d+$"))
-    # start_review_callback intentionally NOT registered here — review_handler.py
-    # owns the ConversationHandler (TG-003).
+    # start_review_callback is intentionally NOT registered here (TG-003).
+    # review_handler.ConversationHandler owns the /review flow; wiring
+    # start_review_callback into this dispatcher would cause dual-dispatch.

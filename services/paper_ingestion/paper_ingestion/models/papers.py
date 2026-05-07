@@ -32,9 +32,10 @@ class SourceType(str, Enum):
 class Confidence(str, Enum):
     """Summary confidence level based on quote verification pass rate.
 
-    HIGH = 100% of quotes verified, MEDIUM = >50%, LOW = <=50%.
+    NONE = no findings to verify, HIGH = 100% verified, MEDIUM = >50%, LOW = <=50%.
     """
 
+    NONE = "NONE"
     HIGH = "HIGH"
     MEDIUM = "MEDIUM"
     LOW = "LOW"

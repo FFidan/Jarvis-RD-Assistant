@@ -994,9 +994,11 @@ INSERT INTO schema_migrations (version) VALUES
     -- 33 is intentionally absent: it is false-applied and repaired at runtime.
     (34), (35), (36), (37), (38), (39), (40), (41),
     (42), (43), (44), (45), (46), (47), (48),
-    -- 49-51, 54-61 are baked into this snapshot.
+    -- 49-51, 54-62 are baked into this snapshot.
     -- 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT in init.sql;
     -- the runtime runner will apply them on first boot.
+    -- 62 (daily_log user_id + UNIQUE NULLS NOT DISTINCT guard) is baked into this snapshot.
     (49), (50), (51),
-    (54), (55), (56), (57), (58), (59), (60), (61)
+    (54), (55), (56), (57), (58), (59), (60), (61),
+    (62)
 ON CONFLICT (version) DO NOTHING;

@@ -51,7 +51,7 @@ async def _handle_pairing(
 
     # --- inline rate-limit: pairing attempts per sliding window per chat ---
     # TODO(B-followup): convert to @rate_limit decorator when promoted to public API
-    _rl_key = f"{chat.id}:_handle_pairing"
+    _rl_key = f"{chat.id}:telegram_bot.handlers.commands.system_commands._handle_pairing"
     _now = time.monotonic()
     _stamps = _timestamps[_rl_key]
     _stamps[:] = [t for t in _stamps if _now - t < _PAIRING_RATE_WINDOW_SECONDS]

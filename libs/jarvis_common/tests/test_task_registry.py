@@ -284,7 +284,9 @@ async def test_run_legacy_handler_records_success_result(monkeypatch) -> None:
     )
 
     assert result == {"cards_created": 2}
-    ctx.record_terminal_outcome.assert_awaited_once_with(result={"cards_created": 2})
+    ctx.record_terminal_outcome.assert_awaited_once_with(
+        result={"cards_created": 2}, is_error=False
+    )
 
 
 @pytest.mark.asyncio
@@ -308,7 +310,8 @@ async def test_run_legacy_handler_records_job_error(monkeypatch) -> None:
         await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)
 
     ctx.record_terminal_outcome.assert_awaited_once_with(
-        error={"message": "No chunks", "action_link": {"href": "/papers/1", "label": "Open"}}
+        error={"message": "No chunks", "action_link": {"href": "/papers/1", "label": "Open"}},
+        is_error=True,
     )
 
 

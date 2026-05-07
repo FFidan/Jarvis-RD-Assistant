@@ -41,10 +41,14 @@ async def _fetch_next_card(context: ContextTypes.DEFAULT_TYPE) -> dict | None:
     """Fetch the next due card from the learning engine; returns None when none are due."""
     http = get_http(context)
     config = get_config(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/review/next",
             params={"limit": 1},
+            headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -83,6 +87,7 @@ def _rating_keyboard() -> InlineKeyboardMarkup:
 # ---------------------------------------------------------------------------
 
 
+@rate_limit(max_calls=5, window_seconds=60)
 async def review_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -194,12 +199,16 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Submit rating to learning engine
     http = get_http(context)
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     next_review_str = "unknown"
     review_ok = True
     try:
         resp = await http.post(
             f"{config.learning_engine_url}/api/review/{card_id}",
             json={"rating": rating},
+            headers=headers,
             timeout=15.0,
         )
         resp.raise_for_status()

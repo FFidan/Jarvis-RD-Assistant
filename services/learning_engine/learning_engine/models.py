@@ -244,7 +244,8 @@ class TaskResponse(BaseModel):
     description: str | None = None
     status: Literal["todo", "in_progress", "done", "blocked"] = "todo"
     priority: int = 3
-    deadline: date | None = None
+    # DB column is TIMESTAMPTZ; frontend receives ISO-8601 datetime string
+    deadline: datetime | None = None
     estimated_hours: float | None = None
     actual_hours: float | None = None
     sort_order: int = 0
@@ -261,7 +262,7 @@ class MilestoneCreate(BaseModel):
 
 class MilestoneUpdate(BaseModel):
     name: str | None = Field(default=None, max_length=255)
-    deadline: date | None = None
+    deadline: datetime | None = None  # DB column is TIMESTAMPTZ
     description: str | None = None
     completed: bool | None = None
 
@@ -419,7 +420,8 @@ class MyDayTaskItem(BaseModel):
     project_id: int | None = None
     title: str
     priority: int
-    deadline: date | None = None
+    # DB column is TIMESTAMPTZ; frontend receives ISO-8601 datetime string
+    deadline: datetime | None = None
     status: str
     completed_at: datetime | None = None
     project_name: str | None = None

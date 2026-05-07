@@ -421,3 +421,73 @@ async def test_generate_paper_summary_falls_back_when_llm_returns_no_findings():
     insert_args = conn_phase2.fetchrow.await_args.args
     assert insert_args[2].startswith("Unable to summarize reliably (no verifiable findings).")
     assert insert_args[5] == []
+
+
+@pytest.mark.asyncio
+async def test_generate_paper_summary_confidence_none_roundtrips_without_validation_error():
+    """Confidence.NONE (zero findings) must survive the DB round-trip without ValidationError.
+
+    Regression for W1-3: jarvis_common.verify.Confidence.NONE was not in the local
+    Confidence enum, so row_to_summary_response raised a Pydantic ValidationError on
+    read-back whenever verify_findings returned NONE (empty findings list).
+    """
+    conn_phase1 = AsyncMock()
+    conn_phase1.fetchrow.side_effect = [_paper_row(), None]
+    conn_phase1.fetch.return_value = [_chunk_row()]
+    conn_phase1.fetchval.return_value = "smart"
+
+    stored_row = {
+        "id": 5,
+        "paper_id": 7,
+        "summary_brief": (
+            "Unable to summarize reliably (no verifiable findings). "
+            "Original abstract: Original abstract text."
+        ),
+        "summary_detailed": "Original abstract text.",
+        "tldr": "semantic scholar summary",
+        "key_findings": [],
+        "methodology": None,
+        "limitations": None,
+        "relevance_notes": None,
+        "confidence": "NONE",
+        "cross_references": [],
+        "llm_model": "smart-model",
+        "summary_verified": False,
+        "created_at": datetime.now(UTC),
+    }
+    conn_phase2 = AsyncMock()
+    conn_phase2.fetchrow.return_value = stored_row
+    pool = _make_pool(conn_phase1, conn_phase2)
+
+    llm_output = SummarizationOutput(
+        tldr="",
+        summary_brief="draft brief",
+        summary_detailed="draft detailed",
+        key_findings=[],
+    )
+
+    http_client = AsyncMock()
+    verifier = MagicMock()
+    verifier.verify_findings.return_value = SimpleNamespace(
+        total_findings=0,
+        verified_count=0,
+        confidence=Confidence.NONE,
+    )
+
+    patch_ctx, _llm_mock = _patched_call_llm(return_value=llm_output)
+    with (
+        patch.object(summarization, "advisory_lock", _noop_lock),
+        patch.object(summarization, "_find_cross_references", AsyncMock(return_value=[])),
+        patch_ctx,
+    ):
+        # Must not raise ValidationError — the core regression assertion
+        result = await summarization.generate_paper_summary(
+            paper_id=7,
+            db_pool=pool,
+            http_client=http_client,
+            verifier=verifier,
+            embedder=MagicMock(),
+        )
+
+    assert result.confidence == Confidence.NONE
+    assert result.summary_verified is False

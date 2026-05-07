@@ -124,7 +124,8 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
                     ('llm.fast_model'),
                     ('llm.embed_model'),
                     ('fsrs.desired_retention'),
-                    ('fsrs.learning_steps')
+                    ('fsrs.learning_steps'),
+                    ('user.timezone')
             ) AS required(key)
             WHERE NOT EXISTS (
                 SELECT 1
@@ -156,17 +157,6 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
         """,
     ),
     (
-        59,
-        "daily_intent table exists with user_id TEXT",
-        """
-        SELECT to_regclass('public.daily_intent') IS NOT NULL
-           AND (SELECT data_type FROM information_schema.columns
-                 WHERE table_schema='public'
-                   AND table_name='daily_intent'
-                   AND column_name='user_id') = 'text'
-        """,
-    ),
-    (
         60,
         "daily_intent.user_id is INTEGER",
         """
@@ -174,7 +164,8 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
             SELECT 1 FROM information_schema.tables WHERE table_name = 'daily_intent'
         ) AND (
             SELECT data_type FROM information_schema.columns
-            WHERE table_name = 'daily_intent' AND column_name = 'user_id'
+            WHERE table_schema = 'public'
+              AND table_name = 'daily_intent' AND column_name = 'user_id'
         ) = 'integer'
         """,
     ),
@@ -184,7 +175,9 @@ _MIGRATION_SCHEMA_PROBES: tuple[tuple[int, str, str], ...] = (
         """
         SELECT EXISTS (
             SELECT 1 FROM information_schema.columns
-            WHERE table_name = 'daily_intent' AND column_name = 'created_at' AND is_nullable = 'NO'
+            WHERE table_schema = 'public'
+              AND table_name = 'daily_intent' AND column_name = 'created_at'
+              AND is_nullable = 'NO'
         )
         """,
     ),

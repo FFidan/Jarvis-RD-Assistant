@@ -79,16 +79,22 @@ async def get_my_day(
         )
 
         # Focus hours logged today
+        user_id = await current_user_id_or_none(request)
         today_focus_hours = (
             await conn.fetchval(
-                "SELECT COALESCE(focus_hours, 0) FROM daily_log WHERE log_date = CURRENT_DATE"
+                "SELECT COALESCE(focus_hours, 0) FROM daily_log "
+                "WHERE log_date = CURRENT_DATE AND user_id IS NOT DISTINCT FROM $1",
+                user_id,
             )
             or 0.0
         )
 
         # Focus streak: consecutive days with focus_hours > 0
         streak_rows = await conn.fetch(
-            "SELECT log_date FROM daily_log WHERE focus_hours > 0 ORDER BY log_date DESC LIMIT 365"
+            "SELECT log_date FROM daily_log "
+            "WHERE focus_hours > 0 AND user_id IS NOT DISTINCT FROM $1 "
+            "ORDER BY log_date DESC LIMIT 365",
+            user_id,
         )
         focus_streak_days = 0
         if streak_rows:

@@ -14,7 +14,8 @@
     "test:e2e:live-smoke": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --grep @live-smoke",
     "test:e2e:live-readonly": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/auth.spec.ts e2e/home.spec.ts e2e/navigation.spec.ts e2e/analytics.spec.ts e2e/learning-cards.spec.ts e2e/extractions.spec.ts",
     "test:e2e:live-mutating": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/feed/discovery.spec.ts e2e/projects.spec.ts e2e/settings/authors.spec.ts e2e/settings/automation.spec.ts e2e/settings/ingestion.spec.ts e2e/settings/sources.spec.ts e2e/settings/templates.spec.ts e2e/settings/topics.spec.ts",
-    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "lint": "eslint .",
     "codegen:paper": "openapi-typescript http://localhost:${PAPER_INGESTION_HOST_PORT:-8010}/openapi.json -o src/types/paper-ingestion.gen.ts",
     "codegen:learning": "openapi-typescript http://localhost:${LEARNING_ENGINE_HOST_PORT:-8011}/openapi.json -o src/types/learning-engine.gen.ts",
     "codegen": "npm run codegen:paper && npm run codegen:learning"
@@ -55,6 +56,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.7.0",
     "@playwright/test": "^1.58.2",
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
@@ -65,13 +67,20 @@
     "@types/node": "^25.3.5",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
     "@vitejs/plugin-react": "^4.3.4",
     "autoprefixer": "^10.4.20",
+    "eslint": "^9.7.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.0.0",
     "jsdom": "^25.0.1",
     "openapi-typescript": "^7.0.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
     "vite": "^6.0.0",
     "vitest": "^3.0.0"
   }
