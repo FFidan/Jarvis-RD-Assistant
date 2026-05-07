@@ -15,10 +15,10 @@ import httpx
 from fastapi import HTTPException
 from jarvis_common import get_fast_model
 from jarvis_common.llm_client import (
-    _strip_think_streaming,
     build_litellm_headers,
     get_litellm_config,
     observe,
+    strip_think_streaming,
 )
 from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
 
@@ -354,7 +354,7 @@ async def stream_rag_events(
                 content = choices[0].get("delta", {}).get("content", "")
                 if not content:
                     continue
-                visible, in_think, think_carry = _strip_think_streaming(
+                visible, in_think, think_carry = strip_think_streaming(
                     content, in_think, think_carry
                 )
                 if visible:

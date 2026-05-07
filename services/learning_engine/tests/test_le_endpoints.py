@@ -928,33 +928,33 @@ async def test_focus_session_paper_id_live_pg(live_pg_dsn: str) -> None:
             )
 
             # Execute the fixed upsert SQL directly — this is exactly what
-            # log_focus_session runs after the NEW-C1 fix.
+            # log_focus_session runs after the 047-state fix.
             await conn.execute(
-                """INSERT INTO paper_user_state (paper_id, user_id, status)
+                """INSERT INTO paper_user_state (paper_id, user_id, state)
                    VALUES ($1, $2, 'reading')
                    ON CONFLICT (paper_id, user_id) DO UPDATE
-                      SET status = 'reading'
-                    WHERE paper_user_state.status = 'new'""",
+                      SET state = 'reading'
+                    WHERE paper_user_state.state IN ('inbox', 'to_read')""",
                 paper_id,
                 None,  # user_id = None (unauthenticated)
             )
 
             # Calling it a second time must also succeed (idempotent upsert)
             await conn.execute(
-                """INSERT INTO paper_user_state (paper_id, user_id, status)
+                """INSERT INTO paper_user_state (paper_id, user_id, state)
                    VALUES ($1, $2, 'reading')
                    ON CONFLICT (paper_id, user_id) DO UPDATE
-                      SET status = 'reading'
-                    WHERE paper_user_state.status = 'new'""",
+                      SET state = 'reading'
+                    WHERE paper_user_state.state IN ('inbox', 'to_read')""",
                 paper_id,
                 None,
             )
 
             # Verify the row was written
-            status = await conn.fetchval(
-                "SELECT status FROM paper_user_state WHERE paper_id = $1 AND user_id IS NULL",
+            state = await conn.fetchval(
+                "SELECT state FROM paper_user_state WHERE paper_id = $1 AND user_id IS NULL",
                 paper_id,
             )
-            assert status == "reading"
+            assert state == "reading"
     finally:
         await pool.close()

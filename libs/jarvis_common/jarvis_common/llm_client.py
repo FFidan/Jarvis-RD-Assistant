@@ -122,7 +122,7 @@ def strip_think_blocks(raw: str) -> str:
     return re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
 
-def _strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:
+def strip_think_streaming(chunk: str, in_think: bool, carry: str = "") -> tuple[str, bool, str]:
     """Stateful streaming filter that drops <think>...</think> blocks across chunks.
 
     Tokens may split arbitrarily across SSE deltas (e.g. ``<th`` + ``ink>``).

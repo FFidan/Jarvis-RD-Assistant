@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from jarvis_common import llm_client
-from jarvis_common.llm_client import _strip_think_streaming
+from jarvis_common.llm_client import strip_think_streaming
 
 
 def test_get_litellm_config_reads_base_url_from_env(monkeypatch):
@@ -336,7 +336,7 @@ def test_boundary_functions_are_observed():
 
 
 # ---------------------------------------------------------------------------
-# _strip_think_streaming — streaming CoT filter (W0-2)
+# strip_think_streaming — streaming CoT filter (W0-2)
 # ---------------------------------------------------------------------------
 
 
@@ -347,7 +347,7 @@ def test_strip_think_streaming_simple():
     partial open-tags at the chunk boundary.  Callers must flush carry after
     the stream ends.  We validate out+carry equals the full visible text.
     """
-    out, st, carry = _strip_think_streaming("Hello <think>noise</think>World", False)
+    out, st, carry = strip_think_streaming("Hello <think>noise</think>World", False)
     # The filter drops the think block; visible fragments land in out or carry.
     assert out + carry == "Hello World"
     assert st is False
@@ -357,8 +357,8 @@ def test_strip_think_streaming_simple():
 
 def test_strip_think_streaming_split_open_tag():
     """Open tag split across two chunks: <th | ink>noise</think>."""
-    out1, st1, carry1 = _strip_think_streaming("Hello <th", False)
-    out2, st2, carry2 = _strip_think_streaming("ink>noise</think>World", st1, carry1)
+    out1, st1, carry1 = strip_think_streaming("Hello <th", False)
+    out2, st2, carry2 = strip_think_streaming("ink>noise</think>World", st1, carry1)
     # Flush carry from final chunk to get full visible text.
     assert out1 + out2 + carry2 == "Hello World"
     assert st2 is False
@@ -367,8 +367,8 @@ def test_strip_think_streaming_split_open_tag():
 
 def test_strip_think_streaming_split_close_tag():
     """Close tag split across two chunks: noise</th | ink>visible."""
-    out1, st1, carry1 = _strip_think_streaming("Hello <think>noise</th", False)
-    out2, st2, carry2 = _strip_think_streaming("ink>World", st1, carry1)
+    out1, st1, carry1 = strip_think_streaming("Hello <think>noise</th", False)
+    out2, st2, carry2 = strip_think_streaming("ink>World", st1, carry1)
     # Flush carry from final chunk to get full visible text.
     assert out1 + out2 + carry2 == "Hello World"
     assert st2 is False
@@ -377,7 +377,7 @@ def test_strip_think_streaming_split_close_tag():
 
 def test_strip_think_streaming_no_think():
     """No tags at all — all content must pass through (possibly via carry)."""
-    out, st, carry = _strip_think_streaming("Just regular text.", False)
+    out, st, carry = strip_think_streaming("Just regular text.", False)
     # All visible content must be emitted across out + carry.
     assert out + carry == "Just regular text."
     assert st is False
@@ -390,7 +390,7 @@ def test_strip_think_streaming_token_by_token():
     in_think = False
     carry = ""
     for ch in src:
-        v, in_think, carry = _strip_think_streaming(ch, in_think, carry)
+        v, in_think, carry = strip_think_streaming(ch, in_think, carry)
         out_buf.append(v)
     # Flush trailing carry (only if not still inside a think block).
     if not in_think:

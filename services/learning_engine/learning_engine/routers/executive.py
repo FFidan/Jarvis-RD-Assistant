@@ -199,11 +199,11 @@ async def log_focus_session(
             if payload.paper_id is not None:
                 user_id = await current_user_id_or_none(request)
                 await conn.execute(
-                    """INSERT INTO paper_user_state (paper_id, user_id, status)
+                    """INSERT INTO paper_user_state (paper_id, user_id, state)
                        VALUES ($1, $2, 'reading')
                        ON CONFLICT (paper_id, user_id) DO UPDATE
-                          SET status = 'reading'
-                        WHERE paper_user_state.status = 'new'""",
+                          SET state = 'reading'
+                        WHERE paper_user_state.state IN ('inbox', 'to_read')""",
                     payload.paper_id,
                     user_id,
                 )

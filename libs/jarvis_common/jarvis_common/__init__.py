@@ -56,6 +56,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     request_chat_completion_content,
     strip_think_blocks,
+    strip_think_streaming,
 )
 from jarvis_common.logging_config import configure_logging
 from jarvis_common.models import (
@@ -129,6 +130,7 @@ __all__ = [
     "get_litellm_config",
     "request_chat_completion_content",
     "strip_think_blocks",
+    "strip_think_streaming",
     "DEFAULT_LITELLM_BASE_URL",
     "LLM_TIMEOUT_DEFAULT",
     "LLM_TIMEOUT_LONG",
