@@ -1,16 +1,482 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchConfig, setConfig } from '@/lib/api';
+import { fetchConfig, setConfig, apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/EmptyState';
-import { Pencil, Check, X, Settings2 } from 'lucide-react';
+import { Pencil, Check, X, Settings2, ChevronDown, ChevronRight } from 'lucide-react';
 import { ModelSelector } from '@/components/shared/ModelSelector';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import type { ConfigEntry } from '@/types';
+import type { ConfigEntry, ModelFitDetail } from '@/types';
+
+// ---------------------------------------------------------------------------
+// Hardware-Aware Settings helpers (Contract 06)
+// ---------------------------------------------------------------------------
+
+/** Power-of-2 snap steps for the num_ctx slider (§10.2). */
+const NUM_CTX_STOPS = [2048, 4096, 8192, 16384, 32768, 65536] as const;
+
+interface HardwareInfoApi {
+  vram_gb?: number;
+  vram_source?: string;
+  tier?: number;
+  detected_at?: string;
+  machine_id?: string;
+}
+
+interface ModelCatalogEntryApi {
+  id: string;
+  name: string;
+  provider: string;
+  roles: string[];
+  fit_detail?: ModelFitDetail;
+  supports_thinking?: boolean;
+}
+
+interface SystemModelsApi {
+  hardware?: HardwareInfoApi;
+  catalog?: ModelCatalogEntryApi[];
+}
+
+/**
+ * Compute required VRAM for a model at a given num_ctx.
+ * Mirrors the backend formula from Contract 06 §4.
+ * Returns null when catalog fields are absent.
+ */
+function computeRequiredVram(
+  fitDetail: ModelFitDetail,
+  numCtx: number,
+): number {
+  const base = fitDetail.required_vram_gb ?? 0;
+  const kvBytes = fitDetail.kv_cache_bytes_per_token ?? 1024;
+  const extraTokens = Math.max(0, numCtx - fitDetail.default_num_ctx);
+  return base + (extraTokens * kvBytes) / 1e9;
+}
+
+/**
+ * Determine fit status for a given required VRAM vs available VRAM.
+ * Contract 06 §4 thresholds.
+ */
+function fitStatus(
+  requiredVramGb: number,
+  availableVramGb: number,
+): 'fits' | 'partial' | 'unfit' {
+  if (requiredVramGb <= availableVramGb * 0.85) return 'fits';
+  if (requiredVramGb <= availableVramGb * 1.2) return 'partial';
+  return 'unfit';
+}
+
+/**
+ * Find the highest snap-step that produces 'fits' (≤ 85% VRAM threshold).
+ * Falls back to the lowest stop if nothing fits.
+ */
+function largestFittingStop(
+  fitDetail: ModelFitDetail,
+  vramGb: number,
+  stops: readonly number[],
+): number {
+  let best = stops[0];
+  for (const stop of stops) {
+    if (stop > fitDetail.max_num_ctx) break;
+    const req = computeRequiredVram(fitDetail, stop);
+    if (req <= vramGb * 0.85) best = stop;
+  }
+  return best;
+}
+
+/**
+ * Clamp a slider value to the highest non-unfit stop (fits or partial).
+ * Partial (up to 120%) is allowed; only unfit is blocked (§10.3).
+ */
+function clampToNonUnfit(
+  value: number,
+  fitDetail: ModelFitDetail,
+  vramGb: number,
+  stops: readonly number[],
+): number {
+  const allowed = stops.filter(
+    (s) => s <= fitDetail.max_num_ctx && fitStatus(computeRequiredVram(fitDetail, s), vramGb) !== 'unfit',
+  );
+  if (allowed.length === 0) return stops[0];
+  // If current value is allowed, keep it; otherwise clamp to max allowed
+  if (allowed.includes(value)) return value;
+  const sorted = [...allowed].sort((a, b) => a - b);
+  return sorted[sorted.length - 1];
+}
+
+// ---------------------------------------------------------------------------
+// HardwareStrip — §6.2
+// ---------------------------------------------------------------------------
+
+interface HardwareStripProps {
+  hardware: HardwareInfoApi;
+}
+
+function HardwareStrip({ hardware }: HardwareStripProps) {
+  const [expanded, setExpanded] = useState(false);
+  if (!hardware.vram_gb && hardware.tier === undefined) return null;
+
+  const summary = [
+    typeof hardware.vram_gb === 'number' ? `${hardware.vram_gb.toFixed(1)} GB VRAM` : null,
+    typeof hardware.tier === 'number' ? `Tier ${hardware.tier}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <div
+      className="mb-3 cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none"
+      onClick={() => setExpanded((v) => !v)}
+      data-testid="hardware-strip"
+    >
+      <span className="font-medium text-foreground">{summary}</span>
+      {expanded && (
+        <span className="ml-3 space-x-3">
+          {hardware.vram_source && (
+            <span>
+              Source: <span className="text-foreground">{hardware.vram_source}</span>
+            </span>
+          )}
+          {hardware.detected_at && (
+            <span>
+              Detected:{' '}
+              <span className="text-foreground">
+                {new Date(hardware.detected_at).toLocaleString()}
+              </span>
+            </span>
+          )}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FitBadge — §6.1
+// ---------------------------------------------------------------------------
+
+interface FitBadgeProps {
+  status: 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown';
+  requiredVramGb?: number | null;
+  availableVramGb?: number;
+  largestFitting?: number;
+}
+
+function FitBadge({ status, requiredVramGb, availableVramGb, largestFitting }: FitBadgeProps) {
+  const fmt = (n: number) => n.toFixed(1);
+  const colorClass =
+    status === 'fits'
+      ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200'
+      : status === 'partial'
+        ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+        : status === 'unfit'
+          ? 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+          : 'bg-muted text-muted-foreground';
+
+  let copy: string;
+  switch (status) {
+    case 'fits':
+      copy =
+        requiredVramGb !== null && requiredVramGb !== undefined && availableVramGb !== undefined
+          ? `Fits — ${fmt(requiredVramGb)} GB / ${fmt(availableVramGb)} GB`
+          : 'Fits';
+      break;
+    case 'partial':
+      copy =
+        requiredVramGb !== null && requiredVramGb !== undefined && availableVramGb !== undefined
+          ? `Partial offload — ${fmt(requiredVramGb)} GB / ${fmt(availableVramGb)} GB · slower`
+          : 'Partial offload · slower';
+      break;
+    case 'unfit':
+      copy =
+        largestFitting !== undefined
+          ? `Won't fit · try ${largestFitting.toLocaleString()} tokens`
+          : "Won't fit";
+      break;
+    case 'cloud':
+      copy = 'Cloud';
+      break;
+    default:
+      copy = 'Unknown VRAM';
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${colorClass}`}
+      data-testid={`fit-badge-${status}`}
+    >
+      {copy}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// NumCtxSlider — per-role expander
+// ---------------------------------------------------------------------------
+
+interface NumCtxSliderProps {
+  role: 'smart' | 'fast' | 'embed';
+  machineId: string;
+  fitDetail?: ModelFitDetail;
+  hardware?: HardwareInfoApi;
+  /** Currently configured model id for this role (for thinking toggle) */
+  modelId: string;
+  supportsThinking: boolean;
+  /** Config entries passed from parent (already fetched by IngestionSection). */
+  configs: ConfigEntry[];
+}
+
+function NumCtxSlider({
+  role,
+  machineId,
+  fitDetail,
+  hardware,
+  modelId,
+  supportsThinking,
+  configs,
+}: NumCtxSliderProps) {
+  const queryClient = useQueryClient();
+  const vramGb = hardware?.vram_gb ?? 0;
+
+  // Available stops — capped to max_num_ctx if known
+  const availableStops = NUM_CTX_STOPS.filter(
+    (s) => !fitDetail || s <= fitDetail.max_num_ctx,
+  );
+  const stops = availableStops.length > 0 ? availableStops : NUM_CTX_STOPS;
+
+  const numCtxKey = `llm.${machineId}.${role}_num_ctx`;
+  const thinkingKey = `llm.${machineId}.thinking_disabled.${modelId}`;
+
+  const persistedNumCtx = configs.find((c) => c.key === numCtxKey)?.value;
+  const persistedThinkingDisabled = configs.find((c) => c.key === thinkingKey)?.value;
+
+  const defaultNumCtx = fitDetail?.default_num_ctx ?? 8192;
+  const resolvedNumCtx =
+    typeof persistedNumCtx === 'number'
+      ? persistedNumCtx
+      : typeof persistedNumCtx === 'string'
+        ? parseInt(persistedNumCtx, 10) || defaultNumCtx
+        : defaultNumCtx;
+
+  // Snap to nearest stop
+  const snapToStop = (val: number): number => {
+    let nearest = stops[0];
+    for (const s of stops) {
+      if (Math.abs(s - val) < Math.abs(nearest - val)) nearest = s;
+    }
+    return nearest;
+  };
+
+  const initialStop = snapToStop(resolvedNumCtx);
+
+  // Local slider state (index into stops array)
+  const [sliderIndex, setSliderIndex] = useState<number>(() => {
+    const idx = stops.indexOf(initialStop);
+    return idx >= 0 ? idx : 0;
+  });
+
+  const currentStop = stops[sliderIndex] ?? stops[0];
+
+  // Compute live fit for current slider position
+  const computedFit = (() => {
+    if (!fitDetail) return null;
+    if (vramGb <= 0) return 'unknown' as const;
+    const req = computeRequiredVram(fitDetail, currentStop);
+    return fitStatus(req, vramGb);
+  })();
+
+  const computedRequired = fitDetail ? computeRequiredVram(fitDetail, currentStop) : null;
+  const largestFitting = fitDetail && vramGb > 0
+    ? largestFittingStop(fitDetail, vramGb, stops)
+    : undefined;
+
+  // Determine fit badge status: use computed if we have data, else fall back to fit_detail.default
+  const badgeStatus = computedFit ?? fitDetail?.default ?? 'unknown';
+
+  // Thinking-mode persisted value: default true for supports_thinking models
+  const thinkingDisabled =
+    typeof persistedThinkingDisabled === 'boolean'
+      ? persistedThinkingDisabled
+      : typeof persistedThinkingDisabled === 'string'
+        ? persistedThinkingDisabled === 'true'
+        : supportsThinking; // default: disabled=true for thinking-capable
+
+  const saveMut = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config'] }),
+  });
+
+  const handleSliderChange = (values: number[]) => {
+    const idx = values[0] ?? 0;
+    const rawStop = stops[idx] ?? stops[0];
+
+    // Clamp: block unfit stops (§10.3)
+    let clampedStop = rawStop;
+    if (fitDetail && vramGb > 0) {
+      clampedStop = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+    }
+    const clampedIdx = stops.indexOf(clampedStop);
+    setSliderIndex(clampedIdx >= 0 ? clampedIdx : 0);
+  };
+
+  const handleSliderCommit = (values: number[]) => {
+    const idx = values[0] ?? 0;
+    const rawStop = stops[idx] ?? stops[0];
+    let clampedStop = rawStop;
+    if (fitDetail && vramGb > 0) {
+      clampedStop = clampToNonUnfit(rawStop, fitDetail, vramGb, stops);
+    }
+    saveMut.mutate({ key: numCtxKey, value: clampedStop });
+  };
+
+  return (
+    <div className="mt-3 space-y-3 border-t pt-3" data-testid={`num-ctx-slider-${role}`}>
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <Label className="text-xs text-muted-foreground">
+            Context length (num_ctx): <span className="font-medium text-foreground">{currentStop.toLocaleString()}</span>
+          </Label>
+          {badgeStatus !== 'unknown' && (
+            <FitBadge
+              status={badgeStatus as 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown'}
+              requiredVramGb={computedRequired}
+              availableVramGb={vramGb > 0 ? vramGb : undefined}
+              largestFitting={largestFitting}
+            />
+          )}
+        </div>
+        <Slider
+          min={0}
+          max={stops.length - 1}
+          step={1}
+          value={[sliderIndex]}
+          onValueChange={handleSliderChange}
+          onValueCommit={handleSliderCommit}
+          data-testid={`slider-${role}`}
+        />
+        <div className="flex justify-between text-xs text-muted-foreground">
+          {stops.map((s) => {
+            const isUnfit =
+              fitDetail && vramGb > 0
+                ? fitStatus(computeRequiredVram(fitDetail, s), vramGb) === 'unfit'
+                : false;
+            return (
+              <span
+                key={s}
+                className={isUnfit ? 'text-red-400 line-through' : ''}
+                title={isUnfit ? 'Unfit at this context length' : undefined}
+              >
+                {s >= 1024 ? `${s / 1024}k` : String(s)}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      {supportsThinking && (
+        <div className="flex items-center gap-2 pt-1" data-testid={`thinking-toggle-${role}`}>
+          <Switch
+            id={`thinking-disabled-${role}`}
+            checked={thinkingDisabled}
+            onCheckedChange={(checked) => saveMut.mutate({ key: thinkingKey, value: checked })}
+            disabled={saveMut.isPending}
+          />
+          <Label htmlFor={`thinking-disabled-${role}`} className="text-xs cursor-pointer">
+            Disable thinking mode{' '}
+            <span className="text-muted-foreground">(recommended for Qwen3)</span>
+          </Label>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LlmModelCard — wraps ModelSelector + Configure expander
+// ---------------------------------------------------------------------------
+
+interface LlmModelCardProps {
+  entry: ConfigEntry;
+  meta: { label: string; description: string };
+  machineId: string;
+  hardware?: HardwareInfoApi;
+  catalogEntry?: ModelCatalogEntryApi;
+  onSave: (key: string, value: unknown) => void;
+  isPending: boolean;
+  /** Config entries from parent (to avoid a second fetch in NumCtxSlider). */
+  configs: ConfigEntry[];
+}
+
+function LlmModelCard({
+  entry,
+  meta,
+  machineId,
+  hardware,
+  catalogEntry,
+  onSave,
+  isPending,
+  configs,
+}: LlmModelCardProps) {
+  const [configureOpen, setConfigureOpen] = useState(false);
+
+  const rawValue = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
+  const currentValue = rawValue.replace(/^"|"$/g, '');
+
+  // Determine the role from config key
+  const role = entry.key.replace(/^llm\./, '').replace(/_model$/, '') as 'smart' | 'fast' | 'embed';
+  const isValidRole = role === 'smart' || role === 'fast' || role === 'embed';
+
+  return (
+    <Card className="rounded-md border-hair shadow-none">
+      <CardContent className="flex items-center gap-4 p-4">
+        <div className="flex-1 min-w-0 space-y-2">
+          <div className="font-medium text-sm">{meta.label}</div>
+          <p className="text-xs text-muted-foreground">{meta.description}</p>
+          <ModelSelector
+            value={currentValue}
+            onChange={(v) => onSave(entry.key, v)}
+            configKey={entry.key}
+          />
+
+          {isValidRole && (
+            <div>
+              <button
+                type="button"
+                className="mt-1 flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                onClick={() => setConfigureOpen((v) => !v)}
+                data-testid={`configure-toggle-${role}`}
+                disabled={isPending}
+              >
+                {configureOpen ? (
+                  <ChevronDown className="h-3 w-3" />
+                ) : (
+                  <ChevronRight className="h-3 w-3" />
+                )}
+                Configure
+              </button>
+
+              {configureOpen && (
+                <NumCtxSlider
+                  role={role}
+                  machineId={machineId}
+                  fitDetail={catalogEntry?.fit_detail}
+                  hardware={hardware}
+                  modelId={currentValue}
+                  supportsThinking={catalogEntry?.supports_thinking ?? false}
+                  configs={configs}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Config metadata for human-readable labels and grouping
@@ -105,6 +571,18 @@ export function IngestionSection() {
     queryFn: fetchConfig,
   });
 
+  // Fetch system models to get hardware info + catalog fit_detail
+  const { data: systemModels } = useQuery<SystemModelsApi>({
+    queryKey: ['system-models'],
+    queryFn: () => apiFetch<SystemModelsApi>('/api/system/models'),
+    staleTime: 60_000,
+  });
+
+  const hardware = systemModels?.hardware;
+  const catalog = systemModels?.catalog ?? [];
+  // machine_id from hardware response (Contract 06 §3)
+  const machineId = hardware?.machine_id ?? 'local';
+
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => {
@@ -169,6 +647,18 @@ export function IngestionSection() {
     return oa - ob || a.localeCompare(b);
   });
 
+  /**
+   * Find the catalog entry matching the currently configured model for a given role.
+   * Config value may be a bare model id (e.g. "qwen3:14b").
+   */
+  const findCatalogEntry = (configValue: unknown, role: string): ModelCatalogEntryApi | undefined => {
+    const val = typeof configValue === 'string' ? configValue.replace(/^"|"$/g, '') : '';
+    if (!val) return undefined;
+    return catalog.find(
+      (c) => c.roles.includes(role) && (c.id === val || c.id.replace(/:latest$/, '') === val),
+    );
+  };
+
   const renderEntry = (entry: ConfigEntry) => {
     const meta = CONFIG_METADATA[entry.key];
     const isLlm = entry.key.startsWith('llm.');
@@ -194,31 +684,22 @@ export function IngestionSection() {
       );
     }
 
-    // LLM model entries get a ModelSelector dropdown instead of a text input
+    // LLM model entries get a ModelSelector + Configure expander
     if (isLlm) {
-      const rawValue = typeof entry.value === 'string' ? entry.value : JSON.stringify(entry.value);
-      // Strip wrapping quotes from JSONB-encoded string values (e.g. '"qwen3:4b"' → 'qwen3:4b')
-      const currentValue = rawValue.replace(/^"|"$/g, '');
+      const role = entry.key.replace(/^llm\./, '').replace(/_model$/, '');
+      const catalogEntry = findCatalogEntry(entry.value, role);
       return (
-        <Card key={entry.key} className="rounded-md border-hair shadow-none">
-          <CardContent className="flex items-center gap-4 p-4">
-            <div className="flex-1 min-w-0 space-y-2">
-              <div className="font-medium text-sm">
-                {meta?.label ?? entry.key}
-              </div>
-              {meta?.description && (
-                <p className="text-xs text-muted-foreground">
-                  {meta.description}
-                </p>
-              )}
-              <ModelSelector
-                value={currentValue}
-                onChange={(v) => setMut.mutate({ key: entry.key, value: v })}
-                configKey={entry.key}
-              />
-            </div>
-          </CardContent>
-        </Card>
+        <LlmModelCard
+          key={entry.key}
+          entry={entry}
+          meta={{ label: meta?.label ?? entry.key, description: meta?.description ?? '' }}
+          machineId={machineId}
+          hardware={hardware}
+          catalogEntry={catalogEntry}
+          onSave={(key, value) => setMut.mutate({ key, value })}
+          isPending={setMut.isPending}
+          configs={configs}
+        />
       );
     }
 
@@ -288,6 +769,8 @@ export function IngestionSection() {
     );
   };
 
+  const llmGroup = grouped['LLM Models'];
+
   return (
     <div className="space-y-2">
       {sortedGroups.map((group) => (
@@ -295,11 +778,19 @@ export function IngestionSection() {
           <h4 className="mt-4 mb-2 text-sm font-semibold text-muted-foreground first:mt-0">
             {group}
           </h4>
+          {/* Hardware strip — shown once at top of LLM Models group (§6.2) */}
+          {group === 'LLM Models' && hardware && (
+            <HardwareStrip hardware={hardware} />
+          )}
           <div className="space-y-2">
             {(grouped[group] ?? []).map(renderEntry)}
           </div>
         </div>
       ))}
+      {/* Render hardware strip even if LLM Models group is absent (edge case) */}
+      {!llmGroup && hardware && (
+        <HardwareStrip hardware={hardware} />
+      )}
     </div>
   );
 }

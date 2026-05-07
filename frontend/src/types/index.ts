@@ -639,6 +639,23 @@ export interface SearchPreviewResponse {
   source_errors: Record<string, SearchPreviewSourceError>;
 }
 // =============================================================================
+// Hardware-Aware Settings types (Wave 5 / Contract 06)
+// =============================================================================
+
+/**
+ * Per-model fit detail returned by GET /api/system/models catalog entries.
+ * Optional — older backends omit this field; UI degrades gracefully.
+ */
+export interface ModelFitDetail {
+  default: 'fits' | 'partial' | 'unfit' | 'cloud' | 'unknown';
+  at_num_ctx: number;
+  required_vram_gb: number | null;
+  default_num_ctx: number;
+  max_num_ctx: number;
+  kv_cache_bytes_per_token: number | null;
+}
+
+// =============================================================================
 // Phase A Lifecycle Redesign types (Wave 2.2 — legacy types removed)
 // =============================================================================
 

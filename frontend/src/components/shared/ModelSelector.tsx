@@ -13,8 +13,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { useConfirm } from '@/hooks/use-confirm';
 import { apiFetch } from '@/lib/api';
+import type { ModelFitDetail } from '@/types';
 
 interface SystemModels {
   status: 'ok' | 'degraded';
@@ -38,6 +45,8 @@ interface HardwareInfo {
   tier?: number;
   detected_at?: string;
   ollama_running?: number;
+  /** Stable machine identifier (hostname). Used as key segment only — never displayed. */
+  machine_id?: string;
 }
 
 type ModelRole = 'smart' | 'fast' | 'embed';
@@ -72,7 +81,30 @@ interface ModelCatalogEntry {
   fit: string;
   size?: number;
   quantization?: string;
+  /** Optional — backend T3-B populates this; older backends omit it. UI degrades gracefully. */
+  fit_detail?: ModelFitDetail;
+  /** True for thinking-capable models (Qwen3 family). T3-A populates this. */
+  supports_thinking?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Fit-detail helpers (Contract 06 §4 — mirrored from IngestionSection)
+// ---------------------------------------------------------------------------
+
+/** Find the largest snap-step (power of 2) that stays within 85% VRAM threshold. */
+function largestFittingCtxForEntry(fitDetail: ModelFitDetail, vramGb: number): number {
+  const STOPS = [2048, 4096, 8192, 16384, 32768, 65536];
+  let best = STOPS[0];
+  for (const stop of STOPS) {
+    if (stop > fitDetail.max_num_ctx) break;
+    const kvBytes = fitDetail.kv_cache_bytes_per_token ?? 1024;
+    const required = (fitDetail.required_vram_gb ?? 0) + (Math.max(0, stop - fitDetail.default_num_ctx) * kvBytes) / 1e9;
+    if (required <= vramGb * 0.85) best = stop;
+  }
+  return best;
+}
+
+// ---------------------------------------------------------------------------
 
 const PROVIDER_LABELS: Record<string, string> = {
   local: 'Local (Ollama)',
@@ -349,8 +381,22 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                     matchesConfiguredValue(m, systemDefault) ||
                     matchesConfiguredValue(m, value);
                   const badge = statusLabel(m, isCurrent);
-                  return (
-                    <SelectItem key={m.id} value={m.id} disabled={!canAssign}>
+
+                  // fit_detail-based disabling (Contract 06 §6, §10.3)
+                  const fitDefault = m.fit_detail?.default;
+                  const isUnfitByDetail = fitDefault === 'unfit';
+                  const isCloud = fitDefault === 'cloud' || m.provider !== 'ollama';
+                  // A model is disabled if canAssign=false OR fit_detail says unfit
+                  const isDisabled = !canAssign || isUnfitByDetail;
+
+                  // Tooltip for unfit via fit_detail
+                  const vramGb = data?.hardware?.vram_gb ?? 0;
+                  const unfitTooltip = isUnfitByDetail && m.fit_detail && vramGb > 0
+                    ? `Won't fit at current num_ctx — try ${largestFittingCtxForEntry(m.fit_detail, vramGb).toLocaleString()} tokens`
+                    : undefined;
+
+                  const itemContent = (
+                    <SelectItem key={m.id} value={m.id} disabled={isDisabled}>
                       <div className="space-y-1">
                         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                           <span>{m.name}</span>
@@ -387,15 +433,42 @@ export function ModelSelector({ value, onChange, configKey: role }: ModelSelecto
                               {badge}
                             </span>
                           )}
+                          {/* fit_detail badges (Contract 06 §6.1) */}
+                          {isCloud && fitDefault === 'cloud' && (
+                            <span className="text-xs rounded-full bg-muted px-1.5 py-0.5 text-muted-foreground">
+                              Cloud
+                            </span>
+                          )}
+                          {fitDefault === 'unknown' && (
+                            <span className="text-xs text-muted-foreground">?</span>
+                          )}
                         </div>
-                        {blocker && (
+                        {blocker && !unfitTooltip && (
                           <div className="text-xs text-amber-700">
                             {blocker}
+                          </div>
+                        )}
+                        {unfitTooltip && (
+                          <div className="text-xs text-red-600">
+                            {unfitTooltip}
                           </div>
                         )}
                       </div>
                     </SelectItem>
                   );
+
+                  // Wrap in Tooltip when there's an unfit message
+                  if (unfitTooltip) {
+                    return (
+                      <TooltipProvider key={m.id}>
+                        <Tooltip>
+                          <TooltipTrigger asChild>{itemContent}</TooltipTrigger>
+                          <TooltipContent>{unfitTooltip}</TooltipContent>
+                        </Tooltip>
+                      </TooltipProvider>
+                    );
+                  }
+                  return itemContent;
                 })}
               </SelectGroup>
             ))

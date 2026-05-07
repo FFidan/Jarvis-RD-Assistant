@@ -588,4 +588,96 @@ describe('ModelSelector', () => {
       expect(screen.getByTestId('select-root')).toHaveAttribute('data-value', 'qwen3:14b');
     });
   });
+
+  // -------------------------------------------------------------------------
+  // fit_detail-based disabled state (Contract 06 §6, §10.3)
+  // -------------------------------------------------------------------------
+
+  it('disables options whose fit_detail.default is "unfit"', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      hardware: { vram_gb: 16, tier: 2, machine_id: 'host-rtx5060' },
+      catalog: [
+        {
+          ...defaultModels.catalog[0],
+          // qwen3:14b fits
+          fit_detail: {
+            default: 'fits',
+            at_num_ctx: 8192,
+            required_vram_gb: 12.0,
+            default_num_ctx: 8192,
+            max_num_ctx: 32768,
+            kv_cache_bytes_per_token: 1024,
+          },
+          supports_thinking: true,
+          can_assign: true,
+          assign_blocker: null,
+        },
+        {
+          ...defaultModels.catalog[3], // qwen3:30b-a3b
+          fit_detail: {
+            default: 'unfit',
+            at_num_ctx: 8192,
+            required_vram_gb: 22.0,
+            default_num_ctx: 8192,
+            max_num_ctx: 32768,
+            kv_cache_bytes_per_token: 2048,
+          },
+          can_assign: false,
+          assign_blocker: null,
+        },
+      ],
+    });
+
+    const onChange = vi.fn();
+    renderComponent({ onChange, configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('Qwen3 14B')).toBeInTheDocument();
+      expect(screen.getByText('Qwen3 30B-A3B')).toBeInTheDocument();
+    });
+
+    // qwen3:14b should be enabled
+    const fitsOption = screen.getByTestId('select-item-qwen3:14b');
+    expect(fitsOption).not.toHaveAttribute('aria-disabled', 'true');
+
+    // qwen3:30b-a3b should be disabled via fit_detail.default=unfit
+    const unfitOption = screen.getByTestId('select-item-qwen3:30b-a3b');
+    expect(unfitOption).toHaveAttribute('aria-disabled', 'true');
+
+    // Clicking the unfit option should not trigger onChange
+    fireEvent.click(unfitOption);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('shows Cloud badge for entries with fit_detail.default === "cloud"', async () => {
+    const { apiFetch } = await import('@/lib/api');
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...defaultModels,
+      catalog: [
+        {
+          ...defaultModels.catalog[5], // openai/gpt-4o
+          fit_detail: {
+            default: 'cloud',
+            at_num_ctx: 8192,
+            required_vram_gb: null,
+            default_num_ctx: 8192,
+            max_num_ctx: 128000,
+            kv_cache_bytes_per_token: null,
+          },
+          can_assign: true,
+          assign_blocker: null,
+        },
+      ],
+    });
+
+    renderComponent({ configKey: 'llm.smart_model' });
+
+    await waitFor(() => {
+      expect(screen.getByText('GPT-4o')).toBeInTheDocument();
+    });
+    // Cloud badge should be visible
+    expect(screen.getByText('Cloud')).toBeInTheDocument();
+  });
 });
