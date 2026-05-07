@@ -147,10 +147,10 @@ async def process_pdf(
     if not sync:
         import uuid  # noqa: PLC0415
 
-        from jarvis_common.task_registry import paper_process  # noqa: PLC0415
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await paper_process.defer_async(
+        await KIND_TO_TASK["paper.process"].defer_async(
             job_id=jarvis_job_id, user_id=None, paper_id=paper_id, force=force
         )
         return {"job_id": jarvis_job_id, "status": "queued"}
@@ -339,10 +339,10 @@ async def scan_local_pdfs(
     """
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import papers_scan_local  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     jarvis_job_id = str(uuid.uuid4())
-    await papers_scan_local.defer_async(job_id=jarvis_job_id, user_id=None)
+    await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=None)
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
@@ -384,7 +384,7 @@ async def batch_process_papers(
     """
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import papers_batch_process  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     async with db_pool.acquire() as conn:
         if force:
@@ -432,7 +432,9 @@ async def batch_process_papers(
     job_id: str | None = None
     if queued_ids:
         job_id = str(uuid.uuid4())
-        await papers_batch_process.defer_async(job_id=job_id, user_id=None, paper_ids=queued_ids)
+        await KIND_TO_TASK["papers.batch_process"].defer_async(
+            job_id=job_id, user_id=None, paper_ids=queued_ids
+        )
 
     return {
         "queued": len(queued_ids),

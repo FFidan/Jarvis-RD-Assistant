@@ -787,19 +787,25 @@ async def test_zotero_sync_stamps_user_initiated() -> None:
     mock_client = AsyncMock()
     mock_client.fetch_items_since = AsyncMock(return_value=([zotero_item], 42))
 
+    import jarvis_common.task_registry as task_registry
+
+    mock_analyze_task = MagicMock()
+    mock_analyze_task.defer_async = AsyncMock(return_value=None)
+    mock_annotations_task = MagicMock()
+    mock_annotations_task.defer_async = AsyncMock(return_value=None)
+
     # Mock jobs_lib.enqueue so no DB calls for job enqueueing are made
     with (
         patch(
             "paper_ingestion.integrations.zotero_service.upsert_paper",
             AsyncMock(side_effect=_fake_upsert),
         ),
-        patch(
-            "jarvis_common.task_registry.paper_analyze.defer_async",
-            AsyncMock(return_value=None),
-        ),
-        patch(
-            "jarvis_common.task_registry.zotero_sync_annotations.defer_async",
-            AsyncMock(return_value=None),
+        patch.dict(
+            task_registry.KIND_TO_TASK,
+            {
+                "paper.analyze": mock_analyze_task,
+                "zotero.sync_annotations": mock_annotations_task,
+            },
         ),
         patch(
             "paper_ingestion.integrations.zotero_client.ZoteroClient",

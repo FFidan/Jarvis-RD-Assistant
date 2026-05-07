@@ -222,10 +222,12 @@ async def test_generate_cards_endpoint_returns_job_id():
     """POST /api/generate enqueues a procrastinate job and returns {job_id, status}."""
     pool, conn = _make_pool_and_conn()
 
-    with patch(
-        "jarvis_common.task_registry.card_generate.defer_async",
-        new_callable=AsyncMock,
-    ) as mock_defer:
+    import jarvis_common.task_registry as task_registry
+
+    mock_card_generate_task = MagicMock()
+    mock_defer = AsyncMock()
+    mock_card_generate_task.defer_async = mock_defer
+    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}):
         response = await generation.generate_cards.__wrapped__(
             MagicMock(),
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
@@ -254,10 +256,14 @@ async def test_batch_generate_cards_returns_202_with_job_id():
     pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = 1  # deck exists
 
-    with patch(
-        "jarvis_common.task_registry.card_generate_batch.defer_async",
-        new_callable=AsyncMock,
-    ) as mock_defer:
+    import jarvis_common.task_registry as task_registry
+
+    mock_card_generate_batch_task = MagicMock()
+    mock_defer = AsyncMock()
+    mock_card_generate_batch_task.defer_async = mock_defer
+    with patch.dict(
+        task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_generate_batch_task}
+    ):
         response = await generation.batch_generate_cards.__wrapped__(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=1),

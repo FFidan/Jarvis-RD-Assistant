@@ -88,10 +88,12 @@ async def push_paper_to_zotero(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    from jarvis_common.task_registry import zotero_push
+    from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
-    await zotero_push.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    await KIND_TO_TASK["zotero.push"].defer_async(
+        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+    )
     return {"job_id": jarvis_job_id, "status": "queued"}
 
 
@@ -152,10 +154,12 @@ async def resync_paper_to_zotero(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    from jarvis_common.task_registry import zotero_resync
+    from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
-    await zotero_resync.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    await KIND_TO_TASK["zotero.resync"].defer_async(
+        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+    )
     return {"job_id": jarvis_job_id, "status": "queued"}
 
 
@@ -181,10 +185,12 @@ async def sync_annotations_for_paper(
     if not exists:
         raise HTTPException(status_code=404, detail="Paper not found")
 
-    from jarvis_common.task_registry import zotero_sync_annotations
+    from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
-    await zotero_sync_annotations.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+    await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
+        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+    )
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")
 
 
@@ -204,9 +210,9 @@ async def poll_now(
     Returns immediately with a ``job_id`` so the caller can poll
     ``GET /api/jobs/{job_id}`` for progress.  Rate-limited to 6/hour.
     """
-    from jarvis_common.task_registry import zotero_sync_from_zotero
+    from jarvis_common.task_registry import KIND_TO_TASK
 
     logger.info("zotero.poll: enqueueing sync job")
     jarvis_job_id = str(uuid.uuid4())
-    await zotero_sync_from_zotero.defer_async(job_id=jarvis_job_id, user_id=None)
+    await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(job_id=jarvis_job_id, user_id=None)
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")

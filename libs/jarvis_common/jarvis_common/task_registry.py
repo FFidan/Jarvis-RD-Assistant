@@ -1,10 +1,21 @@
-"""Procrastinate task registry — all JARVIS job kinds.
+"""Procrastinate task registry — owns the App factory + registration API.
 
 B.4 cutover is complete as of 2026-05-03 (see ``docs/plans/2026-05-03-marathon-status.md``
 for the cutover record). The Procrastinate worker is wired into both
 ``paper_ingestion`` and ``learning_engine`` service lifespans via
 ``app.run_worker_async()``. All enqueue paths use these tasks; the legacy
 ``worker_loop`` has been removed.
+
+W4-1 (Wave 2.2) — dependency inversion:
+    jarvis_common owns the procrastinate ``App`` factory and exposes
+    ``register_tasks(app, mapping, queue)`` to receive kind→handler dicts
+    from each service. Each service registers its own tasks during lifespan
+    startup (before the worker is started) via its ``_task_register`` module:
+
+        paper_ingestion/_task_register.py  → 18 kinds on "paper_ingestion" queue
+        learning_engine/_task_register.py  → 2 kinds on "learning_engine" queue
+
+    jarvis_common no longer imports paper_ingestion or learning_engine.
 
 Each task body is a thin dispatcher that calls the existing legacy handler
 via ``ProcrastinateJobContextShim`` (see ``_ctx_shim.py``). The legacy
@@ -19,30 +30,8 @@ handler signature is::
 
 so each task forwards exactly that.
 
-Verified handler symbols matching the keys of ``JOB_HANDLER_OWNER``:
-
-    paper.process              -> paper_ingestion.paper_jobs._paper_process_job
-    paper.analyze              -> paper_ingestion.paper_jobs._paper_analyze_job
-    paper.summarize            -> paper_ingestion.paper_jobs._paper_summarize_job
-    papers.batch_process       -> paper_ingestion.paper_jobs._papers_batch_process_job
-    papers.batch_summarize     -> paper_ingestion.paper_jobs._papers_batch_summarize_job
-    papers.scan_local          -> paper_ingestion.paper_jobs._papers_scan_local_job
-    citations.batch_fetch      -> paper_ingestion.citations_jobs._citations_batch_fetch_job
-    digest.weekly              -> paper_ingestion.paper_jobs._digest_weekly_job
-    extraction.single          -> paper_ingestion.extraction.jobs._extraction_single_job
-    extraction.batch           -> paper_ingestion.extraction.jobs._extraction_batch_job
-    contradictions.scan        -> paper_ingestion.contradiction_jobs._contradictions_scan_job
-    pulse.generate             -> paper_ingestion.pulse.job._pulse_generate_job
-    pulse.train_classifier     -> paper_ingestion.pulse.training._pulse_train_classifier_job
-    model.pull                 -> paper_ingestion.services.model_lifecycle._model_pull_job
-    zotero.push                -> paper_ingestion.integrations.zotero_service._zotero_push_job
-    zotero.resync              -> paper_ingestion.integrations.zotero_service._zotero_resync_job
-    zotero.sync_from_zotero    -> paper_ingestion.integrations.zotero_service
-                                       ._zotero_sync_from_zotero_job
-    zotero.sync_annotations    -> paper_ingestion.integrations.zotero_service
-                                       ._zotero_sync_annotations_job
-    card.generate              -> learning_engine.routers.generation._card_generate_job
-    card.generate_batch        -> learning_engine.routers.generation._card_generate_batch_job
+KIND_TO_TASK is populated at runtime as services call ``register_tasks``.
+It is used by ``jobs_router.create_job`` for procrastinate dispatch.
 
 Connector choice: ``procrastinate.contrib.aiopg.AiopgConnector`` (matches
 ``procrastinate[aiopg]>=0.49`` declared in root ``pyproject.toml`` and in
@@ -107,7 +96,7 @@ def set_dependencies(
     Must be called by each service's lifespan BEFORE the procrastinate worker
     is started. Calling it more than once is allowed (last writer wins).
     Calling it is NOT required for tasks to be registered — registration
-    happens at module import time.
+    happens at service startup via ``register_tasks``.
     """
     global _pool, _http_client
     _pool = pool
@@ -160,223 +149,79 @@ async def _run_legacy_handler(
 
 
 # ---------------------------------------------------------------------------
-# Task definitions
+# Registration API
 # ---------------------------------------------------------------------------
 #
-# Each task:
-#   - registers under the dotted kind name from JOB_HANDLER_OWNER (jobs.py:46)
-#   - declares its queue (= the owning service from the same map)
-#   - sets ``pass_context=True`` so the dispatcher can build a JobContext shim
-#   - imports the legacy handler lazily inside the body so this module stays
-#     importable from any service (lazy import avoids cross-service import
-#     cycles + lets unit tests import task_registry without dragging in
-#     paper_ingestion / learning_engine).
+# Services call ``register_tasks`` during lifespan startup (BEFORE the worker
+# starts) to declare their kind→handler mapping.  For each entry, a
+# ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper is
+# registered on the shared ``app`` and the task object is inserted into
+# ``KIND_TO_TASK`` for ``jobs_router.create_job`` to dispatch.
+#
+# The noop.test task is special: it is registered unconditionally so the
+# procrastinate App always carries it (test infrastructure needs it), but
+# it is only added to KIND_TO_TASK when JARVIS_ENABLE_TEST_JOBS=1, preventing
+# production exposure via the create_job API.
+
+# Populated at runtime by ``register_tasks`` calls from service startup hooks.
+KIND_TO_TASK: dict[str, Any] = {}
 
 
-@app.task(name="paper.process", queue="paper_ingestion", pass_context=True)
-async def paper_process(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _paper_process_job
+def register_tasks(
+    procrastinate_app: procrastinate.App,
+    mapping: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
+    queue: str,
+) -> None:
+    """Register kind→handler entries as procrastinate tasks on ``procrastinate_app``.
 
-    return await _run_legacy_handler(context, payload, _paper_process_job)
+    For each ``(kind, handler)`` pair:
+      - Registers an ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper.
+      - Inserts the resulting task object into the module-level ``KIND_TO_TASK``
+        dict so ``jobs_router.create_job`` can dispatch via ``task.defer_async``.
 
+    Must be called BEFORE ``procrastinate_app.run_worker_async()`` is started.
 
-@app.task(name="paper.analyze", queue="paper_ingestion", pass_context=True)
-async def paper_analyze(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _paper_analyze_job
+    Args:
+        procrastinate_app: The shared procrastinate ``App`` instance from this module.
+        mapping: Dict mapping JARVIS job kind strings to legacy handler callables.
+        queue: The procrastinate queue name for this service (e.g. "paper_ingestion").
+    """
+    for kind, handler in mapping.items():
+        # Capture handler in default arg to avoid late-binding closure bug.
+        @procrastinate_app.task(name=kind, queue=queue, pass_context=True)
+        async def _task_wrapper(
+            context: procrastinate.JobContext,
+            _h: Callable[..., Awaitable[dict[str, Any]]] = handler,
+            **payload: Any,
+        ) -> dict[str, Any]:
+            return await _run_legacy_handler(context, payload, _h)
 
-    return await _run_legacy_handler(context, payload, _paper_analyze_job)
+        KIND_TO_TASK[kind] = _task_wrapper
 
-
-@app.task(name="paper.summarize", queue="paper_ingestion", pass_context=True)
-async def paper_summarize(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _paper_summarize_job
-
-    return await _run_legacy_handler(context, payload, _paper_summarize_job)
-
-
-@app.task(name="papers.batch_process", queue="paper_ingestion", pass_context=True)
-async def papers_batch_process(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _papers_batch_process_job
-
-    return await _run_legacy_handler(context, payload, _papers_batch_process_job)
-
-
-@app.task(name="papers.batch_summarize", queue="paper_ingestion", pass_context=True)
-async def papers_batch_summarize(
-    context: procrastinate.JobContext, **payload: Any
-) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _papers_batch_summarize_job
-
-    return await _run_legacy_handler(context, payload, _papers_batch_summarize_job)
-
-
-@app.task(name="papers.scan_local", queue="paper_ingestion", pass_context=True)
-async def papers_scan_local(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _papers_scan_local_job
-
-    return await _run_legacy_handler(context, payload, _papers_scan_local_job)
-
-
-@app.task(name="citations.batch_fetch", queue="paper_ingestion", pass_context=True)
-async def citations_batch_fetch(
-    context: procrastinate.JobContext, **payload: Any
-) -> dict[str, Any]:
-    from paper_ingestion.citations_jobs import _citations_batch_fetch_job
-
-    return await _run_legacy_handler(context, payload, _citations_batch_fetch_job)
-
-
-@app.task(name="digest.weekly", queue="paper_ingestion", pass_context=True)
-async def digest_weekly(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.paper_jobs import _digest_weekly_job
-
-    return await _run_legacy_handler(context, payload, _digest_weekly_job)
-
-
-@app.task(name="extraction.single", queue="paper_ingestion", pass_context=True)
-async def extraction_single(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.extraction.jobs import _extraction_single_job
-
-    return await _run_legacy_handler(context, payload, _extraction_single_job)
-
-
-@app.task(name="extraction.batch", queue="paper_ingestion", pass_context=True)
-async def extraction_batch(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.extraction.jobs import _extraction_batch_job
-
-    return await _run_legacy_handler(context, payload, _extraction_batch_job)
-
-
-@app.task(name="contradictions.scan", queue="paper_ingestion", pass_context=True)
-async def contradictions_scan(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.contradiction_jobs import _contradictions_scan_job
-
-    return await _run_legacy_handler(context, payload, _contradictions_scan_job)
-
-
-@app.task(name="pulse.generate", queue="paper_ingestion", pass_context=True)
-async def pulse_generate(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.pulse.job import _pulse_generate_job
-
-    return await _run_legacy_handler(context, payload, _pulse_generate_job)
-
-
-@app.task(name="pulse.train_classifier", queue="paper_ingestion", pass_context=True)
-async def pulse_train_classifier(
-    context: procrastinate.JobContext, **payload: Any
-) -> dict[str, Any]:
-    from paper_ingestion.pulse.training import _pulse_train_classifier_job
-
-    return await _run_legacy_handler(context, payload, _pulse_train_classifier_job)
-
-
-@app.task(name="model.pull", queue="paper_ingestion", pass_context=True)
-async def model_pull(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.services.model_lifecycle import _model_pull_job
-
-    return await _run_legacy_handler(context, payload, _model_pull_job)
-
-
-@app.task(name="zotero.push", queue="paper_ingestion", pass_context=True)
-async def zotero_push(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.integrations.zotero_service import _zotero_push_job
-
-    return await _run_legacy_handler(context, payload, _zotero_push_job)
-
-
-@app.task(name="zotero.resync", queue="paper_ingestion", pass_context=True)
-async def zotero_resync(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from paper_ingestion.integrations.zotero_service import _zotero_resync_job
-
-    return await _run_legacy_handler(context, payload, _zotero_resync_job)
-
-
-@app.task(name="zotero.sync_from_zotero", queue="paper_ingestion", pass_context=True)
-async def zotero_sync_from_zotero(
-    context: procrastinate.JobContext, **payload: Any
-) -> dict[str, Any]:
-    from paper_ingestion.integrations.zotero_service import _zotero_sync_from_zotero_job
-
-    return await _run_legacy_handler(context, payload, _zotero_sync_from_zotero_job)
-
-
-@app.task(name="zotero.sync_annotations", queue="paper_ingestion", pass_context=True)
-async def zotero_sync_annotations(
-    context: procrastinate.JobContext, **payload: Any
-) -> dict[str, Any]:
-    from paper_ingestion.integrations.zotero_service import _zotero_sync_annotations_job
-
-    return await _run_legacy_handler(context, payload, _zotero_sync_annotations_job)
-
-
-@app.task(name="card.generate", queue="learning_engine", pass_context=True)
-async def card_generate(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from learning_engine.routers.generation import _card_generate_job
-
-    return await _run_legacy_handler(context, payload, _card_generate_job)
-
-
-@app.task(name="card.generate_batch", queue="learning_engine", pass_context=True)
-async def card_generate_batch(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
-    from learning_engine.routers.generation import _card_generate_batch_job
-
-    return await _run_legacy_handler(context, payload, _card_generate_batch_job)
+    logger.debug(
+        "register_tasks: registered %d tasks on queue=%r: %s",
+        len(mapping),
+        queue,
+        sorted(mapping.keys()),
+    )
 
 
 # ---------------------------------------------------------------------------
 # Test-only: noop.test
 # ---------------------------------------------------------------------------
 #
-# Registered only when JARVIS_ENABLE_TEST_JOBS=1. Mirrors the legacy
-# @job_handler("noop.test") in jobs.py but dispatches through procrastinate
-# so the unified job surface (procrastinate_jobs) is exercisable in CI.
-# The task does not call _run_legacy_handler — there is no cross-service
-# import needed; the body is self-contained.
+# Registered unconditionally so test infrastructure can always use it.
+# Only added to KIND_TO_TASK (the create_job dispatch surface) when
+# JARVIS_ENABLE_TEST_JOBS=1, so production envs are unaffected.
 
 
 @app.task(name="noop.test", queue="paper_ingestion", pass_context=True)
 async def noop_task(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     """No-op smoke-test task. Gated on JARVIS_ENABLE_TEST_JOBS=1."""
-    from jarvis_common.settings import get_jobs_settings
-
     if not get_jobs_settings().test_jobs_enabled:
         raise RuntimeError("noop.test invoked but JARVIS_ENABLE_TEST_JOBS is unset")
     return {"ok": True, "echo": payload}
 
-
-# ---------------------------------------------------------------------------
-# KIND_TO_TASK mapping — used by create_job for procrastinate dispatch
-# ---------------------------------------------------------------------------
-#
-# Maps each JARVIS job kind string to its registered procrastinate task object.
-# The ``create_job`` route uses this to defer a task via procrastinate instead
-# of inserting a legacy row, so GET/stream/cancel routes (now backed by
-# ``get_unified``) can find the job in ``procrastinate_jobs``.
-#
-# ``noop.test`` is conditionally added below when JARVIS_ENABLE_TEST_JOBS=1.
-
-KIND_TO_TASK: dict[str, Any] = {
-    "paper.process": paper_process,
-    "paper.analyze": paper_analyze,
-    "paper.summarize": paper_summarize,
-    "papers.batch_process": papers_batch_process,
-    "papers.batch_summarize": papers_batch_summarize,
-    "papers.scan_local": papers_scan_local,
-    "citations.batch_fetch": citations_batch_fetch,
-    "digest.weekly": digest_weekly,
-    "extraction.single": extraction_single,
-    "extraction.batch": extraction_batch,
-    "contradictions.scan": contradictions_scan,
-    "pulse.generate": pulse_generate,
-    "pulse.train_classifier": pulse_train_classifier,
-    "model.pull": model_pull,
-    "zotero.push": zotero_push,
-    "zotero.resync": zotero_resync,
-    "zotero.sync_from_zotero": zotero_sync_from_zotero,
-    "zotero.sync_annotations": zotero_sync_annotations,
-    "card.generate": card_generate,
-    "card.generate_batch": card_generate_batch,
-}
 
 # Gate noop.test on the test-jobs toggle so production envs are unaffected.
 if get_jobs_settings().test_jobs_enabled:
@@ -389,5 +234,6 @@ if get_jobs_settings().test_jobs_enabled:
 __all__ = [
     "app",
     "set_dependencies",
+    "register_tasks",
     "KIND_TO_TASK",
 ]

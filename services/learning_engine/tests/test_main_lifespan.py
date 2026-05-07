@@ -129,6 +129,14 @@ class TestProcrastinateWorkerLifespan:
                     set_dependencies_mock,
                 )
             )
+            # register_learning_engine_tasks uses @procrastinate_app.task decorator
+            # which doesn't work on a MagicMock — stub it out so lifespan can proceed.
+            stack.enter_context(
+                patch(
+                    "learning_engine._task_register.register_learning_engine_tasks",
+                    MagicMock(),
+                )
+            )
 
             from fastapi import FastAPI
 

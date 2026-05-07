@@ -139,6 +139,14 @@ class TestProcrastinateWorkerLifespan:
                     set_dependencies_mock,
                 )
             )
+            # register_paper_ingestion_tasks uses @procrastinate_app.task decorator
+            # which doesn't work on a MagicMock — stub it out so lifespan can proceed.
+            stack.enter_context(
+                patch(
+                    "paper_ingestion._task_register.register_paper_ingestion_tasks",
+                    MagicMock(),
+                )
+            )
 
             from fastapi import FastAPI
 

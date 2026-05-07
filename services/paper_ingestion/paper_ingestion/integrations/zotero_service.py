@@ -10,7 +10,7 @@ import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
-from jarvis_common.task_registry import paper_analyze, zotero_sync_annotations
+from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.models.papers import PaperCreate, SourceType
 from paper_ingestion.services.pdf_workflow import upsert_paper
@@ -478,7 +478,7 @@ async def poll_zotero_library(
                                 row["id"],
                             )
                         try:
-                            await zotero_sync_annotations.defer_async(
+                            await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
                                 user_id=None,
                                 paper_id=row["id"],
@@ -547,7 +547,7 @@ async def poll_zotero_library(
                         item_key,
                         paper_id,
                     )
-            await paper_analyze.defer_async(
+            await KIND_TO_TASK["paper.analyze"].defer_async(
                 job_id=str(uuid.uuid4()),
                 user_id=None,
                 paper_id=paper_id,

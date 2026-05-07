@@ -221,10 +221,12 @@ async def analyze_paper(
     if async_mode:
         import uuid
 
-        from jarvis_common.task_registry import paper_analyze
+        from jarvis_common.task_registry import KIND_TO_TASK
 
         jarvis_job_id = str(uuid.uuid4())
-        await paper_analyze.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=paper_id)
+        await KIND_TO_TASK["paper.analyze"].defer_async(
+            job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+        )
         return {"job_id": jarvis_job_id, "status": "queued"}
 
     return StreamingResponse(

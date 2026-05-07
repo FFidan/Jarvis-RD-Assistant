@@ -461,14 +461,16 @@ async def test_poll_library_skips_jarvis_origin():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([jarvis_item], 5))
 
-        with patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            new_callable=AsyncMock,
-        ) as mock_defer:
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # JARVIS-originated item must not be enqueued
-    mock_defer.assert_not_called()
+    mock_analyze_defer.assert_not_awaited()
     assert result["status"] == "ok"
     assert result["new_items"] == 0
     assert result["enqueued"] == 0
@@ -492,14 +494,16 @@ async def test_poll_library_enqueues_new_items():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([new_item], 10))
 
-        with patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            new_callable=AsyncMock,
-        ) as mock_defer:
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
-    mock_defer.assert_called_once()
-    call_kwargs = mock_defer.call_args.kwargs
+    mock_analyze_defer.assert_awaited_once()
+    call_kwargs = mock_analyze_defer.await_args.kwargs
     # PI-002: job deferred via paper_analyze task with paper_id kwarg
     assert call_kwargs["paper_id"] == 99
     assert call_kwargs["user_id"] is None
@@ -523,10 +527,11 @@ async def test_poll_library_updates_version():
         # Return a newer version (42) than the current (0)
         mock_client.fetch_items_since = AsyncMock(return_value=([item], 42))
 
-        with patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            new_callable=AsyncMock,
-        ):
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_task.defer_async = AsyncMock()
+        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # The version-persist connection should have had execute called
@@ -626,15 +631,17 @@ async def test_poll_zotero_library_caps_enqueue_at_max_per_sync():
         # Library version advances to 999 on the Zotero side.
         mock_client.fetch_items_since = AsyncMock(return_value=(items, 999))
 
-        with patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            new_callable=AsyncMock,
-        ) as mock_defer:
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Exactly MAX_ENQUEUE_PER_SYNC jobs must have been enqueued.
-    assert mock_defer.call_count == MAX_ENQUEUE_PER_SYNC, (
-        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_defer.call_count}"
+    assert mock_analyze_defer.await_count == MAX_ENQUEUE_PER_SYNC, (
+        f"Expected {MAX_ENQUEUE_PER_SYNC} enqueued jobs, got {mock_analyze_defer.await_count}"
     )
     assert result["enqueued"] == MAX_ENQUEUE_PER_SYNC
 
@@ -870,10 +877,12 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
         mock_client = mock_client_cls.return_value
         mock_client.fetch_items_since = AsyncMock(return_value=([bad_item], 999))
 
-        with patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            new_callable=AsyncMock,
-        ) as mock_defer:
+        import jarvis_common.task_registry as task_registry
+
+        mock_analyze_task = MagicMock()
+        mock_analyze_defer = AsyncMock()
+        mock_analyze_task.defer_async = mock_analyze_defer
+        with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_analyze_task}):
             result = await poll_zotero_library(db_pool=pool, http_client=http)
 
     # Cursor must NOT have advanced — version_to should remain at last_version (0).
@@ -882,7 +891,7 @@ async def test_poll_does_not_advance_cursor_when_items_fail():
     )
     assert result["status"] == "ok"
     # No jobs should have been enqueued for the failed item.
-    mock_defer.assert_not_called()
+    mock_analyze_defer.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

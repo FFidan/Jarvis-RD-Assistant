@@ -14,7 +14,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from jarvis_common import get_smart_model
 from jarvis_common.jobs import JobContext, JobError
-from jarvis_common.task_registry import card_generate, card_generate_batch
+from jarvis_common.task_registry import KIND_TO_TASK
 
 from learning_engine.card_generator import CardGenerator
 from learning_engine.card_store import insert_card
@@ -273,7 +273,7 @@ async def generate_cards(
 ) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
     jarvis_job_id = str(uuid.uuid4())
-    await card_generate.defer_async(
+    await KIND_TO_TASK["card.generate"].defer_async(
         job_id=jarvis_job_id,
         user_id=None,
         paper_id=body.paper_id,
@@ -297,7 +297,7 @@ async def batch_generate_cards(
             raise HTTPException(status_code=404, detail="Deck not found")
 
     jarvis_job_id = str(uuid.uuid4())
-    await card_generate_batch.defer_async(
+    await KIND_TO_TASK["card.generate_batch"].defer_async(
         job_id=jarvis_job_id,
         user_id=None,
         deck_id=body.deck_id,

@@ -200,9 +200,13 @@ async def test_process_pdf_async_enqueues_job():
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
     pool = MagicMock()  # not used in async path — defer_async is patched
 
+    import jarvis_common.task_registry as task_registry
+
+    mock_task = MagicMock()
     mock_defer = AsyncMock()
+    mock_task.defer_async = mock_defer
     with (
-        mock_patch("jarvis_common.task_registry.paper_process.defer_async", new=mock_defer),
+        mock_patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task}),
         mock_patch("uuid.uuid4", return_value=fake_uuid),
     ):
         result = await pdf.process_pdf.__wrapped__(
@@ -283,8 +287,12 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 
     from unittest.mock import patch as mock_patch  # noqa: PLC0415
 
+    import jarvis_common.task_registry as task_registry
+
+    mock_task_bp = MagicMock()
+    mock_task_bp.defer_async = mock_defer
     with (
-        mock_patch("jarvis_common.task_registry.papers_batch_process.defer_async", new=mock_defer),
+        mock_patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task_bp}),
         mock_patch("uuid.uuid4", return_value=fake_uuid),
     ):
         result = await pdf.batch_process_papers.__wrapped__(
@@ -400,8 +408,12 @@ def test_process_pdf_async_response_model_no_500():
     app.dependency_overrides[get_pdf_processor] = lambda: MagicMock()
     app.dependency_overrides[get_embedder] = lambda: MagicMock()
 
+    import jarvis_common.task_registry as task_registry
+
+    mock_task_proc = MagicMock()
+    mock_task_proc.defer_async = AsyncMock()
     with (
-        mock_patch("jarvis_common.task_registry.paper_process.defer_async", new=AsyncMock()),
+        mock_patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task_proc}),
         mock_patch("uuid.uuid4", return_value=fake_job_id),
         TestClient(app, raise_server_exceptions=True) as client,
     ):

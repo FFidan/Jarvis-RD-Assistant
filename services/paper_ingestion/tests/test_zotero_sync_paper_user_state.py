@@ -32,11 +32,24 @@ import re
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import jarvis_common.task_registry as task_registry
 import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _get_kind_to_task() -> dict:
+    """Return the module-level KIND_TO_TASK dict for patching."""
+    return task_registry.KIND_TO_TASK
+
+
+def _mock_paper_analyze_task() -> MagicMock:
+    """Return a mock task object whose defer_async does nothing."""
+    t = MagicMock()
+    t.defer_async = AsyncMock()
+    return t
 
 
 def _make_zotero_item(key: str = "AAAA0001") -> dict[str, Any]:
@@ -151,9 +164,9 @@ async def test_fresh_sync_inserts_to_read_state() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            AsyncMock(),
+        patch.dict(
+            _get_kind_to_task(),
+            {"paper.analyze": _mock_paper_analyze_task()},
         ),
     ):
         result = await poll_zotero_library(pool, http_client)
@@ -222,9 +235,9 @@ async def test_resync_same_item_does_not_duplicate_state_row() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            AsyncMock(),
+        patch.dict(
+            _get_kind_to_task(),
+            {"paper.analyze": _mock_paper_analyze_task()},
         ),
     ):
         result1 = await poll_zotero_library(pool1, http_client)
@@ -245,9 +258,9 @@ async def test_resync_same_item_does_not_duplicate_state_row() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            AsyncMock(),
+        patch.dict(
+            _get_kind_to_task(),
+            {"paper.analyze": _mock_paper_analyze_task()},
         ),
     ):
         result2 = await poll_zotero_library(pool2, http_client)
@@ -307,9 +320,9 @@ async def test_resync_does_not_overwrite_user_modified_state() -> None:
     # each time — the DB side-effects differ but the SQL shape is what we test.
     with (
         _patch_zotero_client([item]),
-        patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            AsyncMock(),
+        patch.dict(
+            _get_kind_to_task(),
+            {"paper.analyze": _mock_paper_analyze_task()},
         ),
     ):
         result = await poll_zotero_library(pool, http_client)
@@ -362,9 +375,9 @@ async def test_paper_user_state_insert_order() -> None:
 
     with (
         _patch_zotero_client([item]),
-        patch(
-            "paper_ingestion.integrations.zotero_service.paper_analyze.defer_async",
-            AsyncMock(),
+        patch.dict(
+            _get_kind_to_task(),
+            {"paper.analyze": _mock_paper_analyze_task()},
         ),
     ):
         await poll_zotero_library(pool, http_client)

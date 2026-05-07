@@ -29,7 +29,7 @@ import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
 from jarvis_common.llm_client import observe
-from jarvis_common.task_registry import pulse_train_classifier
+from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion._state import svc
 from paper_ingestion.pulse.citation_signals import compute_citation_signals
@@ -409,7 +409,9 @@ async def run_pulse(
     if ctx:
         try:
             classifier_job_id = str(uuid.uuid4())
-            await pulse_train_classifier.defer_async(job_id=classifier_job_id, user_id=None)
+            await KIND_TO_TASK["pulse.train_classifier"].defer_async(
+                job_id=classifier_job_id, user_id=None
+            )
             stats["classifier_training_enqueued"] = True
             stats["classifier_training_job_id"] = classifier_job_id
         except Exception:

@@ -19,7 +19,7 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
 from jarvis_common.paper_state import trash_paper as _trash_paper
-from jarvis_common.task_registry import pulse_generate
+from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
@@ -75,7 +75,7 @@ async def generate_pulse(
     # H16: system job — user_id=None until real auth resolver lands.
     # pulse.generate is a system-level cron job, not user-owned.
     jarvis_job_id = str(uuid.uuid4())
-    await pulse_generate.defer_async(job_id=jarvis_job_id, user_id=None)
+    await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=None)
     await log_audit(
         db_pool,
         action="pulse_generate_enqueued",

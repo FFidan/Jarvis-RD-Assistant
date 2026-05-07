@@ -1868,13 +1868,15 @@ async def test_process_batch_happy_path_returns_job_id():
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, patch
 
+    import jarvis_common.task_registry as task_registry
+
     pool = _make_pool_and_conn()[0]
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
+    mock_task = MagicMock()
+    mock_defer = AsyncMock()
+    mock_task.defer_async = mock_defer
     with (
-        patch(
-            "jarvis_common.task_registry.papers_batch_process.defer_async",
-            new_callable=AsyncMock,
-        ) as mock_defer,
+        patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task}),
         patch(
             "paper_ingestion.routers.papers.current_user_id_or_none",
             new=AsyncMock(return_value=None),

@@ -106,10 +106,10 @@ async def link_paper(
     # The handler is idempotent: it reads from DB and returns early if conditions
     # are no longer met, so a stale fire is harmless.
     if should_push_zotero:
-        from jarvis_common.task_registry import zotero_push
+        from jarvis_common.task_registry import KIND_TO_TASK
 
         try:
-            await zotero_push.defer_async(
+            await KIND_TO_TASK["zotero.push"].defer_async(
                 job_id=str(uuid.uuid4()),
                 user_id=None,
                 paper_id=paper_id,

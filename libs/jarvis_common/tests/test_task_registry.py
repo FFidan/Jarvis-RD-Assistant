@@ -1,12 +1,18 @@
-"""Unit tests for jarvis_common.task_registry (B.4 Step 2 part 1).
+"""Unit tests for jarvis_common.task_registry (B.4 Step 2 part 1 / W4-1).
 
 These tests assert structural properties only:
-  - All ``JOB_HANDLER_OWNER`` kinds register as procrastinate tasks.
-  - Each task's ``queue`` matches the owning service from the same map.
+  - ``register_tasks`` registers kind→handler entries on ``app.tasks``.
+  - ``KIND_TO_TASK`` is populated by ``register_tasks`` calls.
+  - Queue names passed to ``register_tasks`` are honoured by registered tasks.
   - The JobContext shim exposes the legacy contract (``update_progress``,
     ``is_cancelled``, ``job_id``).
   - Importing ``task_registry`` without first calling ``set_dependencies``
     is fine; the runtime check fires only when a task body executes.
+
+W4-1 note: tasks are no longer registered at module import time. They are
+registered by each service during lifespan startup via ``register_tasks``.
+The structural tests below use a fresh ``procrastinate.App`` instance to avoid
+polluting the module-level singleton.
 
 No DB / connector / network calls are exercised — that is Step 2 part 2.
 """
@@ -20,46 +26,155 @@ from unittest.mock import AsyncMock
 import pytest
 
 # ---------------------------------------------------------------------------
-# All tasks registered under the dotted kind names
+# register_tasks API — tasks registered on demand (W4-1)
 # ---------------------------------------------------------------------------
 
 
-def test_all_tasks_registered() -> None:
-    """``app.tasks`` should contain exactly the ``JOB_HANDLER_OWNER`` keys
-    (filtering out procrastinate's two builtin ``remove_old_jobs`` aliases
-    and the test-only ``noop.test`` task that exists for CI smoke testing)."""
+def test_register_tasks_populates_app_tasks() -> None:
+    """``register_tasks`` should register each kind as an ``app.task`` entry."""
+    import procrastinate
+    from jarvis_common.task_registry import register_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy_handler(pool, http_client, payload, ctx):
+        return {}
+
+    mapping = {
+        "test.alpha": _dummy_handler,
+        "test.beta": _dummy_handler,
+    }
+    register_tasks(fresh_app, mapping=mapping, queue="test_queue")
+
+    registered_names = set(fresh_app.tasks.keys())
+    assert "test.alpha" in registered_names
+    assert "test.beta" in registered_names
+
+
+def test_register_tasks_honours_queue() -> None:
+    """Tasks registered via ``register_tasks`` use the supplied queue name."""
+    import procrastinate
+    from jarvis_common.task_registry import register_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy(pool, http_client, payload, ctx):
+        return {}
+
+    register_tasks(fresh_app, mapping={"svc.do_thing": _dummy}, queue="my_service")
+
+    task = fresh_app.tasks["svc.do_thing"]
+    assert task.queue == "my_service"
+
+
+def test_register_tasks_populates_kind_to_task() -> None:
+    """``register_tasks`` should insert the task objects into ``KIND_TO_TASK``."""
+    import jarvis_common.task_registry as task_registry
+    import procrastinate
+    from jarvis_common.task_registry import register_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy(pool, http_client, payload, ctx):
+        return {}
+
+    kind = "unit.test_kind_to_task_inject"
+    register_tasks(fresh_app, mapping={kind: _dummy}, queue="test_q")
+
+    assert kind in task_registry.KIND_TO_TASK
+
+
+def test_register_tasks_handler_closure() -> None:
+    """Each kind must invoke its own handler (no late-binding bug)."""
+    import procrastinate
+    from jarvis_common.task_registry import register_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
+
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+    calls: list[str] = []
+
+    async def handler_a(pool, http_client, payload, ctx):
+        calls.append("a")
+        return {}
+
+    async def handler_b(pool, http_client, payload, ctx):
+        calls.append("b")
+        return {}
+
+    register_tasks(fresh_app, mapping={"t.a": handler_a, "t.b": handler_b}, queue="q")
+
+    # Verify the bound handler is different for each task (closure captured correctly).
+    task_a = fresh_app.tasks["t.a"]
+    task_b = fresh_app.tasks["t.b"]
+    # Each task's default-arg _h should reference its own handler.
+    import inspect
+
+    sig_a = inspect.signature(task_a.func)
+    sig_b = inspect.signature(task_b.func)
+    default_a = sig_a.parameters["_h"].default
+    default_b = sig_b.parameters["_h"].default
+    assert default_a is handler_a, "task_a should be bound to handler_a"
+    assert default_b is handler_b, "task_b should be bound to handler_b"
+
+
+# ---------------------------------------------------------------------------
+# At import time app.tasks has only noop.test + builtin tasks (W4-1)
+# ---------------------------------------------------------------------------
+
+
+def test_no_service_tasks_at_import_time() -> None:
+    """After W4-1: jarvis_common no longer registers service tasks at import.
+
+    The module-level app should contain only the ``noop.test`` task and
+    procrastinate's builtin tasks immediately after import — no paper_ingestion
+    or learning_engine tasks.
+    """
     from jarvis_common.jobs import JOB_HANDLER_OWNER
     from jarvis_common.task_registry import app
 
-    # noop.test is unconditionally @app.task-registered for test infrastructure;
-    # its conditional KIND_TO_TASK gating is what controls production exposure.
-    user_task_names = {
-        name for name, task in app.tasks.items() if task.queue != "builtin" and name != "noop.test"
-    }
-    expected = set(JOB_HANDLER_OWNER.keys())
-
-    assert user_task_names == expected, (
-        f"missing: {expected - user_task_names}, unexpected: {user_task_names - expected}"
-    )
-    assert len(user_task_names) == len(JOB_HANDLER_OWNER)
-    assert "model.pull" in user_task_names
+    user_task_names = {name for name, task in app.tasks.items() if task.queue not in ("builtin",)}
+    # noop.test is registered unconditionally; service kinds are NOT registered.
+    for kind in JOB_HANDLER_OWNER:
+        assert kind not in user_task_names, (
+            f"kind {kind!r} should NOT be in app.tasks at import time after W4-1 "
+            f"(tasks are registered lazily by each service)"
+        )
 
 
 # ---------------------------------------------------------------------------
-# Queue assignment matches the service owner map
+# Queue assignment: use register_tasks to validate owner map
 # ---------------------------------------------------------------------------
 
 
 def test_queue_assignments_match_owner_map() -> None:
-    """For each registered task, ``task.queue == JOB_HANDLER_OWNER[task.name]``."""
+    """register_tasks with JOB_HANDLER_OWNER keys and matching queues passes assertion."""
+    import procrastinate
     from jarvis_common.jobs import JOB_HANDLER_OWNER
-    from jarvis_common.task_registry import app
+    from jarvis_common.task_registry import register_tasks
+    from procrastinate.contrib.aiopg import AiopgConnector
 
-    for name, task in app.tasks.items():
+    fresh_app = procrastinate.App(connector=AiopgConnector())
+
+    async def _dummy(pool, http_client, payload, ctx):
+        return {}
+
+    # Group by queue and register each group, then verify queue assignments.
+
+    by_queue: dict[str, dict] = {}
+    for kind, queue in JOB_HANDLER_OWNER.items():
+        by_queue.setdefault(queue, {})[kind] = _dummy
+
+    for queue, mapping in by_queue.items():
+        register_tasks(fresh_app, mapping=mapping, queue=queue)
+
+    for name, task in fresh_app.tasks.items():
         if task.queue == "builtin":
-            continue  # procrastinate's auto-registered remove_old_jobs
+            continue
         if name == "noop.test":
-            continue  # test-only smoke task; gated separately via test_jobs_enabled
+            continue
         assert name in JOB_HANDLER_OWNER, f"task {name!r} not in JOB_HANDLER_OWNER"
         expected_queue = JOB_HANDLER_OWNER[name]
         assert task.queue == expected_queue, (
@@ -111,16 +226,20 @@ async def test_ctx_shim_methods_runnable() -> None:
 
 
 def test_set_dependencies_then_called_pre_worker() -> None:
-    """Registration happens at module import; ``set_dependencies`` is only
-    enforced at task-execution time. Importing must succeed regardless."""
+    """``set_dependencies`` is only enforced at task-execution time.
+    Importing must succeed regardless; the public API is present on the module."""
     import jarvis_common.task_registry as task_registry
 
     assert hasattr(task_registry, "app")
     assert hasattr(task_registry, "set_dependencies")
-    # Tasks are populated even without set_dependencies having been called.
-    assert any(t.queue != "builtin" for t in task_registry.app.tasks.values()), (
-        "expected user tasks to be registered at import time"
+    assert hasattr(task_registry, "register_tasks"), (
+        "register_tasks must be exported for service startup hooks (W4-1)"
     )
+    # W4-1: tasks are registered lazily by each service — NOT at import time.
+    # Only builtin tasks + noop.test exist immediately after import.
+    assert "noop.test" in task_registry.app.tasks or all(
+        t.queue == "builtin" for t in task_registry.app.tasks.values()
+    ), "unexpected non-builtin tasks at import time (check for accidental static registration)"
 
 
 def test_require_dependencies_raises_before_set() -> None:

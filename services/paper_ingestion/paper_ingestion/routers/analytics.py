@@ -5,7 +5,7 @@ from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from jarvis_common.task_registry import paper_analyze, paper_process
+from jarvis_common.task_registry import KIND_TO_TASK
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -111,13 +111,17 @@ async def fetch_and_process_foundational(
 
     if paper["pdf_downloaded"] and paper["pdf_local_path"]:
         jarvis_job_id = str(uuid.uuid4())
-        await paper_process.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id)
+        await KIND_TO_TASK["paper.process"].defer_async(
+            job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id
+        )
         return FetchAndProcessResponse(
             paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
         )
     if paper["pdf_url"]:
         jarvis_job_id = str(uuid.uuid4())
-        await paper_analyze.defer_async(job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id)
+        await KIND_TO_TASK["paper.analyze"].defer_async(
+            job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id
+        )
         return FetchAndProcessResponse(
             paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
         )

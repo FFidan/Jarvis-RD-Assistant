@@ -74,10 +74,14 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
     """POST /api/summarize/{paper_id} returns 202 in single-user mode."""
     app, conn = _app
 
-    # Stub out paper_summarize.defer_async so we don't need a real DB / procrastinate
-    from jarvis_common import task_registry
+    # Stub out paper.summarize task so we don't need a real DB / procrastinate
+    from unittest.mock import MagicMock
 
-    monkeypatch.setattr(task_registry.paper_summarize, "defer_async", AsyncMock())
+    import jarvis_common.task_registry as task_registry
+
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry.KIND_TO_TASK, "paper.summarize", mock_task)
 
     # In single-user mode (current_user_id_or_none returns None) the
     # ownership helper short-circuits and never calls fetchrow.
@@ -101,13 +105,15 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
 @pytest.mark.asyncio
 async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkeypatch):
     """POST /api/papers/{paper_id}/extract returns 202 in single-user mode."""
-    from unittest.mock import AsyncMock
+    from unittest.mock import AsyncMock, MagicMock
 
-    from jarvis_common import task_registry
+    import jarvis_common.task_registry as task_registry
 
     app, conn = _app
 
-    monkeypatch.setattr(task_registry.extraction_single, "defer_async", AsyncMock())
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock()
+    monkeypatch.setitem(task_registry.KIND_TO_TASK, "extraction.single", mock_task)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

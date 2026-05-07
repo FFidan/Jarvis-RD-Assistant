@@ -88,11 +88,13 @@ async def test_get_contradictions_returns_verified_rows(app_with_pool):
 @pytest.mark.asyncio
 async def test_scan_contradictions_endpoint_enqueues_job(app_with_pool):
     """POST /api/contradictions/scan returns a durable job id."""
+    import jarvis_common.task_registry as task_registry
+
     app, pool, _conn = app_with_pool
-    with patch(
-        "paper_ingestion.routers.contradictions.contradictions_scan.defer_async",
-        new=AsyncMock(),
-    ) as defer:
+    mock_task = MagicMock()
+    defer = AsyncMock()
+    mock_task.defer_async = defer
+    with patch.dict(task_registry.KIND_TO_TASK, {"contradictions.scan": mock_task}):
         with patch(
             "paper_ingestion.routers.contradictions.uuid.uuid4", return_value="job-contradictions"
         ):
@@ -111,11 +113,13 @@ async def test_scan_contradictions_endpoint_enqueues_job(app_with_pool):
 @pytest.mark.asyncio
 async def test_scan_paper_contradictions_endpoint_enqueues_scoped_job(app_with_pool):
     """POST /api/papers/{paper_id}/contradictions/scan scopes the job payload."""
+    import jarvis_common.task_registry as task_registry
+
     app, pool, _conn = app_with_pool
-    with patch(
-        "paper_ingestion.routers.contradictions.contradictions_scan.defer_async",
-        new=AsyncMock(),
-    ) as defer:
+    mock_task = MagicMock()
+    defer = AsyncMock()
+    mock_task.defer_async = defer
+    with patch.dict(task_registry.KIND_TO_TASK, {"contradictions.scan": mock_task}):
         with patch(
             "paper_ingestion.routers.contradictions.uuid.uuid4",
             return_value="job-paper-contradictions",

@@ -43,10 +43,15 @@ def app_with_pool():
 
 async def test_summarize_endpoint_enqueues_job(app_with_pool):
     """POST /api/summarize/{paper_id} returns a durable job id."""
+    from unittest.mock import MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
     app, _pool = app_with_pool
-    with patch(
-        "jarvis_common.task_registry.paper_summarize.defer_async", new_callable=AsyncMock
-    ) as defer_async:
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry.KIND_TO_TASK, {"paper.summarize": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -65,10 +70,15 @@ async def test_summarize_endpoint_enqueues_job(app_with_pool):
 
 async def test_extract_endpoint_enqueues_single_extraction_job(app_with_pool):
     """POST /api/papers/{paper_id}/extract returns a durable job id."""
+    from unittest.mock import MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
     app, _pool = app_with_pool
-    with patch(
-        "jarvis_common.task_registry.extraction_single.defer_async", new_callable=AsyncMock
-    ) as defer_async:
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry.KIND_TO_TASK, {"extraction.single": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -88,10 +98,15 @@ async def test_extract_endpoint_enqueues_single_extraction_job(app_with_pool):
 
 async def test_scan_local_pdfs_endpoint_enqueues_job(app_with_pool):
     """POST /api/scan-local-pdfs returns a durable job id instead of blocking."""
+    from unittest.mock import MagicMock
+
+    import jarvis_common.task_registry as task_registry
+
     app, _pool = app_with_pool
-    with patch(
-        "jarvis_common.task_registry.papers_scan_local.defer_async", new_callable=AsyncMock
-    ) as defer_async:
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry.KIND_TO_TASK, {"papers.scan_local": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

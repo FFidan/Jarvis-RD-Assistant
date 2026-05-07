@@ -10,7 +10,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.task_registry import citations_batch_fetch
+from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
 from paper_ingestion.deps import get_db_pool, get_s2_source, limiter
@@ -52,7 +52,7 @@ async def batch_fetch_citations(
     paper_ingestion worker loop (``citations_jobs.py``).
     """
     jarvis_job_id = str(uuid.uuid4())
-    await citations_batch_fetch.defer_async(job_id=jarvis_job_id, user_id=None)
+    await KIND_TO_TASK["citations.batch_fetch"].defer_async(job_id=jarvis_job_id, user_id=None)
     return BatchCitationFetchResponse(queued=1, message=f"Job {jarvis_job_id} queued")
 
 

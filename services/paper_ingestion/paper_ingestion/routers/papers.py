@@ -778,9 +778,9 @@ async def star_paper(
     # Outside conn block: enqueue without holding the pool slot
     if was_new_star and project_link_count > 0 and auto_push_on_star:
         try:
-            from jarvis_common.task_registry import zotero_push
+            from jarvis_common.task_registry import KIND_TO_TASK
 
-            await zotero_push.defer_async(
+            await KIND_TO_TASK["zotero.push"].defer_async(
                 job_id=str(uuid.uuid4()), user_id=user_id, paper_id=paper_id
             )
         except Exception:
@@ -1052,7 +1052,7 @@ async def process_batch(
     Returns ``{"job_id": "<uuid>", "status": "queued"}``.
     """
     _ = request  # required by @limiter.limit; not used in body
-    from jarvis_common.task_registry import papers_batch_process
+    from jarvis_common.task_registry import KIND_TO_TASK
 
     user_id = await current_user_id_or_none(request)
 
@@ -1063,7 +1063,7 @@ async def process_batch(
             await assert_paper_ownership(conn, paper_id, user_id)
 
     jarvis_job_id = str(uuid.uuid4())
-    await papers_batch_process.defer_async(
+    await KIND_TO_TASK["papers.batch_process"].defer_async(
         job_id=jarvis_job_id, user_id=user_id, paper_ids=body.paper_ids
     )
     return {"job_id": jarvis_job_id, "status": "queued"}

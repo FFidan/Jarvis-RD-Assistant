@@ -227,10 +227,10 @@ async def extract_paper(
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import extraction_single  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     jarvis_job_id = str(uuid.uuid4())
-    await extraction_single.defer_async(
+    await KIND_TO_TASK["extraction.single"].defer_async(
         job_id=jarvis_job_id,
         user_id=user_id,
         paper_id=paper_id,
@@ -295,10 +295,10 @@ async def batch_extract_papers(
             await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import extraction_batch  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     jarvis_job_id = str(uuid.uuid4())
-    await extraction_batch.defer_async(
+    await KIND_TO_TASK["extraction.batch"].defer_async(
         job_id=jarvis_job_id,
         user_id=user_id,
         paper_ids=body.paper_ids,

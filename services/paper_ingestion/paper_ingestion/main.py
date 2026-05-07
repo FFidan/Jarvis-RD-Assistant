@@ -319,10 +319,12 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
     """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
 
     Wires the procrastinate ``App`` connector with ``DATABASE_URL`` (the same
-    DSN backing ``app.state.db_pool``), opens the connector, threads
-    ``(pool, http_client)`` into ``task_registry`` so task wrappers can access
-    the shared singletons, then starts the worker as a background asyncio
-    task. Stored on ``app.state`` for the symmetric teardown.
+    DSN backing ``app.state.db_pool``), registers paper_ingestion task handlers
+    (W4-1: dependency inversion — service owns its kind→handler mapping), opens
+    the connector, threads ``(pool, http_client)`` into ``task_registry`` so
+    task wrappers can access the shared singletons, then starts the worker as
+    a background asyncio task. Stored on ``app.state`` for the symmetric
+    teardown.
     """
     from jarvis_common.task_registry import (  # noqa: PLC0415
         app as procrastinate_app,
@@ -331,6 +333,13 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
         set_dependencies,
     )
     from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
+
+    from paper_ingestion._task_register import (  # noqa: PLC0415
+        register_paper_ingestion_tasks,
+    )
+
+    # Register kind→handler mappings BEFORE the worker starts (W4-1).
+    register_paper_ingestion_tasks(procrastinate_app)
 
     # The connector built at task_registry import time has no DSN — replace it
     # with one bound to the same DSN the app_factory pool uses (reads from

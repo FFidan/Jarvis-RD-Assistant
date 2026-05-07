@@ -100,12 +100,14 @@ def _app():
 @pytest.mark.asyncio
 async def test_poll_now_enqueues_job(_app):
     """POST /api/zotero/poll enqueues a zotero.sync_from_zotero job and returns 200."""
+    import jarvis_common.task_registry as task_registry
+
     app, _conn = _app
 
-    with patch(
-        "jarvis_common.task_registry.zotero_sync_from_zotero.defer_async",
-        new=AsyncMock(return_value=None),
-    ) as mock_defer:
+    mock_task = MagicMock()
+    mock_defer = AsyncMock(return_value=None)
+    mock_task.defer_async = mock_defer
+    with patch.dict(task_registry.KIND_TO_TASK, {"zotero.sync_from_zotero": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -127,12 +129,13 @@ async def test_poll_now_enqueues_job(_app):
 @pytest.mark.asyncio
 async def test_poll_now_response_shape(_app):
     """POST /api/zotero/poll response conforms to JobEnqueuedResponse schema."""
+    import jarvis_common.task_registry as task_registry
+
     app, _conn = _app
 
-    with patch(
-        "jarvis_common.task_registry.zotero_sync_from_zotero.defer_async",
-        new=AsyncMock(return_value=None),
-    ):
+    mock_task = MagicMock()
+    mock_task.defer_async = AsyncMock(return_value=None)
+    with patch.dict(task_registry.KIND_TO_TASK, {"zotero.sync_from_zotero": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:

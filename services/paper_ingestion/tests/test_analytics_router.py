@@ -97,6 +97,8 @@ async def test_missing_foundational_returns_ranked_stub_rows(app_with_pool):
 @pytest.mark.asyncio
 async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(app_with_pool):
     """A downloaded local PDF promotes the stub and queues paper.process."""
+    import jarvis_common.task_registry as task_registry
+
     app, pool, conn = app_with_pool
     conn.fetchrow.return_value = {
         "id": 42,
@@ -106,10 +108,10 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
         "metadata": {"stub": "true"},
     }
 
-    with patch(
-        "paper_ingestion.routers.analytics.paper_process.defer_async",
-        new=AsyncMock(),
-    ) as defer_async:
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry.KIND_TO_TASK, {"paper.process": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -133,6 +135,8 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
 @pytest.mark.asyncio
 async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_with_pool):
     """A remote PDF URL promotes the stub and queues paper.analyze."""
+    import jarvis_common.task_registry as task_registry
+
     app, pool, conn = app_with_pool
     conn.fetchrow.return_value = {
         "id": 43,
@@ -142,10 +146,10 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
         "metadata": {"stub": "true"},
     }
 
-    with patch(
-        "paper_ingestion.routers.analytics.paper_analyze.defer_async",
-        new=AsyncMock(),
-    ) as defer_async:
+    mock_task = MagicMock()
+    defer_async = AsyncMock()
+    mock_task.defer_async = defer_async
+    with patch.dict(task_registry.KIND_TO_TASK, {"paper.analyze": mock_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -167,6 +171,8 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
 @pytest.mark.asyncio
 async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(app_with_pool):
     """A stub with no local PDF and no PDF URL returns no_pdf without a job."""
+    import jarvis_common.task_registry as task_registry
+
     app, _pool, conn = app_with_pool
     conn.fetchrow.return_value = {
         "id": 44,
@@ -176,13 +182,14 @@ async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(
         "metadata": {"stub": "true"},
     }
 
-    with (
-        patch(
-            "paper_ingestion.routers.analytics.paper_process.defer_async", new=AsyncMock()
-        ) as defer_process,
-        patch(
-            "paper_ingestion.routers.analytics.paper_analyze.defer_async", new=AsyncMock()
-        ) as defer_analyze,
+    mock_pp = MagicMock()
+    defer_process = AsyncMock()
+    mock_pp.defer_async = defer_process
+    mock_pa = MagicMock()
+    defer_analyze = AsyncMock()
+    mock_pa.defer_async = defer_analyze
+    with patch.dict(
+        task_registry.KIND_TO_TASK, {"paper.process": mock_pp, "paper.analyze": mock_pa}
     ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
@@ -207,16 +214,19 @@ async def test_fetch_and_process_without_pdf_promotes_stub_but_does_not_enqueue(
 @pytest.mark.asyncio
 async def test_fetch_and_process_missing_or_non_stub_row_returns_404(app_with_pool):
     """Missing rows and non-stub papers are rejected by the stub lookup."""
+    import jarvis_common.task_registry as task_registry
+
     app, _pool, conn = app_with_pool
     conn.fetchrow.return_value = None
 
-    with (
-        patch(
-            "paper_ingestion.routers.analytics.paper_process.defer_async", new=AsyncMock()
-        ) as defer_process,
-        patch(
-            "paper_ingestion.routers.analytics.paper_analyze.defer_async", new=AsyncMock()
-        ) as defer_analyze,
+    mock_pp = MagicMock()
+    defer_process = AsyncMock()
+    mock_pp.defer_async = defer_process
+    mock_pa = MagicMock()
+    defer_analyze = AsyncMock()
+    mock_pa.defer_async = defer_analyze
+    with patch.dict(
+        task_registry.KIND_TO_TASK, {"paper.process": mock_pp, "paper.analyze": mock_pa}
     ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

@@ -107,8 +107,10 @@ async def _init_fsrs_and_generators(app: FastAPI) -> None:
 async def _start_procrastinate_worker(app: FastAPI) -> None:
     """B.4 Step 4 — start the procrastinate worker (legacy worker removed).
 
-    Wires the procrastinate ``App`` connector to ``DATABASE_URL`` and starts the
-    worker polling the ``learning_engine`` + ``builtin`` queues.
+    Wires the procrastinate ``App`` connector to ``DATABASE_URL``, registers
+    learning_engine task handlers (W4-1: dependency inversion — service owns
+    its kind→handler mapping), and starts the worker polling the
+    ``learning_engine`` + ``builtin`` queues.
     """
     from jarvis_common.task_registry import (  # noqa: PLC0415
         app as procrastinate_app,
@@ -117,6 +119,13 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
         set_dependencies,
     )
     from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
+
+    from learning_engine._task_register import (  # noqa: PLC0415
+        register_learning_engine_tasks,
+    )
+
+    # Register kind→handler mappings BEFORE the worker starts (W4-1).
+    register_learning_engine_tasks(procrastinate_app)
 
     # Bind the connector to the same DSN the app_factory pool uses (reads from
     # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).

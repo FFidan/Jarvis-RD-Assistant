@@ -82,31 +82,29 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module):
 
 @pytest.mark.asyncio
 async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
-    """Group G (W2-7): run_pulse_wrapper defers via procrastinate, not direct call.
+    """Group G (W2-7): run_pulse_wrapper defers via KIND_TO_TASK["pulse.generate"].
 
-    Asserts the in-memory connector recorded a deferred job whose args carry
-    a JARVIS UUID under ``job_id`` and ``user_id=None`` (system call).
+    Asserts defer_async was called with a JARVIS UUID under ``job_id`` and
+    ``user_id=None`` (system call).
     """
     import jarvis_common.task_registry as task_registry
-    from procrastinate import testing
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    in_memory = testing.InMemoryConnector()
-    with task_registry.app.replace_connector(in_memory):
+    mock_pulse_task = MagicMock()
+    mock_pulse_defer = AsyncMock()
+    mock_pulse_task.defer_async = mock_pulse_defer
+
+    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_pulse_task}):
         await scheduler_module.run_pulse_wrapper(app)
 
-    jobs = in_memory.jobs
-    assert len(jobs) == 1
-    deferred = next(iter(jobs.values()))
-    assert deferred["task_name"] == "pulse.generate"
-    assert deferred["queue_name"] == "paper_ingestion"
-    args = deferred["args"]
-    assert args["user_id"] is None
-    assert isinstance(args["job_id"], str)
-    assert len(args["job_id"]) == 36  # uuid4 string form
+    mock_pulse_defer.assert_awaited_once()
+    call_kwargs = mock_pulse_defer.await_args.kwargs
+    assert call_kwargs["user_id"] is None
+    assert isinstance(call_kwargs["job_id"], str)
+    assert len(call_kwargs["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio
@@ -151,61 +149,57 @@ async def test_run_pulse_classifier_training_wrapper_skips_when_disabled(schedul
 
 @pytest.mark.asyncio
 async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(scheduler_module):
-    """B.4 Step 3: pulse.train_classifier now defers via procrastinate.
+    """B.4 Step 3: pulse.train_classifier now defers via KIND_TO_TASK.
 
-    Asserts the in-memory connector recorded a deferred job whose args carry
-    the JARVIS UUID under ``job_id`` and ``user_id=None`` (system call).
+    Asserts defer_async was called with a JARVIS UUID under ``job_id`` and
+    ``user_id=None`` (system call).
     """
     import jarvis_common.task_registry as task_registry
-    from procrastinate import testing
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    in_memory = testing.InMemoryConnector()
-    with task_registry.app.replace_connector(in_memory):
+    mock_train_task = MagicMock()
+    mock_train_defer = AsyncMock()
+    mock_train_task.defer_async = mock_train_defer
+
+    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.train_classifier": mock_train_task}):
         await scheduler_module.run_pulse_classifier_training_wrapper(app)
 
-    jobs = in_memory.jobs
-    assert len(jobs) == 1
-    deferred = next(iter(jobs.values()))
-    assert deferred["task_name"] == "pulse.train_classifier"
-    assert deferred["queue_name"] == "paper_ingestion"
-    args = deferred["args"]
-    assert args["user_id"] is None
-    assert isinstance(args["job_id"], str)
-    assert len(args["job_id"]) == 36  # uuid4 string form
+    mock_train_defer.assert_awaited_once()
+    call_kwargs = mock_train_defer.await_args.kwargs
+    assert call_kwargs["user_id"] is None
+    assert isinstance(call_kwargs["job_id"], str)
+    assert len(call_kwargs["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio
 async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module):
-    """B.4 Step 3 canary: digest.weekly now defers via procrastinate.
+    """B.4 Step 3 canary: digest.weekly now defers via KIND_TO_TASK["digest.weekly"].
 
-    Asserts the in-memory connector recorded a deferred job whose args carry
-    the JARVIS UUID under ``job_id`` (the SSE bridge keys on this) and the
-    ``days=7`` payload from the scheduler wrapper.
+    Asserts defer_async was called with the ``days=7`` payload from the
+    scheduler wrapper and a JARVIS UUID under ``job_id`` (the SSE bridge keys
+    on this).
     """
     import jarvis_common.task_registry as task_registry
-    from procrastinate import testing
 
     pool, _conn = _make_pool_and_conn()
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    in_memory = testing.InMemoryConnector()
-    with task_registry.app.replace_connector(in_memory):
+    mock_digest_task = MagicMock()
+    mock_digest_defer = AsyncMock()
+    mock_digest_task.defer_async = mock_digest_defer
+
+    with patch.dict(task_registry.KIND_TO_TASK, {"digest.weekly": mock_digest_task}):
         await scheduler_module.run_weekly_digest_wrapper(app)
 
-    jobs = in_memory.jobs
-    assert len(jobs) == 1
-    deferred = next(iter(jobs.values()))
-    assert deferred["task_name"] == "digest.weekly"
-    assert deferred["queue_name"] == "paper_ingestion"
-    args = deferred["args"]
-    assert args["days"] == 7
+    mock_digest_defer.assert_awaited_once()
+    call_kwargs = mock_digest_defer.await_args.kwargs
+    assert call_kwargs["days"] == 7
     # Critical SSE-bridge contract: JARVIS UUID must travel as args.job_id.
-    assert isinstance(args["job_id"], str)
-    assert len(args["job_id"]) == 36  # uuid4 string form
+    assert isinstance(call_kwargs["job_id"], str)
+    assert len(call_kwargs["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio

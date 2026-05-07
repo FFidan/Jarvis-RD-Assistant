@@ -608,7 +608,11 @@ async def test_generate_enqueues_job_and_returns_202(_app):
     """POST /api/generate defers a procrastinate task and returns 202 with job_id."""
     app, conn, _, mock_fsrs, mock_generator, _ = _app
 
-    with patch("jarvis_common.task_registry.card_generate.defer_async", AsyncMock()):
+    import jarvis_common.task_registry as task_registry
+
+    mock_card_gen_task = MagicMock()
+    mock_card_gen_task.defer_async = AsyncMock()
+    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_gen_task}):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"
         ) as client:
@@ -670,7 +674,11 @@ async def test_batch_generate_success_returns_202_accepted(_app):
     conn.fetchval.return_value = 1  # deck exists
     handler = generation.batch_generate_cards.__wrapped__
 
-    with patch("jarvis_common.task_registry.card_generate_batch.defer_async", AsyncMock()):
+    import jarvis_common.task_registry as task_registry
+
+    mock_card_gen_batch_task = MagicMock()
+    mock_card_gen_batch_task.defer_async = AsyncMock()
+    with patch.dict(task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_gen_batch_task}):
         resp = await handler(
             MagicMock(),
             body=BatchGenerateRequest(deck_id=1),

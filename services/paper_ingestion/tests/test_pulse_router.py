@@ -73,12 +73,14 @@ def client():
 
 def test_generate_returns_job_id(client):
     """POST /generate now enqueues a job and returns {job_id, status}."""
+    import jarvis_common.task_registry as task_registry
+
     tc, pool, conn = client
 
-    with patch(
-        "paper_ingestion.routers.pulse.pulse_generate.defer_async",
-        AsyncMock(return_value=None),
-    ) as mp:
+    mock_task = MagicMock()
+    mp = AsyncMock(return_value=None)
+    mock_task.defer_async = mp
+    with patch.dict(task_registry.KIND_TO_TASK, {"pulse.generate": mock_task}):
         resp = tc.post("/api/pulse/generate")
 
     assert resp.status_code == 200

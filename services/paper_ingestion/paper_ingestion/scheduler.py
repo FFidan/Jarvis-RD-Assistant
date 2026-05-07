@@ -123,10 +123,12 @@ async def run_zotero_sync_wrapper(app: Any) -> None:
     try:
         import uuid  # noqa: PLC0415
 
-        from jarvis_common.task_registry import zotero_sync_from_zotero  # noqa: PLC0415
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await zotero_sync_from_zotero.defer_async(job_id=jarvis_job_id, user_id=None)
+        await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(
+            job_id=jarvis_job_id, user_id=None
+        )
         logger.info(
             "zotero: deferred zotero.sync_from_zotero job %s via procrastinate",
             jarvis_job_id,
@@ -144,10 +146,10 @@ async def run_pulse_wrapper(app: Any) -> None:
     try:
         import uuid  # noqa: PLC0415
 
-        from jarvis_common.task_registry import pulse_generate  # noqa: PLC0415
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await pulse_generate.defer_async(job_id=jarvis_job_id, user_id=None)
+        await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=None)
         logger.info(
             "pulse: deferred pulse.generate job %s via procrastinate",
             jarvis_job_id,
@@ -165,10 +167,10 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
     try:
         import uuid  # noqa: PLC0415
 
-        from jarvis_common.task_registry import pulse_train_classifier  # noqa: PLC0415
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await pulse_train_classifier.defer_async(job_id=jarvis_job_id, user_id=None)
+        await KIND_TO_TASK["pulse.train_classifier"].defer_async(job_id=jarvis_job_id, user_id=None)
         logger.info(
             "pulse: deferred pulse.train_classifier job %s via procrastinate",
             jarvis_job_id,
@@ -192,10 +194,10 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
 
     _ = app.state.db_pool  # touch to surface AttributeError early in tests
     try:
-        from jarvis_common.task_registry import digest_weekly  # noqa: PLC0415
+        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await digest_weekly.defer_async(job_id=jarvis_job_id, days=7)
+        await KIND_TO_TASK["digest.weekly"].defer_async(job_id=jarvis_job_id, days=7)
         logger.info("digest: deferred digest.weekly job %s via procrastinate", jarvis_job_id)
     except Exception:
         logger.exception("digest: failed to defer weekly digest job")

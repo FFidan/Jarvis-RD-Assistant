@@ -73,10 +73,12 @@ async def summarize_paper(
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import paper_summarize  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     jarvis_job_id = str(uuid.uuid4())
-    await paper_summarize.defer_async(job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id)
+    await KIND_TO_TASK["paper.summarize"].defer_async(
+        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
+    )
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
@@ -101,7 +103,7 @@ async def batch_summarize_papers(
     """
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import papers_batch_summarize  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
@@ -118,7 +120,7 @@ async def batch_summarize_papers(
     job_id: str | None = None
     if paper_ids:
         jarvis_job_id = str(uuid.uuid4())
-        await papers_batch_summarize.defer_async(
+        await KIND_TO_TASK["papers.batch_summarize"].defer_async(
             job_id=jarvis_job_id,
             user_id=user_id,
             paper_ids=paper_ids,
@@ -503,9 +505,9 @@ async def enqueue_weekly_digest(
     """
     import uuid  # noqa: PLC0415
 
-    from jarvis_common.task_registry import digest_weekly  # noqa: PLC0415
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
     jarvis_job_id = str(uuid.uuid4())
-    await digest_weekly.defer_async(job_id=jarvis_job_id, days=days)
+    await KIND_TO_TASK["digest.weekly"].defer_async(job_id=jarvis_job_id, days=days)
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")

@@ -286,17 +286,18 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     async def _fake_ownership(c, paper_id, user_id):
         ownership_calls.append((paper_id, user_id))
 
+    import jarvis_common.task_registry as task_registry
+
     deferred_jobs: list[dict] = []
 
     async def _fake_defer(**kw):
         deferred_jobs.append(kw)
 
+    mock_batch_task = MagicMock()
+    mock_batch_task.defer_async = AsyncMock(side_effect=_fake_defer)
     with (
         patch("paper_ingestion.routers.papers.assert_paper_ownership", side_effect=_fake_ownership),
-        patch(
-            "jarvis_common.task_registry.papers_batch_process.defer_async",
-            side_effect=_fake_defer,
-        ),
+        patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_batch_task}),
     ):
         try:
             async with httpx.AsyncClient(
