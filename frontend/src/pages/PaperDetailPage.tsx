@@ -27,7 +27,6 @@ import { RAGChatSection } from '@/components/paper/RAGChatSection';
 import { ZoteroPanel } from '@/components/paper/ZoteroPanel';
 import { ContradictionsPanel } from '@/components/paper/ContradictionsPanel';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 export function PaperDetailPage() {
   const { paperId: paramId } = useParams<{ paperId: string }>();
@@ -164,10 +163,8 @@ export function PaperDetailPage() {
               <button onClick={() => setPaperDetailNoteDismissed(true)} aria-label="Dismiss" className="text-muted-foreground hover:text-foreground">×</button>
             </div>
           )}
-          <SectionHeader marker="PAPER" />
           <PaperHeader paper={paper} isStarred={user_state?.starred === true} userState={user_state} />
 
-          <SectionHeader marker="CONTENT" />
           <Tabs defaultValue="summary">
             <TabsList className="bg-transparent border-b border-hair p-0 gap-2 flex-wrap">
               <TabsTrigger value="summary" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Summary</TabsTrigger>
@@ -198,7 +195,6 @@ export function PaperDetailPage() {
             </TabsContent>
           </Tabs>
 
-          <SectionHeader marker="ASK" />
           <RAGChatSection paperId={paperId} />
         </div>
 
@@ -207,7 +203,6 @@ export function PaperDetailPage() {
           <div className="sticky top-4">
             <ScrollArea className="h-[calc(100dvh-8rem)]">
               <Card className="rounded-md border-hair shadow-none p-4">
-                <SectionHeader marker="ACTIONS" />
                 {sidebarContent}
               </Card>
             </ScrollArea>

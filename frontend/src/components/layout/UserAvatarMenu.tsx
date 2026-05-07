@@ -13,7 +13,7 @@ export function UserAvatarMenu() {
   // as the avatar initial, falling back to 'J' for JARVIS.
   const apiKey = useAuthStore((s) => s.apiKey);
   const logout = useAuthStore((s) => s.logout);
-  const initial = apiKey ? apiKey[0].toUpperCase() : 'J';
+  const initial = apiKey ? apiKey.charAt(0).toUpperCase() : 'J';
 
   return (
     <DropdownMenu>

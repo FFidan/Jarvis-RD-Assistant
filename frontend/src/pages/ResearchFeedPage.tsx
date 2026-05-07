@@ -447,7 +447,6 @@ export function ResearchFeedPage() {
         <div className="space-y-4">
           <SectionInfo>Search external databases live and save new papers to your library.</SectionInfo>
           <div>
-            <h2 className="text-sm font-medium">Discover New Papers</h2>
             <p className="text-xs text-muted-foreground mb-2">
               Search across your enabled sources — results can be added to your library.
             </p>
@@ -511,7 +510,6 @@ export function ResearchFeedPage() {
         <div className="flex flex-col">
           <SectionInfo>Ask AI questions answered from your indexed paper library.</SectionInfo>
           <div className="mb-3">
-            <h2 className="text-sm font-medium">Ask Questions</h2>
             <p className="text-xs text-muted-foreground">
               Get answers synthesised from your entire library.
             </p>

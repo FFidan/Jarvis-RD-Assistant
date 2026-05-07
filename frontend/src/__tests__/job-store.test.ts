@@ -40,6 +40,11 @@ vi.mock('@/lib/api', () => ({
 
 // --- Helpers ---
 
+function requireJob(job: Job | undefined, label = 'job'): Job {
+  if (!job) throw new Error(`test fixture: ${label} not found in store`);
+  return job;
+}
+
 function makeJob(overrides: Partial<Job> = {}): Job {
   return {
     id: 'job-1',
@@ -105,8 +110,7 @@ describe('JobStore', () => {
     expect(jobId).toBe('job-abc');
     expect(createJob).toHaveBeenCalledWith('pulse.generate', { foo: 'bar' });
 
-    const job = useJobStore.getState().jobs['job-abc'];
-    expect(job).toBeDefined();
+    const job = requireJob(useJobStore.getState().jobs['job-abc'], 'job-abc');
     expect(job.status).toBe('queued');
     expect(job.kind).toBe('pulse.generate');
   });
@@ -263,7 +267,7 @@ describe('JobStore', () => {
 
     expect(getJob).toHaveBeenCalledWith('job-zotero-transient');
     expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    expect(useJobStore.getState().jobs['job-zotero-transient'].status).toBe('succeeded');
+    expect(requireJob(useJobStore.getState().jobs['job-zotero-transient'], 'job-zotero-transient').status).toBe('succeeded');
     expect(useJobStore.getState().activeAborts['job-zotero-transient']).toBeUndefined();
   });
 
@@ -327,7 +331,7 @@ describe('JobStore', () => {
     // Wait for async SSE processing to complete
     await new Promise((r) => setTimeout(r, 50));
 
-    const updated = useJobStore.getState().jobs['job-2'];
+    const updated = requireJob(useJobStore.getState().jobs['job-2'], 'job-2');
     expect(updated.status).toBe('running');
     expect(updated.progress).toBe(42);
     expect(updated.progress_message).toBe('Processing chunk 4/10');
@@ -362,7 +366,7 @@ describe('JobStore', () => {
 
     // Job should still be in store (eviction timer hasn't fired yet)
     expect(useJobStore.getState().jobs['job-3']).toBeDefined();
-    expect(useJobStore.getState().jobs['job-3'].status).toBe('succeeded');
+    expect(requireJob(useJobStore.getState().jobs['job-3'], 'job-3').status).toBe('succeeded');
     expect(toast.success).toHaveBeenCalledWith('pulse.generate completed');
   });
 
@@ -389,7 +393,7 @@ describe('JobStore', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(toast.error).toHaveBeenCalledWith('LLM timeout after 30s');
-    expect(useJobStore.getState().jobs['job-4'].status).toBe('failed');
+    expect(requireJob(useJobStore.getState().jobs['job-4'], 'job-4').status).toBe('failed');
   });
 
   // ----- hasRunning -----
@@ -439,7 +443,7 @@ describe('JobStore', () => {
     await useJobStore.getState().cancelJob('j6');
 
     expect(apiCancelJob).toHaveBeenCalledWith('j6');
-    expect(useJobStore.getState().jobs['j6'].status).toBe('cancelled');
+    expect(requireJob(useJobStore.getState().jobs['j6'], 'j6').status).toBe('cancelled');
   });
 
   // ----- removeJob -----
@@ -472,7 +476,7 @@ describe('JobStore', () => {
 
     expect(listJobs).toHaveBeenCalledWith({ status: 'running' });
     expect(useJobStore.getState().jobs['j8']).toBeDefined();
-    expect(useJobStore.getState().jobs['j8'].status).toBe('running');
+    expect(requireJob(useJobStore.getState().jobs['j8'], 'j8').status).toBe('running');
   });
 
   it('hydrate: does not crash when API returns error', async () => {
@@ -512,7 +516,9 @@ describe('JobStore', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(toastError).toHaveBeenCalled();
-    const callArg = toastError.mock.calls[0][1] as { action?: { onClick: () => void } };
+    const firstCall = toastError.mock.calls[0];
+    if (!firstCall) throw new Error('test fixture: toastError was not called');
+    const callArg = firstCall[1] as { action?: { onClick: () => void } };
     return callArg.action!.onClick;
   }
 
@@ -639,8 +645,8 @@ describe('JobStore', () => {
     // Both jobs must appear in the store
     const jobs = useJobStore.getState().jobs;
     expect(jobs['job-running-1']).toBeDefined();
-    expect(jobs['job-running-1'].status).toBe('running');
+    expect(requireJob(jobs['job-running-1'], 'job-running-1').status).toBe('running');
     expect(jobs['job-queued-1']).toBeDefined();
-    expect(jobs['job-queued-1'].status).toBe('queued');
+    expect(requireJob(jobs['job-queued-1'], 'job-queued-1').status).toBe('queued');
   });
 });

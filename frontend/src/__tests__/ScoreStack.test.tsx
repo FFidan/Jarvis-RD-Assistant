@@ -14,6 +14,7 @@ describe('ScoreStack', () => {
     expect(segments).toHaveLength(4);
 
     const [emb, llm, rec, graph] = Array.from(segments);
+    if (!emb || !llm || !rec || !graph) throw new Error('test fixture: expected 4 segment divs');
 
     // emb should take the full width (100%) since it's the only non-zero signal.
     expect(emb.style.width).toBe('100%');
@@ -34,6 +35,7 @@ describe('ScoreStack', () => {
     expect(segments).toHaveLength(4);
 
     const [emb, llm, rec, graph] = Array.from(segments);
+    if (!emb || !llm || !rec || !graph) throw new Error('test fixture: expected 4 segment divs');
 
     expect(emb.style.width).toBe('25%');
     expect(llm.style.width).toBe('25%');
@@ -65,6 +67,7 @@ describe('ScoreStack', () => {
     expect(segments).toHaveLength(4);
 
     const [emb, llm, rec, graph] = Array.from(segments);
+    if (!emb || !llm || !rec || !graph) throw new Error('test fixture: expected 4 segment divs');
 
     expect(emb.getAttribute('title')).toContain('emb 50%');
     expect(llm.getAttribute('title')).toContain('llm 50%');

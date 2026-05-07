@@ -162,6 +162,7 @@ describe('ZoteroSection', () => {
 
     await screen.findByText('Auto-push on star');
     const autoPush = screen.getAllByRole('switch')[0];
+    if (!autoPush) throw new Error('autoPush switch not found');
     await user.click(autoPush);
 
     await waitFor(() => {

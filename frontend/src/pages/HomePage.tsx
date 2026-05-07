@@ -10,7 +10,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
 import { SetupBanner } from '@/components/setup/SetupBanner';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 interface BatchButtonProps<T> {
   label: string;
@@ -117,7 +116,6 @@ export function HomePage() {
 
       {showChecklist && (
         <>
-          <SectionHeader marker="GET STARTED" />
           <Card className="rounded-md border-hair shadow-none">
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-xl">Welcome to JARVIS Research Assistant</CardTitle>
@@ -159,10 +157,8 @@ export function HomePage() {
         </>
       )}
 
-      <SectionHeader marker="QUICK STATS" />
       <MetricTileGrid metrics={metrics} isLoading={isLoading} />
 
-      <SectionHeader marker="BATCH OPS" />
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-lg">Batch Operations</CardTitle>

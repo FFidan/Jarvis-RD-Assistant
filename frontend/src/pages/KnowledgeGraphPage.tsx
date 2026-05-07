@@ -14,8 +14,6 @@ import { Network, Sparkles, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Link } from 'react-router-dom';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
-
 const TYPE_COLORS: Record<string, string> = {
   method: '#1f77b4',
   dataset: '#2ca02c',
@@ -86,7 +84,6 @@ export function KnowledgeGraphPage() {
         Explore entities and relationships extracted from your papers
       </p>
 
-      <SectionHeader marker="Filters" />
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Filters</CardTitle>
@@ -115,7 +112,6 @@ export function KnowledgeGraphPage() {
         </CardContent>
       </Card>
 
-      <SectionHeader marker="Query" />
       <KGQueryInput />
 
       {isLoading && <Skeleton className="h-[500px] w-full rounded-md" />}
@@ -167,7 +163,6 @@ export function KnowledgeGraphPage() {
 
       {entities.length > 0 && (
         <>
-          <SectionHeader marker="Graph" />
           <CytoscapeGraph
             nodes={nodes}
             edges={edges}

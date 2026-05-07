@@ -26,8 +26,10 @@ describe('chat-store — removeLastMessageIfEmpty (D.2)', () => {
     useChatStore.getState().removeLastMessageIfEmpty(CHAT_ID);
 
     const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages).toBeDefined();
+    if (!messages) return;
     expect(messages).toHaveLength(2);
-    expect(messages[1].content).toBe('world');
+    expect(messages[1]?.content).toBe('world');
   });
 
   it('removes last message when it is empty string', () => {
@@ -37,8 +39,10 @@ describe('chat-store — removeLastMessageIfEmpty (D.2)', () => {
     useChatStore.getState().removeLastMessageIfEmpty(CHAT_ID);
 
     const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages).toBeDefined();
+    if (!messages) return;
     expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('user');
+    expect(messages[0]?.role).toBe('user');
   });
 
   it('removes only the last message, preserving prior content', () => {
@@ -50,8 +54,10 @@ describe('chat-store — removeLastMessageIfEmpty (D.2)', () => {
     useChatStore.getState().removeLastMessageIfEmpty(CHAT_ID);
 
     const messages = useChatStore.getState().chats[CHAT_ID];
+    expect(messages).toBeDefined();
+    if (!messages) return;
     expect(messages).toHaveLength(3);
-    expect(messages[2].content).toBe('second question');
+    expect(messages[2]?.content).toBe('second question');
   });
 
   it('no-op when last message has a single space (non-empty string)', () => {
@@ -73,7 +79,9 @@ describe('chat-store — removeLastMessageIfEmpty (D.2)', () => {
     const mainMessages = useChatStore.getState().chats[CHAT_ID];
     const otherMessages = useChatStore.getState().chats[OTHER];
     expect(mainMessages).toHaveLength(0);
+    expect(otherMessages).toBeDefined();
+    if (!otherMessages) return;
     expect(otherMessages).toHaveLength(1);
-    expect(otherMessages[0].content).toBe('has content');
+    expect(otherMessages[0]?.content).toBe('has content');
   });
 });

@@ -548,7 +548,6 @@ export function PulseSection() {
       {/* ── Schedule card ── */}
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
-          <CardTitle>Pulse</CardTitle>
           <CardDescription>
             Nightly ranked deck of candidate papers scored by the Pulse pipeline.
           </CardDescription>
@@ -818,7 +817,7 @@ export function PulseSection() {
                   max={2}
                   step={0.05}
                   value={[l2Lambda]}
-                  onValueChange={([v]) => setL2Lambda(v)}
+                  onValueChange={([v]) => setL2Lambda(v ?? l2Lambda)}
                   onValueCommit={([v]) =>
                     setMut.mutate(
                       { key: 'pulse.l2_lambda', value: v },

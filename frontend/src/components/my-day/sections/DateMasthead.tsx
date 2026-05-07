@@ -47,8 +47,8 @@ export function DateMasthead() {
   }, []);
 
   const hash = Array.from(now.toDateString()).reduce((a, c) => a + c.charCodeAt(0), 0);
-  // use hash (already computed) to pick a quote
-  const attributedQuote = ATTRIBUTED_QUOTES[hash % ATTRIBUTED_QUOTES.length];
+  // use hash (already computed) to pick a quote; fallback to first entry (array is a non-empty constant)
+  const attributedQuote = ATTRIBUTED_QUOTES[hash % ATTRIBUTED_QUOTES.length] ?? ATTRIBUTED_QUOTES[0] ?? { text: '', author: '' };
   // TODO Phase 2: replace with real journal entry count from journal_entries table
   const entryNum = Math.floor((now.getTime() - new Date('2026-01-01').getTime()) / 86400000);
   const dateStr =

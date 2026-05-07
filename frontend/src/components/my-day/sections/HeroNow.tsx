@@ -50,7 +50,6 @@ function ModePicker({ mode, onChange, hasTask, hasReading }: ModePickerProps) {
 
 export function HeroNow() {
   const [mode, setMode] = useState<HeroMode>('pulse');
-  const attachedItem = usePomodoroStore((s) => s.attachedItem);
   const phase = usePomodoroStore((s) => s.phase);
   const hasTask = phase !== 'idle';
 

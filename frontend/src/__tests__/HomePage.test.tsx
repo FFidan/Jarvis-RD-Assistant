@@ -83,6 +83,18 @@ describe('HomePage', () => {
     expect(screen.queryByText('Quick Navigation')).not.toBeInTheDocument();
   });
 
+  it('does not render § GET STARTED section marker', () => {
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+    renderHomePage();
+    expect(screen.queryByText('§ GET STARTED')).toBeNull();
+  });
+
+  it('does not render § BATCH OPS section marker', () => {
+    vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
+    renderHomePage();
+    expect(screen.queryByText('§ BATCH OPS')).toBeNull();
+  });
+
   it('renders all five metric tiles when data loads', async () => {
     vi.mocked(fetchDashboardMetrics).mockResolvedValue(mockMetrics);
     renderHomePage();

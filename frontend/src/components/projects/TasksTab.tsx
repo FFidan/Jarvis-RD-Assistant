@@ -11,7 +11,6 @@ import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import {
   Select,
   SelectContent,
@@ -143,7 +142,7 @@ export function TasksTab({ projectId }: TasksTabProps) {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <SectionHeader marker="TASKS" meta={`${tasks.length} task${tasks.length !== 1 ? 's' : ''}`} />
+        <span className="text-xs text-muted-foreground">{`${tasks.length} task${tasks.length !== 1 ? 's' : ''}`}</span>
         <Button size="sm" onClick={() => setShowCreate(true)}>
           <Plus className="mr-1 h-4 w-4" /> Add Task
         </Button>

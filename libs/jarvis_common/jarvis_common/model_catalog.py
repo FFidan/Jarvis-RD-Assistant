@@ -34,6 +34,11 @@ class ModelCatalogEntry:
     embedding_dimension: int | None = None
     phase: CatalogPhase = "default"
     assignable: bool = True
+    min_vram_gb_at_default_ctx: float | None = None
+    kv_cache_bytes_per_token: int | None = None
+    default_num_ctx: int | None = None
+    max_num_ctx: int | None = None
+    supports_thinking: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -59,6 +64,21 @@ def _coerce_entry(raw: dict) -> ModelCatalogEntry:
         ),
         phase=raw.get("phase", "default"),
         assignable=bool(raw.get("assignable", True)),
+        min_vram_gb_at_default_ctx=(
+            float(raw["min_vram_gb_at_default_ctx"])
+            if raw.get("min_vram_gb_at_default_ctx") is not None
+            else None
+        ),
+        kv_cache_bytes_per_token=(
+            int(raw["kv_cache_bytes_per_token"])
+            if raw.get("kv_cache_bytes_per_token") is not None
+            else None
+        ),
+        default_num_ctx=(
+            int(raw["default_num_ctx"]) if raw.get("default_num_ctx") is not None else None
+        ),
+        max_num_ctx=(int(raw["max_num_ctx"]) if raw.get("max_num_ctx") is not None else None),
+        supports_thinking=bool(raw.get("supports_thinking", False)),
     )
 
 

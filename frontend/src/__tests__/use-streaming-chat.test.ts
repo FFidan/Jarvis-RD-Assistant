@@ -47,11 +47,6 @@ async function* hangingStream(signal: AbortSignal): AsyncGenerator<StreamEvent, 
   });
 }
 
-/** Returns an async generator that yields nothing and resolves immediately */
-async function* emptyStream(): AsyncGenerator<StreamEvent, void, unknown> {
-  // no tokens — generator ends immediately (simulates instant done with no content)
-}
-
 // ---------------------------------------------------------------------------
 // D.2 — empty placeholder removed on AbortError (Stop before any token)
 // ---------------------------------------------------------------------------
@@ -79,8 +74,12 @@ describe('use-streaming-chat — D.2 empty placeholder removal', () => {
     await waitFor(() => expect(result.current.isStreaming).toBe(true));
 
     // At this point we have 2 messages: user + empty assistant
-    expect(useChatStore.getState().chats['c1']).toHaveLength(2);
-    expect(useChatStore.getState().chats['c1'][1].content).toBe('');
+    const initialMessages = useChatStore.getState().chats['c1'];
+    if (!initialMessages || initialMessages.length < 2) throw new Error('test fixture: expected 2 messages');
+    expect(initialMessages).toHaveLength(2);
+    const secondMsg = initialMessages[1];
+    if (!secondMsg) throw new Error('test fixture: second message missing');
+    expect(secondMsg.content).toBe('');
 
     // Stop before any token
     act(() => {
@@ -92,8 +91,11 @@ describe('use-streaming-chat — D.2 empty placeholder removal', () => {
 
     // Empty assistant placeholder must be removed; only user message remains
     const messages = useChatStore.getState().chats['c1'];
+    if (!messages || messages.length < 1) throw new Error('test fixture: expected 1 remaining message');
+    const firstMsg = messages[0];
+    if (!firstMsg) throw new Error('test fixture: first message missing');
     expect(messages).toHaveLength(1);
-    expect(messages[0].role).toBe('user');
+    expect(firstMsg.role).toBe('user');
   });
 
   it('preserves partial content when Stop arrives after some tokens', async () => {
@@ -129,8 +131,11 @@ describe('use-streaming-chat — D.2 empty placeholder removal', () => {
 
     // Partial content must be preserved
     const messages = useChatStore.getState().chats['c2'];
+    if (!messages || messages.length < 2) throw new Error('test fixture: expected 2 preserved messages');
+    const lastMsg = messages[1];
+    if (!lastMsg) throw new Error('test fixture: second message missing');
     expect(messages).toHaveLength(2);
-    expect(messages[1].content).toBe('Partial answer');
+    expect(lastMsg.content).toBe('Partial answer');
   });
 });
 

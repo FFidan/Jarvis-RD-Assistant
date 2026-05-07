@@ -40,17 +40,21 @@ interface FeedViewProps {
 }
 
 // Per-surface empty state copy
-const EMPTY_STATE: Record<string, { icon: LucideIcon; title: string; description: string }> = {
+type EmptyStateCopy = { icon: LucideIcon; title: string; description: string };
+
+const LIBRARY_EMPTY_STATE: EmptyStateCopy = {
+  icon: Library,
+  title: 'No papers in your library',
+  description: 'Save papers from the Inbox to build your library.',
+};
+
+const EMPTY_STATE: Record<string, EmptyStateCopy> = {
   inbox: {
     icon: Inbox,
     title: 'Inbox is empty',
     description: 'Auto-fetched papers will appear here. Add topics in Settings to discover research automatically.',
   },
-  library: {
-    icon: Library,
-    title: 'No papers in your library',
-    description: 'Save papers from the Inbox to build your library.',
-  },
+  library: LIBRARY_EMPTY_STATE,
   starred: {
     icon: Star,
     title: 'No starred papers',
@@ -68,8 +72,8 @@ const EMPTY_STATE: Record<string, { icon: LucideIcon; title: string; description
   },
 };
 
-function getEmptyState(surface: SurfaceView) {
-  return EMPTY_STATE[surface] ?? EMPTY_STATE.library;
+function getEmptyState(surface: SurfaceView): EmptyStateCopy {
+  return EMPTY_STATE[surface] ?? LIBRARY_EMPTY_STATE;
 }
 
 const DEFAULT_LIMIT: PageSize = 30;

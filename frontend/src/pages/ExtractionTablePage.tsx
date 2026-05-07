@@ -15,7 +15,6 @@ import {
 } from '@/lib/api';
 import { Download, Loader2, TableProperties } from 'lucide-react';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 export function ExtractionTablePage() {
   const queryClient = useQueryClient();
@@ -93,7 +92,6 @@ export function ExtractionTablePage() {
         </div>
       )}
 
-      <SectionHeader marker="FILTERS" />
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="border-0 bg-transparent shadow-none">
           <CardHeader>
@@ -145,7 +143,6 @@ export function ExtractionTablePage() {
         </Card>
       </div>
 
-      <SectionHeader marker="ACTIONS" />
       <div className="flex items-center gap-3">
         <div>
           <Button
@@ -188,7 +185,6 @@ export function ExtractionTablePage() {
         )}
       </div>
 
-      <SectionHeader marker="TABLE" />
       <Card className="border-0 bg-transparent shadow-none">
         <CardHeader>
           <CardTitle className="text-lg">Comparison Table</CardTitle>

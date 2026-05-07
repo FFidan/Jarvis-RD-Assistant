@@ -49,9 +49,12 @@ describe('streamSSE', () => {
     }
 
     expect(events).toHaveLength(2);
-    expect(events[0].type).toBe('token');
-    expect(events[0].content).toBe('Hello');
-    expect(events[1].content).toBe(' world');
+    const ev0 = events[0];
+    const ev1 = events[1];
+    if (!ev0 || !ev1) throw new Error('test fixture: expected 2 events');
+    expect(ev0.type).toBe('token');
+    expect(ev0.content).toBe('Hello');
+    expect(ev1.content).toBe(' world');
   });
 
   it('stops on [DONE] sentinel', async () => {
@@ -71,7 +74,9 @@ describe('streamSSE', () => {
     }
 
     expect(events).toHaveLength(1);
-    expect(events[0].content).toBe('Hi');
+    const ev0done = events[0];
+    if (!ev0done) throw new Error('test fixture: expected 1 event');
+    expect(ev0done.content).toBe('Hi');
   });
 
   it('yields error events', async () => {
@@ -90,8 +95,10 @@ describe('streamSSE', () => {
     }
 
     expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('error');
-    expect(events[0].message).toBe('Something failed');
+    const ev0err = events[0];
+    if (!ev0err) throw new Error('test fixture: expected 1 error event');
+    expect(ev0err.type).toBe('error');
+    expect(ev0err.message).toBe('Something failed');
   });
 
   it('calls logout and throws on 401 response', async () => {

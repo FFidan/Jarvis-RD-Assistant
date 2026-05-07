@@ -34,6 +34,16 @@ Related docs:
 - User-facing changes require frontend tests and, when practical, a live smoke
   check against `http://127.0.0.1:3001`.
 
+### Typography contract
+
+Frontend headings follow a 4-level contract (page H1 / section marker /
+card title / inline label) with a "one caption per visual block" rule.
+Section markers (`MarkerCaption`) and inline small-caps labels
+(`MarkerLabel`) live in `frontend/src/components/typography/`. There is no
+ESLint enforcement; reviewers run the hand-checklist in the contract doc
+against headline-touching diffs. Canonical source:
+[`typography-contract.md`](typography-contract.md).
+
 ## API
 
 - HTTP endpoints use `/api/resource` REST-style paths.

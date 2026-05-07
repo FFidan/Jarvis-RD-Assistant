@@ -4,6 +4,7 @@ import {
   loadAppearance, saveAppearance,
   type AccentId, type TypeId, type DensityId,
 } from '@/lib/theme';
+import { MarkerLabel } from '@/components/typography/MarkerLabel';
 
 export function AppearanceSection() {
   const [prefs, setPrefs] = useState(() => loadAppearance());
@@ -25,9 +26,9 @@ export function AppearanceSection() {
     <div className="space-y-8">
       {/* Accent colour */}
       <div>
-        <h3 className="font-mono text-[11px] uppercase tracking-widest text-meta mb-3">
+        <MarkerLabel as="h3" className="mb-3">
           Accent colour
-        </h3>
+        </MarkerLabel>
         <div className="flex gap-3 flex-wrap">
           {ACCENT_PRESETS.map((p) => (
             <button

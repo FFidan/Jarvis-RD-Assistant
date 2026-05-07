@@ -174,10 +174,13 @@ describe('HeroPulse currentIndex clamp and reset (Phase 1e)', () => {
     expect(await screen.findByText(/#4 of 5/)).toBeInTheDocument();
 
     // Now simulate refetch returning same deck_id=10 but only 2 cards
+    const card0 = fiveCards[0];
+    const card1 = fiveCards[1];
+    if (!card0 || !card1) throw new Error('fiveCards too short');
     const shrunkDeck = makeDeck({
       deck_id: 10,
       card_count: 2,
-      cards: [fiveCards[0], fiveCards[1]],
+      cards: [card0, card1],
     });
 
     act(() => {

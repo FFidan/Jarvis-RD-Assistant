@@ -152,8 +152,10 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const [anthropicTestBtn] = screen.getAllByRole('button', { name: /test/i });
-    await user.click(anthropicTestBtn);
+    const testBtns1 = screen.getAllByRole('button', { name: /test/i });
+    const anthropicTestBtn1 = testBtns1[0];
+    if (!anthropicTestBtn1) throw new Error('test fixture: Anthropic test button not found');
+    await user.click(anthropicTestBtn1);
 
     await waitFor(() => {
       expect(vi.mocked(testProvider)).toHaveBeenCalledWith('anthropic');
@@ -166,8 +168,10 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const [anthropicTestBtn] = screen.getAllByRole('button', { name: /test/i });
-    await user.click(anthropicTestBtn);
+    const testBtns2 = screen.getAllByRole('button', { name: /test/i });
+    const anthropicTestBtn2 = testBtns2[0];
+    if (!anthropicTestBtn2) throw new Error('test fixture: Anthropic test button not found');
+    await user.click(anthropicTestBtn2);
 
     await waitFor(() => {
       expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
@@ -182,8 +186,10 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const [anthropicTestBtn] = screen.getAllByRole('button', { name: /test/i });
-    await user.click(anthropicTestBtn);
+    const testBtns3 = screen.getAllByRole('button', { name: /test/i });
+    const anthropicTestBtn3 = testBtns3[0];
+    if (!anthropicTestBtn3) throw new Error('test fixture: Anthropic test button not found');
+    await user.click(anthropicTestBtn3);
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Invalid API key');
@@ -205,8 +211,10 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const [anthropicTestBtn] = screen.getAllByRole('button', { name: /test/i });
-    await user.click(anthropicTestBtn);
+    const testBtns4 = screen.getAllByRole('button', { name: /test/i });
+    const anthropicTestBtn4 = testBtns4[0];
+    if (!anthropicTestBtn4) throw new Error('test fixture: Anthropic test button not found');
+    await user.click(anthropicTestBtn4);
 
     await waitFor(() => {
       expect(vi.mocked(toast.error)).toHaveBeenCalledWith('Network error');
@@ -226,18 +234,20 @@ describe('ProvidersSection', () => {
     renderSection();
 
     await waitFor(() => screen.getAllByRole('button', { name: /test/i }));
-    const [anthropicTestBtn] = screen.getAllByRole('button', { name: /test/i });
-    await user.click(anthropicTestBtn);
+    const testBtns5 = screen.getAllByRole('button', { name: /test/i });
+    const anthropicTestBtn5 = testBtns5[0];
+    if (!anthropicTestBtn5) throw new Error('test fixture: Anthropic test button not found');
+    await user.click(anthropicTestBtn5);
 
     // Button should be disabled while in flight
     await waitFor(() => {
-      expect(anthropicTestBtn).toBeDisabled();
+      expect(anthropicTestBtn5).toBeDisabled();
     });
 
     // Resolve and button should re-enable
     resolveTest({ ok: true, error: null });
     await waitFor(() => {
-      expect(anthropicTestBtn).not.toBeDisabled();
+      expect(anthropicTestBtn5).not.toBeDisabled();
     });
   });
 });

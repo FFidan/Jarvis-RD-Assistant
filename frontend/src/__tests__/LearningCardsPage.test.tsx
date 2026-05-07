@@ -112,4 +112,19 @@ describe('LearningCardsPage', () => {
     expect(screen.getByText('Review')).toBeInTheDocument();
     expect(screen.getByText('Browse')).toBeInTheDocument();
   });
+
+  it('does not render § REVIEW section marker in the Review tab', () => {
+    mockGetStats.mockResolvedValue({
+      total_cards: 0,
+      due_now: 0,
+      reviewed_today: 0,
+      average_retention: 0,
+      reviews_by_rating: {},
+      streak_days: 0,
+    });
+
+    renderPage();
+
+    expect(screen.queryByText(/§\s*REVIEW/)).toBeNull();
+  });
 });

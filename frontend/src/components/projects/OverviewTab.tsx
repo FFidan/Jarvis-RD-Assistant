@@ -9,7 +9,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import {
   Select,
   SelectContent,
@@ -66,7 +65,6 @@ export function OverviewTab({ project }: OverviewTabProps) {
 
   return (
     <div className="space-y-6">
-      <SectionHeader marker="OVERVIEW" />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <MetricTile title="Total Tasks" value={totalTasks} icon={ListTodo} />
         <MetricTile title="Done" value={doneTasks} icon={CheckCircle2} />

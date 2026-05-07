@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { LangfuseLinkCard } from '@/components/settings/LangfuseLinkCard';
 
 // We need to control import.meta.env.VITE_LANGFUSE_PUBLIC_DASHBOARD between tests.
 // Vitest exposes import.meta.env as a plain object so we can mutate it directly.

@@ -101,13 +101,12 @@ export const useChatStore = create<ChatState>()((set) => ({
       const messages = state.chats[chatId];
       if (!messages || messages.length === 0) return state;
       const last = messages[messages.length - 1];
+      if (!last) return state;
+      const updated: ChatMessage = { ...last, content: last.content + token };
       return {
         chats: {
           ...state.chats,
-          [chatId]: [
-            ...messages.slice(0, -1),
-            { ...last, content: last.content + token },
-          ],
+          [chatId]: [...messages.slice(0, -1), updated],
         },
       };
     });
@@ -118,13 +117,12 @@ export const useChatStore = create<ChatState>()((set) => ({
       const messages = state.chats[chatId];
       if (!messages || messages.length === 0) return state;
       const last = messages[messages.length - 1];
+      if (!last) return state;
+      const updated: ChatMessage = { ...last, sources };
       return {
         chats: {
           ...state.chats,
-          [chatId]: [
-            ...messages.slice(0, -1),
-            { ...last, sources },
-          ],
+          [chatId]: [...messages.slice(0, -1), updated],
         },
       };
     });
@@ -135,6 +133,7 @@ export const useChatStore = create<ChatState>()((set) => ({
       const messages = state.chats[chatId];
       if (!messages || messages.length === 0) return state;
       const last = messages[messages.length - 1];
+      if (!last) return state;
       if (last.content !== '') return state;
       return {
         chats: {
@@ -152,11 +151,16 @@ export const useChatStore = create<ChatState>()((set) => ({
       // Find the last assistant message
       const assistantItems = [...messages].map((m, i) => ({ m, i }))
         .filter(({ m }) => m.role === 'assistant');
-      const lastAssistantIdx = assistantItems.length > 0 ? assistantItems[assistantItems.length - 1].i : undefined;
-      if (lastAssistantIdx === undefined) return state;
+      const lastAssistantEntry = assistantItems[assistantItems.length - 1];
+      if (!lastAssistantEntry) return state;
+      const lastAssistantIdx = lastAssistantEntry.i;
       const updated = [...messages];
+      const target = updated[lastAssistantIdx];
+      if (!target) return state;
       updated[lastAssistantIdx] = {
-        ...updated[lastAssistantIdx],
+        role: target.role,
+        content: target.content,
+        sources: target.sources,
         confidence: payload.confidence,
         verified_fraction: payload.verified_fraction,
         per_sentence: payload.per_sentence,

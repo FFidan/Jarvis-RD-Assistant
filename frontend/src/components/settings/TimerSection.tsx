@@ -1,4 +1,4 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
 import { Slider } from '@/components/ui/slider';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
@@ -14,7 +14,6 @@ export function TimerSection() {
   return (
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
-        <CardTitle>Pomodoro Timer</CardTitle>
         <p className="text-sm text-muted-foreground">
           Customize your focus and break durations.
         </p>

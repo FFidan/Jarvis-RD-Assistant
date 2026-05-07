@@ -1,5 +1,5 @@
 import { PulseDeck } from '@/components/my-day/PulseDeck';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
+import { MarkerCaption } from '@/components/typography/MarkerCaption';
 
 /**
  * /pulse — full Pulse Deck page.
@@ -13,7 +13,7 @@ import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 export function PulseDeckPage() {
   return (
     <div className="space-y-6">
-      <SectionHeader marker="Today's Pulse" meta="ranked by relevance + your feedback" />
+      <MarkerCaption marker="Today's Pulse" meta="ranked by relevance + your feedback" />
       <PulseDeck />
     </div>
   );

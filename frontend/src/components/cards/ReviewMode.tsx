@@ -39,7 +39,7 @@ export function ReviewMode() {
     },
   });
 
-  const currentCard: CardType | null = cards.length > 0 ? cards[0] : null;
+  const currentCard: CardType | null = cards.length > 0 ? (cards[0] as CardType) : null;
 
   if (isLoading) {
     return (

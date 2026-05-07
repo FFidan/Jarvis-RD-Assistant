@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/EmptyState';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 interface LinkedPapersTabProps {
   projectId: number;
@@ -67,7 +66,7 @@ export function LinkedPapersTab({ projectId }: LinkedPapersTabProps) {
 
   return (
     <div className="space-y-4">
-      <SectionHeader marker="PAPERS" meta={`${papers.length} linked`} />
+      <span className="text-xs text-muted-foreground">{`${papers.length} linked`}</span>
 
       {papers.length === 0 ? (
         <EmptyState

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
+import { MarkerCaption } from '@/components/typography/MarkerCaption';
 import { DateRangeFilter } from '@/components/analytics/DateRangeFilter';
 import { ActivityChart } from '@/components/analytics/ActivityChart';
 import { RetentionChart } from '@/components/analytics/RetentionChart';
@@ -83,7 +83,7 @@ export function AnalyticsPage() {
         </div>
       )}
 
-      <SectionHeader marker="ACTIVITY" />
+      <MarkerCaption marker="ACTIVITY" />
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
@@ -123,7 +123,7 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      <SectionHeader marker="DISTRIBUTION" />
+      <MarkerCaption marker="DISTRIBUTION" />
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="rounded-md border-hair shadow-none">
           <CardHeader>
@@ -160,7 +160,7 @@ export function AnalyticsPage() {
         </Card>
       </div>
 
-      <SectionHeader marker="REVIEWS" />
+      <MarkerCaption marker="REVIEWS" />
       <div className="grid gap-6 md:grid-cols-2">
         <Card className="rounded-md border-hair shadow-none">
           <CardHeader>

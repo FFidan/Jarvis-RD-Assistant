@@ -311,4 +311,23 @@ describe('PulseSection', () => {
     await user.click(generateButton);
     expect(vi.mocked(createJob)).not.toHaveBeenCalled();
   });
+
+  // ── Heading-rhythm cleanup (WS-6) ─────────────────────────────────────────
+
+  it('shows the CardDescription lead-in text', async () => {
+    renderSection();
+    await waitFor(() => {
+      expect(
+        screen.getByText(/nightly ranked deck of candidate papers scored by the pulse pipeline/i),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('does not render a heading-level "Pulse" title inside the card', async () => {
+    renderSection();
+    // Wait for the section to load so we are not catching a loading state
+    await screen.findByRole('switch', { name: /pulse/i });
+    // There must be no heading element whose accessible name is exactly "Pulse"
+    expect(screen.queryByRole('heading', { name: 'Pulse' })).toBeNull();
+  });
 });

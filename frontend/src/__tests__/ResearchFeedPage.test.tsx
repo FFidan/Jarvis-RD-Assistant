@@ -302,12 +302,12 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('renders the Ask tab heading and description', async () => {
+  it('renders the Ask tab description and cross-paper chat surface', async () => {
     const user = userEvent.setup();
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Ask' }));
-    expect(screen.getByText('Ask Questions')).toBeInTheDocument();
     expect(screen.getByText(/Get answers synthesised from your entire library/i)).toBeInTheDocument();
+    expect(screen.getByTestId('streaming-chat')).toBeInTheDocument();
   });
 
   it('renders the search input with updated placeholder', async () => {
@@ -396,6 +396,7 @@ describe('ResearchFeedPage', () => {
       );
     });
     const callArgs = vi.mocked(searchPreview).mock.calls[0];
+    if (!callArgs) throw new Error('test fixture: searchPreview was not called');
     const sourceTypes = callArgs[1] as string[];
     expect(sourceTypes).not.toContain('semantic_scholar');
     expect(sourceTypes).not.toContain('openalex');
@@ -518,7 +519,9 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(vi.mocked(batchSavePapers)).toHaveBeenCalled();
     });
-    const [savedPapers] = vi.mocked(batchSavePapers).mock.calls[0];
+    const batchSaveCall = vi.mocked(batchSavePapers).mock.calls[0];
+    if (!batchSaveCall) throw new Error('test fixture: batchSavePapers was not called');
+    const [savedPapers] = batchSaveCall;
     expect(savedPapers).toHaveLength(1);
     expect(savedPapers[0]).toMatchObject({ external_id: 'arxiv:2304.00003' });
   });
@@ -565,7 +568,9 @@ describe('ResearchFeedPage', () => {
     await waitFor(() => {
       expect(vi.mocked(batchSavePapers)).toHaveBeenCalled();
     });
-    const [savedPapers] = vi.mocked(batchSavePapers).mock.calls[0];
+    const batchSaveCall2 = vi.mocked(batchSavePapers).mock.calls[0];
+    if (!batchSaveCall2) throw new Error('test fixture: batchSavePapers was not called');
+    const [savedPapers] = batchSaveCall2;
     expect(savedPapers).toHaveLength(1);
     expect(savedPapers[0]).toMatchObject({ external_id: 'arxiv:2306.00002' });
   });
@@ -1831,7 +1836,6 @@ describe('ResearchFeedPage', () => {
 
   // Wave 2.3 lifecycle test: clicking Library tab shows the library surface content
   it('clicking Library tab navigates to the library surface and shows section info', async () => {
-    const user = userEvent.setup();
     vi.mocked(useFeedCounts).mockReturnValue({
       data: { inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2 },
       isLoading: false,

@@ -109,7 +109,6 @@ export function SettingsPage() {
           <div className="space-y-8">
             <div className="space-y-4">
               <div>
-                <h2 className="text-lg font-semibold">Telegram</h2>
                 <p className="text-sm text-muted-foreground">
                   Pair a Telegram chat to receive briefings and interact with JARVIS from your phone.
                 </p>
@@ -117,9 +116,6 @@ export function SettingsPage() {
               <PairTelegram />
             </div>
             <div className="space-y-4">
-              <div>
-                <h2 className="text-lg font-semibold">Zotero</h2>
-              </div>
               <ZoteroSection />
             </div>
           </div>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchConfig, setConfig, zoteroTest, zoteroPollNow } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -10,8 +10,6 @@ import { Switch } from '@/components/ui/switch';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import type { ConfigEntry } from '@/types';
 
-const ZOTERO_KEYS = ['zotero.api_key', 'zotero.user_id', 'zotero.library_type', 'zotero.auto_push_on_star'] as const;
-type ZoteroKey = (typeof ZOTERO_KEYS)[number];
 
 function getConfigValue(configs: ConfigEntry[], key: string): string {
   const entry = configs.find((c) => c.key === key);
@@ -127,7 +125,6 @@ export function ZoteroSection() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Zotero</CardTitle>
         <p className="text-sm text-muted-foreground">
           Connect JARVIS to your Zotero library to push papers and copy citation keys.
         </p>

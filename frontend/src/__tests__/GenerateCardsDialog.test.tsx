@@ -161,7 +161,7 @@ describe('GenerateCardsDialog', () => {
     // Simulate that generateCardsJob immediately resolved (mutation complete)
     mockGenerateCardsJob.mockResolvedValue({ job_id: 'test-job-001', status: 'queued' });
 
-    const { container } = renderDialog();
+    renderDialog();
 
     // Wait for deck to load
     await waitFor(() => expect(screen.getByText(/ML Deck/i)).toBeInTheDocument());

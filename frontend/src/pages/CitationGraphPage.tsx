@@ -10,7 +10,6 @@ import { EmptyState } from '@/components/EmptyState';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 import { GitFork } from 'lucide-react';
 import type { PaperBrief } from '@/types';
 import type { CytoscapeNode, CytoscapeEdge } from '@/components/graph/CytoscapeGraph';
@@ -77,7 +76,6 @@ export function CitationGraphPage() {
       <h1 className="text-[28px] leading-tight tracking-tight text-strong">Citation Graph</h1>
       <p className="text-muted-foreground text-sm">Citation network across your paper library</p>
 
-      <SectionHeader marker="SELECTION" />
       <Card className="rounded-md border-hair shadow-none">
         <CardHeader>
           <CardTitle className="text-base">Paper Selection</CardTitle>
@@ -138,7 +136,6 @@ export function CitationGraphPage() {
 
       {nodes.length > 0 && (
         <>
-          <SectionHeader marker="GRAPH" />
           <CytoscapeGraph
             nodes={nodes}
             edges={edges}
@@ -146,7 +143,6 @@ export function CitationGraphPage() {
             colorMap={citationColorMap}
             height={500}
           />
-          <SectionHeader marker="STATS" />
           <GraphStats stats={stats} />
         </>
       )}

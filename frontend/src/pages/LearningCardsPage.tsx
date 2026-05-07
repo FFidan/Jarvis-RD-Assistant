@@ -7,7 +7,6 @@ import { ReviewMode } from '@/components/cards/ReviewMode';
 import { DeckBrowser } from '@/components/cards/DeckBrowser';
 import { CardList } from '@/components/cards/CardList';
 import { CreateCardForm, GenerateCardsDialog } from '@/components/cards/CreateCardForm';
-import { SectionHeader } from '@/components/my-day/sections/SectionHeader';
 
 export function LearningCardsPage() {
   const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
@@ -40,19 +39,16 @@ export function LearningCardsPage() {
         </TabsList>
 
         <TabsContent value="review" className="mt-4">
-          <SectionHeader marker="REVIEW" />
           <ReviewMode />
         </TabsContent>
 
         <TabsContent value="browse" className="mt-4 space-y-6">
-          <SectionHeader marker="QUEUE" />
           <DeckBrowser
             selectedDeckId={selectedDeckId}
             onSelectDeck={setSelectedDeckId}
           />
           {selectedDeckId && (
             <div className="space-y-3">
-              <SectionHeader marker="CARDS" />
               <CardList deckId={selectedDeckId} />
             </div>
           )}

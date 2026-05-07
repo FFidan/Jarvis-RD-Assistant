@@ -59,6 +59,7 @@ export function SourcesList() {
     if (oldIdx < 0 || newIdx < 0) return;
     const next = [...sources];
     const [moved] = next.splice(oldIdx, 1);
+    if (!moved) return;
     next.splice(newIdx, 0, moved);
     reorder.mutate(next.map((s) => s.source_type));
   };

@@ -167,7 +167,9 @@ describe('ChatMessage inline sentence highlighting', () => {
     const { container } = render(<ChatMessage message={message} />);
     const marks = container.querySelectorAll('mark');
     expect(marks).toHaveLength(1);
-    expect(marks[0].textContent).toBe('Second.');
+    const firstMark = marks[0];
+    if (!firstMark) throw new Error('test fixture: expected a <mark> element');
+    expect(firstMark.textContent).toBe('Second.');
     // "First." must NOT be inside any <mark>
     const allMarkedText = Array.from(marks).map((m) => m.textContent).join('');
     expect(allMarkedText).not.toContain('First.');

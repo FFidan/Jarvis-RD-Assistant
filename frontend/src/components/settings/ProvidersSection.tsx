@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchConfig, setProviderKey, testProvider } from '@/lib/api';
 import type { CloudProvider } from '@/lib/api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -127,7 +127,6 @@ export function ProvidersSection() {
   return (
     <Card className="rounded-md border-hair shadow-none">
       <CardHeader>
-        <CardTitle>LLM Providers</CardTitle>
         <p className="text-sm text-muted-foreground">
           Configure cloud LLM keys to route the <code className="text-xs">smart</code>/
           <code className="text-xs">fast</code> aliases to Claude, GPT, or Gemini. Keys are

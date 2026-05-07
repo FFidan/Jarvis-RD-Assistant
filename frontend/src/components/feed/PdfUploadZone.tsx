@@ -24,9 +24,6 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
 
-  const updateFile = (index: number, patch: Partial<FileEntry>) =>
-    setFiles(prev => prev.map((f, i) => (i === index ? { ...f, ...patch } : f)));
-
   const retryFile = (index: number) => {
     const entry = files[index];
     if (!entry) return;
@@ -65,7 +62,9 @@ export function PdfUploadZone({ onComplete }: PdfUploadZoneProps) {
       void (async () => {
         for (let i = 0; i < entries.length; i++) {
           const idx = startIndex + i;
-          const file = entries[i].file;
+          const entry = entries[i];
+          if (!entry) continue;
+          const file = entry.file;
           try {
             setFiles(s => s.map((f, si) => (si === idx ? { ...f, status: 'uploading' as FileStatus } : f)));
             const paper = await uploadPdf(file, file.name.replace(/\.pdf$/i, ''));

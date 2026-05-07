@@ -296,7 +296,7 @@ export function IngestionSection() {
             {group}
           </h4>
           <div className="space-y-2">
-            {grouped[group].map(renderEntry)}
+            {(grouped[group] ?? []).map(renderEntry)}
           </div>
         </div>
       ))}

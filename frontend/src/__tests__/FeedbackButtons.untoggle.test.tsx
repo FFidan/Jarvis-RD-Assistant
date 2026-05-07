@@ -210,6 +210,7 @@ describe('FeedbackButtons — untoggle-lock regression (W1.6-B)', () => {
     );
 
     const thumbsDown1 = within(document.body).getAllByLabelText("Don't recommend like this")[0];
+    if (!thumbsDown1) throw new Error('thumbsDown1 button not found');
 
     await act(async () => {
       fireEvent.click(thumbsDown1);

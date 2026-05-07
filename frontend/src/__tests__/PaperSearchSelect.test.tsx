@@ -41,7 +41,9 @@ describe('PaperSearchSelect', () => {
     // Restore default mocks after tests that override them
     const { fetchPapersBrief, searchPapersBrief } = await import('@/lib/api');
     vi.mocked(fetchPapersBrief).mockResolvedValue(defaultPapers);
-    vi.mocked(searchPapersBrief).mockResolvedValue([defaultPapers[0]]);
+    const firstPaper = defaultPapers[0];
+    if (!firstPaper) throw new Error('test fixture: defaultPapers is empty');
+    vi.mocked(searchPapersBrief).mockResolvedValue([firstPaper]);
   });
 
   afterEach(() => {
@@ -180,7 +182,9 @@ describe('PaperSearchSelect', () => {
       (btn) => !btn.className.includes('absolute') && !btn.className.includes('pl-8'),
     );
     // Click the first badge's X to remove paper 1
-    await user.click(badgeXButtons[0]);
+    const firstBadgeXBtn = badgeXButtons[0];
+    if (!firstBadgeXBtn) throw new Error('test fixture: badge X button not found');
+    await user.click(firstBadgeXBtn);
     expect(onChangeMulti).toHaveBeenCalledWith([2]);
   });
 });

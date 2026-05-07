@@ -440,7 +440,7 @@ export async function exportAnki(deckId: number): Promise<void> {
   const blob = await res.blob();
   const disposition = res.headers.get('Content-Disposition') || '';
   const match = disposition.match(/filename="?([^"]+)"?/);
-  const filename = match ? match[1] : `deck_${deckId}.apkg`;
+  const filename = (match && match[1]) ? match[1] : `deck_${deckId}.apkg`;
   triggerBlobDownload(blob, filename);
 }
 

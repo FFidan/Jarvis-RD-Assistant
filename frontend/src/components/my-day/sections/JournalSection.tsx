@@ -4,7 +4,7 @@ import { getJournalEntry, upsertJournalEntry } from '@/lib/api';
 import type { JournalPrompts } from '@/types';
 
 export function JournalSection() {
-  const today = new Date().toISOString().split('T')[0];
+  const today = new Date().toISOString().split('T')[0] ?? new Date().toISOString().slice(0, 10);
   const [prompts, setPrompts] = useState<JournalPrompts>({});
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
