@@ -11,7 +11,6 @@ Provides:
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
@@ -20,6 +19,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 import asyncpg
 import asyncpg_listen
+
+from jarvis_common.sse import sse_event, sse_keepalive
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +90,7 @@ PROCRASTINATE_STATUS_MAP: dict[str, str] = {
     "succeeded": "succeeded",
     "failed": "failed",
     "cancelled": "cancelled",
-    "aborting": "running",  # legacy, not used since procrastinate v3.0.0
+    "aborting": "cancelled",
     "aborted": "cancelled",
 }
 
@@ -415,11 +416,11 @@ async def stream_job_events(
 
         if elapsed > MAX_STREAM_SECONDS:
             logger.warning("SSE stream timeout for job %s after %.0fs", job_id, elapsed)
-            yield f"data: {json.dumps({'status': 'streaming_timeout'})}\n\n"
+            yield sse_event({"status": "streaming_timeout"})
             break
 
         if now - last_keepalive >= KEEPALIVE_INTERVAL:
-            yield ": keepalive\n\n"
+            yield sse_keepalive()
             last_keepalive = now
 
         procrastinate_raw = await get_procrastinate_job_for_jarvis_id(pool, job_id)
@@ -435,11 +436,7 @@ async def stream_job_events(
             )
             if procrastinate_key != last_procrastinate_key:
                 last_procrastinate_key = procrastinate_key
-                yield (
-                    "data: "
-                    + json.dumps(job_sse_payload(procrastinate_row, source="procrastinate"))
-                    + "\n\n"
-                )
+                yield sse_event(job_sse_payload(procrastinate_row, source="procrastinate"))
 
         # If no procrastinate row exists, the job is unknown — terminate.
         if procrastinate_row is None:
@@ -578,7 +575,10 @@ async def list_jobs(
                  WHEN 'aborted'    THEN 'cancelled'
                  ELSE 'running' END = $1)
           AND ($2::text IS NULL OR pj.task_name = $2)
-          AND ($3::text IS NULL OR pj.args->>'user_id' IS NULL OR pj.args->>'user_id' = $3)
+          AND (
+            ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
+            OR ($3::text IS NOT NULL AND pj.args->>'user_id' = $3)
+          )
         ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """
@@ -617,7 +617,10 @@ async def list_jobs(
                  WHEN 'aborted'    THEN 'cancelled'
                  ELSE 'running' END = $1)
           AND ($2::text IS NULL OR pj.task_name = $2)
-          AND ($3::text IS NULL OR pj.args->>'user_id' IS NULL OR pj.args->>'user_id' = $3)
+          AND (
+            ($3::text IS NULL AND pj.args->>'user_id' IS NULL)
+            OR ($3::text IS NOT NULL AND pj.args->>'user_id' = $3)
+          )
         ORDER BY (SELECT MIN(at) FROM procrastinate_events WHERE job_id = pj.id) DESC NULLS LAST
         LIMIT $4
     """

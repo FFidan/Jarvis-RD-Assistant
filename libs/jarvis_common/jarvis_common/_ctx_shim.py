@@ -103,6 +103,7 @@ class ProcrastinateJobContextShim:
         *,
         result: dict[str, Any] | None = None,
         error: dict[str, Any] | None = None,
+        is_error: bool = False,
     ) -> None:
         """UPSERT terminal result/error payloads into ``job_progress``.
 
@@ -111,12 +112,12 @@ class ProcrastinateJobContextShim:
         into a failed Procrastinate job.
 
         Progress semantics on terminal:
-        - **New row** (no prior ``update_progress`` call): seed ``progress=1.0``
-          since the job is finished and there is no in-flight value to keep.
-        - **Existing row**: preserve whatever progress was last reported via
-          ``COALESCE(job_progress.progress, 1.0)``. ``COALESCE`` coerces a
-          stored NULL to 1.0 — terminal-with-NULL-progress means 100% complete,
-          not "unknown progress forever".
+        - **Success** (``is_error=False``): write ``progress=1.0`` to signal
+          completion in the UI regardless of any prior in-flight value.
+        - **Error** (``is_error=True``): write ``progress=0.0`` to signal that
+          the job did not finish normally (e.g. cancelled or exception).
+        - The terminal call is authoritative over any prior ``update_progress``
+          value.
         """
         if self._pool is None or not self.job_id:
             logger.debug(
@@ -129,9 +130,9 @@ class ProcrastinateJobContextShim:
             await self._pool.execute(
                 """
                 INSERT INTO job_progress (jarvis_job_id, progress, result, error, updated_at)
-                VALUES ($1, 1.0, $2, $3, NOW())
+                VALUES ($1, CASE WHEN $4 THEN 0.0 ELSE 1.0 END, $2, $3, NOW())
                 ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET progress   = COALESCE(job_progress.progress, 1.0),
+                  SET progress   = CASE WHEN $4 THEN 0.0 ELSE 1.0 END,
                       result     = EXCLUDED.result,
                       error      = EXCLUDED.error,
                       updated_at = EXCLUDED.updated_at
@@ -139,6 +140,7 @@ class ProcrastinateJobContextShim:
                 self.job_id,
                 result,
                 error,
+                is_error,
             )
         except Exception:  # noqa: BLE001 — never let outcome reporting kill the job
             logger.debug(

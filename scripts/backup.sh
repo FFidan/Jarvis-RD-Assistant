@@ -17,7 +17,7 @@
 #   openssl enc -aes-256-cbc -pbkdf2 and saved as .sql.gz.enc instead of .sql.gz.
 #
 # Decryption recipe:
-#   openssl enc -aes-256-cbc -pbkdf2 -d -kfile "$BACKUP_ENCRYPT_KEYFILE" \
+#   openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -d -kfile "$BACKUP_ENCRYPT_KEYFILE" \
 #       -in jarvis_<timestamp>.sql.gz.enc | gunzip > backup.sql
 #
 # Docker Compose: run under --profile backup (service: postgres-backup).
@@ -47,7 +47,7 @@ if [ -n "$ENC_KEYFILE" ] && [ -s "$ENC_KEYFILE" ]; then
   pg_dump -h "${PGHOST:-postgres}" -U "${PGUSER:-jarvis}" -d "${PGDATABASE:-jarvis}" \
     --no-owner --no-acl \
     | gzip \
-    | openssl enc -aes-256-cbc -pbkdf2 -kfile "$ENC_KEYFILE" > "$BACKUP_FILE"
+    | openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -kfile "$ENC_KEYFILE" > "$BACKUP_FILE"
   echo "[$(date -Iseconds)] Encrypted backup saved to $BACKUP_FILE"
 else
   BACKUP_FILE="${BACKUP_DIR}/jarvis_${TIMESTAMP}.sql.gz"

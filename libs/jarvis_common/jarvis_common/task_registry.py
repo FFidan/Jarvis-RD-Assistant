@@ -1,11 +1,10 @@
 """Procrastinate task registry — all JARVIS job kinds.
 
-Step 2 of the B.4 cutover (spec: ``docs/specs/2026-05-03-b4-job-broker.md``).
-The procrastinate worker is not yet wired into any service lifespan and no
-enqueue path uses these tasks — they exist purely to register with
-procrastinate so they are discoverable by ``app.run_worker_async()`` once
-B.2 lands. Step 2 is **purely additive**: the legacy ``worker_loop`` and all
-existing ``@job_handler`` decorators are untouched.
+B.4 cutover is complete as of 2026-05-03 (see ``docs/plans/2026-05-03-marathon-status.md``
+for the cutover record). The Procrastinate worker is wired into both
+``paper_ingestion`` and ``learning_engine`` service lifespans via
+``app.run_worker_async()``. All enqueue paths use these tasks; the legacy
+``worker_loop`` has been removed.
 
 Each task body is a thin dispatcher that calls the existing legacy handler
 via ``ProcrastinateJobContextShim`` (see ``_ctx_shim.py``). The legacy
@@ -144,14 +143,19 @@ async def _run_legacy_handler(
     ],
 ) -> dict[str, Any]:
     """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
+    import asyncio  # noqa: PLC0415
+
     pool, http_client = _require_dependencies()
     ctx = make_ctx_shim(context, pool=pool)
     try:
         result = await handler(pool, http_client, payload, ctx)
-    except Exception as exc:
-        await ctx.record_terminal_outcome(error=_terminal_error_payload(exc))
+    except BaseException as exc:
+        if isinstance(exc, asyncio.CancelledError):
+            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
+        elif isinstance(exc, Exception):
+            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
         raise
-    await ctx.record_terminal_outcome(result=result)
+    await ctx.record_terminal_outcome(result=result, is_error=False)
     return result
 
 
@@ -333,6 +337,10 @@ async def card_generate_batch(context: procrastinate.JobContext, **payload: Any)
 @app.task(name="noop.test", queue="paper_ingestion", pass_context=True)
 async def noop_task(context: procrastinate.JobContext, **payload: Any) -> dict[str, Any]:
     """No-op smoke-test task. Gated on JARVIS_ENABLE_TEST_JOBS=1."""
+    from jarvis_common.settings import get_jobs_settings
+
+    if not get_jobs_settings().test_jobs_enabled:
+        raise RuntimeError("noop.test invoked but JARVIS_ENABLE_TEST_JOBS is unset")
     return {"ok": True, "echo": payload}
 
 

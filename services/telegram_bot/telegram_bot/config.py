@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass
 
 import asyncpg
-from jarvis_common import init_pg_connection
+from jarvis_common import build_database_url, init_pg_connection
 from jarvis_common.secrets import read_secret
 from pydantic import SecretStr
 
@@ -54,10 +54,11 @@ class BotConfig:
                 )
                 chat_id = None
 
-        database_url = os.environ.get("DATABASE_URL", "")
-        if not database_url:
-            logger.critical("DATABASE_URL is not set — Telegram bot cannot connect to database")
-            raise SystemExit(1)
+        try:
+            database_url = build_database_url()
+        except RuntimeError as exc:
+            logger.critical("Cannot build DATABASE_URL: %s", exc)
+            raise SystemExit(1) from exc
 
         _raw_api_key = read_secret("JARVIS_API_KEY")
         if not _raw_api_key:

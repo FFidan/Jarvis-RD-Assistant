@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
-PASSWORD=$(cat /run/secrets/postgres_password)
-export DATABASE_URL="postgresql://${POSTGRES_USER:-jarvis}:${PASSWORD}@postgres:5432/${POSTGRES_DB:-jarvis}"
+# Don't export DATABASE_URL with embedded password — passwords leak via /proc/<pid>/environ.
+# Service code reads /run/secrets/postgres_password lazily at pool construction.
+export POSTGRES_USER="${POSTGRES_USER:-jarvis}"
+export POSTGRES_DB="${POSTGRES_DB:-jarvis}"
 exec "$@"

@@ -53,6 +53,52 @@ from jarvis_common.secrets import read_secret
 
 logger = logging.getLogger(__name__)
 
+_POSTGRES_SECRET_PATH = "/run/secrets/postgres_password"
+
+
+def build_database_url() -> str:
+    """Construct the PostgreSQL DSN without embedding a password in any env var.
+
+    Resolution order:
+    1. ``/run/secrets/postgres_password`` (Docker Secret mount — preferred; avoids
+       leaking the password via ``/proc/<pid>/environ`` or ``docker inspect``).
+    2. ``DATABASE_URL`` environment variable (legacy / test fallback).
+
+    The DSN is built as ``postgresql://<user>:<pass>@postgres:5432/<db>``
+    using ``POSTGRES_USER`` and ``POSTGRES_DB`` env vars (both default to
+    ``jarvis`` matching ``docker-compose.yml``).
+
+    Raises
+    ------
+    RuntimeError
+        If neither the secret file nor ``DATABASE_URL`` can be read.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    secret_file = Path(_POSTGRES_SECRET_PATH)
+    if secret_file.is_file():
+        password = secret_file.read_text().strip()
+        if not password:
+            raise RuntimeError(
+                f"FATAL: {_POSTGRES_SECRET_PATH} exists but is empty — "
+                "cannot construct DATABASE_URL"
+            )
+        user = os.environ.get("POSTGRES_USER", "jarvis")
+        db = os.environ.get("POSTGRES_DB", "jarvis")
+        return f"postgresql://{user}:{password}@postgres:5432/{db}"
+
+    # Fallback: tests and local dev set DATABASE_URL directly.
+    url = os.environ.get("DATABASE_URL", "")
+    if url:
+        return url
+
+    raise RuntimeError(
+        f"Cannot build DATABASE_URL: {_POSTGRES_SECRET_PATH} is absent and "
+        "DATABASE_URL is not set. "
+        "In Docker, ensure the postgres_password secret is mounted. "
+        "In tests, set the DATABASE_URL env var."
+    )
+
 
 _HTTP_CLIENT_DEFAULTS: dict[str, Any] = {
     "timeout": httpx.Timeout(connect=10.0, read=120.0, write=30.0, pool=10.0),
@@ -171,7 +217,7 @@ def configure_lifespan(config: ServiceLifespanConfig) -> Callable[[FastAPI], Any
         db_pool = None
         http_client = None
         try:
-            database_url = os.environ["DATABASE_URL"]
+            database_url = build_database_url()
             pool_kwargs = _resolve_db_pool_kwargs(config.db_pool_settings)
             db_pool = await asyncpg.create_pool(database_url, **pool_kwargs)
             app.state.db_pool = db_pool

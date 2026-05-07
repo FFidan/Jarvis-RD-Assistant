@@ -77,8 +77,10 @@ services:
     environment:
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_PERSONALIZATION_ENABLED=false
-      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
-      - N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_JWT_SECRET}
+      # n8n 1.x natively supports _FILE convention for these two secrets —
+      # no entrypoint shim needed; the image reads the file itself.
+      - N8N_ENCRYPTION_KEY_FILE=/run/secrets/n8n_encryption_key
+      - N8N_USER_MANAGEMENT_JWT_SECRET_FILE=/run/secrets/n8n_jwt_secret
       - DB_TYPE=postgresdb
       - DB_POSTGRESDB_HOST=postgres
       - DB_POSTGRESDB_PORT=5432
@@ -87,6 +89,8 @@ services:
       - DB_POSTGRESDB_PASSWORD_FILE=/run/secrets/postgres_password
     secrets:
       - postgres_password
+      - n8n_encryption_key
+      - n8n_jwt_secret
     volumes:
       - n8n_data:/home/node/.n8n
       - ./shared/pdf_storage:/data/pdfs
@@ -206,9 +210,10 @@ services:
       - "127.0.0.1:4000:4000"
     volumes:
       - ./litellm/config.yaml:/app/config.yaml:ro
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    # OPENAI_API_KEY and ANTHROPIC_API_KEY are intentionally omitted here.
+    # Cloud-key injection happens via Fernet user_config + runtime POST /config/update.
+    # The startup env vars are dead and their presence would expose keys via
+    # ``docker inspect``.
     secrets:
       - litellm_master_key
     # litellm/config.yaml uses ``master_key: os.environ/LITELLM_MASTER_KEY`` and
@@ -253,6 +258,7 @@ services:
       args:
         INSTALL_OPTIONAL: ${INSTALL_OPTIONAL:-false}
     restart: unless-stopped
+    hostname: paper-ingestion-1
     ports:
       - "127.0.0.1:${PAPER_INGESTION_HOST_PORT:-8010}:8000"
     environment:
@@ -317,6 +323,7 @@ services:
       context: .
       dockerfile: services/learning_engine/Dockerfile
     restart: unless-stopped
+    hostname: learning-engine-1
     ports:
       - "127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}:8001"
     environment:
@@ -354,6 +361,7 @@ services:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
     restart: unless-stopped
+    hostname: telegram-bot-1
     profiles:
       - telegram
     environment:
@@ -433,8 +441,11 @@ services:
       PGDATABASE: ${POSTGRES_DB:-jarvis}
       BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
       BACKUP_S3_BUCKET: ${BACKUP_S3_BUCKET:-}
+      # Path to encryption key file (Docker Secret); backup.sh uses this to encrypt archives.
+      BACKUP_ENCRYPT_KEYFILE: /run/secrets/backup_encrypt_key
     secrets:
       - postgres_password
+      - backup_encrypt_key
     volumes:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
       - postgres_backups:/backups
@@ -457,10 +468,21 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: langfuse
-      # No ``:-default`` — compose fail-fasts when LANGFUSE_PG_PASSWORD is unset.
-      # ``scripts/init-secrets.sh`` provisions the value into .env on first run.
-      POSTGRES_PASSWORD: ${LANGFUSE_PG_PASSWORD:?LANGFUSE_PG_PASSWORD is required for the observability profile — run scripts/init-secrets.sh}
       POSTGRES_DB: langfuse
+      # Password is read from the Docker Secret at startup; no plaintext env var
+      # so ``docker inspect`` cannot leak it.
+      POSTGRES_PASSWORD_FILE: /run/secrets/langfuse_pg_password
+    secrets:
+      - langfuse_pg_password
+    # Entrypoint shim: fail-fast if secret file is empty, then hand off to the
+    # upstream postgres entrypoint which reads POSTGRES_PASSWORD_FILE natively.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ ! -s /run/secrets/langfuse_pg_password ]; then
+          echo 'FATAL: /run/secrets/langfuse_pg_password is empty or missing.' >&2; exit 1
+        fi
+        exec docker-entrypoint.sh postgres
     volumes:
       - langfuse_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -478,14 +500,27 @@ services:
     ports:
       - "${LANGFUSE_BIND_HOST:-127.0.0.1}:${LANGFUSE_HOST_PORT:-3002}:3000"
     environment:
-      # No ``:-default`` on the Langfuse secrets — compose fail-fasts when any
-      # of these are unset.  ``scripts/init-secrets.sh`` provisions all three
-      # into .env on first run.
-      DATABASE_URL: postgres://langfuse:${LANGFUSE_PG_PASSWORD:?LANGFUSE_PG_PASSWORD is required for the observability profile — run scripts/init-secrets.sh}@langfuse-postgres:5432/langfuse
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?LANGFUSE_NEXTAUTH_SECRET is required for the observability profile — run scripts/init-secrets.sh}
-      SALT: ${LANGFUSE_SALT:?LANGFUSE_SALT is required for the observability profile — run scripts/init-secrets.sh}
       TELEMETRY_ENABLED: "false"
+    secrets:
+      - langfuse_pg_password
+      - langfuse_nextauth_secret
+      - langfuse_salt
+    # Entrypoint shim: langfuse does not honour _FILE convention.
+    # Fail-fast if any secret file is empty, then reconstruct env vars from
+    # file contents before handing off to the upstream Node entrypoint.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for f in langfuse_pg_password langfuse_nextauth_secret langfuse_salt; do
+          if [ ! -s "/run/secrets/$$f" ]; then
+            echo "FATAL: /run/secrets/$$f is empty or missing." >&2; exit 1
+          fi
+        done
+        export DATABASE_URL="postgres://langfuse:$$(cat /run/secrets/langfuse_pg_password)@langfuse-postgres:5432/langfuse"
+        export NEXTAUTH_SECRET="$$(cat /run/secrets/langfuse_nextauth_secret)"
+        export SALT="$$(cat /run/secrets/langfuse_salt)"
+        exec node /app/packages/langfuse/server.js
     depends_on:
       langfuse-postgres:
         condition: service_healthy
@@ -495,9 +530,10 @@ services:
   cloudflared:
     image: ${CLOUDFLARED_IMAGE:-cloudflare/cloudflared:2025.1.0}
     container_name: jarvis-cloudflared
-    command: tunnel run
-    environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    # cloudflared natively supports --token-file; no entrypoint shim needed.
+    command: tunnel --token-file /run/secrets/cloudflare_tunnel_token run
+    secrets:
+      - cloudflare_tunnel_token
     profiles: [tunnel]
     networks: [jarvis]
     depends_on:
@@ -512,15 +548,18 @@ services:
         max-file: "3"
 
   caddy:
-    image: ${CADDY_IMAGE:-caddy:2.9-alpine}
+    image: ${CADDY_IMAGE:?CADDY_IMAGE is not set — source versions.env before running docker compose}
     profiles: [letsencrypt]
     restart: unless-stopped
     ports:
       - "${LETSENCRYPT_HTTP_PORT:-80}:80"
       - "${LETSENCRYPT_HTTPS_PORT:-443}:443"
     environment:
-      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:-}
-      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
+      # Fail-fast: compose errors immediately when either variable is unset or
+      # empty — prevents Caddy starting with no domain/email and silently
+      # failing ACME certificate acquisition.
+      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:?required for letsencrypt profile}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?required for letsencrypt profile}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -573,3 +612,17 @@ secrets:
     file: ./secrets/litellm_master_key.txt
   jarvis_config_key:
     file: ./secrets/jarvis_config_key.txt
+  langfuse_pg_password:
+    file: ./secrets/langfuse_pg_password.txt
+  langfuse_nextauth_secret:
+    file: ./secrets/langfuse_nextauth_secret.txt
+  langfuse_salt:
+    file: ./secrets/langfuse_salt.txt
+  n8n_encryption_key:
+    file: ./secrets/n8n_encryption_key.txt
+  n8n_jwt_secret:
+    file: ./secrets/n8n_jwt_secret.txt
+  cloudflare_tunnel_token:
+    file: ./secrets/cloudflare_tunnel_token.txt
+  backup_encrypt_key:
+    file: ./secrets/backup_encrypt_key.txt

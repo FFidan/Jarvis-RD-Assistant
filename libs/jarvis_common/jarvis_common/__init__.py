@@ -2,6 +2,7 @@
 
 from jarvis_common.app_factory import (
     ServiceLifespanConfig,
+    build_database_url,
     configure_lifespan,
     configure_middleware_and_errors,
 )
@@ -76,6 +77,7 @@ from jarvis_common.text_utils import author_matches, normalize_author_name
 __all__ = [
     # DRY-002: shared FastAPI app factory
     "ServiceLifespanConfig",
+    "build_database_url",
     "configure_lifespan",
     "configure_middleware_and_errors",
     "log_audit",

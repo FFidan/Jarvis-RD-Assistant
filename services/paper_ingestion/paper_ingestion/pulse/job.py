@@ -168,7 +168,7 @@ async def run_pulse(
             source_cache=source_cache,
             include_diagnostics=True,
         )
-        candidates, source_counts, source_diagnostics = discovery_result  # type: ignore[assignment]
+        candidates, source_counts, source_diagnostics = discovery_result
     except Exception as exc:  # broad: fan-out over heterogeneous source plugins; degrade to []
         stats["last_error"] = f"discover_candidates: {exc}"
         logger.exception("pulse.discover failed")
@@ -408,8 +408,10 @@ async def run_pulse(
 
     if ctx:
         try:
-            await pulse_train_classifier.defer_async(job_id=str(uuid.uuid4()), user_id=None)
+            classifier_job_id = str(uuid.uuid4())
+            await pulse_train_classifier.defer_async(job_id=classifier_job_id, user_id=None)
             stats["classifier_training_enqueued"] = True
+            stats["classifier_training_job_id"] = classifier_job_id
         except Exception:
             stats["classifier_training_enqueued"] = False
             logger.debug("pulse: classifier training enqueue skipped", exc_info=True)

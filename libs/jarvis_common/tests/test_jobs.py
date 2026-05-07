@@ -203,7 +203,7 @@ def test_procrastinate_status_to_jarvis_maps_all_known_statuses():
         "succeeded": "succeeded",
         "failed": "failed",
         "cancelled": "cancelled",
-        "aborting": "running",
+        "aborting": "cancelled",
         "aborted": "cancelled",
     }
     assert PROCRASTINATE_STATUS_MAP == expected

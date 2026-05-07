@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     HealthCheckResponse,
     ServiceLifespanConfig,
+    build_database_url,
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
@@ -117,9 +118,9 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
     )
     from procrastinate.contrib.aiopg import AiopgConnector  # noqa: PLC0415
 
-    # Bind the connector to the same DSN backing app.state.db_pool — the
-    # task_registry-time connector has no DSN.
-    procrastinate_app.connector = AiopgConnector(dsn=os.environ["DATABASE_URL"])
+    # Bind the connector to the same DSN the app_factory pool uses (reads from
+    # /run/secrets/postgres_password; falls back to DATABASE_URL in tests).
+    procrastinate_app.connector = AiopgConnector(dsn=build_database_url())
     procrastinate_app.job_manager.connector = procrastinate_app.connector
     await procrastinate_app.open_async()
 

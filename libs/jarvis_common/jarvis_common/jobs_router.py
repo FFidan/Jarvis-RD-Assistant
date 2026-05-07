@@ -81,9 +81,14 @@ def _owner_matches(row_user_id: Any, caller_user_id: int | None) -> bool:
     asyncpg may return ``user_id`` as ``str`` (UUID-shaped column) or ``int``
     (legacy schemas). Coercing both sides to ``str`` keeps the comparison
     correct in either case (LE-002 fix preserved).
+
+    Wave-3 multi-tenant: NULL-row jobs are now system-only. Public access
+    removed. Pre-Wave-4 callers (caller_user_id is None) match system rows.
     """
     if row_user_id is None:
-        return True  # no-ownership / single-tenant rows are public
+        # Wave-3 multi-tenant: NULL-row jobs are now system-only. Public access removed.
+        # Pre-Wave-4 callers (caller_user_id is None) match.
+        return caller_user_id is None
     return str(row_user_id) == str(caller_user_id)
 
 

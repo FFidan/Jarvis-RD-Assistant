@@ -57,7 +57,11 @@ async def test_get_pulse_cron_custom(scheduler_module):
 
 
 @pytest.mark.asyncio
-async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module, monkeypatch):
+async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module):
+    """When pulse.enabled is False, run_pulse_wrapper must not enqueue any job."""
+    import jarvis_common.task_registry as task_registry
+    from procrastinate import testing
+
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": False})
 
@@ -69,19 +73,11 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module, monkeypat
         )
     )
 
-    called = {"n": 0}
+    in_memory = testing.InMemoryConnector()
+    with task_registry.app.replace_connector(in_memory):
+        await scheduler_module.run_pulse_wrapper(app)
 
-    async def fake_run_pulse(**kwargs):
-        called["n"] += 1
-        return {}
-
-    # Ensure app.pulse.job exists and its run_pulse is the one we stub
-    import paper_ingestion.pulse.job as job_mod
-
-    monkeypatch.setattr(job_mod, "run_pulse", fake_run_pulse)
-
-    await scheduler_module.run_pulse_wrapper(app)
-    assert called["n"] == 0
+    assert len(in_memory.jobs) == 0
 
 
 @pytest.mark.asyncio

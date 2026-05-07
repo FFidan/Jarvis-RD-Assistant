@@ -92,12 +92,35 @@ sync_secret JARVIS_CONFIG_KEY  jarvis_config_key.txt  "openssl rand -base64 32 |
 # ---------------------------------------------------------------------------
 # Langfuse observability (--profile observability)
 # ---------------------------------------------------------------------------
-# Langfuse's image does not honour the _FILE convention, so we still write
-# these into .env (sync_secret does that on the first leg) and ALSO mirror
-# them to ./secrets/ for parity with the other secrets.
+# Langfuse's image does not honour the _FILE convention — secrets are now
+# injected via an entrypoint shim that reads them from /run/secrets/*.
+# We still write values into .env (sync_secret does that on the first leg)
+# and mirror copies into ./secrets/ so the Docker Secret bind-mount works.
 sync_secret LANGFUSE_NEXTAUTH_SECRET langfuse_nextauth_secret.txt "openssl rand -hex 32"
 sync_secret LANGFUSE_SALT            langfuse_salt.txt            "openssl rand -hex 16"
 sync_secret LANGFUSE_PG_PASSWORD     langfuse_pg_password.txt     "openssl rand -hex 24"
+
+# ---------------------------------------------------------------------------
+# n8n workflow automation (--profile n8n)
+# ---------------------------------------------------------------------------
+sync_secret N8N_ENCRYPTION_KEY n8n_encryption_key.txt "openssl rand -base64 32 | tr -d '\\n'"
+sync_secret N8N_JWT_SECRET     n8n_jwt_secret.txt     "openssl rand -hex 32"
+
+# ---------------------------------------------------------------------------
+# Cloudflare Tunnel (--profile tunnel)
+# ---------------------------------------------------------------------------
+# CLOUDFLARE_TUNNEL_TOKEN must be obtained from the Cloudflare Zero Trust
+# dashboard (Networks → Tunnels → Create tunnel → token).  It cannot be
+# auto-generated locally.
+sync_secret CLOUDFLARE_TUNNEL_TOKEN cloudflare_tunnel_token.txt
+
+# ---------------------------------------------------------------------------
+# Backup encryption (--profile backup)
+# ---------------------------------------------------------------------------
+# Passphrase file for AES-256-CBC backup encryption (PBKDF2, 600k iterations).
+# Auto-generated on first run; keep a copy offsite — losing this key means
+# losing access to all encrypted backup archives.
+sync_secret BACKUP_ENCRYPT_KEY backup_encrypt_key.txt "openssl rand -base64 32 | tr -d '\\n'"
 
 # ---------------------------------------------------------------------------
 # Manual secrets (cannot be auto-generated)
