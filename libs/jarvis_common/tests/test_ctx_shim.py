@@ -146,7 +146,12 @@ async def test_update_progress_coerces_int_progress_to_float() -> None:
 
 @pytest.mark.asyncio
 async def test_record_terminal_outcome_upserts_result_and_error() -> None:
-    """Terminal outcomes are persisted without clobbering progress state."""
+    """Terminal outcomes are persisted alongside a final progress=1.0 seed.
+
+    W3-DRY-11: the UPSERT now includes ``progress`` so that new rows (no prior
+    ``update_progress`` call) seed ``progress=1.0`` and existing rows preserve
+    their last reported in-flight value via ``COALESCE(...)``.
+    """
     from jarvis_common._ctx_shim import make_ctx_shim
 
     pool = AsyncMock()
@@ -164,8 +169,33 @@ async def test_record_terminal_outcome_upserts_result_and_error() -> None:
     assert "result" in sql
     assert "error" in sql
     inserted_columns = sql.split("(", maxsplit=1)[1].split(")", maxsplit=1)[0]
-    assert "progress" not in inserted_columns
+    # New row gets a final progress seed; existing rows keep their value via COALESCE.
+    assert "progress" in inserted_columns
+    assert "COALESCE(job_progress.progress, 1.0)" in sql
     assert args == ["uuid-1", {"cards_created": 2}, {"message": "ignored for success"}]
+
+
+@pytest.mark.asyncio
+async def test_record_terminal_outcome_preserves_in_flight_progress_via_coalesce() -> None:
+    """Existing rows keep their in-flight progress; UPSERT must not clobber it.
+
+    W3-DRY-11: when a job has reported progress=0.7 and then hits terminal,
+    the UPSERT preserves 0.7 via ``COALESCE(job_progress.progress, 1.0)``.
+    The DB enforces this — here we just assert the SQL shape that delivers it.
+    """
+    from jarvis_common._ctx_shim import make_ctx_shim
+
+    pool = AsyncMock()
+    pool.execute = AsyncMock(return_value=None)
+    shim = make_ctx_shim(None, job_id="uuid-1", pool=pool)
+
+    await shim.record_terminal_outcome(result={"ok": True}, error=None)
+
+    sql, *_ = pool.execute.await_args.args
+    # New-row branch: hard-coded 1.0 seed in the VALUES clause.
+    assert "VALUES ($1, 1.0, $2, $3, NOW())" in sql
+    # Conflict branch: COALESCE keeps existing progress, defaults to 1.0 only when NULL.
+    assert "progress   = COALESCE(job_progress.progress, 1.0)" in sql
 
 
 # ---------------------------------------------------------------------------

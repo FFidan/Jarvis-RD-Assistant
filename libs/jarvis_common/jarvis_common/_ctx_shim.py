@@ -109,6 +109,14 @@ class ProcrastinateJobContextShim:
         Outcome persistence is best-effort for the same reason progress is:
         losing the UI payload is bad, but it must not turn a completed handler
         into a failed Procrastinate job.
+
+        Progress semantics on terminal:
+        - **New row** (no prior ``update_progress`` call): seed ``progress=1.0``
+          since the job is finished and there is no in-flight value to keep.
+        - **Existing row**: preserve whatever progress was last reported via
+          ``COALESCE(job_progress.progress, 1.0)``. ``COALESCE`` coerces a
+          stored NULL to 1.0 — terminal-with-NULL-progress means 100% complete,
+          not "unknown progress forever".
         """
         if self._pool is None or not self.job_id:
             logger.debug(
@@ -120,10 +128,11 @@ class ProcrastinateJobContextShim:
         try:
             await self._pool.execute(
                 """
-                INSERT INTO job_progress (jarvis_job_id, result, error, updated_at)
-                VALUES ($1, $2, $3, NOW())
+                INSERT INTO job_progress (jarvis_job_id, progress, result, error, updated_at)
+                VALUES ($1, 1.0, $2, $3, NOW())
                 ON CONFLICT (jarvis_job_id) DO UPDATE
-                  SET result     = EXCLUDED.result,
+                  SET progress   = COALESCE(job_progress.progress, 1.0),
+                      result     = EXCLUDED.result,
                       error      = EXCLUDED.error,
                       updated_at = EXCLUDED.updated_at
                 """,

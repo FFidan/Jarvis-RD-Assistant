@@ -104,11 +104,19 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     )
 
 
-def test_false_applied_repair_does_not_probe_mutable_config_values() -> None:
-    """Migration repair probes must only use durable schema evidence."""
-    probe_versions = {version for version, _, _ in _MIGRATION_SCHEMA_PROBES}
+def test_schema_probes_cover_recent_migrations() -> None:
+    """Probes for the most recent schema/state-affecting migrations must exist.
 
-    assert 56 not in probe_versions
+    W3-DRY-12: migrations 56 (pulse.stage2_top_k canonicalised from 50→40) and
+    59 (daily_intent table; INTEGER user_id post-060) both have observable
+    effects, so the runner can detect false-applied markers and replay the
+    SQL when the schema/state does not match the recorded version. Migration
+    56's probe inspects user_config state — the historically-applied version
+    is the only false-applied case it has to detect, and the row's value is
+    the most direct evidence of whether the migration ran.
+    """
+    versions = {v for v, _, _ in _MIGRATION_SCHEMA_PROBES}
+    assert {56, 59} <= versions
 
 
 class _FakeConnection:
