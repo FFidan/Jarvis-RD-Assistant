@@ -258,7 +258,7 @@ echo -n '<new-value>' > secrets/jarvis_api_key
 docker compose up -d paper_ingestion learning_engine   # triggers re-read on next start
 ```
 
-> **Note:** `secrets/` is in `.gitignore`. Never commit secret files. Use `chmod 600 secrets/*` to restrict read access on multi-user hosts.
+> **Note:** `secrets/` is the canonical secret store — every secret used by the stack lives here as `secrets/<name>.txt` (mode 600, gitignored). `setup.sh` writes all core secrets on first run, including `secrets/litellm_master_key.txt`. Never commit secret files. Use `chmod 600 secrets/*` to restrict read access on multi-user hosts.
 
 ---
 

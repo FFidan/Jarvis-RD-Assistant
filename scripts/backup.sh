@@ -27,11 +27,13 @@
 
 set -euo pipefail
 
-# Read PGPASSWORD from Docker Secret (preferred) or fall back to env var.
-if [ -r /run/secrets/postgres_password ]; then
-  export PGPASSWORD
-  PGPASSWORD="$(cat /run/secrets/postgres_password)"
+# Read PGPASSWORD from Docker Secret — required; fail fast if missing.
+if [ ! -r /run/secrets/postgres_password ]; then
+    echo "FATAL: cannot read /run/secrets/postgres_password" >&2
+    exit 1
 fi
+PGPASSWORD="$(cat /run/secrets/postgres_password)"
+export PGPASSWORD
 
 # Configuration
 BACKUP_DIR="${BACKUP_DIR:-/backups}"

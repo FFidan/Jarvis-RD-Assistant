@@ -24,7 +24,7 @@ x-shared-env: &shared-env
   JARVIS_API_KEY_FILE: /run/secrets/jarvis_api_key
   DEV_MODE: ${DEV_MODE:-false}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
-  CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost:3001}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
   ENVIRONMENT: ${ENVIRONMENT:-development}
   DB_POOL_MIN: ${DB_POOL_MIN:-2}
   DB_POOL_MAX: ${DB_POOL_MAX:-10}
@@ -74,6 +74,9 @@ services:
     mem_limit: 2g
     ports:
       - "127.0.0.1:5678:5678"
+    # n8n binds 127.0.0.1 only; access is gated by loopback + the n8n compose profile.
+    # If a future operator routes n8n via Caddy or cloudflared, ALSO set N8N_BASIC_AUTH_ACTIVE=true
+    # and mount N8N_BASIC_AUTH_USER_FILE / N8N_BASIC_AUTH_PASSWORD_FILE secrets.
     environment:
       - N8N_DIAGNOSTICS_ENABLED=false
       - N8N_PERSONALIZATION_ENABLED=false
@@ -521,6 +524,11 @@ services:
         export NEXTAUTH_SECRET="$$(cat /run/secrets/langfuse_nextauth_secret)"
         export SALT="$$(cat /run/secrets/langfuse_salt)"
         exec node /app/packages/langfuse/server.js
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
     depends_on:
       langfuse-postgres:
         condition: service_healthy

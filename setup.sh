@@ -188,11 +188,14 @@ ok "Secrets generated."
 # These are gitignored (secrets/*.txt). setup.sh is idempotent — re-running
 # overwrites and re-chmodds all files.
 mkdir -p secrets
-printf '%s' "$POSTGRES_PASSWORD" > secrets/postgres_password.txt && chmod 600 secrets/postgres_password.txt
-printf '%s' "$JARVIS_API_KEY"    > secrets/jarvis_api_key.txt && chmod 600 secrets/jarvis_api_key.txt
+printf '%s' "$POSTGRES_PASSWORD"   > secrets/postgres_password.txt    && chmod 600 secrets/postgres_password.txt
+printf '%s' "$JARVIS_API_KEY"      > secrets/jarvis_api_key.txt        && chmod 600 secrets/jarvis_api_key.txt
+# LITELLM_MASTER_KEY: canonical store is secrets/litellm_master_key.txt;
+# secrets/*.txt is the single source of truth for all Docker Secrets at runtime.
+printf '%s' "$LITELLM_MASTER_KEY"  > secrets/litellm_master_key.txt    && chmod 600 secrets/litellm_master_key.txt
 # Generate and write Qdrant API key secret (used by both Qdrant service and app services via _FILE)
 QDRANT_API_KEY="$(openssl rand -hex 24)"
-printf '%s' "$QDRANT_API_KEY"   > secrets/qdrant_api_key.txt && chmod 600 secrets/qdrant_api_key.txt
+printf '%s' "$QDRANT_API_KEY"      > secrets/qdrant_api_key.txt        && chmod 600 secrets/qdrant_api_key.txt
 ok "Docker secret files written to secrets/ (mode 600)."
 
 # -----------------------------------------------------------------------------
