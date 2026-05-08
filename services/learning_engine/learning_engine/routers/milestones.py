@@ -26,15 +26,23 @@ async def list_milestones(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[MilestoneResponse]:
     """List milestones for a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
+        project = await conn.fetchval(
+            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
         rows = await conn.fetch(
-            "SELECT * FROM milestones WHERE project_id = $1"
-            " ORDER BY deadline ASC NULLS LAST, created_at",
+            """SELECT * FROM milestones
+               WHERE project_id = $1
+                 AND user_id IS NOT DISTINCT FROM $2
+               ORDER BY deadline ASC NULLS LAST, created_at""",
             project_id,
+            user_id,
         )
     return [MilestoneResponse(**dict(row)) for row in rows]
 
@@ -57,21 +65,27 @@ async def create_milestone(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> MilestoneResponse:
     """Create a milestone in a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
+        project = await conn.fetchval(
+            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
         row = await conn.fetchrow(
             """
-            INSERT INTO milestones (project_id, name, deadline, description)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO milestones (project_id, name, deadline, description, user_id)
+            VALUES ($1, $2, $3, $4, $5)
             RETURNING *
             """,
             project_id,
             body.name,
             body.deadline,
             body.description,
+            user_id,
         )
     return MilestoneResponse(**dict(row))
 
@@ -90,10 +104,15 @@ async def update_milestone(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> MilestoneResponse:
     """Update a milestone. Auto-sets completed_at when completed becomes True."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT * FROM milestones WHERE id = $1 FOR UPDATE", milestone_id
+                "SELECT * FROM milestones"
+                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                " FOR UPDATE",
+                milestone_id,
+                user_id,
             )
             if not existing:
                 raise HTTPException(status_code=404, detail="Milestone not found")
@@ -135,13 +154,14 @@ async def delete_milestone(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Delete a milestone."""
+    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM milestones WHERE id = $1",
+        "DELETE FROM milestones WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
         milestone_id,
+        user_id,
         detail="Milestone not found",
     )
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",

@@ -38,14 +38,24 @@ async def list_projects(
             status_code=400,
             detail=f"Invalid status '{status}'. Must be one of: {valid}",
         )
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if status:
             rows = await conn.fetch(
-                "SELECT * FROM projects WHERE status = $1 ORDER BY created_at DESC",
+                """SELECT * FROM projects
+                   WHERE status = $1
+                     AND user_id IS NOT DISTINCT FROM $2
+                   ORDER BY created_at DESC""",
                 status,
+                user_id,
             )
         else:
-            rows = await conn.fetch("SELECT * FROM projects ORDER BY created_at DESC")
+            rows = await conn.fetch(
+                """SELECT * FROM projects
+                   WHERE user_id IS NOT DISTINCT FROM $1
+                   ORDER BY created_at DESC""",
+                user_id,
+            )
     return [ProjectResponse(**dict(row)) for row in rows]
 
 
@@ -62,10 +72,11 @@ async def create_project(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ProjectResponse:
     """Create a new project."""
+    user_id = await current_user_id_or_none(request)
     row = await db_pool.fetchrow(
         """
-        INSERT INTO projects (name, description, status, deadline, color)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO projects (name, description, status, deadline, color, user_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
         """,
         body.name,
@@ -73,6 +84,7 @@ async def create_project(
         body.status,
         body.deadline,
         body.color,
+        user_id,
     )
     return ProjectResponse(**dict(row))
 
@@ -90,8 +102,13 @@ async def get_project(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ):
     """Get a project with task and milestone counts."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow("SELECT * FROM projects WHERE id = $1", project_id)
+        row = await conn.fetchrow(
+            "SELECT * FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not row:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -139,10 +156,15 @@ async def update_project(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ProjectResponse:
     """Update a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT * FROM projects WHERE id = $1 FOR UPDATE", project_id
+                "SELECT * FROM projects"
+                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                " FOR UPDATE",
+                project_id,
+                user_id,
             )
             if not existing:
                 raise HTTPException(status_code=404, detail="Project not found")
@@ -177,13 +199,14 @@ async def delete_project(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Delete a project (cascades to tasks and milestones)."""
+    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM projects WHERE id = $1",
+        "DELETE FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
         project_id,
+        user_id,
         detail="Project not found",
     )
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",

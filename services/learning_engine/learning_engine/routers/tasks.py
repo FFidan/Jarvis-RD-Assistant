@@ -49,9 +49,14 @@ async def list_tasks(
             status_code=400,
             detail=f"Invalid status: {status}. Valid values: {sorted(_VALID_TASK_STATUSES)}",
         )
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        # Verify project exists (same connection as data query to avoid TOCTOU)
-        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
+        # Verify project exists and belongs to the caller (same conn as data query — avoid TOCTOU)
+        project = await conn.fetchval(
+            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -59,16 +64,20 @@ async def list_tasks(
             rows = await conn.fetch(
                 """SELECT * FROM tasks
                    WHERE project_id = $1 AND status = $2
+                     AND user_id IS NOT DISTINCT FROM $3
                    ORDER BY sort_order, created_at""",
                 project_id,
                 status,
+                user_id,
             )
         else:
             rows = await conn.fetch(
                 """SELECT * FROM tasks
                    WHERE project_id = $1
+                     AND user_id IS NOT DISTINCT FROM $2
                    ORDER BY sort_order, created_at""",
                 project_id,
+                user_id,
             )
     return [TaskResponse(**dict(row)) for row in rows]
 
@@ -87,9 +96,14 @@ async def create_task(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TaskResponse:
     """Create a task in a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        # Verify project exists (same connection as insert to avoid TOCTOU)
-        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
+        # Verify project exists and belongs to the caller (same conn as insert — avoid TOCTOU)
+        project = await conn.fetchval(
+            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -98,9 +112,9 @@ async def create_task(
                 """
                 INSERT INTO tasks (
                     project_id, parent_task_id, title, description,
-                    status, priority, deadline, estimated_hours
+                    status, priority, deadline, estimated_hours, user_id
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 RETURNING *
                 """,
                 project_id,
@@ -111,6 +125,7 @@ async def create_task(
                 body.priority,
                 body.deadline,
                 body.estimated_hours,
+                user_id,
             )
         except asyncpg.ForeignKeyViolationError as exc:
             constraint = getattr(exc, "constraint_name", "") or ""
@@ -134,9 +149,14 @@ async def update_task(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TaskResponse:
     """Update a task. Auto-sets completed_at when status changes to done."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            existing = await conn.fetchrow("SELECT * FROM tasks WHERE id = $1 FOR UPDATE", task_id)
+            existing = await conn.fetchrow(
+                "SELECT * FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                task_id,
+                user_id,
+            )
             if not existing:
                 raise HTTPException(status_code=404, detail="Task not found")
 
@@ -177,13 +197,14 @@ async def delete_task(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Delete a task."""
+    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM tasks WHERE id = $1",
+        "DELETE FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
         task_id,
+        user_id,
         detail="Task not found",
     )
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",
@@ -206,9 +227,14 @@ async def link_paper_to_task(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Link a paper to a task."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            task = await conn.fetchval("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", task_id)
+            task = await conn.fetchval(
+                "SELECT id FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                task_id,
+                user_id,
+            )
             if not task:
                 raise HTTPException(status_code=404, detail="Task not found")
             try:
@@ -242,6 +268,16 @@ async def unlink_paper_from_task(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Remove a paper link from a task."""
+    user_id = await current_user_id_or_none(request)
+    # Verify task ownership before deleting the link
+    async with db_pool.acquire() as conn:
+        task = await conn.fetchval(
+            "SELECT id FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            task_id,
+            user_id,
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
     await delete_or_404(
         db_pool,
         "DELETE FROM task_paper_links WHERE task_id = $1 AND paper_id = $2",
@@ -249,7 +285,6 @@ async def unlink_paper_from_task(
         paper_id,
         detail="Link not found",
     )
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",
