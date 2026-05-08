@@ -26,15 +26,15 @@ async def list_recommendations(
     limit: int = Query(default=20, ge=1, le=200),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[RecommendationItem]:
-    user_id = await current_user_id_or_none(request)  # noqa: F841  # W1-5: prepares Wave 3
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT paper_id, score, modes, explanation, dismissed "
-            "FROM paper_recommendations WHERE dismissed = FALSE "
-            # TODO W1-5: AND user_id IS NOT DISTINCT FROM $2
-            # once Wave 3 migration 063 adds the column
+            "FROM paper_recommendations "
+            "WHERE dismissed = FALSE AND user_id IS NOT DISTINCT FROM $2 "
             "ORDER BY score DESC LIMIT $1",
             limit,
+            user_id,
         )
     return [RecommendationItem(**dict(r)) for r in rows]
 
@@ -53,13 +53,13 @@ async def dismiss_recommendation(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict[str, bool]:
-    user_id = await current_user_id_or_none(request)  # noqa: F841  # W1-5: prepares Wave 3
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         result = await conn.execute(
-            # TODO W1-5: AND user_id IS NOT DISTINCT FROM $2
-            # once Wave 3 migration 063 adds the column
-            "UPDATE paper_recommendations SET dismissed = TRUE WHERE paper_id = $1",
+            "UPDATE paper_recommendations SET dismissed = TRUE "
+            "WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
             paper_id,
+            user_id,
         )
     if result == "UPDATE 0":
         raise HTTPException(status_code=404, detail="Recommendation not found")

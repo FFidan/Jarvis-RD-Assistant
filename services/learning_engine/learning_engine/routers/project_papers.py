@@ -111,6 +111,7 @@ async def link_paper(
         try:
             await KIND_TO_TASK["zotero.push"].defer_async(
                 job_id=str(uuid.uuid4()),
+                # allow-user-id-none: single-tenant mode — no per-user auth context
                 user_id=None,
                 paper_id=paper_id,
             )

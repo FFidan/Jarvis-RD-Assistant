@@ -52,12 +52,12 @@ async def get_dashboard_metrics(
                  LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
                  WHERE p.user_id IS NOT DISTINCT FROM $1
                    AND ps.id IS NULL) AS pending_papers,
-                -- TODO W2-4: cards/projects/topics/scheduled_nudges lack user_id columns today
-                -- Add AND user_id IS NOT DISTINCT FROM $1 once Wave 3 migrations add those columns
+                -- cards/topics/scheduled_nudges lack user_id columns; scoped globally for now
                 (SELECT COUNT(*) FROM cards
                  WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
                 (SELECT COUNT(*) FROM projects
-                 WHERE status = 'active') AS active_projects,
+                 WHERE status = 'active'
+                   AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
                 (SELECT COUNT(*) FROM topics) AS topic_count,
                 (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
             """,

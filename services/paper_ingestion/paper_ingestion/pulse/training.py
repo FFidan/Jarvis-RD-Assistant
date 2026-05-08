@@ -2,12 +2,39 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
+import os
 import pickle
 from datetime import UTC, datetime
 from typing import Any
 
 from jarvis_common.jobs import JobContext
+
+_HMAC_DIGEST_LEN = 32  # SHA-256 digest length in bytes
+
+
+def _hmac_key() -> bytes:
+    """Return the HMAC signing key for model blobs (read at call time, not import time)."""
+    return os.environ.get("JARVIS_API_KEY", "jarvis-dev-unsafe-hmac-key").encode()
+
+
+def _sign_blob(blob: bytes) -> bytes:
+    """Prepend a 32-byte SHA-256 HMAC to *blob* so load can verify authenticity."""
+    mac = hmac.digest(_hmac_key(), blob, "sha256")
+    return mac + blob
+
+
+def _verify_and_unpickle(signed: bytes) -> Any:
+    """Verify the HMAC prefix and unpickle; raises ValueError on tamper or short blob."""
+    if len(signed) < _HMAC_DIGEST_LEN:
+        raise ValueError("model blob too short to contain HMAC signature")
+    mac, data = signed[:_HMAC_DIGEST_LEN], signed[_HMAC_DIGEST_LEN:]
+    expected = hmac.digest(_hmac_key(), data, "sha256")
+    if not hmac.compare_digest(mac, expected):
+        raise ValueError("model blob HMAC mismatch — tampered blob or key rotation required")
+    return pickle.loads(data)  # noqa: S301 — HMAC-verified blob
+
 
 logger = logging.getLogger(__name__)
 
@@ -129,12 +156,14 @@ async def train_classifier_model(
     else:
         metrics["auc"] = None
         metrics["auc_degradation_reason"] = "validation split lacks both classes"
-    blob = pickle.dumps(
-        {
-            "model": model,
-            "sklearn_version": sklearn.__version__,
-            "trained_at": datetime.now(UTC).isoformat(),
-        }
+    blob = _sign_blob(
+        pickle.dumps(
+            {
+                "model": model,
+                "sklearn_version": sklearn.__version__,
+                "trained_at": datetime.now(UTC).isoformat(),
+            }
+        )
     )
 
     async with db_pool.acquire() as conn:
@@ -188,7 +217,7 @@ async def load_active_classifier(
     if row is None:
         return None, {"available": False, "degradation_reason": "no active model"}
     try:
-        raw = pickle.loads(bytes(row["model_blob"]))
+        raw = _verify_and_unpickle(bytes(row["model_blob"]))
         # Support both legacy format (bare model) and new format (dict with metadata)
         if isinstance(raw, dict) and "model" in raw:
             import sklearn

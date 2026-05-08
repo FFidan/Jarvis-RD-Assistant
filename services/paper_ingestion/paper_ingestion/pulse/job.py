@@ -297,7 +297,7 @@ async def run_pulse(
             classifier_values, classifier_meta = await classifier_scores(
                 db_pool,
                 [sc.signals for sc in enriched],
-                user_id=None,
+                user_id=None,  # allow-user-id-none: pulse job — no user context at schedule time
             )
         else:
             classifier_values = [0.0 for _ in enriched]
@@ -410,7 +410,8 @@ async def run_pulse(
         try:
             classifier_job_id = str(uuid.uuid4())
             await KIND_TO_TASK["pulse.train_classifier"].defer_async(
-                job_id=classifier_job_id, user_id=None
+                job_id=classifier_job_id,
+                user_id=None,  # allow-user-id-none: pulse job — no user context at schedule time
             )
             stats["classifier_training_enqueued"] = True
             stats["classifier_training_job_id"] = classifier_job_id

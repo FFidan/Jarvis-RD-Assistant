@@ -101,6 +101,7 @@ async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
         await scheduler_module.run_pulse_wrapper(app)
 
     mock_pulse_defer.assert_awaited_once()
+    assert mock_pulse_defer.await_args is not None
     call_kwargs = mock_pulse_defer.await_args.kwargs
     assert call_kwargs["user_id"] is None
     assert isinstance(call_kwargs["job_id"], str)
@@ -168,6 +169,7 @@ async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(schedul
         await scheduler_module.run_pulse_classifier_training_wrapper(app)
 
     mock_train_defer.assert_awaited_once()
+    assert mock_train_defer.await_args is not None
     call_kwargs = mock_train_defer.await_args.kwargs
     assert call_kwargs["user_id"] is None
     assert isinstance(call_kwargs["job_id"], str)
@@ -195,6 +197,7 @@ async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module
         await scheduler_module.run_weekly_digest_wrapper(app)
 
     mock_digest_defer.assert_awaited_once()
+    assert mock_digest_defer.await_args is not None
     call_kwargs = mock_digest_defer.await_args.kwargs
     assert call_kwargs["days"] == 7
     # Critical SSE-bridge contract: JARVIS UUID must travel as args.job_id.

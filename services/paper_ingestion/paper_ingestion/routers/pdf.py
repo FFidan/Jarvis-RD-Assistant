@@ -435,7 +435,9 @@ async def batch_process_papers(
     if queued_ids:
         job_id = str(uuid.uuid4())
         await KIND_TO_TASK["papers.batch_process"].defer_async(
-            job_id=job_id, user_id=None, paper_ids=queued_ids
+            job_id=job_id,
+            user_id=None,
+            paper_ids=queued_ids,  # allow-user-id-none: batch reembed job
         )
 
     return {

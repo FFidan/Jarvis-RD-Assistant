@@ -127,7 +127,8 @@ async def run_zotero_sync_wrapper(app: Any) -> None:
 
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(
-            job_id=jarvis_job_id, user_id=None
+            job_id=jarvis_job_id,
+            user_id=None,  # allow-user-id-none: system-wide cron
         )
         logger.info(
             "zotero: deferred zotero.sync_from_zotero job %s via procrastinate",
@@ -149,7 +150,9 @@ async def run_pulse_wrapper(app: Any) -> None:
         from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=None)
+        await KIND_TO_TASK["pulse.generate"].defer_async(
+            job_id=jarvis_job_id, user_id=None
+        )  # allow-user-id-none: system-wide cron
         logger.info(
             "pulse: deferred pulse.generate job %s via procrastinate",
             jarvis_job_id,
@@ -170,7 +173,9 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
         from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
         jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["pulse.train_classifier"].defer_async(job_id=jarvis_job_id, user_id=None)
+        await KIND_TO_TASK["pulse.train_classifier"].defer_async(
+            job_id=jarvis_job_id, user_id=None
+        )  # allow-user-id-none: system-wide cron
         logger.info(
             "pulse: deferred pulse.train_classifier job %s via procrastinate",
             jarvis_job_id,

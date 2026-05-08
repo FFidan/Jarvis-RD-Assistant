@@ -52,7 +52,9 @@ async def batch_fetch_citations(
     paper_ingestion worker loop (``citations_jobs.py``).
     """
     jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["citations.batch_fetch"].defer_async(job_id=jarvis_job_id, user_id=None)
+    await KIND_TO_TASK["citations.batch_fetch"].defer_async(
+        job_id=jarvis_job_id, user_id=None
+    )  # allow-user-id-none: discovery job — batched across all papers
     return BatchCitationFetchResponse(queued=1, message=f"Job {jarvis_job_id} queued")
 
 

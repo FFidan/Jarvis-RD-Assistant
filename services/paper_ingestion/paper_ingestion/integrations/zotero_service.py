@@ -480,6 +480,7 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
+                                # allow-user-id-none: discovery job — batched across all users
                                 user_id=None,
                                 paper_id=row["id"],
                             )
@@ -549,7 +550,7 @@ async def poll_zotero_library(
                     )
             await KIND_TO_TASK["paper.analyze"].defer_async(
                 job_id=str(uuid.uuid4()),
-                user_id=None,
+                user_id=None,  # allow-user-id-none: discovery job — batched across all users
                 paper_id=paper_id,
             )
             enqueued_count += 1
