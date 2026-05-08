@@ -30,39 +30,34 @@ class FakeRecord(dict):
         return super().keys()
 
 
-def _make_paper_record(
-    paper_id: int = 1,
-    source_type: str = "arxiv",
-    summary_brief: str | None = "Brief summary",
-    tldr: str | None = None,
-    confidence: str | None = "HIGH",
-    user_status: str | None = "new",
-    rating: int | None = None,
-) -> FakeRecord:
+def _make_paper_record(**overrides: object) -> FakeRecord:
     """Return a dict mimicking an asyncpg Record for a joined feed row."""
-    return FakeRecord(
-        id=paper_id,
-        external_id=f"arxiv:{paper_id}",
-        source_type=source_type,
-        title=f"Paper {paper_id}",
-        authors=["Author A"],
-        abstract="Abstract text",
-        published_date=None,
-        url=f"https://arxiv.org/abs/{paper_id}",
-        pdf_url=None,
-        pdf_local_path=None,
-        pdf_downloaded=False,
-        citation_count=0,
-        metadata={},
-        discovered_at=_NOW,
-        created_at=_NOW,
-        priority_score=None,
-        summary_brief=summary_brief,
-        tldr=tldr,
-        confidence=confidence,
-        user_status=user_status,
-        rating=rating,
-    )
+    paper_id = overrides.pop("paper_id", 1)
+    row: dict[str, object] = {
+        "id": paper_id,
+        "external_id": f"arxiv:{paper_id}",
+        "source_type": "arxiv",
+        "title": f"Paper {paper_id}",
+        "authors": ["Author A"],
+        "abstract": "Abstract text",
+        "published_date": None,
+        "url": f"https://arxiv.org/abs/{paper_id}",
+        "pdf_url": None,
+        "pdf_local_path": None,
+        "pdf_downloaded": False,
+        "citation_count": 0,
+        "metadata": {},
+        "discovered_at": _NOW,
+        "created_at": _NOW,
+        "priority_score": None,
+        "summary_brief": "Brief summary",
+        "tldr": None,
+        "confidence": "HIGH",
+        "user_status": "new",
+        "rating": None,
+    }
+    row.update(overrides)
+    return FakeRecord(row)
 
 
 def _make_detail_paper_record(paper_id: int = 1) -> FakeRecord:

@@ -225,7 +225,7 @@ def build_feed_queries(
 async def fetch_feed_rows(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     query_parts: FeedQueryParts,
-):
+) -> list[asyncpg.Record]:
     """Fetch feed rows, retrying without TLDR if the column is absent."""
     try:
         return await conn.fetch(query_parts.data_query, *query_parts.params)

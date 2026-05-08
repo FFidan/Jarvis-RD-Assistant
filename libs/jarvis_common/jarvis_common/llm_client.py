@@ -4,8 +4,9 @@ import functools
 import logging
 import os
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
 import httpx
 from pydantic import BaseModel
@@ -20,8 +21,15 @@ except ImportError:
         # langfuse 3.x / 4.x — observe re-exported at the package root.
         from langfuse import observe  # type: ignore[no-redef]
     except ImportError:
+        _ObservedFn = TypeVar("_ObservedFn", bound=Callable[..., Any])
 
-        def observe(*args, **kwargs):  # type: ignore[misc]
+        @overload
+        def observe(fn: _ObservedFn, /) -> _ObservedFn: ...
+
+        @overload
+        def observe(*args: Any, **kwargs: Any) -> Callable[[_ObservedFn], _ObservedFn]: ...
+
+        def observe(*args: Any, **kwargs: Any) -> Any:
             """No-op fallback when langfuse is not installed.
 
             Uses ``functools.wraps`` so callers (and tests) can still rely on
@@ -29,22 +37,23 @@ except ImportError:
             trace-boundary functions per docs/contracts/04-observability.md.
             """
 
-            def decorator(fn):  # type: ignore[misc]
+            def decorator(fn: _ObservedFn) -> _ObservedFn:
                 @functools.wraps(fn)
-                async def _async_wrapper(*a, **kw):
+                async def _async_wrapper(*a: Any, **kw: Any) -> Any:
                     return await fn(*a, **kw)
 
                 @functools.wraps(fn)
-                def _sync_wrapper(*a, **kw):
+                def _sync_wrapper(*a: Any, **kw: Any) -> Any:
                     return fn(*a, **kw)
 
                 import asyncio  # noqa: PLC0415
 
-                return _async_wrapper if asyncio.iscoroutinefunction(fn) else _sync_wrapper
+                wrapper = _async_wrapper if asyncio.iscoroutinefunction(fn) else _sync_wrapper
+                return cast(_ObservedFn, wrapper)
 
             # Support both @observe and @observe(...) call styles.
             if args and callable(args[0]) and not kwargs:
-                return decorator(args[0])
+                return decorator(cast(_ObservedFn, args[0]))
             return decorator
 
 

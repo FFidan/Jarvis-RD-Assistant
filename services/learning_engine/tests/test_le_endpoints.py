@@ -65,44 +65,43 @@ def _now():
     return datetime.now(UTC)
 
 
-def _make_deck_row(
-    id=1, name="Test Deck", description=None, topic_id=None, card_count=0, due_count=0
-):
-    return FakeRecord(
-        id=id,
-        name=name,
-        description=description,
-        topic_id=topic_id,
-        card_count=card_count,
-        due_count=due_count,
-        created_at=_now(),
-    )
+def _make_deck_row(**overrides):
+    values = {
+        "id": 1,
+        "name": "Test Deck",
+        "description": None,
+        "topic_id": None,
+        "card_count": 0,
+        "due_count": 0,
+    }
+    values.update(overrides)
+    values["created_at"] = _now()
+    return FakeRecord(**values)
 
 
-def _make_card_row(
-    id=1,
-    deck_id=1,
-    paper_id=None,
-    card_type="concept",
-    front="Q?",
-    back="A.",
-    evidence=None,
-    fsrs_state=None,
-    due_at=None,
-):
-    return FakeRecord(
-        id=id,
-        deck_id=deck_id,
-        paper_id=paper_id,
-        card_type=card_type,
-        front=front,
-        back=back,
-        evidence=evidence or {},
-        fsrs_state=fsrs_state or {},
-        due_at=due_at or _now(),
-        created_at=_now(),
-        updated_at=_now(),
+def _make_card_row(**overrides):
+    values = {
+        "id": 1,
+        "deck_id": 1,
+        "paper_id": None,
+        "card_type": "concept",
+        "front": "Q?",
+        "back": "A.",
+        "evidence": None,
+        "fsrs_state": None,
+        "due_at": None,
+    }
+    values.update(overrides)
+    values.update(
+        {
+            "evidence": values["evidence"] or {},
+            "fsrs_state": values["fsrs_state"] or {},
+            "due_at": values["due_at"] or _now(),
+            "created_at": _now(),
+            "updated_at": _now(),
+        }
     )
+    return FakeRecord(**values)
 
 
 # ---------------------------------------------------------------------------

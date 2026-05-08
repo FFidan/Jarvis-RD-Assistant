@@ -462,26 +462,14 @@ async def load_last_nonempty_deck(
     db_pool: Any,
     user_id: int | None,
     max_age_days: int = 7,
-) -> Any:
-    """Return the most recent non-empty deck within ``max_age_days`` for this user, or None.
+) -> "PulseDeckResponse | None":
+    """Return the most recent non-empty deck within ``max_age_days`` for this user.
 
-    Parameters
-    ----------
-    db_pool:
-        asyncpg connection pool.
-    user_id:
-        Caller's user ID (None for anonymous / single-tenant mode).
-    max_age_days:
-        How many calendar days back to search (inclusive of today, default 7).
-
-    Returns
-    -------
-    asyncpg.Record | None
-        A raw DB row with columns ``id, deck_date, card_count, generated_at,
-        stats, degraded_reason``, or ``None`` if no qualifying deck exists.
+    Loads full deck + cards (mirroring ``load_today``) so the fallback response
+    actually contains content for the frontend to render.
     """
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
+        deck_row = await conn.fetchrow(
             """
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
@@ -494,4 +482,38 @@ async def load_last_nonempty_deck(
             user_id,
             max_age_days,
         )
-    return row
+        if deck_row is None:
+            return None
+
+        card_rows = await conn.fetch(
+            """
+            SELECT
+                pc.id,
+                pc.deck_id,
+                pc.paper_id,
+                p.title   AS paper_title,
+                p.authors AS paper_authors,
+                p.url     AS paper_url,
+                pc.rank,
+                pc.score,
+                pc.llm_relevance,
+                pc.llm_novelty,
+                pc.reasoning,
+                pc.signals,
+                pc.reasoning_verified,
+                pc.reasoning_confidence,
+                pus.state AS user_state
+            FROM pulse_cards pc
+            JOIN papers p ON p.id = pc.paper_id
+            LEFT JOIN paper_user_state pus
+                   ON pus.paper_id = p.id
+                  AND pus.user_id IS NOT DISTINCT FROM $2
+            WHERE pc.deck_id = $1
+              AND COALESCE(pus.state, 'inbox') != 'trash'
+            ORDER BY pc.rank ASC
+            """,
+            deck_row["id"],
+            user_id,
+        )
+
+    return _build_deck_response(deck_row, card_rows)

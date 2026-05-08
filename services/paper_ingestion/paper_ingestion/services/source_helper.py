@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request
 from pydantic import ValidationError
 
 from paper_ingestion.models import PaperSourceConfig, SourceType
+from paper_ingestion.sources.base import PaperSource
 from paper_ingestion.sources.registry import get_source_class
 
 _SOURCE_BOOTSTRAP_EXCEPTIONS = (TypeError, ValueError, ValidationError)
@@ -16,7 +17,7 @@ async def get_source_for_type(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
     request: "Request | None" = None,
-):
+) -> PaperSource:
     """Return a PaperSource for the given type.
 
     C-8: Returns the pre-initialized singleton from paper_ingestion.state.sources when

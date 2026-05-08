@@ -1,5 +1,7 @@
 """Tasks CRUD router with paper-link management."""
 
+from typing import Any
+
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
@@ -225,7 +227,7 @@ async def link_paper_to_task(
     task_id: int,
     body: TaskPaperLinkCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-) -> dict:
+) -> dict[str, Any]:
     """Link a paper to a task."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from jarvis_common import validated_model
@@ -253,13 +253,13 @@ class CardGenerator:
         self,
         title: str,
         authors: list[str],
-        chunks: list[dict],
+        chunks: list[dict[str, Any]],
         openai_client: openai.AsyncOpenAI,
         paper_id: int | None = None,
         abstract: str | None = None,
         max_cards: int = 5,
         model: str = "smart",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Generate and verify flashcards from paper chunks.
 
         The ``@observe()`` decorator marks this as a Langfuse trace boundary.

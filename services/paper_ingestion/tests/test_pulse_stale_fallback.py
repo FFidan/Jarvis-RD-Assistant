@@ -55,20 +55,9 @@ def _make_deck(card_count: int = 2, deck_date: date = TODAY) -> PulseDeckRespons
     )
 
 
-def _make_fallback_row(deck_date: date = YESTERDAY, card_count: int = 3) -> FakeRecord:
-    """Build a FakeRecord mimicking a pulse_decks DB row."""
-    return FakeRecord(
-        {
-            "id": 99,
-            "deck_date": deck_date,
-            "card_count": card_count,
-            "generated_at": datetime(
-                deck_date.year, deck_date.month, deck_date.day, 4, 0, tzinfo=UTC
-            ),
-            "stats": {"candidate_count": 30},
-            "degraded_reason": None,
-        }
-    )
+def _make_fallback_row(deck_date: date = YESTERDAY, card_count: int = 3) -> PulseDeckResponse:
+    """Build a fallback PulseDeckResponse (load_last_nonempty_deck returns a full deck)."""
+    return _make_deck(card_count=card_count, deck_date=deck_date)
 
 
 def _make_health_rows() -> list[FakeRecord]:

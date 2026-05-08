@@ -27,22 +27,6 @@ def _make_paper(idx: int = 0) -> PaperCreate:
     )
 
 
-def _make_scored(
-    paper: PaperCreate,
-    signals: dict,
-    llm_relevance: int | None = None,
-    llm_novelty: int | None = None,
-) -> ScoredCandidate:
-    return ScoredCandidate(
-        paper=paper,
-        signals=signals,
-        llm_relevance=llm_relevance,
-        llm_novelty=llm_novelty,
-        reasoning=None,
-        final_score=None,
-    )
-
-
 _WEIGHTS = {
     "embedding": 0.2,
     "topic": 0.2,
@@ -71,7 +55,14 @@ async def test_stage3_final_score_arithmetic():
     }
     expected = 0.8 * 0.2 + 0.6 * 0.2 + 0.7 * 0.3 + 0.5 * 0.1 + 1.0 * 0.15 + 0.9 * 0.05
     paper = _make_paper(0)
-    sc = _make_scored(paper, signals)
+    sc = ScoredCandidate(
+        paper=paper,
+        signals=signals,
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=None,
+    )
 
     result = await stage3_combine([sc], _WEIGHTS)
 
@@ -87,7 +78,14 @@ async def test_stage3_missing_signal_treated_as_zero():
     weights = {"embedding": 0.5, "topic": 0.5, "llm_relevance": 0.3}
     # Expected: 1.0*0.5 + 1.0*0.5 + 0.0*0.3 = 1.0
     paper = _make_paper(0)
-    sc = _make_scored(paper, signals)
+    sc = ScoredCandidate(
+        paper=paper,
+        signals=signals,
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=None,
+    )
 
     result = await stage3_combine([sc], weights)
 
@@ -100,7 +98,17 @@ async def test_stage3_sort_order_descending():
     papers = [_make_paper(i) for i in range(4)]
     # Assign different embedding scores
     scores = [0.1, 0.9, 0.5, 0.3]
-    candidates = [_make_scored(p, {"embedding": s}) for p, s in zip(papers, scores)]
+    candidates = [
+        ScoredCandidate(
+            paper=p,
+            signals={"embedding": s},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        )
+        for p, s in zip(papers, scores)
+    ]
     weights = {"embedding": 1.0}
 
     result = await stage3_combine(candidates, weights)
@@ -120,7 +128,14 @@ async def test_stage3_empty_input_returns_empty():
 async def test_stage3_all_zero_signals():
     """All-zero signals produce 0.0 final_score."""
     paper = _make_paper(0)
-    sc = _make_scored(paper, {"embedding": 0.0, "topic": 0.0, "recency": 0.0})
+    sc = ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.0, "topic": 0.0, "recency": 0.0},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=None,
+    )
     result = await stage3_combine([sc], _WEIGHTS)
     assert result[0].final_score == 0.0
 
@@ -129,7 +144,14 @@ async def test_stage3_all_zero_signals():
 async def test_stage3_weight_not_in_signals():
     """Weight keys not in signals dict are treated as signal=0."""
     paper = _make_paper(0)
-    sc = _make_scored(paper, {"embedding": 0.5})
+    sc = ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.5},
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=None,
+    )
     weights = {"embedding": 0.5, "topic": 0.5}  # topic missing from signals
     result = await stage3_combine([sc], weights)
     # 0.5 * 0.5 + 0.0 * 0.5 = 0.25
@@ -153,7 +175,14 @@ async def test_stage3_classifier_and_citation_signals_use_weighted_sum():
         "citation_count": 0.3,
     }
     expected = 0.2 * 0.1 + 0.9 * 0.4 + 0.5 * 0.2 + 1.0 * 0.3
-    sc = _make_scored(paper, signals)
+    sc = ScoredCandidate(
+        paper=paper,
+        signals=signals,
+        llm_relevance=None,
+        llm_novelty=None,
+        reasoning=None,
+        final_score=None,
+    )
 
     result = await stage3_combine([sc], weights)
 
@@ -165,7 +194,14 @@ async def test_stage3_classifier_and_citation_signals_use_weighted_sum():
 async def test_stage3_preserves_all_candidate_data():
     """stage3_combine preserves paper, llm_relevance, llm_novelty, reasoning."""
     paper = _make_paper(0)
-    sc = _make_scored(paper, {"embedding": 0.8}, llm_relevance=8, llm_novelty=6)
+    sc = ScoredCandidate(
+        paper=paper,
+        signals={"embedding": 0.8},
+        llm_relevance=8,
+        llm_novelty=6,
+        reasoning=None,
+        final_score=None,
+    )
     sc = ScoredCandidate(
         paper=paper,
         signals={"embedding": 0.8},
@@ -188,7 +224,17 @@ async def test_stage3_preserves_all_candidate_data():
 async def test_stage3_multiple_candidates_all_get_scores():
     """All candidates have final_score set after stage3."""
     papers = [_make_paper(i) for i in range(5)]
-    candidates = [_make_scored(p, {"embedding": 0.5 + i * 0.1}) for i, p in enumerate(papers)]
+    candidates = [
+        ScoredCandidate(
+            paper=p,
+            signals={"embedding": 0.5 + i * 0.1},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        )
+        for i, p in enumerate(papers)
+    ]
 
     result = await stage3_combine(candidates, _WEIGHTS)
 
@@ -200,7 +246,17 @@ async def test_stage3_multiple_candidates_all_get_scores():
 async def test_stage3_empty_weights_gives_zero():
     """Empty weights dict gives 0.0 for all candidates."""
     papers = [_make_paper(i) for i in range(3)]
-    candidates = [_make_scored(p, {"embedding": 0.9}) for p in papers]
+    candidates = [
+        ScoredCandidate(
+            paper=p,
+            signals={"embedding": 0.9},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        )
+        for p in papers
+    ]
 
     result = await stage3_combine(candidates, {})
 
@@ -226,9 +282,30 @@ async def test_negative_final_score_sorts_below_zero():
     # Use a weight of 1.0 for a single signal so final_score == signal value.
     weights = {"embedding": 1.0}
     candidates = [
-        _make_scored(papers[0], {"embedding": -0.5}),  # negative
-        _make_scored(papers[1], {"embedding": 0.0}),  # genuine zero
-        _make_scored(papers[2], {"embedding": 0.3}),  # positive
+        ScoredCandidate(
+            paper=papers[0],
+            signals={"embedding": -0.5},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        ),  # negative
+        ScoredCandidate(
+            paper=papers[1],
+            signals={"embedding": 0.0},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        ),  # genuine zero
+        ScoredCandidate(
+            paper=papers[2],
+            signals={"embedding": 0.3},
+            llm_relevance=None,
+            llm_novelty=None,
+            reasoning=None,
+            final_score=None,
+        ),  # positive
     ]
 
     result = await stage3_combine(candidates, weights)

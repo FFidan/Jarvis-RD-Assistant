@@ -7,7 +7,7 @@ import logging
 from dataclasses import asdict, dataclass
 from datetime import date
 from importlib import resources
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +40,7 @@ class ModelCatalogEntry:
     max_num_ctx: int | None = None
     supports_thinking: bool = False
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 

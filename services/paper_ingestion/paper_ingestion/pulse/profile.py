@@ -50,6 +50,10 @@ class UserProfile(BaseModel):
     negative_authors: list[str] = Field(default_factory=list)
     negative_centroid: list[float] | None = None
     dampened_topics: set[int] = Field(default_factory=set)
+    # Pulse reliability — discovery lookback window (days), clamped 1-90
+    lookback_days: int = Field(default=7, ge=1, le=90)
+    # Startup grace before first outbound HTTP burst (seconds)
+    startup_grace_seconds: float = Field(default=0.0, ge=0.0, le=300.0)
 
 
 async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = None) -> UserProfile:
@@ -169,7 +173,8 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             """
             SELECT key, value FROM user_config
             WHERE key IN (
-                'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda'
+                'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda',
+                'pulse.lookback_days', 'pulse.startup_grace_seconds'
             )
             """
         )
@@ -191,6 +196,13 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         raw_l2 = cfg.get("pulse.l2_lambda")
         l2_lambda: float = float(raw_l2) if raw_l2 is not None else 0.5
         weights["l2_lambda"] = l2_lambda
+
+        raw_lookback = cfg.get("pulse.lookback_days")
+        lookback_days: int = max(1, min(90, int(raw_lookback))) if raw_lookback is not None else 7
+        raw_grace = cfg.get("pulse.startup_grace_seconds")
+        startup_grace_seconds: float = (
+            max(0.0, min(300.0, float(raw_grace))) if raw_grace is not None else 0.0
+        )
 
         # 5. Recent positive ratings (recommendation_feedback, 90-day window).
         # GROUP BY + MAX(created_at) gives "N most recent distinct papers";
@@ -374,4 +386,6 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         negative_authors=negative_authors,
         negative_centroid=negative_centroid,
         dampened_topics=dampened_set,
+        lookback_days=lookback_days,
+        startup_grace_seconds=startup_grace_seconds,
     )

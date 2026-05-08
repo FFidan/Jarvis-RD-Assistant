@@ -11,7 +11,7 @@ import logging
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, Protocol, TypedDict
 
 import asyncpg
 import httpx
@@ -28,6 +28,17 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore[type-arg]
+
+
+class ProcessPdfResult(TypedDict):
+    paper_id: int
+    chunk_count: int
+    status: Literal["already_processed", "processed"]
+
+
+class ProcessPdfProgressContext(Protocol):
+    async def update_progress(self, progress: float, message: str | None = None) -> None: ...
+
 
 _EMBEDDING_ERROR_SECRET_RE = re.compile(
     r"(Bearer\s+)[A-Za-z0-9._~+/=-]+|"
@@ -127,8 +138,8 @@ async def run_process_pdf(
     pdf_processor: PDFProcessor,
     embedder: Embedder,
     force: bool = False,
-    ctx: object | None = None,
-) -> dict:
+    ctx: ProcessPdfProgressContext | None = None,
+) -> ProcessPdfResult:
     """Core PDF processing logic: idempotency check, embed, store.
 
     Splits work into three phases so the advisory lock is never held during
@@ -154,7 +165,7 @@ async def run_process_pdf(
 
     async def _maybe_progress(p: float, msg: str) -> None:
         if ctx is not None:
-            await ctx.update_progress(p, msg)  # type: ignore[attr-defined]
+            await ctx.update_progress(p, msg)
 
     # --- Phase 1: idempotency check + DB cleanup under advisory lock ---
     # Qdrant delete intentionally moved outside the lock (see below) to avoid

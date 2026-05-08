@@ -78,36 +78,40 @@ def _make_project_row(id=1, name="TestProject", status="active"):
     )
 
 
-def _make_task_row(id=1, project_id=1, title="Do stuff", status="todo"):
-    return FakeRecord(
-        id=id,
-        project_id=project_id,
-        parent_task_id=None,
-        title=title,
-        description=None,
-        status=status,
-        priority=3,
-        deadline=None,
-        estimated_hours=None,
-        actual_hours=None,
-        sort_order=0,
-        completed_at=None,
-        created_at=_now(),
-        updated_at=_now(),
-    )
+def _make_task_row(**overrides):
+    row = {
+        "id": 1,
+        "project_id": 1,
+        "parent_task_id": None,
+        "title": "Do stuff",
+        "description": None,
+        "status": "todo",
+        "priority": 3,
+        "deadline": None,
+        "estimated_hours": None,
+        "actual_hours": None,
+        "sort_order": 0,
+        "completed_at": None,
+        "created_at": _now(),
+        "updated_at": _now(),
+    }
+    row.update(overrides)
+    return FakeRecord(**row)
 
 
-def _make_milestone_row(id=1, project_id=1, name="M1", deadline=None):
-    return FakeRecord(
-        id=id,
-        project_id=project_id,
-        name=name,
-        deadline=deadline or date.today() + timedelta(days=7),
-        description=None,
-        completed=False,
-        completed_at=None,
-        created_at=_now(),
-    )
+def _make_milestone_row(**overrides):
+    row = {
+        "id": 1,
+        "project_id": 1,
+        "name": "M1",
+        "deadline": date.today() + timedelta(days=7),
+        "description": None,
+        "completed": False,
+        "completed_at": None,
+        "created_at": _now(),
+    }
+    row.update(overrides)
+    return FakeRecord(**row)
 
 
 # ---------------------------------------------------------------------------

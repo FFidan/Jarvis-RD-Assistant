@@ -100,7 +100,7 @@ async def get_project(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> ProjectDetailResponse:
     """Get a project with task and milestone counts."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:

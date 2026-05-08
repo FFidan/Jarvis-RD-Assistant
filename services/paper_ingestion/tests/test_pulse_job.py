@@ -710,9 +710,13 @@ async def test_pulse_generate_job_happy_path():
         }
     )
 
-    with patch("paper_ingestion.pulse.job.run_pulse", mock_run):
-        with patch("paper_ingestion.main.app", fake_app, create=True):
-            result = await _pulse_generate_job(pool, http_client, payload, ctx)
+    fake_lock = MagicMock()
+    fake_lock.__aenter__ = AsyncMock(return_value=True)
+    fake_lock.__aexit__ = AsyncMock(return_value=False)
+    with patch("paper_ingestion.pulse.job.AdvisoryLock", return_value=fake_lock):
+        with patch("paper_ingestion.pulse.job.run_pulse", mock_run):
+            with patch("paper_ingestion.main.app", fake_app, create=True):
+                result = await _pulse_generate_job(pool, http_client, payload, ctx)
 
     assert result["deck_date"] == "2026-04-10"
     assert result["card_count"] == 10
@@ -754,9 +758,13 @@ async def test_pulse_generate_job_now_param_forwarded():
             "last_error": None,
         }
 
-    with patch("paper_ingestion.pulse.job.run_pulse", side_effect=recording_run_pulse):
-        with patch("paper_ingestion.main.app", fake_app, create=True):
-            await _pulse_generate_job(pool, http_client, {"now": now_iso}, ctx)
+    fake_lock = MagicMock()
+    fake_lock.__aenter__ = AsyncMock(return_value=True)
+    fake_lock.__aexit__ = AsyncMock(return_value=False)
+    with patch("paper_ingestion.pulse.job.AdvisoryLock", return_value=fake_lock):
+        with patch("paper_ingestion.pulse.job.run_pulse", side_effect=recording_run_pulse):
+            with patch("paper_ingestion.main.app", fake_app, create=True):
+                await _pulse_generate_job(pool, http_client, {"now": now_iso}, ctx)
 
     assert len(captured) == 1
     assert captured[0] == expected_dt

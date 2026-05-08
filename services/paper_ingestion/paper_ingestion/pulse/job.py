@@ -27,6 +27,7 @@ from typing import Any
 
 import asyncpg
 import httpx
+from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
 from jarvis_common.jobs import JobContext
 from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
@@ -164,7 +165,7 @@ async def run_pulse(
             db_pool,
             http_client,
             profile,
-            since=now - timedelta(days=7),
+            since=now - timedelta(days=profile.lookback_days),
             source_cache=source_cache,
             include_diagnostics=True,
         )
@@ -444,14 +445,20 @@ async def _pulse_generate_job(
     now_str = payload.get("now")
     now = datetime.fromisoformat(now_str) if now_str else None
 
-    stats = await run_pulse(
-        db_pool=pool,
-        http_client=http_client,
-        embedder=svc.embedder,
-        now=now,
-        source_cache=svc.sources,
-        ctx=ctx,
-    )
+    user_id_or_zero = payload.get("user_id") or 0
+    async with AdvisoryLock(
+        pool, key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero
+    ) as locked:
+        if not locked:
+            return {"status": "blocked", "reason": "Pulse already running"}
+        stats = await run_pulse(
+            db_pool=pool,
+            http_client=http_client,
+            embedder=svc.embedder,
+            now=now,
+            source_cache=svc.sources,
+            ctx=ctx,
+        )
     return {
         "deck_date": stats.get("deck_date"),
         "card_count": stats.get("card_count", 0),

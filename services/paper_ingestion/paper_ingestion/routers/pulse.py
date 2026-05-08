@@ -162,11 +162,10 @@ async def get_today(
     if deck.card_count > 0:
         return deck
 
-    # Today's deck is empty: try stale fallback
-    fallback_row = await load_last_nonempty_deck(db_pool, user_id=user_id, max_age_days=7)
-    if fallback_row is not None:
-        stale_age = (date.today() - fallback_row["deck_date"]).days
-        # Fetch source_health diagnostics for this user
+    # Today's deck is empty: try stale fallback (returns full deck with cards)
+    fallback_deck = await load_last_nonempty_deck(db_pool, user_id=user_id, max_age_days=7)
+    if fallback_deck is not None:
+        stale_age = (date.today() - fallback_deck.deck_date).days
         async with db_pool.acquire() as conn:
             health_rows = await conn.fetch(
                 """
@@ -186,10 +185,10 @@ async def get_today(
             }
             for row in health_rows
         }
-        deck.is_stale = True
-        deck.stale_age_days = stale_age
-        deck.stale_diagnostics = stale_diagnostics
-        return deck
+        fallback_deck.is_stale = True
+        fallback_deck.stale_age_days = stale_age
+        fallback_deck.stale_diagnostics = stale_diagnostics
+        return fallback_deck
 
     # No usable fallback in the last 7 days
     deck.empty_reason = "no_data_yet"
