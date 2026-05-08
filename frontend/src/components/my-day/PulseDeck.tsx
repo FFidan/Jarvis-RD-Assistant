@@ -7,9 +7,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PulseCard } from '@/components/pulse/PulseCard';
+import { StaleBadge } from '@/components/pulse/StaleBadge';
 import {
   fetchPulseToday,
   ratePulseCard,
+  ApiError,
 } from '@/lib/api';
 import { useJobStore } from '@/stores/job-store';
 import type { PulseDeck as PulseDeckType, PulseRating, PulseSourceDiagnostic } from '@/types';
@@ -117,6 +119,18 @@ export function PulseDeck() {
     );
   }
 
+  const handleGenerateNow = () => {
+    startJob('pulse.generate', {}).catch((err: unknown) => {
+      if (err instanceof ApiError && err.status === 409) {
+        toast.info('Pulse is already running. Your deck will be ready shortly.');
+      } else if (err instanceof ApiError && err.status === 429) {
+        toast.error('Rate limit reached. Try again in a minute.');
+      } else {
+        toast.error('Failed to start Pulse generation.');
+      }
+    });
+  };
+
   if (!deck) {
     return (
       <Card>
@@ -132,13 +146,41 @@ export function PulseDeck() {
           </p>
           <Button
             size="sm"
-            onClick={() => void startJob('pulse.generate', {})}
+            onClick={handleGenerateNow}
             disabled={isGenerating}
           >
             {isGenerating ? 'Generating...' : 'Generate now'}
           </Button>
           <p className="text-xs text-muted-foreground">
             Your daily AI-curated paper recommendations, personalised to your reading history and research interests.
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (deck.empty_reason === 'no_data_yet') {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center gap-2 text-lg">
+            <Sparkles className="h-5 w-5" />
+            Your Pulse
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-col items-start gap-3">
+          <p className="text-muted-foreground text-sm">
+            No papers have been ingested yet. Add some sources or upload papers to get started.
+          </p>
+          <Button
+            size="sm"
+            onClick={handleGenerateNow}
+            disabled={isGenerating}
+          >
+            {isGenerating ? 'Generating...' : 'Generate now'}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Once you have papers in your library, Pulse will rank and curate a personalised daily deck.
           </p>
         </CardContent>
       </Card>
@@ -154,17 +196,24 @@ export function PulseDeck() {
 
   return (
     <section className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <Sparkles className="h-5 w-5" />
         <h2 className="text-lg font-semibold">
           Your Pulse — {deck.card_count} papers
         </h2>
+        {deck.is_stale && typeof deck.stale_age_days === 'number' && (
+          <StaleBadge
+            ageDays={deck.stale_age_days}
+            diagnostics={deck.stale_diagnostics ?? null}
+            onRetry={handleGenerateNow}
+          />
+        )}
         {deck.card_count === 0 && (
           <Button
             size="sm"
             variant="outline"
             className="ml-auto"
-            onClick={() => void startJob('pulse.generate', {})}
+            onClick={handleGenerateNow}
             disabled={isGenerating}
           >
             {isGenerating ? 'Generating...' : 'Regenerate'}

@@ -50,7 +50,9 @@ import procrastinate
 from procrastinate.contrib.aiopg import AiopgConnector
 
 from jarvis_common._ctx_shim import make_ctx_shim
+from jarvis_common.event_log import log_event
 from jarvis_common.jobs import JobError
+from jarvis_common.logging_config import correlation_id_var
 from jarvis_common.settings import get_jobs_settings
 
 if TYPE_CHECKING:
@@ -133,19 +135,57 @@ async def _run_legacy_handler(
 ) -> dict[str, Any]:
     """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
     import asyncio  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
 
     pool, http_client = _require_dependencies()
     ctx = make_ctx_shim(context, pool=pool)
+
+    # Derive task_kind and job_id for structured event emission.
+    task_kind: str = getattr(getattr(context, "job", None), "task_name", "") or ""
+    job_id: str = ctx.job_id  # JARVIS UUID (or procrastinate bigint as str)
+
+    corr = uuid.uuid4()
+    token = correlation_id_var.set(corr)
     try:
-        result = await handler(pool, http_client, payload, ctx)
-    except BaseException as exc:
-        if isinstance(exc, asyncio.CancelledError):
-            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
-        elif isinstance(exc, Exception):
-            await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
-        raise
-    await ctx.record_terminal_outcome(result=result, is_error=False)
-    return result
+        await log_event(
+            pool=pool,
+            level="info",
+            category="job",
+            source=task_kind,
+            message="started",
+            context={"job_id": job_id, "task_kind": task_kind},
+            correlation_id=corr,
+        )
+        try:
+            result = await handler(pool, http_client, payload, ctx)
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
+            elif isinstance(exc, Exception):
+                await ctx.record_terminal_outcome(error=_terminal_error_payload(exc), is_error=True)
+                await log_event(
+                    pool=pool,
+                    level="error",
+                    category="job",
+                    source=task_kind,
+                    message="failed",
+                    context={"job_id": job_id, "task_kind": task_kind, "error": repr(exc)[:500]},
+                    correlation_id=corr,
+                )
+            raise
+        await ctx.record_terminal_outcome(result=result, is_error=False)
+        await log_event(
+            pool=pool,
+            level="info",
+            category="job",
+            source=task_kind,
+            message="finished",
+            context={"job_id": job_id, "task_kind": task_kind, "result": str(result)[:500]},
+            correlation_id=corr,
+        )
+        return result
+    finally:
+        correlation_id_var.reset(token)
 
 
 # ---------------------------------------------------------------------------

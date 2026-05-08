@@ -7,15 +7,17 @@ Rate limit: repeated calls should wait at least 3 seconds per arXiv API guidance
 import asyncio
 import logging
 import re
+import time as _time
 from datetime import UTC, date, datetime
 from typing import Any
 
 import httpx
-from jarvis_common.source_rate_limiter import SourceRateLimiter
+from jarvis_common.event_log import log_event
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.sources._xml_safe import safe_fromstring
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 logger = logging.getLogger(__name__)
@@ -54,14 +56,84 @@ class ArxivSource(PaperSource):
 
     source_type = "arxiv"
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
-        super().__init__(config, http_client)
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: Any = None,
+    ) -> None:
+        super().__init__(config, http_client, db_pool)
         # arXiv asks clients to wait 3 seconds between repeated calls.
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 
     async def _rate_limit(self) -> None:
         """Enforce arXiv's conservative polling cadence."""
         await self._rate_limiter.acquire()
+
+    def consolidate_topics(self, topics: list[TopicRef]) -> list[SourceQuery]:
+        """Merge all topics into one arXiv OR-query (or 2 if > 1500 chars).
+
+        Builds a single ``(ti:"X" OR abs:"X" OR ...)`` query from all topic
+        terms, splitting into at most 2 bins when the string would exceed the
+        1500-character URL ceiling.
+
+        Returns
+        -------
+        list[SourceQuery]
+            One or two :class:`SourceQuery` objects.
+        """
+        if not topics:
+            return []
+
+        def _parts_for_topic(topic: TopicRef) -> list[str]:
+            terms = topic.query_terms if topic.query_terms else [topic.name]
+            return [f'(ti:"{t}" OR abs:"{t}")' for t in terms]
+
+        _cap = 1500
+
+        def _build_query(topic_list: list[TopicRef]) -> str:
+            all_parts: list[str] = []
+            for t in topic_list:
+                all_parts.extend(_parts_for_topic(t))
+            return " OR ".join(all_parts)
+
+        full_query = _build_query(topics)
+        if len(full_query) <= _cap:
+            return [SourceQuery(topics=list(topics), extra_params={"search_query": full_query})]
+
+        # Greedy bin-pack into 2 bins.
+        bin1: list[TopicRef] = []
+        bin2: list[TopicRef] = []
+        current_parts: list[str] = []
+        for topic in topics:
+            new_parts = _parts_for_topic(topic)
+            tentative = " OR ".join(current_parts + new_parts)
+            if len(tentative) <= _cap:
+                current_parts.extend(new_parts)
+                bin1.append(topic)
+            else:
+                bin2.append(topic)
+
+        queries: list[SourceQuery] = []
+        if bin1:
+            queries.append(
+                SourceQuery(
+                    topics=bin1,
+                    extra_params={
+                        "search_query": " OR ".join(p for t in bin1 for p in _parts_for_topic(t))
+                    },
+                )
+            )
+        if bin2:
+            queries.append(
+                SourceQuery(
+                    topics=bin2,
+                    extra_params={
+                        "search_query": " OR ".join(p for t in bin2 for p in _parts_for_topic(t))
+                    },
+                )
+            )
+        return queries
 
     async def _fetch_xml(self, params: dict) -> Any | None:
         """Rate-limited GET to the arXiv API; returns parsed XML or None on transient errors.
@@ -294,26 +366,42 @@ class ArxivSource(PaperSource):
     ) -> list[PaperCreate]:
         """Fetch papers submitted after *since* that match any of the given topics.
 
-        Uses the arXiv ``submittedDate`` range filter combined with per-topic
-        title/abstract queries.  Each topic generates one API request (one per
-        topic query term group) to stay within the 3 req/sec rate limit.
+        Uses the arXiv ``submittedDate`` range filter combined with consolidated
+        topic queries built by :meth:`consolidate_topics`.  Issues one HTTP
+        request per consolidated :class:`SourceQuery` (typically 1-2 requests
+        total) to stay within the 3 req/sec rate limit.
 
         Parameters
         ----------
         since : datetime
             Lower bound (exclusive) for submission date.  Must be timezone-aware.
         topics : list[TopicRef]
-            Topics to include; each topic's ``query_terms`` or ``name`` is used
-            to build an OR filter.  An empty list triggers a single undirected
-            date-range query.
+            Topics to include; consolidated into 1-2 API queries.  An empty list
+            triggers a single undirected date-range query.
         limit : int
-            Maximum total results to return (across all topics).
+            Maximum total results to return (across all consolidated queries).
 
         Returns
         -------
         list[PaperCreate]
             Deduplicated papers newer than *since*, ordered by submission date.
         """
+        # Startup grace — lets containers finish their warm-up before first burst.
+        # TODO: add startup_grace_seconds to user_config schema (follow-up).
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
+
+        # Persistent rate limiter (no-op when db_pool is None).
+        p_limiter: PersistentSourceRateLimiter | None = None
+        if self.db_pool is not None:
+            p_limiter = PersistentSourceRateLimiter(
+                source_type="arxiv",
+                user_id=None,
+                min_interval_seconds=RATE_LIMIT_DELAY,
+                db_pool=self.db_pool,
+                fallback=self._rate_limiter,
+            )
+
         # Normalise *since* to UTC, then format as arXiv date string YYYYMMDDHHMM
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         since_str = since_utc.strftime("%Y%m%d%H%M")
@@ -323,41 +411,117 @@ class ArxivSource(PaperSource):
         date_filter = f"submittedDate:[{since_str} TO 299912312359]"
 
         if not topics:
-            # No topic filter — just poll by date
-            topic_queries = [""]
+            consolidated = [SourceQuery(topics=[], extra_params={})]
         else:
-            topic_queries = []
-            for topic in topics:
-                terms = topic.query_terms if topic.query_terms else [topic.name]
-                parts = [f'(ti:"{t}" OR abs:"{t}")' for t in terms]
-                topic_queries.append(" OR ".join(parts))
+            consolidated = self.consolidate_topics(topics)
 
         seen_ids: set[str] = set()
         papers: list[PaperCreate] = []
 
-        per_topic = max(1, limit // max(len(topic_queries), 1))
+        per_query = max(1, limit // max(len(consolidated), 1))
 
-        for topic_q in topic_queries:
+        for sq in consolidated:
             if len(papers) >= limit:
                 break
+
+            # Build search_query from SourceQuery.extra_params or from its topics.
+            topic_q = sq.extra_params.get("search_query", "")
+            if not topic_q and sq.topics:
+                parts: list[str] = []
+                for topic in sq.topics:
+                    terms = topic.query_terms if topic.query_terms else [topic.name]
+                    parts.extend(f'(ti:"{t}" OR abs:"{t}")' for t in terms)
+                topic_q = " OR ".join(parts)
+
             if topic_q:
                 search_query = f"({topic_q}) AND {date_filter}"
             else:
                 search_query = date_filter
+
             params = {
                 "search_query": search_query,
                 "start": 0,
-                "max_results": per_topic,
+                "max_results": per_query,
                 "sortBy": "submittedDate",
                 "sortOrder": "descending",
             }
+
+            started_at = _time.monotonic()
+            candidate_count = 0
+
+            # Acquire persistent rate limit slot before the in-process lock.
+            if p_limiter is not None:
+                await p_limiter.acquire()
+
             try:
                 root = await self._fetch_xml(params)
-            except Exception:
+            except Exception as _exc:
                 logger.warning("arXiv fetch_new_since failed for query: %s", search_query)
+                if p_limiter is not None:
+                    await p_limiter.update_last_request("error")
+                await self._insert_run_history(
+                    started_at=started_at,
+                    status="error",
+                    candidate_count=0,
+                    duration_ms=int((_time.monotonic() - started_at) * 1000),
+                )
+                if self.db_pool is not None:
+                    try:
+                        await log_event(
+                            pool=self.db_pool,
+                            level="error",
+                            category="source",
+                            source="arxiv",
+                            message="fetch_failed",
+                            context={"http_status": None, "exception": repr(_exc)[:300]},
+                        )
+                    except Exception:
+                        pass
                 continue
+
             if root is None:
                 logger.warning("arXiv fetch_new_since returned no data for query: %s", search_query)
+                diag = self.last_poll_diagnostic or {}
+                http_status = diag.get("status", "error")
+                retry_after = diag.get("retry_after_s")
+                p_status: str = "rate_limit" if http_status == "rate_limit" else "error"
+                if p_limiter is not None:
+                    await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
+                await self._insert_run_history(
+                    started_at=started_at,
+                    status=p_status,
+                    candidate_count=0,
+                    duration_ms=int((_time.monotonic() - started_at) * 1000),
+                )
+                if self.db_pool is not None:
+                    try:
+                        _diag_code = diag.get("status_code")
+                        if p_status == "rate_limit":
+                            await log_event(
+                                pool=self.db_pool,
+                                level="warning",
+                                category="source",
+                                source="arxiv",
+                                message="rate_limited",
+                                context={
+                                    "http_status": _diag_code or 429,
+                                    "retry_after_s": retry_after,
+                                },
+                            )
+                        else:
+                            await log_event(
+                                pool=self.db_pool,
+                                level="error",
+                                category="source",
+                                source="arxiv",
+                                message="fetch_failed",
+                                context={
+                                    "http_status": _diag_code,
+                                    "exception": diag.get("message", "")[:300],
+                                },
+                            )
+                    except Exception:
+                        pass
                 continue
 
             entries = root.findall(f"{{{ATOM_NS}}}entry")
@@ -373,10 +537,73 @@ class ArxivSource(PaperSource):
                     continue
                 seen_ids.add(paper.external_id)
                 papers.append(paper)
+                candidate_count += 1
                 if len(papers) >= limit:
                     break
 
+            duration_ms = int((_time.monotonic() - started_at) * 1000)
+            if p_limiter is not None:
+                await p_limiter.update_last_request("ok")
+            await self._insert_run_history(
+                started_at=started_at,
+                status="ok",
+                candidate_count=candidate_count,
+                duration_ms=duration_ms,
+            )
+            if self.db_pool is not None:
+                try:
+                    await log_event(
+                        pool=self.db_pool,
+                        level="info",
+                        category="source",
+                        source="arxiv",
+                        message="fetch_succeeded",
+                        context={
+                            "http_status": 200,
+                            "papers_fetched": candidate_count,
+                            "query_count": len(consolidated),
+                        },
+                    )
+                except Exception:
+                    pass
+
         return papers
+
+    async def _insert_run_history(
+        self,
+        *,
+        started_at: float,
+        status: str,
+        candidate_count: int,
+        duration_ms: int,
+    ) -> None:
+        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
+        if self.db_pool is None:
+            return
+        import datetime as _dt
+
+        now_utc = _dt.datetime.now(tz=_dt.UTC)
+        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO source_run_history
+                        (user_id, source_type, started_at, finished_at,
+                         status, candidate_count, duration_ms, detail)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                    """,
+                    None,
+                    "arxiv",
+                    started_utc,
+                    now_utc,
+                    status,
+                    candidate_count,
+                    duration_ms,
+                    "{}",
+                )
+        except Exception as exc:
+            logger.warning("arXiv: failed to insert source_run_history: %s", exc)
 
     async def fetch_by_id(self, external_id: str) -> PaperCreate | None:
         """Fetch a single paper by arXiv ID.

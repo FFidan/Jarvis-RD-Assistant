@@ -461,6 +461,7 @@ from paper_ingestion.routers import (  # noqa: E402
     feed,
     jobs,
     knowledge_graph,
+    logs,
     my_day,
     notes,
     papers,
@@ -506,6 +507,7 @@ app.include_router(zotero_router.router)
 app.include_router(telegram.router)
 app.include_router(system.router)
 app.include_router(jobs.router)
+app.include_router(logs.router)
 
 
 # ---------------------------------------------------------------------------

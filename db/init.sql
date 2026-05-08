@@ -944,6 +944,69 @@ CREATE UNIQUE INDEX IF NOT EXISTS daily_intent_user_date_uniq
     ON daily_intent (user_id, intent_date) NULLS NOT DISTINCT;
 
 -- =============================================================================
+-- MODULE: PULSE SOURCE HEALTH (migration 067)
+-- Source monitoring + run history + deck stale detection.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS source_health (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    last_request_at TIMESTAMPTZ,
+    last_success_at TIMESTAMPTZ,
+    last_status TEXT,            -- 'ok' | 'rate_limit' | 'error'
+    cooldown_until TIMESTAMPTZ,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT source_health_user_source UNIQUE NULLS NOT DISTINCT (user_id, source_type)
+);
+CREATE INDEX IF NOT EXISTS ix_source_health_lookup ON source_health (user_id, source_type);
+
+CREATE TABLE IF NOT EXISTS source_run_history (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NULL REFERENCES users(id) ON DELETE CASCADE,
+    source_type TEXT NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    status TEXT NOT NULL,         -- 'ok' | 'rate_limit' | 'error' | 'cooldown_skip'
+    candidate_count INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER,
+    detail JSONB
+);
+CREATE INDEX IF NOT EXISTS ix_source_run_history_timeline ON source_run_history (user_id, source_type, started_at DESC);
+
+ALTER TABLE pulse_decks ADD COLUMN IF NOT EXISTS is_stale BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE pulse_decks ADD COLUMN IF NOT EXISTS stale_from_deck_id INTEGER REFERENCES pulse_decks(id) ON DELETE SET NULL;
+
+-- =============================================================================
+-- MODULE: SYSTEM EVENTS (migration 068)
+-- Operational event logging for Logs Admin UI + vector_writer role.
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS system_events (
+    id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    level TEXT NOT NULL CHECK (level IN ('debug','info','warning','error','critical')),
+    category TEXT NOT NULL CHECK (category IN ('error','job','source','auth','config','infra')),
+    source TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    correlation_id UUID
+);
+CREATE INDEX IF NOT EXISTS system_events_created_at_idx ON system_events (created_at DESC);
+CREATE INDEX IF NOT EXISTS system_events_category_level_idx ON system_events (category, level, created_at DESC);
+CREATE INDEX IF NOT EXISTS system_events_correlation_idx ON system_events (correlation_id, created_at) WHERE correlation_id IS NOT NULL;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'vector_writer') THEN
+    -- Password set out-of-band via secret file at boot; placeholder role created here
+    EXECUTE format('CREATE ROLE vector_writer LOGIN PASSWORD %L', coalesce(current_setting('jarvis.vector_writer_password', true), 'change_me_at_boot'));
+  END IF;
+END $$;
+GRANT INSERT ON system_events TO vector_writer;
+GRANT USAGE, SELECT ON SEQUENCE system_events_id_seq TO vector_writer;
+
+-- =============================================================================
 -- DB-004: shared updated_at trigger (migration 042)
 -- Keeps updated_at current on every UPDATE for tables that have the column.
 -- =============================================================================
@@ -1003,11 +1066,15 @@ INSERT INTO schema_migrations (version) VALUES
     -- 33 is intentionally absent: it is false-applied and repaired at runtime.
     (34), (35), (36), (37), (38), (39), (40), (41),
     (42), (43), (44), (45), (46), (47), (48),
-    -- 49-51, 54-62 are baked into this snapshot.
+    -- 49-51, 54-62, 67-68 are baked into this snapshot.
     -- 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT in init.sql;
     -- the runtime runner will apply them on first boot.
     -- 62 (daily_log user_id + UNIQUE NULLS NOT DISTINCT guard) is baked into this snapshot.
+    -- 63-66 (Wave-3 multi-tenant user_id columns) are deferred to runtime runner.
+    -- 67 (source_health + run_history + pulse_decks columns) is baked into this snapshot.
+    -- 68 (system_events table + vector_writer role) is baked into this snapshot.
     (49), (50), (51),
     (54), (55), (56), (57), (58), (59), (60), (61),
-    (62)
+    (62),
+    (67), (68)
 ON CONFLICT (version) DO NOTHING;

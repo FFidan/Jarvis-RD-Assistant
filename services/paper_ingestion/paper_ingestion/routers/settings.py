@@ -20,6 +20,7 @@ from jarvis_common.crypto import (
     mask_secret,
     resolve_secret_row,
 )
+from jarvis_common.event_log import log_event as _log_event
 from jarvis_common.settings import get_core_settings, get_telegram_settings
 from pydantic import BaseModel
 
@@ -652,6 +653,19 @@ async def set_config(
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
         await _reload_telegram_nudges()
     display_value = mask_secret(str(body.value)) if key in _ENCRYPTED_KEYS else body.value
+    # Emit a config-change event for audit trail. Best-effort: never block the
+    # response if event logging fails (e.g. pool closed during tests).
+    try:
+        await _log_event(
+            pool=db_pool,
+            level="info",
+            category="config",
+            source="settings",
+            message="setting_changed",
+            context={"key": key, "new_value": str(display_value)},
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("config event log_event failed (non-fatal)", exc_info=True)
     return ConfigEntry(key=key, value=display_value)
 
 

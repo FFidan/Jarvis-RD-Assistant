@@ -116,8 +116,11 @@ async def test_set_encrypted_key_writes_bytea(_app):
     assert "****" in body["value"]
 
     # Verify the DB execute was called with the encrypted_value path
-    conn.execute.assert_awaited_once()
-    call_args = conn.execute.await_args
+    # set_config now emits a log_event (INSERT INTO system_events) in addition to the
+    # UPSERT — expect at least one execute call (the config UPSERT).
+    conn.execute.assert_awaited()
+    # Use call_args_list[0]: the first call is always the UPSERT.
+    call_args = conn.execute.call_args_list[0]
     sql = call_args.args[0]
     assert "encrypted_value" in sql
     # The ciphertext passed to the driver should be bytes
@@ -136,8 +139,9 @@ async def test_set_encrypted_key_does_not_store_plaintext(_app):
     plaintext = "sk-openai-secret"
     await _put_config(app, "llm.openai.api_key", plaintext)
 
-    conn.execute.assert_awaited_once()
-    call_args = conn.execute.await_args
+    conn.execute.assert_awaited()
+    # Use call_args_list[0]: the first call is always the UPSERT (not the log_event INSERT).
+    call_args = conn.execute.call_args_list[0]
     # The plaintext should not appear in any argument
     for arg in call_args.args:
         if isinstance(arg, str | bytes):

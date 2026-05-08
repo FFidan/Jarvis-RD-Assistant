@@ -1,0 +1,101 @@
+data_dir = "/var/lib/vector"
+
+[api]
+enabled = false
+
+# --- Sources ---
+
+[sources.docker_logs]
+type = "docker_logs"
+exclude_containers = [
+  "vector",                       # don't capture our own logs
+  "jarvis_paper_ingestion",       # app emits via SystemEventHandler instead
+  "jarvis_learning_engine",
+  "jarvis_telegram_bot",
+]
+
+# --- Transforms ---
+
+# Generic level inference for unstructured stdout
+[transforms.infer_level]
+type = "remap"
+inputs = ["docker_logs"]
+source = '''
+upper_msg = upcase!(.message)
+if contains(upper_msg, "ERROR") || contains(upper_msg, "FATAL") || contains(upper_msg, "PANIC") {
+  .level = "error"
+} else if contains(upper_msg, "WARN") {
+  .level = "warning"
+} else {
+  .level = "info"
+}
+.category = "infra"
+.source = .container_name
+'''
+
+# Drop-filter rules for known noisy lines
+[transforms.drop_noise]
+type = "filter"
+inputs = ["infer_level"]
+condition = '''
+# Skip nginx access logs with status < 400
+if exists(.container_name) && .container_name == "jarvis_dashboard" {
+  if exists(.message) && match!(.message, r'" (1\d\d|2\d\d|3\d\d) ') {
+    return false
+  }
+}
+# Skip Postgres routine info (LOG: but not WARNING/ERROR)
+if exists(.container_name) && .container_name == "jarvis_postgres" {
+  if exists(.message) && starts_with!(.message, "LOG:  ") && !contains(.message, "ERROR") {
+    return false
+  }
+}
+# Skip Qdrant info-level chatter
+if exists(.container_name) && .container_name == "jarvis_qdrant" {
+  if exists(.message) && (contains(.message, "INFO ") && !contains(.message, "ERROR")) {
+    return false
+  }
+}
+# Skip Ollama per-request
+if exists(.container_name) && .container_name == "jarvis_ollama" {
+  if exists(.message) && contains(.message, " GET ") {
+    return false
+  }
+}
+true
+'''
+
+# Truncate message and reshape fields before writing to Postgres
+# NOTE: Vector 0.40.x postgres sink uses `endpoint` (DSN string) and `table`.
+# The `encoding.codec` field is not used by the postgres sink — it writes
+# column-by-column from the event object. Column names must match the table.
+# TODO: verify field mapping against timberio/vector:0.40.0-alpine release notes
+#       if the sink schema changed between 0.38→0.40 (encoding block may be removed).
+[transforms.truncate_message]
+type = "remap"
+inputs = ["drop_noise"]
+source = '''
+.message = slice!(.message, 0, 4096)
+.level = .level
+.category = "infra"
+.source = .container_name
+.context = {
+  "container_id": .container_id,
+  "image": .image,
+  "stream": .stream,
+}
+'''
+
+# --- Sink: Postgres system_events ---
+
+[sinks.postgres]
+type = "postgres"
+inputs = ["truncate_message"]
+endpoint = "${PG_DSN}"
+table = "system_events"
+
+# Buffer & retries
+[sinks.postgres.buffer]
+type = "disk"
+max_size = 104857600     # 100MB
+when_full = "drop_newest"

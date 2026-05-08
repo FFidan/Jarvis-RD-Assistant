@@ -27,15 +27,18 @@ shared across all calls on the same instance.
 
 import logging
 import os
+import time as _time
 from datetime import UTC, date, datetime
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from jarvis_common.source_rate_limiter import SourceRateLimiter
+from jarvis_common.event_log import log_event
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
 from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 logger = logging.getLogger(__name__)
@@ -100,14 +103,57 @@ class OpenAlexSource(PaperSource):
 
     source_type = "openalex"
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
-        super().__init__(config, http_client)
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: Any = None,
+    ) -> None:
+        super().__init__(config, http_client, db_pool)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("OPENALEX_API_KEY")
         self._email: str = os.environ.get("OPENALEX_EMAIL", "")
         self._missing_key_warned = False
         # rate: ~9 req/s (polite-pool target ≤10 req/s)
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / 0.11)
+
+    def consolidate_topics(self, topics: list[TopicRef]) -> list[SourceQuery]:
+        """Merge all topics into a single OpenAlex query.
+
+        For topics that have OpenAlex concept IDs in their metadata, builds a
+        ``concepts.id:C123|C456`` filter.  Topics without concept IDs fall back
+        to the existing per-term text search behaviour (all terms ORed together).
+
+        Returns
+        -------
+        list[SourceQuery]
+            A single :class:`SourceQuery` covering all topics.
+        """
+        if not topics:
+            return []
+
+        concept_ids: list[str] = []
+        text_terms: list[str] = []
+
+        for topic in topics:
+            # Collect OpenAlex concept IDs stored in topic metadata if present.
+            meta = getattr(topic, "metadata", None) or {}
+            cid = meta.get("openalex_concept_id") or meta.get("concept_id")
+            if cid:
+                # Normalise: strip URL prefix → plain Cxxx ID
+                cid_clean = str(cid).removeprefix("https://openalex.org/")
+                concept_ids.append(cid_clean)
+            else:
+                terms = topic.query_terms if topic.query_terms else [topic.name]
+                text_terms.extend(terms)
+
+        extra: dict[str, Any] = {}
+        if concept_ids:
+            extra["concept_filter"] = "|".join(concept_ids)
+        if text_terms:
+            extra["text_search"] = " OR ".join(text_terms)
+
+        return [SourceQuery(topics=list(topics), extra_params=extra)]
 
     async def _rate_limit(self) -> None:
         """Enforce OpenAlex polite-pool rate limit: ≤10 req/s (~9 req/s target)."""
@@ -366,10 +412,10 @@ class OpenAlexSource(PaperSource):
     ) -> list[PaperCreate]:
         """Fetch OpenAlex works published after *since* relevant to the given topics.
 
-        Uses the ``filter=from_publication_date:YYYY-MM-DD`` parameter combined
-        with per-topic free-text search.  When topics are provided, one API
-        request is issued per topic (search on name/query_terms); results are
-        deduplicated by OpenAlex ID and trimmed to ``limit``.
+        Consolidates all topics into a single API query via
+        :meth:`consolidate_topics` (concept-ID filter when available, falling
+        back to free-text search).  Wires :class:`PersistentSourceRateLimiter`
+        when ``db_pool`` is set and records each attempt in ``source_run_history``.
 
         Parameters
         ----------
@@ -377,44 +423,75 @@ class OpenAlexSource(PaperSource):
             Lower bound for ``publication_date`` (inclusive; OpenAlex rounds
             to the day).
         topics : list[TopicRef]
-            Topics to include; each generates a separate search request.
+            Topics to include; consolidated into one query.
             An empty list triggers a single date-only query.
         limit : int
-            Maximum total papers to return across all topic queries.
+            Maximum total papers to return.
 
         Returns
         -------
         list[PaperCreate]
-            Deduplicated works newer than *since*. Returns ``[]`` if neither
+            Deduplicated works newer than *since*.  Returns ``[]`` if neither
             ``OPENALEX_EMAIL`` nor ``OPENALEX_API_KEY`` is configured, or on
             HTTP errors.
         """
         if not self._check_api_key():
             return []
 
+        # Startup grace — see ArxivSource.fetch_new_since for details.
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
+
+        # Persistent rate limiter (no-op when db_pool is None).
+        p_limiter: PersistentSourceRateLimiter | None = None
+        if self.db_pool is not None:
+            p_limiter = PersistentSourceRateLimiter(
+                source_type="openalex",
+                user_id=None,
+                min_interval_seconds=0.11,
+                db_pool=self.db_pool,
+                fallback=self._rate_limiter,
+            )
+
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         date_str = since_utc.strftime("%Y-%m-%d")
         date_filter = f"from_publication_date:{date_str}"
 
         if not topics:
-            queries: list[str | None] = [None]
+            consolidated: list[SourceQuery] = [SourceQuery(topics=[], extra_params={})]
         else:
-            queries = []
-            for topic in topics:
-                terms = topic.query_terms if topic.query_terms else [topic.name]
-                queries.append(" OR ".join(terms))
+            consolidated = self.consolidate_topics(topics)
 
         seen_ids: set[str] = set()
         papers: list[PaperCreate] = []
-        per_q = max(1, limit // max(len(queries), 1))
+        per_q = max(1, limit // max(len(consolidated), 1))
 
-        for q in queries:
+        for sq in consolidated:
             if len(papers) >= limit:
                 break
-            await self._rate_limit()
-            params = self._build_params({"filter": date_filter, "per-page": min(per_q, 200)})
-            if q:
-                params["search"] = q
+
+            extra_params = sq.extra_params
+
+            # Build filter param: start with date, add concept IDs if present.
+            filters: list[str] = [date_filter]
+            concept_filter = extra_params.get("concept_filter")
+            if concept_filter:
+                filters.append(f"concepts.id:{concept_filter}")
+            filter_str = ",".join(filters)
+
+            params = self._build_params({"filter": filter_str, "per-page": min(per_q, 200)})
+
+            # Apply text search for topics without concept IDs.
+            text_search = extra_params.get("text_search")
+            if text_search:
+                params["search"] = text_search
+
+            started_at = _time.monotonic()
+
+            if p_limiter is not None:
+                await p_limiter.acquire()
+            else:
+                await self._rate_limit()
 
             try:
                 response = await self.http_client.get(OPENALEX_API_URL, params=params, timeout=30.0)
@@ -424,6 +501,44 @@ class OpenAlexSource(PaperSource):
                         "OpenAlex fetch_new_since returned %d; skipping query",
                         response.status_code,
                     )
+                    p_status = "rate_limit" if response.status_code == 429 else "error"
+                    retry_after = self._retry_after_seconds(response)
+                    if p_limiter is not None:
+                        await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
+                    await self._insert_run_history(
+                        started_at=started_at,
+                        status=p_status,
+                        candidate_count=0,
+                        duration_ms=int((_time.monotonic() - started_at) * 1000),
+                    )
+                    if self.db_pool is not None:
+                        try:
+                            if p_status == "rate_limit":
+                                await log_event(
+                                    pool=self.db_pool,
+                                    level="warning",
+                                    category="source",
+                                    source="openalex",
+                                    message="rate_limited",
+                                    context={
+                                        "http_status": response.status_code,
+                                        "retry_after_s": retry_after,
+                                    },
+                                )
+                            else:
+                                await log_event(
+                                    pool=self.db_pool,
+                                    level="error",
+                                    category="source",
+                                    source="openalex",
+                                    message="fetch_failed",
+                                    context={
+                                        "http_status": response.status_code,
+                                        "exception": None,
+                                    },
+                                )
+                        except Exception:
+                            pass
                     continue
                 response.raise_for_status()
                 data = response.json()
@@ -441,8 +556,30 @@ class OpenAlexSource(PaperSource):
                         settings_hint=None,
                     )
                 logger.warning("OpenAlex fetch_new_since failed: %s", exc)
+                if p_limiter is not None:
+                    await p_limiter.update_last_request("error")
+                await self._insert_run_history(
+                    started_at=started_at,
+                    status="error",
+                    candidate_count=0,
+                    duration_ms=int((_time.monotonic() - started_at) * 1000),
+                )
+                if self.db_pool is not None:
+                    try:
+                        _exc_status = getattr(getattr(exc, "response", None), "status_code", None)
+                        await log_event(
+                            pool=self.db_pool,
+                            level="error",
+                            category="source",
+                            source="openalex",
+                            message="fetch_failed",
+                            context={"http_status": _exc_status, "exception": repr(exc)[:300]},
+                        )
+                    except Exception:
+                        pass
                 continue
 
+            candidate_count = 0
             for work in data.get("results") or []:
                 raw_id = work.get("id", "")
                 oa_id = raw_id.removeprefix("https://openalex.org/")
@@ -451,9 +588,72 @@ class OpenAlexSource(PaperSource):
                 seen_ids.add(oa_id)
                 try:
                     papers.append(self._parse_work(work))
+                    candidate_count += 1
                 except Exception:
                     logger.exception("OpenAlex: failed to parse work %s", oa_id)
                 if len(papers) >= limit:
                     break
 
+            duration_ms = int((_time.monotonic() - started_at) * 1000)
+            if p_limiter is not None:
+                await p_limiter.update_last_request("ok")
+            await self._insert_run_history(
+                started_at=started_at,
+                status="ok",
+                candidate_count=candidate_count,
+                duration_ms=duration_ms,
+            )
+            if self.db_pool is not None:
+                try:
+                    await log_event(
+                        pool=self.db_pool,
+                        level="info",
+                        category="source",
+                        source="openalex",
+                        message="fetch_succeeded",
+                        context={
+                            "http_status": 200,
+                            "papers_fetched": candidate_count,
+                            "query_count": len(consolidated),
+                        },
+                    )
+                except Exception:
+                    pass
+
         return papers
+
+    async def _insert_run_history(
+        self,
+        *,
+        started_at: float,
+        status: str,
+        candidate_count: int,
+        duration_ms: int,
+    ) -> None:
+        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
+        if self.db_pool is None:
+            return
+        import datetime as _dt
+
+        now_utc = _dt.datetime.now(tz=_dt.UTC)
+        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO source_run_history
+                        (user_id, source_type, started_at, finished_at,
+                         status, candidate_count, duration_ms, detail)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                    """,
+                    None,
+                    "openalex",
+                    started_utc,
+                    now_utc,
+                    status,
+                    candidate_count,
+                    duration_ms,
+                    "{}",
+                )
+        except Exception as exc:
+            logger.warning("OpenAlex: failed to insert source_run_history: %s", exc)

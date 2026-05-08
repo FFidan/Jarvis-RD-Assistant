@@ -35,6 +35,10 @@ class PulseDeckResponse(BaseModel):
     cards: list[PulseCardResponse]
     stats: dict
     degraded_reason: str | None = None
+    is_stale: bool = False
+    stale_age_days: int | None = None
+    stale_diagnostics: dict | None = None
+    empty_reason: str | None = None  # "no_data_yet" | None
 
 
 class PulseGenerateResponse(BaseModel):

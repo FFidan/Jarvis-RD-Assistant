@@ -149,7 +149,9 @@ async def test_set_config_allowed_key(_app):
     body = resp.json()
     assert body["key"] == "llm.smart_model"
     assert body["value"] == "qwen3:4b"
-    conn.execute.assert_awaited_once()
+    # set_config now emits a log_event (INSERT INTO system_events) in addition to the
+    # UPSERT — expect at least one execute call (the config UPSERT).
+    conn.execute.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -811,7 +813,9 @@ async def test_settings_round_trip_string_no_double_encode(_app):
     # Verify the value forwarded to asyncpg execute is the raw Python string,
     # NOT json.dumps("0 4 * * *") == '"0 4 * * *"'.
     assert conn.execute.called, "conn.execute was not called"
-    _call_args = conn.execute.call_args
+    # Use call_args_list[0]: set_config now emits a log_event after the UPSERT,
+    # so call_args may point to the log_event INSERT. The first call is always the UPSERT.
+    _call_args = conn.execute.call_args_list[0]
     positional_args = _call_args.args if _call_args.args else _call_args[0]
     # positional_args: (sql, key, value)
     stored_value = positional_args[2]

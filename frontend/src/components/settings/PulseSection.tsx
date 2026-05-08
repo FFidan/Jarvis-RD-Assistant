@@ -419,6 +419,7 @@ export function PulseSection() {
   const cron = getConfigValue<string>(safeConfigs, 'pulse.cron', '0 4 * * *');
   const deckSize = getConfigValue<number>(safeConfigs, 'pulse.deck_size', 10);
   const stage2TopK = getConfigValue<number>(safeConfigs, 'pulse.stage2_top_k', 40);
+  const lookbackDaysConfig = getConfigValue<number>(safeConfigs, 'pulse.lookback_days', 7);
   const likedWeight = Number(getConfigValue(safeConfigs, 'recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue(safeConfigs, 'recommendation.project_weight', 0.4));
   const l2LambdaConfig = Number(getConfigValue(safeConfigs, 'pulse.l2_lambda', 0.5));
@@ -432,6 +433,7 @@ export function PulseSection() {
   const [localLikedWeight, setLocalLikedWeight] = useState(likedWeight);
   const [localProjectWeight, setLocalProjectWeight] = useState(projectWeight);
   const [l2Lambda, setL2Lambda] = useState(l2LambdaConfig);
+  const [lookbackDays, setLookbackDays] = useState(lookbackDaysConfig);
   const [localPulseWeights, setLocalPulseWeights] =
     useState<Record<PulseWeightKey, number>>(pulseWeights);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -440,6 +442,7 @@ export function PulseSection() {
   useEffect(() => { setLocalLikedWeight(likedWeight); }, [likedWeight]);
   useEffect(() => { setLocalProjectWeight(projectWeight); }, [projectWeight]);
   useEffect(() => { setL2Lambda(l2LambdaConfig); }, [l2LambdaConfig]);
+  useEffect(() => { setLookbackDays(lookbackDaysConfig); }, [lookbackDaysConfig]);
   useEffect(() => {
     setLocalPulseWeights(pulseWeights);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -637,6 +640,41 @@ export function PulseSection() {
               Candidates the LLM reranker evaluates. Higher = better ranking quality but slower.
             </p>
           </div>
+          {/* Lookback window */}
+          <div className="space-y-1">
+            <Label htmlFor="pulse-lookback-days" className="flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                Lookback window
+                <InfoTooltip content="How many days back Pulse looks for candidate papers from each source. Longer windows surface more papers but may increase discovery time." />
+              </span>
+              <span className="text-muted-foreground text-sm font-normal">{lookbackDays}d</span>
+            </Label>
+            <Slider
+              id="pulse-lookback-days"
+              min={1}
+              max={90}
+              step={1}
+              value={[lookbackDays]}
+              onValueChange={([v]) => setLookbackDays(v ?? lookbackDays)}
+              onValueCommit={([v]) =>
+                setMut.mutate(
+                  { key: 'pulse.lookback_days', value: v },
+                  {
+                    onError: (err) =>
+                      toast.error('Failed to update lookback window', {
+                        description: err instanceof Error ? err.message : 'Unknown error',
+                      }),
+                  },
+                )
+              }
+              disabled={settingsControlsDisabled}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Days of paper history each source scans per Pulse run. Default 7.
+            </p>
+          </div>
+
           {settingsUnavailable && (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
               Pulse settings unavailable. Settings controls are disabled until configuration loads.
@@ -907,7 +945,9 @@ export function PulseSection() {
           <Button
             onClick={() => {
               startJob('pulse.generate', {}).catch((err: unknown) => {
-                if (err instanceof ApiError && err.status === 429) {
+                if (err instanceof ApiError && err.status === 409) {
+                  toast.info('Pulse is already running. Your deck will be ready shortly.');
+                } else if (err instanceof ApiError && err.status === 429) {
                   toast.error('Rate limit reached. Try again in a minute.');
                 } else {
                   toast.error('Failed to start Pulse generation.');

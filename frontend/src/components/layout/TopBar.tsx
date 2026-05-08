@@ -7,6 +7,7 @@ import { useKeyboardShortcuts } from '@/stores/keyboard-shortcuts-store';
 import { BrandMark } from './BrandMark';
 import { CommandPaletteSearch } from './CommandPaletteSearch';
 import { UserAvatarMenu } from './UserAvatarMenu';
+import { HeaderPill } from '@/components/logs/HeaderPill';
 
 interface TopBarProps {
   onMenuClick?: () => void;
@@ -27,6 +28,7 @@ export function TopBar({ onMenuClick }: TopBarProps) {
         <CommandPaletteSearch />
       </div>
       <div className="ml-auto md:ml-0 flex items-center gap-2">
+        <HeaderPill />
         <JobsIndicator />
         <HeaderPomodoro />
         <Button

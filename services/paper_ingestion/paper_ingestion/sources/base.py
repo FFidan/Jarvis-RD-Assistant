@@ -4,8 +4,11 @@ All paper sources (arXiv, Semantic Scholar, etc.) must implement this interface.
 Sources are discovered via the ``@register_source`` decorator in ``registry.py``.
 """
 
+import asyncio
 import logging
+import time as _time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, TypedDict
 
@@ -18,6 +21,44 @@ logger = logging.getLogger(__name__)
 # HTTP status codes that indicate transient server/rate-limit errors.
 # Plugins return [] / None on these codes rather than raising.
 _TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({429, 500, 502, 503, 504})
+
+# Module-level timestamp set at import time; used by _enforce_startup_grace.
+_STARTUP_AT: float = _time.monotonic()
+
+
+async def _enforce_startup_grace(grace_seconds: float) -> None:
+    """Sleep until at least ``grace_seconds`` have elapsed since process startup.
+
+    Lets containers warm up before the first outbound HTTP burst.
+
+    Parameters
+    ----------
+    grace_seconds:
+        Minimum number of seconds that must elapse from process start before
+        this coroutine returns.  A value <= 0 is a no-op.
+    """
+    if grace_seconds <= 0:
+        return
+    elapsed = _time.monotonic() - _STARTUP_AT
+    remaining = grace_seconds - elapsed
+    if remaining > 0:
+        await asyncio.sleep(remaining)
+
+
+@dataclass(frozen=True)
+class SourceQuery:
+    """Represents one API query to be issued to a source during Pulse discovery.
+
+    Attributes
+    ----------
+    topics : list[TopicRef]
+        Topics whose results should be merged from this query.
+    extra_params : dict[str, Any]
+        Source-specific query parameters (e.g. ``{"sort": "date"}``).
+    """
+
+    topics: list["TopicRef"] = field(default_factory=list)
+    extra_params: dict[str, Any] = field(default_factory=dict)
 
 
 class SourcePollDiagnostic(TypedDict, total=False):
@@ -39,6 +80,9 @@ class PaperSource(ABC):
         Configuration from the paper_sources DB table.
     http_client : httpx.AsyncClient
         Shared async HTTP client (managed by FastAPI lifespan).
+    db_pool : Any | None
+        Optional asyncpg connection pool for rate-limiter persistence and
+        ``source_run_history`` writes.
 
     Attributes
     ----------
@@ -48,9 +92,15 @@ class PaperSource(ABC):
 
     source_type: str  # must be set by subclass as class variable
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: Any = None,
+    ) -> None:
         self.config = config
         self.http_client = http_client
+        self.db_pool: Any = db_pool
         self._last_poll_diagnostic: SourcePollDiagnostic | None = None
 
     @property
@@ -115,8 +165,8 @@ class PaperSource(ABC):
         """Rate-limit-safe GET that handles transient HTTP errors gracefully.
 
         Performs a GET request and returns the :class:`httpx.Response` on success
-        (2xx after ``raise_for_status``).  Returns ``None`` — rather than raising
-        — for the following error classes:
+        (2xx after ``raise_for_status``).  Returns ``None`` -- rather than raising
+        -- for the following error classes:
 
         * HTTP status in ``_TRANSIENT_STATUS_CODES`` (429, 500, 502, 503, 504):
           logged at WARNING level; indicates rate-limiting or upstream outage.
@@ -252,3 +302,26 @@ class PaperSource(ABC):
         Default: returns empty list. Sources with a recommendation endpoint override this.
         """
         return []
+
+    def consolidate_topics(self, topics: list["TopicRef"]) -> list["SourceQuery"]:
+        """Group topics into 1+ API queries. Default: one query per topic.
+
+        Subclasses may override to batch multiple topics into a single API
+        call when the upstream API supports it (e.g. comma-separated terms).
+
+        Requirements for overrides:
+        - Must be deterministic: same ``topics`` input -> same queries output.
+        - Should respect a ~1500-character URL ceiling per query.
+
+        Parameters
+        ----------
+        topics : list[TopicRef]
+            Topics to be covered by this polling run.
+
+        Returns
+        -------
+        list[SourceQuery]
+            One or more queries. Default implementation returns one
+            :class:`SourceQuery` per topic.
+        """
+        return [SourceQuery(topics=[t]) for t in topics]

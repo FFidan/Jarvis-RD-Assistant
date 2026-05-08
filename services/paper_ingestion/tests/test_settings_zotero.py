@@ -98,7 +98,8 @@ async def test_zotero_api_key_valid(_app):
     # zotero.api_key is now an encrypted key — response returns masked preview
     # H.1: mask_secret now returns "****" + last 4 chars (was prefix + "****")
     assert body["value"] == "****c123"
-    conn.execute.assert_awaited_once()
+    # set_config emits a log_event after the UPSERT — expect at least one execute call.
+    conn.execute.assert_awaited()
 
 
 @pytest.mark.asyncio
@@ -110,7 +111,8 @@ async def test_zotero_user_id_valid(_app):
     body = resp.json()
     assert body["key"] == "zotero.user_id"
     assert body["value"] == "12345678"
-    conn.execute.assert_awaited_once()
+    # set_config emits a log_event after the UPSERT — expect at least one execute call.
+    conn.execute.assert_awaited()
 
 
 @pytest.mark.asyncio

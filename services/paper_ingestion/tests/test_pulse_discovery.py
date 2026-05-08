@@ -550,3 +550,162 @@ async def test_include_diagnostics_clears_stale_source_diagnostic_after_success(
 
     assert [paper.external_id for paper in result] == ["arxiv:recovered"]
     assert diagnostics["_StubSource"]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Cooldown gate tests (PR-B4)
+# ---------------------------------------------------------------------------
+
+
+def _stub_rate_limiter(in_cooldown: bool, until: "datetime | None" = None):
+    """Return a mock PersistentSourceRateLimiter whose is_in_cooldown is pre-set."""
+    from unittest.mock import AsyncMock
+
+    rl = MagicMock()
+    rl.is_in_cooldown = AsyncMock(return_value=(in_cooldown, until))
+    return rl
+
+
+class _CooldownStub(_StubSource):
+    """_StubSource with an explicit source_type for cooldown gate tests."""
+
+    source_type = "arxiv"
+
+
+@pytest.mark.asyncio
+async def test_discover_skips_source_in_cooldown():
+    """A source with an active cooldown must NOT have fetch_new_since called."""
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    cooldown_until = datetime.now(UTC) + timedelta(hours=1)
+    stub = _CooldownStub([_paper("arxiv:1", "Skipped")])
+
+    def fake_get(name):
+        return _make_source_class(stub)
+
+    rl_mock = _stub_rate_limiter(in_cooldown=True, until=cooldown_until)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=rl_mock,
+        ),
+    ):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    # fetch_new_since must never have been called
+    assert stub.fetch_new_since_calls == 0
+    # Result is empty — no papers fetched
+    assert result == []
+    # Diagnostic must show cooldown status
+    assert diagnostics["_CooldownStub"]["status"] == "cooldown"
+    assert diagnostics["_CooldownStub"]["cooldown_until"] == cooldown_until.isoformat()
+
+
+@pytest.mark.asyncio
+async def test_discover_runs_remaining_sources_when_one_is_cooldown():
+    """Healthy sources still run in parallel when one source is in cooldown."""
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [
+        _source_row("arxiv", 1),
+        _source_row("openalex", 2),
+    ]
+
+    cooldown_until = datetime.now(UTC) + timedelta(hours=1)
+
+    class _ArxivCooldownStub(_StubSource):
+        source_type = "arxiv"
+
+    class _OpenAlexHealthyStub(_StubSource):
+        source_type = "openalex"
+
+    arxiv_stub = _ArxivCooldownStub()  # will be in cooldown
+    openalex_stub = _OpenAlexHealthyStub([_paper("oa:1", "Healthy")])
+
+    stubs = {"arxiv": arxiv_stub, "openalex": openalex_stub}
+
+    def fake_get(name):
+        return _make_source_class(stubs[name])
+
+    # arxiv is in cooldown; openalex is not
+    def rl_factory(source_type, **_kwargs):
+        if source_type == "arxiv":
+            return _stub_rate_limiter(in_cooldown=True, until=cooldown_until)
+        return _stub_rate_limiter(in_cooldown=False)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            side_effect=rl_factory,
+        ),
+    ):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    # arxiv skipped, openalex ran
+    assert arxiv_stub.fetch_new_since_calls == 0
+    assert openalex_stub.fetch_new_since_calls == 1
+    assert len(result) == 1
+    assert result[0].external_id == "oa:1"
+    assert diagnostics["_ArxivCooldownStub"]["status"] == "cooldown"
+    assert diagnostics["_OpenAlexHealthyStub"]["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_discover_writes_cooldown_skip_row_to_history():
+    """A cooldown_skip row must be INSERTed into source_run_history."""
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    cooldown_until = datetime.now(UTC) + timedelta(hours=1)
+    stub = _CooldownStub()
+
+    def fake_get(name):
+        return _make_source_class(stub)
+
+    rl_mock = _stub_rate_limiter(in_cooldown=True, until=cooldown_until)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=rl_mock,
+        ),
+    ):
+        await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    # conn.execute must have been called with the cooldown_skip INSERT
+    conn.execute.assert_called_once()
+    call_args = conn.execute.call_args
+    sql: str = call_args[0][0]
+    assert "source_run_history" in sql
+    assert "cooldown_skip" in sql

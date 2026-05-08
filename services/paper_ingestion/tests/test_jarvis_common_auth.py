@@ -32,6 +32,7 @@ async def test_verify_api_key_allows_dev_mode_without_key(monkeypatch):
     """DEV_MODE bypasses authentication when no API key is configured."""
     monkeypatch.delenv("JARVIS_API_KEY", raising=False)
     monkeypatch.setenv("DEV_MODE", "true")
+    refresh_api_key_cache()
 
     await verify_api_key(_request("/api/papers"), api_key=None)
 
@@ -41,6 +42,8 @@ async def test_verify_api_key_rejects_missing_config_in_non_dev(monkeypatch):
     """Missing configuration raises 401 outside DEV_MODE."""
     monkeypatch.delenv("JARVIS_API_KEY", raising=False)
     monkeypatch.setenv("DEV_MODE", "false")
+    # Refresh the cache so any previously-set key (from other tests) is cleared.
+    refresh_api_key_cache()
 
     with pytest.raises(HTTPException, match="API key not configured") as exc_info:
         await verify_api_key(_request("/api/papers"), api_key=None)

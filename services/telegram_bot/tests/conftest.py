@@ -10,8 +10,34 @@ import shutil
 import subprocess
 import time
 import uuid
+from unittest.mock import AsyncMock, patch
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _patch_log_event():
+    """Suppress all log_event calls in unit tests.
+
+    log_event requires a live asyncpg pool; unit tests use lightweight mocks
+    that do not implement the full pool protocol.  Patching here prevents
+    spurious TypeErrors from pool.acquire() returning a coroutine instead of
+    an async context manager.
+
+    Tests that specifically need to assert on log_event calls should override
+    this patch within their own ``with patch(...)`` context.
+    """
+    with (
+        patch(
+            "telegram_bot.handlers.commands._auth.log_event",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "telegram_bot.handlers.commands.system_commands.log_event",
+            new_callable=AsyncMock,
+        ),
+    ):
+        yield
 
 
 def _docker(

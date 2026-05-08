@@ -7,16 +7,18 @@ Rate limit: 1 request/second on the free tier.
 
 import logging
 import os
+import time as _time
 from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import quote as _url_quote
 
 import httpx
-from jarvis_common.source_rate_limiter import SourceRateLimiter
+from jarvis_common.event_log import log_event
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, SourceRateLimiter
 from jarvis_common.text_utils import author_matches
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
-from paper_ingestion.sources.base import PaperSource
+from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
 logger = logging.getLogger(__name__)
@@ -42,8 +44,13 @@ class SemanticScholarSource(PaperSource):
 
     source_type = "semantic_scholar"
 
-    def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
-        super().__init__(config, http_client)
+    def __init__(
+        self,
+        config: PaperSourceConfig,
+        http_client: httpx.AsyncClient,
+        db_pool: Any = None,
+    ) -> None:
+        super().__init__(config, http_client, db_pool)
         # Optional API key for higher rate limits (config overrides env var)
         cfg_key = config.config.get("api_key") if config.config else None
         self._api_key: str | None = cfg_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
@@ -285,32 +292,131 @@ class SemanticScholarSource(PaperSource):
         limit: int = 100,
     ) -> list[PaperCreate]:
         """Fetch recent Semantic Scholar papers matching Pulse topics."""
+        # Startup grace — see ArxivSource.fetch_new_since for details.
+        grace = getattr(getattr(self.config, "pulse", None), "startup_grace_seconds", 0.0)
+        await _enforce_startup_grace(grace)
+
+        # Persistent rate limiter (no-op when db_pool is None).
+        p_limiter: PersistentSourceRateLimiter | None = None
+        if self.db_pool is not None:
+            p_limiter = PersistentSourceRateLimiter(
+                source_type="semantic_scholar",
+                user_id=None,
+                min_interval_seconds=RATE_LIMIT_DELAY,
+                db_pool=self.db_pool,
+                fallback=self._rate_limiter,
+            )
+
         since_utc = since.astimezone(UTC) if since.tzinfo else since.replace(tzinfo=UTC)
         since_date = since_utc.date()
+
+        # Use consolidate_topics (default: one query per topic).
         if not topics:
+            consolidated: list[SourceQuery] = [SourceQuery(topics=[], extra_params={})]
             queries = ["science"]
         else:
+            consolidated = self.consolidate_topics(topics)
             queries = [
-                " OR ".join(topic.query_terms if topic.query_terms else [topic.name])
-                for topic in topics
+                " OR ".join(
+                    term
+                    for t in sq.topics
+                    for term in (t.query_terms if t.query_terms else [t.name])
+                )
+                if sq.topics
+                else "science"
+                for sq in consolidated
             ]
 
         per_query = max(1, min(100, limit // max(1, len(queries))))
         seen_ids: set[str] = set()
         papers: list[PaperCreate] = []
+
         for query in queries:
             if len(papers) >= limit:
                 break
+
+            started_at = _time.monotonic()
+
+            if p_limiter is not None:
+                await p_limiter.acquire()
+
             params: dict[str, Any] = {
                 "query": query,
                 "limit": per_query,
                 "fields": S2_FIELDS,
                 "year": f"{since_date.year}-",
             }
-            data = await self._fetch_json("/paper/search", params=params)
+            try:
+                data = await self._fetch_json("/paper/search", params=params)
+            except Exception as _exc:
+                logger.warning("S2 fetch_new_since failed for query %r", query)
+                if p_limiter is not None:
+                    await p_limiter.update_last_request("error")
+                await self._insert_run_history(
+                    started_at=started_at,
+                    status="error",
+                    candidate_count=0,
+                    duration_ms=int((_time.monotonic() - started_at) * 1000),
+                )
+                if self.db_pool is not None:
+                    try:
+                        await log_event(
+                            pool=self.db_pool,
+                            level="error",
+                            category="source",
+                            source="semantic_scholar",
+                            message="fetch_failed",
+                            context={"http_status": None, "exception": repr(_exc)[:300]},
+                        )
+                    except Exception:
+                        pass
+                continue
+
             if not data:
                 logger.warning("S2 search returned no data for query %r; skipping", query)
+                diag = self.last_poll_diagnostic or {}
+                p_status = "rate_limit" if diag.get("status") == "rate_limit" else "error"
+                retry_after = diag.get("retry_after_s")
+                if p_limiter is not None:
+                    await p_limiter.update_last_request(p_status, retry_after_s=retry_after)
+                await self._insert_run_history(
+                    started_at=started_at,
+                    status=p_status,
+                    candidate_count=0,
+                    duration_ms=int((_time.monotonic() - started_at) * 1000),
+                )
+                if self.db_pool is not None:
+                    try:
+                        _diag_code = diag.get("status_code")
+                        if p_status == "rate_limit":
+                            await log_event(
+                                pool=self.db_pool,
+                                level="warning",
+                                category="source",
+                                source="semantic_scholar",
+                                message="rate_limited",
+                                context={
+                                    "http_status": _diag_code or 429,
+                                    "retry_after_s": retry_after,
+                                },
+                            )
+                        else:
+                            await log_event(
+                                pool=self.db_pool,
+                                level="error",
+                                category="source",
+                                source="semantic_scholar",
+                                message="fetch_failed",
+                                context={
+                                    "http_status": _diag_code,
+                                    "exception": diag.get("message", "")[:300],
+                                },
+                            )
+                    except Exception:
+                        pass
                 continue
+
+            candidate_count = 0
             for item in data.get("data") or []:
                 pid = item.get("paperId", "")
                 if not pid or pid in seen_ids:
@@ -326,9 +432,73 @@ class SemanticScholarSource(PaperSource):
                     continue
                 seen_ids.add(pid)
                 papers.append(paper)
+                candidate_count += 1
                 if len(papers) >= limit:
                     break
+
+            duration_ms = int((_time.monotonic() - started_at) * 1000)
+            if p_limiter is not None:
+                await p_limiter.update_last_request("ok")
+            await self._insert_run_history(
+                started_at=started_at,
+                status="ok",
+                candidate_count=candidate_count,
+                duration_ms=duration_ms,
+            )
+            if self.db_pool is not None:
+                try:
+                    await log_event(
+                        pool=self.db_pool,
+                        level="info",
+                        category="source",
+                        source="semantic_scholar",
+                        message="fetch_succeeded",
+                        context={
+                            "http_status": 200,
+                            "papers_fetched": candidate_count,
+                            "query_count": len(queries),
+                        },
+                    )
+                except Exception:
+                    pass
+
         return papers[:limit]
+
+    async def _insert_run_history(
+        self,
+        *,
+        started_at: float,
+        status: str,
+        candidate_count: int,
+        duration_ms: int,
+    ) -> None:
+        """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
+        if self.db_pool is None:
+            return
+        import datetime as _dt
+
+        now_utc = _dt.datetime.now(tz=_dt.UTC)
+        started_utc = now_utc - _dt.timedelta(milliseconds=duration_ms)
+        try:
+            async with self.db_pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO source_run_history
+                        (user_id, source_type, started_at, finished_at,
+                         status, candidate_count, duration_ms, detail)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+                    """,
+                    None,
+                    "semantic_scholar",
+                    started_utc,
+                    now_utc,
+                    status,
+                    candidate_count,
+                    duration_ms,
+                    "{}",
+                )
+        except Exception as exc:
+            logger.warning("S2: failed to insert source_run_history: %s", exc)
 
     async def fetch_citations(self, paper_id: str, limit: int = 100) -> list[dict]:
         """Fetch papers that cite the given paper.

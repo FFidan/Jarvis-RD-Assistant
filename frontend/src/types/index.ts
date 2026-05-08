@@ -900,6 +900,32 @@ export interface PulseDeck {
   cards: PulseCardItem[];
   stats: Record<string, unknown>;
   degraded_reason?: string | null;
+  /** True when this deck was generated on a previous day and no fresh deck exists yet. */
+  is_stale?: boolean;
+  /** How many days ago this deck was generated (null when is_stale is false). */
+  stale_age_days?: number | null;
+  /** Per-source health diagnostics surfaced when stale. */
+  stale_diagnostics?: Record<string, unknown> | null;
+  /** Reason the deck is empty, e.g. "no_data_yet". */
+  empty_reason?: string | null;
+}
+
+export interface SourceHealth {
+  source_type: string;
+  last_request_at: string | null;
+  last_success_at: string | null;
+  last_status: string | null;
+  cooldown_until: string | null;
+  consecutive_failures: number;
+}
+
+export interface SourceRunRecord {
+  source_type: string;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  candidate_count: number;
+  duration_ms: number | null;
 }
 
 export interface PulseStats {

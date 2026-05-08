@@ -24,6 +24,7 @@ from datetime import datetime
 from typing import Any
 
 import httpx
+from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig
 from paper_ingestion.pulse.profile import UserProfile
@@ -212,17 +213,63 @@ async def discover_candidates(
         per_source_cap,
     )
 
+    # ------------------------------------------------------------------
+    # Cooldown gate — skip sources that are in a persistent cooldown.
+    # ------------------------------------------------------------------
+    source_diagnostics: SourceDiagnostics = {}
+    ready_sources: list[PaperSource] = []
+    for src in sources:
+        src_type = getattr(src, "source_type", None)
+        if src_type is None:
+            ready_sources.append(src)
+            continue
+        rate_limiter = PersistentSourceRateLimiter(
+            source_type=src_type,
+            user_id=profile.user_id,
+            min_interval_seconds=0,  # gate only checks cooldown_until, not interval
+            db_pool=db_pool,
+        )
+        in_cd, until = await rate_limiter.is_in_cooldown()
+        if in_cd:
+            plugin_name = src.__class__.__name__
+            source_diagnostics[plugin_name] = {
+                "status": "cooldown",
+                "cooldown_until": until.isoformat() if until else None,
+                "message": (f"In cooldown until {until:%H:%M}" if until else "In cooldown"),
+                "status_code": None,
+                "retry_after_s": None,
+                "settings_hint": None,
+            }
+            async with db_pool.acquire() as conn:
+                await conn.execute(
+                    "INSERT INTO source_run_history"
+                    " (user_id, source_type, started_at, finished_at,"
+                    " status, candidate_count, duration_ms)"
+                    " VALUES ($1, $2, NOW(), NOW(), 'cooldown_skip', 0, 0)",
+                    profile.user_id,
+                    src_type,
+                )
+            logger.info(
+                "pulse.discover: source %s in cooldown until %s — skipping",
+                plugin_name,
+                until,
+            )
+            continue
+        ready_sources.append(src)
+
     results = await asyncio.gather(
-        *[src.fetch_new_since(since, profile.topics, limit=per_source_cap) for src in sources],
+        *[
+            src.fetch_new_since(since, profile.topics, limit=per_source_cap)
+            for src in ready_sources
+        ],
         return_exceptions=True,
     )
 
     candidates: list[PaperCreate] = []
     seen: set[tuple[str, str]] = set()
     source_counts: dict[str, int] = {}
-    source_diagnostics: SourceDiagnostics = {}
     total_raw = 0
-    for src, result in zip(sources, results, strict=False):
+    for src, result in zip(ready_sources, results, strict=False):
         plugin_name = src.__class__.__name__
         if isinstance(result, BaseException):
             logger.warning(

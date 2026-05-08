@@ -267,7 +267,7 @@ async def test_run_legacy_handler_records_success_result(monkeypatch) -> None:
 
     pool = object()
     http_client = object()
-    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+    ctx = SimpleNamespace(job_id="test-uuid-1", record_terminal_outcome=AsyncMock())
 
     async def handler(_pool, _http_client, payload, _ctx):
         assert payload == {"paper_id": 7}
@@ -276,6 +276,7 @@ async def test_run_legacy_handler_records_success_result(monkeypatch) -> None:
     monkeypatch.setattr(task_registry, "_pool", pool)
     monkeypatch.setattr(task_registry, "_http_client", http_client)
     monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+    monkeypatch.setattr(task_registry, "log_event", AsyncMock())
 
     result = await task_registry._run_legacy_handler(
         SimpleNamespace(),
@@ -297,7 +298,7 @@ async def test_run_legacy_handler_records_job_error(monkeypatch) -> None:
 
     pool = object()
     http_client = object()
-    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+    ctx = SimpleNamespace(job_id="test-uuid-2", record_terminal_outcome=AsyncMock())
 
     async def handler(_pool, _http_client, _payload, _ctx):
         raise JobError("No chunks", action_link={"href": "/papers/1", "label": "Open"})
@@ -305,6 +306,7 @@ async def test_run_legacy_handler_records_job_error(monkeypatch) -> None:
     monkeypatch.setattr(task_registry, "_pool", pool)
     monkeypatch.setattr(task_registry, "_http_client", http_client)
     monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+    monkeypatch.setattr(task_registry, "log_event", AsyncMock())
 
     with pytest.raises(JobError):
         await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)
@@ -322,7 +324,7 @@ async def test_run_legacy_handler_redacts_unexpected_exception_text(monkeypatch)
 
     pool = object()
     http_client = object()
-    ctx = SimpleNamespace(record_terminal_outcome=AsyncMock())
+    ctx = SimpleNamespace(job_id="test-uuid-3", record_terminal_outcome=AsyncMock())
 
     async def handler(_pool, _http_client, _payload, _ctx):
         raise RuntimeError("secret token at /tmp/provider-body")
@@ -330,6 +332,7 @@ async def test_run_legacy_handler_redacts_unexpected_exception_text(monkeypatch)
     monkeypatch.setattr(task_registry, "_pool", pool)
     monkeypatch.setattr(task_registry, "_http_client", http_client)
     monkeypatch.setattr(task_registry, "make_ctx_shim", lambda context, pool: ctx)
+    monkeypatch.setattr(task_registry, "log_event", AsyncMock())
 
     with pytest.raises(RuntimeError):
         await task_registry._run_legacy_handler(SimpleNamespace(), {}, handler)

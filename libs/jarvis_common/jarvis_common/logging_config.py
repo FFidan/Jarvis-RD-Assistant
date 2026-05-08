@@ -1,12 +1,24 @@
 """Structured JSON logging for JARVIS services."""
 
+from __future__ import annotations
+
+import asyncio
 import json
 import logging
 import sys
+import uuid
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    import asyncpg
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
+
+# Per-request/command correlation id.  Set by middleware (HTTP or Telegram)
+# before dispatching to business logic; automatically picked up by log_event.
+correlation_id_var: ContextVar[uuid.UUID | None] = ContextVar("correlation_id", default=None)
 
 
 class JSONFormatter(logging.Formatter):
@@ -23,6 +35,7 @@ class JSONFormatter(logging.Formatter):
         self.service_name = service_name
 
     def format(self, record: logging.LogRecord) -> str:
+        corr = correlation_id_var.get()
         log_entry = {
             "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
@@ -30,10 +43,124 @@ class JSONFormatter(logging.Formatter):
             "message": record.getMessage(),
             "service": self.service_name,
             "request_id": request_id_ctx.get(""),
+            "correlation_id": str(corr) if corr else None,
         }
         if record.exc_info and record.exc_info[0] is not None:
             log_entry["exception"] = self.formatException(record.exc_info)
         return json.dumps(log_entry)
+
+
+class SystemEventHandler(logging.Handler):
+    """Persists WARNING+ log records into the `system_events` table.
+
+    Non-blocking: ``emit()`` enqueues a serialized event onto an
+    ``asyncio.Queue``; a background task drains in batches. On overflow,
+    drops oldest records and tracks a counter. On Postgres outage, falls
+    back to ``sys.stderr`` so events are not silently lost; on recovery,
+    emits one synthetic ``"dropped N events during outage"`` row.
+    """
+
+    def __init__(
+        self,
+        pool: asyncpg.Pool,
+        *,
+        ring_buffer_size: int = 1000,
+        flush_interval_s: float = 0.5,
+    ) -> None:
+        super().__init__()
+        self.setLevel(logging.WARNING)
+        self._pool = pool
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=ring_buffer_size)
+        self._flush_interval = flush_interval_s
+        self._task: asyncio.Task | None = None
+        self._dropped = 0
+        self._was_in_outage = False
+
+    def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < self.level:
+            return
+        try:
+            event = {
+                "level": record.levelname.lower(),
+                "category": getattr(record, "category", "error"),
+                "source": record.name,
+                "message": self.format(record) if self.formatter else record.getMessage(),
+                "context": getattr(record, "context", {}),
+                "correlation_id": correlation_id_var.get(),
+            }
+        except Exception:
+            return
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            self._dropped += 1
+            try:
+                self._queue.put_nowait(event)
+            except asyncio.QueueFull:
+                pass
+        if self._task is None or self._task.done():
+            try:
+                loop = asyncio.get_running_loop()
+                self._task = loop.create_task(self._drain_loop())
+            except RuntimeError:
+                pass
+
+    async def _drain_loop(self) -> None:
+        while True:
+            await asyncio.sleep(self._flush_interval)
+            batch: list[dict] = []
+            while not self._queue.empty() and len(batch) < 100:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except asyncio.QueueEmpty:
+                    break
+            if not batch:
+                continue
+            try:
+                async with self._pool.acquire() as conn:
+                    await conn.executemany(
+                        "INSERT INTO system_events "
+                        "(level, category, source, message, context, correlation_id) "
+                        "VALUES ($1, $2, $3, $4, $5::jsonb, $6)",
+                        [
+                            (
+                                e["level"],
+                                e["category"],
+                                e["source"],
+                                e["message"][:65535],
+                                json.dumps(e["context"]),
+                                e["correlation_id"],
+                            )
+                            for e in batch
+                        ],
+                    )
+                    if self._was_in_outage and self._dropped > 0:
+                        await conn.execute(
+                            "INSERT INTO system_events (level, category, source, message) "
+                            "VALUES ($1, $2, $3, $4)",
+                            "error",
+                            "error",
+                            "SystemEventHandler",
+                            f"dropped {self._dropped} events during outage",
+                        )
+                        self._dropped = 0
+                        self._was_in_outage = False
+            except Exception:
+                self._was_in_outage = True
+                for e in batch:
+                    sys.stderr.write(f"[SystemEventHandler outage] {e}\n")
+
+    async def aclose(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except (asyncio.CancelledError, Exception):
+                pass
 
 
 def configure_logging(service_name: str, log_level: str = "INFO") -> None:

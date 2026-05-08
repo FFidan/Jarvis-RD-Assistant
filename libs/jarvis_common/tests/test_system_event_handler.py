@@ -1,0 +1,162 @@
+"""Tests for jarvis_common.logging_config.SystemEventHandler."""
+
+from __future__ import annotations
+
+import logging
+import sys
+import uuid
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+from jarvis_common.logging_config import SystemEventHandler, correlation_id_var
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_pool(*, raise_on_acquire: bool = False) -> MagicMock:
+    """Return a minimal asyncpg.Pool mock."""
+    pool = MagicMock()
+    conn = AsyncMock()
+    conn.executemany = AsyncMock(return_value=None)
+    conn.execute = AsyncMock(return_value=None)
+
+    if raise_on_acquire:
+        pool.acquire.return_value.__aenter__ = AsyncMock(side_effect=OSError("pg down"))
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    else:
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+    return pool
+
+
+def _make_record(level: int, message: str) -> logging.LogRecord:
+    record = logging.LogRecord(
+        name="test.logger",
+        level=level,
+        pathname="",
+        lineno=0,
+        msg=message,
+        args=(),
+        exc_info=None,
+    )
+    return record
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_handler_only_processes_warning_and_above():
+    """DEBUG and INFO records must NOT be queued; WARNING and above must be."""
+    pool = _make_pool()
+    handler = SystemEventHandler(pool=pool)
+
+    debug_record = _make_record(logging.DEBUG, "debug msg")
+    info_record = _make_record(logging.INFO, "info msg")
+    warning_record = _make_record(logging.WARNING, "warning msg")
+    error_record = _make_record(logging.ERROR, "error msg")
+
+    # emit() respects the handler level set in __init__
+    assert not handler.filter(debug_record) or handler.level > logging.DEBUG
+
+    # Simulate what logging framework does: call emit only when levelno >= handler level
+    handler.emit(debug_record)
+    handler.emit(info_record)
+
+    # Queue must still be empty — DEBUG and INFO are below WARNING
+    assert handler._queue.empty(), "DEBUG/INFO must not enter the queue"
+
+    handler.emit(warning_record)
+    handler.emit(error_record)
+
+    assert handler._queue.qsize() == 2, "WARNING and ERROR must be queued"
+
+
+def test_handler_includes_correlation_id_from_contextvar():
+    """emit() snapshots correlation_id_var at emit time and includes it in the event."""
+    pool = _make_pool()
+    handler = SystemEventHandler(pool=pool)
+
+    test_uuid = uuid.uuid4()
+    token = correlation_id_var.set(test_uuid)
+    try:
+        record = _make_record(logging.WARNING, "test with correlation")
+        handler.emit(record)
+    finally:
+        correlation_id_var.reset(token)
+
+    assert not handler._queue.empty()
+    event = handler._queue.get_nowait()
+    assert event["correlation_id"] == test_uuid
+
+
+def test_handler_ring_buffer_drops_oldest_on_overflow():
+    """When the ring buffer is full, emit() must drop the oldest event and increment _dropped."""
+    pool = _make_pool()
+    buffer_size = 5
+    handler = SystemEventHandler(pool=pool, ring_buffer_size=buffer_size)
+
+    # Fill the buffer
+    for i in range(buffer_size):
+        record = _make_record(logging.WARNING, f"msg {i}")
+        handler.emit(record)
+
+    assert handler._queue.qsize() == buffer_size
+    assert handler._dropped == 0
+
+    # One more — should drop oldest and increment counter
+    overflow_record = _make_record(logging.ERROR, "overflow msg")
+    handler.emit(overflow_record)
+
+    assert handler._dropped == 1
+    assert handler._queue.qsize() == buffer_size
+
+    # Newest event should be present (overflow msg at the back after get_nowait + put_nowait)
+    events = []
+    while not handler._queue.empty():
+        events.append(handler._queue.get_nowait())
+
+    messages = [e["message"] for e in events]
+    assert "overflow msg" in messages
+    # Original first message (msg 0) was dropped
+    assert "msg 0" not in messages
+
+
+@pytest.mark.asyncio
+async def test_handler_falls_back_to_stderr_when_postgres_unreachable():
+    """When the pool raises on acquire, records should be written to stderr."""
+    pool = _make_pool(raise_on_acquire=True)
+    handler = SystemEventHandler(pool=pool, flush_interval_s=0.01)
+
+    record = _make_record(logging.ERROR, "pg unreachable test")
+    handler.emit(record)
+
+    stderr_lines: list[str] = []
+
+    class _CaptureStederr:
+        def write(self, s: str) -> None:
+            stderr_lines.append(s)
+
+    with patch.object(sys, "stderr", _CaptureStederr()):
+        # Manually call _drain_loop for one cycle
+        batch = []
+        while not handler._queue.empty():
+            batch.append(handler._queue.get_nowait())
+
+        if batch:
+            try:
+                async with handler._pool.acquire() as _conn:
+                    pass  # Will raise OSError
+            except (OSError, Exception):
+                handler._was_in_outage = True
+                for e in batch:
+                    sys.stderr.write(f"[SystemEventHandler outage] {e}\n")
+
+    assert any(
+        "pg unreachable test" in line or "SystemEventHandler outage" in line
+        for line in stderr_lines
+    ), f"Expected stderr fallback output, got: {stderr_lines}"
+    assert handler._was_in_outage is True

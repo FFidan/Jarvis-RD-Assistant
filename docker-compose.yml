@@ -590,6 +590,37 @@ services:
     networks:
       - jarvis
 
+  vector:
+    image: ${VECTOR_IMAGE:?VECTOR_IMAGE is not set — source versions.env before running docker compose}
+    container_name: jarvis_vector
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./infra/vector.toml:/etc/vector/vector.toml:ro
+      - vector_data:/var/lib/vector
+    environment:
+      VECTOR_LOG: warn
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        export PG_PWD=$(cat /run/secrets/vector_writer_password)
+        export PG_DSN="postgres://vector_writer:${PG_PWD}@postgres:5432/jarvis"
+        exec vector --config /etc/vector/vector.toml
+    secrets:
+      - vector_writer_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - jarvis
+
 volumes:
   postgres_data:
   n8n_data:
@@ -602,6 +633,7 @@ volumes:
   caddy_data:
   caddy_config:
   langfuse_postgres_data:
+  vector_data:
 
 networks:
   jarvis:
@@ -634,3 +666,5 @@ secrets:
     file: ./secrets/cloudflare_tunnel_token.txt
   backup_encrypt_key:
     file: ./secrets/backup_encrypt_key.txt
+  vector_writer_password:
+    file: ./secrets/vector_writer_password.txt

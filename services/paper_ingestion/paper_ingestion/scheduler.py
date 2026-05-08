@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Re-export so callers that do ``from paper_ingestion.scheduler import run_auto_pipeline``
 # (e.g. tests) continue to work without modification.
 __all__ = [
+    "purge_system_events_task",
     "run_auto_pipeline",
     "run_pulse_classifier_training_wrapper",
     "run_pulse_wrapper",
@@ -208,6 +209,41 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
         logger.exception("digest: failed to defer weekly digest job")
 
 
+async def purge_system_events_task(app: Any) -> None:
+    """Tiered retention: 30 days for app events, 7 days for infra events."""
+    from jarvis_common.event_log import log_event  # noqa: PLC0415
+
+    pool = app.state.db_pool
+    try:
+        app_result = await pool.execute(
+            "DELETE FROM system_events WHERE category != 'infra'"
+            " AND created_at < NOW() - INTERVAL '30 days'"
+        )
+        infra_result = await pool.execute(
+            "DELETE FROM system_events WHERE category = 'infra'"
+            " AND created_at < NOW() - INTERVAL '7 days'"
+        )
+
+        # asyncpg.execute returns "DELETE <n>"; parse counts
+        def _count(s: str) -> int:
+            try:
+                return int(s.split()[-1])
+            except Exception:
+                return -1
+
+        app_n = _count(app_result)
+        infra_n = _count(infra_result)
+        await log_event(
+            pool=pool,
+            level="info",
+            category="config",
+            source="purge_system_events",
+            message=f"deleted {app_n} app + {infra_n} infra events",
+        )
+    except Exception:
+        logger.exception("purge_system_events: failed to purge old events")
+
+
 async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     """Start the APScheduler and return the scheduler instance."""
 
@@ -310,6 +346,21 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
         )
     except Exception:
         logger.exception("Failed to register zotero_library_sync job")
+
+    # Tiered system_events purge (daily at 2 AM)
+    try:
+        scheduler.add_job(
+            purge_system_events_task,
+            trigger=CronTrigger.from_crontab("0 2 * * *"),
+            args=[app],
+            id="purge_system_events",
+            name="Tiered system_events purge",
+            replace_existing=True,
+            max_instances=1,
+        )
+        logger.info("purge_system_events scheduler registered (cron=0 2 * * *)")
+    except Exception:
+        logger.exception("Failed to register purge_system_events job")
 
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)

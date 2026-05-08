@@ -10,6 +10,8 @@ from types import ModuleType
 import pytest
 from paper_ingestion.pulse.training import (
     FEATURE_NAMES,
+    _sign_blob,
+    _verify_and_unpickle,
     classifier_scores,
     load_active_classifier,
     train_classifier_model,
@@ -160,7 +162,7 @@ async def test_train_classifier_persists_active_fake_model(monkeypatch: pytest.M
     stored_feature_names = insert_call.args[3]
     metrics = insert_call.args[4]
 
-    raw = pickle.loads(model_blob)
+    raw = _verify_and_unpickle(model_blob)
     # New format: dict with model + metadata
     assert isinstance(raw, dict)
     model = raw["model"]
@@ -345,7 +347,7 @@ async def test_train_classifier_binary_signal_label_mapping(
     insert_call = conn.execute.await_args_list[1]
     # args[1] = user_id (new param from Group B user_id threading)
     model_blob = insert_call.args[2]
-    raw = pickle.loads(model_blob)
+    raw = _verify_and_unpickle(model_blob)
     assert isinstance(raw, dict)
     model = raw["model"]
     assert isinstance(model, FakeLogisticRegression)
@@ -376,7 +378,7 @@ async def test_classifier_scores_loads_user_scoped_model(monkeypatch: pytest.Mon
     """Scoring must use the active classifier for the same user scope as training."""
     _install_fake_sklearn(monkeypatch)
     pool, conn = _make_pool_and_conn()
-    model_blob = pickle.dumps(FakeLogisticRegression())
+    model_blob = _sign_blob(pickle.dumps(FakeLogisticRegression()))
     conn.fetchrow.return_value = FakeRecord(
         {
             "model_blob": model_blob,

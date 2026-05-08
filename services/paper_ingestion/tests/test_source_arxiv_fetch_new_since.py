@@ -184,7 +184,11 @@ async def test_fetch_new_since_malformed_xml_records_api_error():
 
 @respx.mock
 async def test_fetch_new_since_calls_rate_limiter():
-    """_rate_limit is called once per topic query issued."""
+    """_rate_limit is called once per consolidated query issued.
+
+    PR-B1: consolidate_topics merges all topics into 1 query when under
+    1500 chars, so 2 short topics → 1 API call → 1 _rate_limit call.
+    """
     fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
     respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
 
@@ -209,7 +213,8 @@ async def test_fetch_new_since_calls_rate_limiter():
 
     await source.fetch_new_since(since=since, topics=topics, limit=10)
 
-    assert call_count == 2  # one call per topic
+    # consolidate_topics merges 2 short topics into 1 query → 1 _rate_limit call
+    assert call_count == 1
 
 
 # ---------------------------------------------------------------------------

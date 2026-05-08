@@ -1,4 +1,6 @@
 SERVICES = services/paper_ingestion services/learning_engine services/telegram_bot
+# Compose wrapper: pins image tags from versions.env and sets dummy letsencrypt vars for local dev
+COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose --env-file versions.env
 
 .PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build
 
@@ -62,31 +64,31 @@ check: secure-secrets deps-check lint typecheck test
 
 ## Docker shortcuts
 up:
-	docker compose up -d
+	$(COMPOSE) up -d
 
 down:
-	docker compose down
+	$(COMPOSE) down
 
 logs:
-	docker compose logs -f
+	$(COMPOSE) logs -f
 
 rebuild: rebuild-dashboard
 
 rebuild-dashboard:
-	docker compose build --build-arg CACHE_BUST=$(shell date +%s) dashboard
-	docker compose up -d dashboard
+	$(COMPOSE) build --build-arg CACHE_BUST=$(shell date +%s) dashboard
+	$(COMPOSE) up -d dashboard
 
 rebuild-backend:
-	docker compose build paper_ingestion learning_engine
-	docker compose up -d paper_ingestion learning_engine
+	$(COMPOSE) build paper_ingestion learning_engine
+	$(COMPOSE) up -d paper_ingestion learning_engine
 
 rebuild-telegram:
-	docker compose build telegram_bot
-	docker compose up -d telegram_bot
+	$(COMPOSE) build telegram_bot
+	$(COMPOSE) up -d telegram_bot
 
 rebuild-local:
-	docker compose build paper_ingestion learning_engine dashboard
-	docker compose up -d paper_ingestion learning_engine dashboard
+	$(COMPOSE) build paper_ingestion learning_engine dashboard
+	$(COMPOSE) up -d paper_ingestion learning_engine dashboard
 
 up-build:
-	docker compose up -d --build
+	$(COMPOSE) up -d --build

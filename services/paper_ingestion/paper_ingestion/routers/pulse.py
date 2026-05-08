@@ -15,10 +15,12 @@ preserved as the contract-test gate.
 import logging
 import os
 import uuid
+from datetime import date
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
+from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -35,7 +37,7 @@ from paper_ingestion.models import (
     PulseRateResponse,
     PulseStatsResponse,
 )
-from paper_ingestion.pulse.deck import load_history, load_today
+from paper_ingestion.pulse.deck import load_history, load_last_nonempty_deck, load_today
 from paper_ingestion.pulse.training import FEATURE_NAMES
 from paper_ingestion.routers._paper_helpers import (
     _upsert_recommendation_feedback,
@@ -76,7 +78,41 @@ async def generate_pulse(
     Returns immediately with a ``job_id`` so the caller can poll
     ``GET /api/jobs/{job_id}`` for progress.  Rate-limited to 3/hour to
     prevent runaway LLM usage from accidental mass clicks.
+
+    We probe the advisory lock (non-blocking) before deferring rather than
+    relying on procrastinate's ``queueing_lock`` because procrastinate's lock
+    is per-payload, whereas we want a per-kind+user lock that spans the full
+    multi-minute pipeline run.
     """
+    current_uid = await current_user_id_or_none(request)
+    key1 = _kind_lock_key("pulse.generate")
+    key2 = current_uid or 0
+
+    async with db_pool.acquire() as probe_conn:
+        row = await probe_conn.fetchrow(
+            "SELECT pg_try_advisory_lock($1, $2) AS got",
+            key1,
+            key2,
+        )
+        if row["got"]:
+            # Free immediately — we only probed; the actual job holds its own lock
+            await probe_conn.execute("SELECT pg_advisory_unlock($1, $2)", key1, key2)
+        else:
+            # Lock is held — find the in-flight job for the response body (best-effort)
+            in_flight = await probe_conn.fetchrow(
+                "SELECT id FROM procrastinate_jobs"
+                " WHERE task_name LIKE '%pulse.generate%'"
+                " AND status IN ('doing', 'todo')"
+                " ORDER BY id DESC LIMIT 1"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "reason": "already_running",
+                    "in_flight_job_id": in_flight["id"] if in_flight else None,
+                },
+            )
+
     logger.info("pulse.generate: enqueueing job")
     jarvis_job_id = str(uuid.uuid4())
     # allow-user-id-none: system-level cron job
@@ -101,11 +137,62 @@ async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseDeckResponse:
-    """Fetch today's Pulse deck (404 if not generated yet)."""
+    """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
+
+    Returns
+    -------
+    PulseDeckResponse
+        - Today's deck when card_count > 0 (``is_stale=False``).
+        - A stale fallback deck (``is_stale=True``, ``stale_age_days`` set,
+          ``stale_diagnostics`` populated from source_health) when today's deck
+          exists but has no cards.
+        - Today's empty deck with ``empty_reason="no_data_yet"`` when no
+          non-empty deck exists within the last 7 days.
+    Raises
+    ------
+    HTTPException(404)
+        When no deck has been generated for today at all.
+    """
     user_id = await current_user_id_or_none(request)
     deck = await load_today(db_pool, user_id=user_id)
     if deck is None:
         raise HTTPException(status_code=404, detail="No Pulse deck for today")
+
+    # Today's deck has cards — return as-is (new fields stay at defaults)
+    if deck.card_count > 0:
+        return deck
+
+    # Today's deck is empty: try stale fallback
+    fallback_row = await load_last_nonempty_deck(db_pool, user_id=user_id, max_age_days=7)
+    if fallback_row is not None:
+        stale_age = (date.today() - fallback_row["deck_date"]).days
+        # Fetch source_health diagnostics for this user
+        async with db_pool.acquire() as conn:
+            health_rows = await conn.fetch(
+                """
+                SELECT source_type, last_status, cooldown_until, consecutive_failures
+                FROM source_health
+                WHERE user_id IS NOT DISTINCT FROM $1
+                """,
+                user_id,
+            )
+        stale_diagnostics = {
+            row["source_type"]: {
+                "last_status": row["last_status"],
+                "cooldown_until": (
+                    row["cooldown_until"].isoformat() if row["cooldown_until"] else None
+                ),
+                "consecutive_failures": row["consecutive_failures"],
+            }
+            for row in health_rows
+        }
+        deck.is_stale = True
+        deck.stale_age_days = stale_age
+        deck.stale_diagnostics = stale_diagnostics
+        return deck
+
+    # No usable fallback in the last 7 days
+    deck.empty_reason = "no_data_yet"
     return deck
 
 
@@ -446,3 +533,81 @@ async def debug_pulse(
         ),
         classifier_degradation_reason=classifier_stats.get("degradation_reason"),
     )
+
+
+# ---------------------------------------------------------------------------
+# GET /api/pulse/source-health
+# ---------------------------------------------------------------------------
+
+
+@router.get("/source-health")
+@limiter.limit("30/minute")
+async def get_source_health(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[dict]:
+    """Return per-source health status (last request, last success, cooldown).
+
+    Returns
+    -------
+    list[dict]
+        List of source health rows, one per source_type, sorted by source_type.
+        Fields: source_type, last_request_at, last_success_at, last_status,
+                cooldown_until, consecutive_failures.
+    """
+    user_id = await current_user_id_or_none(request)
+    rows = await db_pool.fetch(
+        """
+        SELECT source_type, last_request_at, last_success_at, last_status,
+               cooldown_until, consecutive_failures
+        FROM source_health
+        WHERE user_id IS NOT DISTINCT FROM $1
+        ORDER BY source_type
+        """,
+        user_id,
+    )
+    return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# GET /api/pulse/source-history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/source-history")
+@limiter.limit("30/minute")
+async def get_source_history(
+    request: Request,
+    days: int = Query(default=7, ge=1, le=365),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> dict[str, list[dict]]:
+    """Return source run history grouped by source_type.
+
+    Returns
+    -------
+    dict[str, list[dict]]
+        Mapping from source_type to list of run records (newest first within
+        each source).  Each record includes: started_at, finished_at, status,
+        candidate_count, duration_ms.
+
+    Parameters
+    ----------
+    days : int
+        Include runs started in the last *days* days (default 7).
+    """
+    user_id = await current_user_id_or_none(request)
+    rows = await db_pool.fetch(
+        """
+        SELECT source_type, started_at, finished_at, status, candidate_count, duration_ms
+        FROM source_run_history
+        WHERE user_id IS NOT DISTINCT FROM $1
+          AND started_at > NOW() - ($2::int || ' days')::interval
+        ORDER BY source_type, started_at DESC
+        """,
+        user_id,
+        days,
+    )
+    grouped: dict[str, list[dict]] = {}
+    for r in rows:
+        grouped.setdefault(r["source_type"], []).append(dict(r))
+    return grouped

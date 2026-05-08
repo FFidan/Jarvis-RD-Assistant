@@ -6,6 +6,7 @@ import json
 import logging
 from datetime import UTC, datetime
 
+from jarvis_common.event_log import log_event
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -97,6 +98,14 @@ async def _handle_pairing(
                     json.dumps(chat.id),
                 )
                 await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)
+        await log_event(
+            pool=db_pool,
+            level="info",
+            category="config",
+            source="telegram_bot",
+            message="setting_changed",
+            context={"chat_id": chat.id, "command": "start_pairing"},
+        )
         await message.reply_text("✅ Paired! You'll now receive JARVIS notifications here.")
     except Exception:
         logger.exception("pairing_failed code_hash=%s", code_hash)  # hash only — not raw code

@@ -7,6 +7,7 @@ import os
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
+from jarvis_common.event_log import log_event
 from jarvis_common.secrets import read_secret
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,24 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
         if not hmac.compare_digest(api_key or "", jarvis_api_key):
+            # Emit an auth-failure event; failures indicate a potential probe or
+            # misconfigured client. Successes are NOT logged (too noisy per-request).
+            try:
+                _pool = getattr(getattr(request, "app", None), "state", None)
+                _pool = getattr(_pool, "db_pool", None) if _pool is not None else None
+                if _pool is not None:
+                    await log_event(
+                        pool=_pool,
+                        level="warning",
+                        category="auth",
+                        source="verify_api_key",
+                        message="invalid_api_key",
+                        context={
+                            "ip": request.client.host if request.client else None,
+                        },
+                    )
+            except Exception:  # noqa: BLE001
+                logger.debug("auth event log_event failed (non-fatal)", exc_info=True)
             raise HTTPException(status_code=403, detail="Invalid or missing API key")
         return
     # No key configured — fall back to DEV_MODE check

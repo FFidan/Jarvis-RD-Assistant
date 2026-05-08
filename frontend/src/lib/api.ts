@@ -194,7 +194,11 @@ import type {
   DeleteFeedbackResponse,
   JournalEntry,
   JournalPrompts,
+  SourceHealth,
+  SourceRunRecord,
 } from '@/types';
+
+export type { SourceHealth, SourceRunRecord };
 
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
@@ -923,6 +927,12 @@ export const fetchPulseStats = (days = 30) =>
 
 export const fetchPulseDebug = () =>
   apiFetch<PulseDebugInfo>('/api/pulse/debug');
+
+export const getPulseSourceHealth = () =>
+  apiFetch<SourceHealth[]>('/api/pulse/source-health');
+
+export const getPulseSourceHistory = (days = 7) =>
+  apiFetch<Record<string, SourceRunRecord[]>>(`/api/pulse/source-history?days=${days}`);
 
 import type { Job } from '@/stores/job-store';
 

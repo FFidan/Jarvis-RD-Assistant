@@ -17,6 +17,7 @@ import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
+import { LogsPage } from '@/pages/LogsPage';
 import { SetupWizard } from '@/pages/SetupWizard';
 import { getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -106,6 +107,7 @@ export function App() {
                   <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="logs" element={<RouteErrorBoundary><LogsPage /></RouteErrorBoundary>} />
                   <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
