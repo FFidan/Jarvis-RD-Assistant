@@ -57,6 +57,10 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
     )
 
 
+# Decorator order: @auth_required outer, @rate_limit inner.
+# This is intentional: auth failure terminates the chain before any rate-limiter
+# slot is consumed, preventing unauthenticated callers from exhausting the window.
+# DoS mitigation at the network edge (nginx/Caddy rate-limit) is the complement.
 @auth_required
 @rate_limit(max_calls=5, window_seconds=60)
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

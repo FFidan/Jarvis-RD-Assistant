@@ -315,9 +315,12 @@ CREATE TABLE IF NOT EXISTS paper_recommendations (
     dismissed       BOOLEAN NOT NULL DEFAULT FALSE,
     clicked         BOOLEAN NOT NULL DEFAULT FALSE,
     recommended_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_paper_recommendations_paper_id UNIQUE (paper_id)
+    user_id         INTEGER NULL,
+    CONSTRAINT uq_paper_recommendations_paper_user_id UNIQUE NULLS NOT DISTINCT (paper_id, user_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_recommendations_score ON paper_recommendations(score DESC);
+CREATE INDEX IF NOT EXISTS idx_paper_recommendations_user
+    ON paper_recommendations(user_id) WHERE user_id IS NOT NULL;
 
 CREATE TABLE paper_notes (
     id              SERIAL PRIMARY KEY,
@@ -437,9 +440,11 @@ CREATE TABLE projects (
     status          VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'archived')),
     deadline        TIMESTAMPTZ,
     color           VARCHAR(7) CHECK (color IS NULL OR color ~ '^#[0-9A-Fa-f]{6}$'),
+    user_id         INTEGER NULL,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_projects_user ON projects(user_id) WHERE user_id IS NOT NULL;
 
 COMMENT ON TABLE projects IS 'Research projects with deadlines.';
 COMMENT ON COLUMN projects.status IS 'One of: active, paused, completed, archived.';
@@ -456,10 +461,12 @@ CREATE TABLE tasks (
     estimated_hours FLOAT,
     actual_hours    FLOAT,
     sort_order      INTEGER DEFAULT 0,
+    user_id         INTEGER NULL,
     completed_at    TIMESTAMPTZ,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_tasks_user ON tasks(user_id) WHERE user_id IS NOT NULL;
 
 COMMENT ON TABLE tasks IS 'Tasks within projects. Supports subtasks via parent_task_id.';
 COMMENT ON COLUMN tasks.status IS 'One of: todo, in_progress, blocked, done.';
@@ -485,8 +492,10 @@ CREATE TABLE milestones (
     description     TEXT,
     completed       BOOLEAN DEFAULT FALSE,
     completed_at    TIMESTAMPTZ,
+    user_id         INTEGER NULL,
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX IF NOT EXISTS idx_milestones_user ON milestones(user_id) WHERE user_id IS NOT NULL;
 
 COMMENT ON TABLE milestones IS 'Project milestones with deadlines for Telegram reminder nudges.';
 

@@ -1,6 +1,6 @@
 -- 062_daily_log_user_id.sql
 -- Multi-tenant readiness: add user_id column to daily_log + UNIQUE NULLS NOT DISTINCT.
--- Wave-4 will backfill NULL → 1 across all user-scoped tables in mig 063.
+-- Migrations 063-066 add user_id to paper_recommendations, projects, tasks, milestones.
 ALTER TABLE daily_log ADD COLUMN IF NOT EXISTS user_id INTEGER;
 ALTER TABLE daily_log DROP CONSTRAINT IF EXISTS daily_log_log_date_key;
 DO $$ BEGIN

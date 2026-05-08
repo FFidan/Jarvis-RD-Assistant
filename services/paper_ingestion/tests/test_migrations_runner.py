@@ -96,9 +96,10 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     # Versions intentionally deferred to the runtime runner (not baked into init.sql).
     # 33: false-applied, repaired at runtime.
     # 52, 53: procrastinate schema / drop legacy jobs — never baked into init.sql.
-    # 62: daily_log user_id (Group 1D Wave-1); applied by the runtime runner on
-    #     first boot against existing installs; not yet baked into init.sql.
-    deferred = {33, 52, 53, 62}
+    # 62: daily_log user_id — applied by runtime runner on existing installs.
+    # 63-66: Wave-3 multi-tenant user_id columns (paper_recommendations, projects,
+    #         tasks, milestones) — applied by runtime runner on existing installs.
+    deferred = {33, 52, 53, 62, 63, 64, 65, 66}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (
@@ -111,26 +112,26 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
 def test_schema_probes_cover_recent_migrations() -> None:
     """Probes for the most recent schema/state-affecting migrations must exist.
 
-    W3-DRY-12: migrations 56 (pulse.stage2_top_k canonicalised from 50→40),
-    59 (daily_intent table; TEXT user_id as initially created), 60 (user_id
-    converted to INTEGER), and 61 (created_at column added) all have observable
-    schema effects that the repair loop can detect and replay.
+    Migrations 56 (pulse.stage2_top_k), 60 (daily_intent.user_id → INTEGER),
+    and 61 (daily_intent.created_at added) all have observable schema effects.
+    Probe 59 was removed (W1-13): it checked data_type='text' for a column that
+    mig-060 already converted to INTEGER, causing infinite churn.
     """
     versions = {v for v, _, _ in _MIGRATION_SCHEMA_PROBES}
-    assert {56, 59, 60, 61} <= versions
+    assert {56, 60, 61} <= versions
+    assert 59 not in versions, "probe 59 was removed (W1-13) — do not re-add"
 
 
-def test_migration_059_probe_checks_text_not_integer() -> None:
-    """Probe for mig-59 must check that user_id is TEXT (original state), not INTEGER.
+def test_migration_060_probe_checks_integer_with_schema_filter() -> None:
+    """Probe 60 must check data_type='integer' (post-mig-60 state) with a public schema filter.
 
-    Mig-59 creates daily_intent with user_id TEXT. Mig-60 converts it to INTEGER.
-    If the probe tested for INTEGER it would always pass after mig-60 runs, making
-    it impossible to detect a false-applied mig-59 marker on a schema that was
-    never actually migrated through mig-59.
+    Added table_schema = 'public' guard in W2-6 to prevent false positives from
+    extension schemas that happen to have a matching table/column name.
     """
     probes = {v: sql for v, _, sql in _MIGRATION_SCHEMA_PROBES}
-    assert 59 in probes
-    assert "'text'" in probes[59].lower() or "= 'text'" in probes[59]
+    assert 60 in probes
+    assert "integer" in probes[60].lower()
+    assert "public" in probes[60].lower()
 
 
 def test_strip_outer_transaction_control_same_line_dollar_quote() -> None:
