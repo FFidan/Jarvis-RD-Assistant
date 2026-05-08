@@ -331,6 +331,40 @@ async def trash_paper(
 
 
 # ---------------------------------------------------------------------------
+# restore_paper — restore from trash
+# ---------------------------------------------------------------------------
+
+
+async def restore_paper(
+    conn: Any,
+    paper_id: int,
+    user_id: int | None,
+) -> None:
+    """Restore a paper from Trash: ``state := COALESCE(state_before_trash, 'inbox')``.
+
+    Also clears ``state_before_trash`` so the field only carries meaning while
+    the paper is in trash.
+
+    Raises
+    ------
+    HTTPException(404)
+        If no row was updated — paper not found or not in trash for this caller.
+    """
+    status = await conn.execute(
+        """UPDATE paper_user_state
+              SET state = COALESCE(state_before_trash, 'inbox'),
+                  state_before_trash = NULL
+            WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
+        paper_id,
+        user_id,
+    )
+    # asyncpg returns e.g. "UPDATE 1" — extract the row count.
+    updated = int(status.split()[-1]) if status else 0
+    if updated == 0:
+        raise HTTPException(status_code=404, detail="Paper not found or not in trash")
+
+
+# ---------------------------------------------------------------------------
 # assert_paper_in_states — precondition guard
 # ---------------------------------------------------------------------------
 

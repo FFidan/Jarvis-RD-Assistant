@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getKnowledgeGraph, batchExtractEntities } from '@/lib/api';
 import { CytoscapeGraph } from '@/components/graph/CytoscapeGraph';
@@ -118,7 +119,7 @@ export function KnowledgeGraphPage() {
 
       {isError && (
         <p className="text-sm text-destructive">
-          Failed to load knowledge graph: {(error as Error).message}
+          Failed to load knowledge graph: {errorMessage(error)}
         </p>
       )}
 
@@ -137,7 +138,7 @@ export function KnowledgeGraphPage() {
           )}
           {extractMut.isError && (
             <p className="mt-2 text-sm text-destructive">
-              Extraction failed: {(extractMut.error as Error).message}
+              Extraction failed: {errorMessage(extractMut.error)}
             </p>
           )}
           <div className="mt-4 flex gap-2">

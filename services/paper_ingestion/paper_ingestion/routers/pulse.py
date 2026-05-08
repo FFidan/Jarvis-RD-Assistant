@@ -78,9 +78,8 @@ async def generate_pulse(
     prevent runaway LLM usage from accidental mass clicks.
     """
     logger.info("pulse.generate: enqueueing job")
-    # H16: system job — user_id=None until real auth resolver lands.
-    # pulse.generate is a system-level cron job, not user-owned.
     jarvis_job_id = str(uuid.uuid4())
+    # allow-user-id-none: system-level cron job
     await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=None)
     await log_audit(
         db_pool,

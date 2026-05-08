@@ -372,6 +372,12 @@ def build_contradiction_candidates(
 
 
 def _build_prompt(candidate: ContradictionCandidate) -> str:
+    title_a, _ = wrap_delimited("title_a", candidate.a.title)
+    finding_a, _ = wrap_delimited("finding_a", candidate.a.finding)
+    quote_a, _ = wrap_delimited("quote_a", candidate.a.quote)
+    title_b, _ = wrap_delimited("title_b", candidate.b.title)
+    finding_b, _ = wrap_delimited("finding_b", candidate.b.finding)
+    quote_b, _ = wrap_delimited("quote_b", candidate.b.quote)
     return f"""\
 You are checking whether two quote-backed research findings contradict each other.
 
@@ -383,14 +389,14 @@ Rules:
 4. Do not invent supporting text.
 
 Paper A:
-{wrap_delimited("title_a", candidate.a.title)}
-{wrap_delimited("finding_a", candidate.a.finding)}
-{wrap_delimited("quote_a", candidate.a.quote)}
+{title_a}
+{finding_a}
+{quote_a}
 
 Paper B:
-{wrap_delimited("title_b", candidate.b.title)}
-{wrap_delimited("finding_b", candidate.b.finding)}
-{wrap_delimited("quote_b", candidate.b.quote)}
+{title_b}
+{finding_b}
+{quote_b}
 
 Respond as JSON:
 {{

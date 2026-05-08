@@ -130,8 +130,10 @@ function HardwareStrip({ hardware }: HardwareStripProps) {
     .join(' · ');
 
   return (
-    <div
-      className="mb-3 cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none"
+    <button
+      type="button"
+      aria-expanded={expanded}
+      className="mb-3 w-full cursor-pointer rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground select-none text-left"
       onClick={() => setExpanded((v) => !v)}
       data-testid="hardware-strip"
     >
@@ -153,7 +155,7 @@ function HardwareStrip({ hardware }: HardwareStripProps) {
           )}
         </span>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -266,6 +268,7 @@ function NumCtxSlider({
 
   // Snap to nearest stop
   const snapToStop = (val: number): number => {
+    if (stops.length === 0) return 2048;
     let nearest = stops[0];
     for (const s of stops) {
       if (Math.abs(s - val) < Math.abs(nearest - val)) nearest = s;

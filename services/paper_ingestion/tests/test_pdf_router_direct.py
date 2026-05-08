@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 from fastapi.dependencies import utils as fastapi_dependency_utils
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
@@ -276,8 +276,6 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         {"id": 12, "pdf_local_path": str(outside_pdf)},
     ]
     pool = _make_pool(conn)
-    background_tasks = BackgroundTasks()
-    background_tasks.add_task = MagicMock()
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
@@ -297,7 +295,6 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
     ):
         result = await pdf.batch_process_papers.__wrapped__(
             request,
-            background_tasks=background_tasks,
             limit=10,
             db_pool=pool,
         )

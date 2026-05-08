@@ -167,7 +167,7 @@ export function PulseCard({
                 <a
                   href={safePaperUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel="noopener noreferrer"
                   onClick={stop}
                   className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
                 >

@@ -57,8 +57,8 @@ def build_extraction_prompt(fields: list[dict], title: str, text: str) -> str:
         for f in fields
     )
 
-    safe_title = wrap_delimited("title", title, max_chars=500)
-    safe_body = wrap_delimited("paper_text", text, max_chars=15000)
+    safe_title, _ = wrap_delimited("title", title, max_chars=500)
+    safe_body, _ = wrap_delimited("paper_text", text, max_chars=15000)
 
     return (
         f"You are a precise research paper data extractor."

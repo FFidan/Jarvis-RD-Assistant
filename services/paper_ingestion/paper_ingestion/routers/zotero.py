@@ -8,6 +8,7 @@ import uuid
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from jarvis_common import assert_paper_ownership, current_user_id_or_none
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
@@ -83,16 +84,18 @@ async def push_paper_to_zotero(
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
-    if not exists:
-        raise HTTPException(status_code=404, detail="Paper not found")
+        if not exists:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await assert_paper_ownership(conn, paper_id, user_id)
 
     from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["zotero.push"].defer_async(
-        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
     )
     return {"job_id": jarvis_job_id, "status": "queued"}
 
@@ -149,16 +152,18 @@ async def resync_paper_to_zotero(
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
-    if not exists:
-        raise HTTPException(status_code=404, detail="Paper not found")
+        if not exists:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await assert_paper_ownership(conn, paper_id, user_id)
 
     from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["zotero.resync"].defer_async(
-        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
     )
     return {"job_id": jarvis_job_id, "status": "queued"}
 
@@ -180,16 +185,18 @@ async def sync_annotations_for_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobEnqueuedResponse:
     """Enqueue Zotero annotation import for a linked paper."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
-    if not exists:
-        raise HTTPException(status_code=404, detail="Paper not found")
+        if not exists:
+            raise HTTPException(status_code=404, detail="Paper not found")
+        await assert_paper_ownership(conn, paper_id, user_id)
 
     from jarvis_common.task_registry import KIND_TO_TASK
 
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
-        job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+        job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
     )
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")
 
@@ -214,5 +221,6 @@ async def poll_now(
 
     logger.info("zotero.poll: enqueueing sync job")
     jarvis_job_id = str(uuid.uuid4())
+    # allow-user-id-none: system-wide cron
     await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(job_id=jarvis_job_id, user_id=None)
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")

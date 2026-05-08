@@ -7,6 +7,7 @@ from pathlib import Path
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import assert_paper_ownership, current_user_id_or_none
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -223,9 +224,12 @@ async def analyze_paper(
 
         from jarvis_common.task_registry import KIND_TO_TASK
 
+        user_id = await current_user_id_or_none(request)
+        async with db_pool.acquire() as conn:
+            await assert_paper_ownership(conn, paper_id, user_id)
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.analyze"].defer_async(
-            job_id=jarvis_job_id, user_id=None, paper_id=paper_id
+            job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id
         )
         return {"job_id": jarvis_job_id, "status": "queued"}
 

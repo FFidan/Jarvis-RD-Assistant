@@ -71,6 +71,11 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     )
 
 
+def _resolve_single_tenant_user_id() -> None:  # type: ignore[return]
+    """Single-tenant placeholder — returns None until Wave-6 ships a real resolver."""
+    return None  # allow-user-id-none: pre-Wave-6 single-tenant
+
+
 async def current_user_id(request: Request) -> int | None:
     """Return the current user's integer ID, or None in single-tenant mode.
 
@@ -86,12 +91,8 @@ async def current_user_id(request: Request) -> int | None:
         explicit, and :func:`assert_multi_tenant_not_implemented` to guard paths
         that must not run in single-tenant mode.
     """
-    # STUB — returns None until real auth resolver ships.
-    # Every downstream check (assert_paper_ownership, _owner_matches, feed scoping)
-    # short-circuits as a no-op.  Single-user mode works correctly because the
-    # stubs are no-ops.  Multi-tenant is blocked until a real resolver replaces this.
     # SEC-108: single-tenant placeholder — always None until Wave-6.
-    return None
+    return _resolve_single_tenant_user_id()
 
 
 async def current_user_id_or_none(request: Request) -> int | None:
@@ -101,10 +102,7 @@ async def current_user_id_or_none(request: Request) -> int | None:
     call-site intent is explicit: "I know this can be None and I handle it."
     Returns None in all current deployments (single-tenant).
     """
-    # STUB — returns None until real auth resolver ships.
-    # All ownership guards (assert_paper_ownership, _owner_matches) treat None
-    # as "single-user mode" and allow access unconditionally.
-    return None
+    return _resolve_single_tenant_user_id()
 
 
 def assert_multi_tenant_not_implemented() -> None:
@@ -123,7 +121,7 @@ def assert_multi_tenant_not_implemented() -> None:
     raise NotImplementedError("multi-tenant auth not yet implemented; use Wave-6 ownership helpers")
 
 
-def single_tenant_user_id() -> None:
+def single_tenant_user_id() -> None:  # type: ignore[return]
     """Return the implicit user-id for single-tenant (pre-Wave-4) callers.
 
     In the current single-tenant deployment every authenticated request belongs
@@ -136,8 +134,7 @@ def single_tenant_user_id() -> None:
         Always ``None`` — the single-tenant sentinel value. Wave-4 will replace
         calls to this function with real user-id resolution from the pairing table.
     """
-    # allow-user-id-none: pre-Wave-4 single-tenant
-    return None
+    return _resolve_single_tenant_user_id()  # allow-user-id-none: pre-Wave-6 single-tenant
 
 
 def validate_production_config() -> None:

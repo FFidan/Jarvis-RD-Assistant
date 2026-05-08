@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -93,7 +94,7 @@ export function AnalyticsPage() {
             {activityQuery.isLoading ? (
               <ChartSkeleton />
             ) : activityQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(activityQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(activityQuery.error)}</p>
             ) : activityQuery.data && activityQuery.data.length > 0 ? (
               <ActivityChart data={activityQuery.data} />
             ) : (
@@ -113,7 +114,7 @@ export function AnalyticsPage() {
             {retentionQuery.isLoading ? (
               <ChartSkeleton />
             ) : retentionQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(retentionQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(retentionQuery.error)}</p>
             ) : retentionQuery.data && retentionQuery.data.length > 0 ? (
               <RetentionChart data={retentionQuery.data} />
             ) : (
@@ -133,7 +134,7 @@ export function AnalyticsPage() {
             {sourceQuery.isLoading ? (
               <ChartSkeleton />
             ) : sourceQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(sourceQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(sourceQuery.error)}</p>
             ) : sourceQuery.data && sourceQuery.data.length > 0 ? (
               <PapersBySourceChart data={sourceQuery.data} />
             ) : (
@@ -150,7 +151,7 @@ export function AnalyticsPage() {
             {statusQuery.isLoading ? (
               <ChartSkeleton />
             ) : statusQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(statusQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(statusQuery.error)}</p>
             ) : statusQuery.data && statusQuery.data.length > 0 ? (
               <PapersByStatusChart data={statusQuery.data} />
             ) : (
@@ -170,7 +171,7 @@ export function AnalyticsPage() {
             {reviewsQuery.isLoading ? (
               <ChartSkeleton />
             ) : reviewsQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(reviewsQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(reviewsQuery.error)}</p>
             ) : reviewsQuery.data && reviewsQuery.data.length > 0 ? (
               <ReviewsByRatingChart data={reviewsQuery.data} />
             ) : (
@@ -187,7 +188,7 @@ export function AnalyticsPage() {
             {llmCostQuery.isLoading ? (
               <ChartSkeleton />
             ) : llmCostQuery.isError ? (
-              <p className="text-sm text-destructive">Failed to load: {(llmCostQuery.error as Error).message}</p>
+              <p className="text-sm text-destructive">Failed to load: {errorMessage(llmCostQuery.error)}</p>
             ) : llmCostQuery.data && llmCostQuery.data.length > 0 ? (
               <LlmCostChart data={llmCostQuery.data} />
             ) : (

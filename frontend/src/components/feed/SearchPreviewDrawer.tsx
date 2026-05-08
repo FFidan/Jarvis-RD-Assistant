@@ -77,7 +77,7 @@ export function SearchPreviewDrawer({
             </Button>
             {isValidUrl && (
               <Button variant="outline" asChild>
-                <a href={paper.url} target="_blank" rel="noreferrer">
+                <a href={paper.url} target="_blank" rel="noopener noreferrer">
                   Open original
                 </a>
               </Button>

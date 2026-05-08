@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useMutation } from '@tanstack/react-query';
 import { queryKnowledgeGraph } from '@/lib/api';
 import { Input } from '@/components/ui/input';
@@ -41,7 +42,7 @@ export function KGQueryInput() {
 
       {mutation.isError && (
         <p className="text-xs text-destructive">
-          Query failed: {(mutation.error as Error).message}
+          Query failed: {errorMessage(mutation.error)}
         </p>
       )}
 

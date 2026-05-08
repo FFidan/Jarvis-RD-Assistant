@@ -128,8 +128,9 @@ async def prepare_single_paper_rag(
         f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
         for c in chunks
     )
+    safe_title, _ = wrap_delimited("title", paper["title"])
     prompt = (
-        f"Paper: {wrap_delimited('title', paper['title'])}\n\n"
+        f"Paper: {safe_title}\n\n"
         "Answer using ONLY these excerpts. If not covered, say so.\n\n"
         f"EXCERPTS:\n{context_blocks}\n\n"
         f"<question>{safe_question}</question>\n\nANSWER:"
@@ -268,7 +269,7 @@ async def prepare_cross_paper_rag(
     paper_number_map: dict[int, int] = {}
     for i, pid in enumerate(prompt_chunks_by_paper.keys(), start=1):
         meta = paper_meta.get(pid)
-        title = wrap_delimited("title", meta["title"]) if meta else f"Paper ID {pid}"
+        title = wrap_delimited("title", meta["title"])[0] if meta else f"Paper ID {pid}"
         paper_number_map[pid] = i
 
         excerpts = "\n".join(

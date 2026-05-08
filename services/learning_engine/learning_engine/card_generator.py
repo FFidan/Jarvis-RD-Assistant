@@ -293,10 +293,13 @@ class CardGenerator:
         # Escape braces ONLY for str.format(); keep raw full_text for verification
         escaped_text = full_text.replace("{", "{{").replace("}", "}}")
 
+        safe_title, _ = wrap_delimited("title", title)
+        safe_authors, _ = wrap_delimited("authors", ", ".join(authors))
+        safe_text, _ = wrap_delimited("paper_text", escaped_text, max_chars=50000)
         prompt = CARD_GENERATION_PROMPT.format(
-            title=wrap_delimited("title", title),
-            authors=wrap_delimited("authors", ", ".join(authors)),
-            text=wrap_delimited("paper_text", escaped_text, max_chars=50000),
+            title=safe_title,
+            authors=safe_authors,
+            text=safe_text,
             max_cards=max_cards,
         )
 

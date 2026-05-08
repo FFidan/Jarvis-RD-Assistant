@@ -84,7 +84,7 @@ export function ZoteroPanel({ paperId, hasProjectLinks }: ZoteroPanelProps) {
           )}
           <div className="flex gap-1">
             <Button size="sm" variant="outline" asChild>
-              <a href={`zotero://select/library/items/${linkage.zotero_item_key}`} target="_blank" rel="noreferrer">
+              <a href={`zotero://select/library/items/${linkage.zotero_item_key}`} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-3 w-3 mr-1" />
                 View in Zotero
               </a>

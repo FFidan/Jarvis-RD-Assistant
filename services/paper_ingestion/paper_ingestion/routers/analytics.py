@@ -5,6 +5,7 @@ from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from jarvis_common import assert_paper_ownership, current_user_id_or_none
 from jarvis_common.task_registry import KIND_TO_TASK
 from pydantic import BaseModel
 
@@ -89,6 +90,7 @@ async def fetch_and_process_foundational(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FetchAndProcessResponse:
     """Promote a citation stub and enqueue processing only when a PDF exists."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
             """
@@ -100,6 +102,7 @@ async def fetch_and_process_foundational(
         )
         if not paper:
             raise HTTPException(status_code=404, detail="Citation stub paper not found")
+        await assert_paper_ownership(conn, body.paper_id, user_id)
         await conn.execute(
             """
             UPDATE papers
@@ -112,7 +115,7 @@ async def fetch_and_process_foundational(
     if paper["pdf_downloaded"] and paper["pdf_local_path"]:
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.process"].defer_async(
-            job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id
+            job_id=jarvis_job_id, user_id=user_id, paper_id=body.paper_id
         )
         return FetchAndProcessResponse(
             paper_id=body.paper_id, status="queued", job_id=jarvis_job_id
@@ -120,7 +123,7 @@ async def fetch_and_process_foundational(
     if paper["pdf_url"]:
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.analyze"].defer_async(
-            job_id=jarvis_job_id, user_id=None, paper_id=body.paper_id
+            job_id=jarvis_job_id, user_id=user_id, paper_id=body.paper_id
         )
         return FetchAndProcessResponse(
             paper_id=body.paper_id, status="queued", job_id=jarvis_job_id

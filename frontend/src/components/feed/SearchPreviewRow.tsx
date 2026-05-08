@@ -185,7 +185,7 @@ export function SearchPreviewRow({
 
           {isValidUrl && (
             <DropdownMenuItem asChild>
-              <a href={paper.url} target="_blank" rel="noreferrer">
+              <a href={paper.url} target="_blank" rel="noopener noreferrer">
                 Open original
                 <ExternalLink className="ml-auto h-4 w-4" />
               </a>
@@ -213,7 +213,7 @@ export function SearchPreviewRow({
 
           {isSavedWithZotero && zoteroItemKey && (
             <DropdownMenuItem asChild>
-              <a href={`zotero://select/library/items/${zoteroItemKey}`} target="_blank" rel="noreferrer">
+              <a href={`zotero://select/library/items/${zoteroItemKey}`} target="_blank" rel="noopener noreferrer">
                 View in Zotero
               </a>
             </DropdownMenuItem>

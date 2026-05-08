@@ -239,7 +239,8 @@ export function ResearchFeedPage() {
           };
         }),
       );
-      void queryClient.invalidateQueries({ queryKey: ['feed', 'library'] });
+      void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
+      void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
       toast.success(`Saved ${data.length} paper(s) to your library.`);
     },
     onError: (error) => {

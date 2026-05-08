@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { batchFetchCitations } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -37,7 +38,7 @@ export function FetchCitationsButton() {
 
       {mutation.isError && (
         <p className="text-xs text-destructive">
-          Failed to fetch citations: {(mutation.error as Error).message}
+          Failed to fetch citations: {errorMessage(mutation.error)}
         </p>
       )}
     </div>

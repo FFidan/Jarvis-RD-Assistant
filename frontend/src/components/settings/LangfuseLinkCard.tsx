@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 const dashboardUrl = import.meta.env.VITE_LANGFUSE_PUBLIC_DASHBOARD as string | undefined;
 
 export function LangfuseLinkCard() {
-  if (!dashboardUrl) return null;
+  const safeUrl = dashboardUrl?.startsWith('https://') ? dashboardUrl : null;
+  if (!safeUrl) return null;
 
   return (
     <Card className="rounded-md border-hair shadow-none">
@@ -18,7 +19,7 @@ export function LangfuseLinkCard() {
           inspect traces and monitor model performance.
         </p>
         <Button asChild variant="outline" size="sm">
-          <a href={dashboardUrl} target="_blank" rel="noreferrer noopener">
+          <a href={safeUrl} target="_blank" rel="noreferrer noopener">
             <ExternalLink className="h-4 w-4 mr-2" />
             Open Langfuse dashboard
           </a>

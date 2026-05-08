@@ -228,10 +228,19 @@ async def generate_paper_summary(
     s2_tldr = (paper_row["metadata"] or {}).get("s2_tldr", "")
 
     # Build prompt -- metadata from DB (originally from source API, never LLM)
+    safe_title, _ = wrap_delimited("title", paper_row["title"])
+    safe_authors, _ = wrap_delimited("authors", ", ".join(paper_row["authors"]))
+    paper_text_block, was_truncated = wrap_delimited("paper_text", full_text, max_chars=50000)
+    if was_truncated:
+        logger.warning(
+            "summarization: truncated full_text from %d to 50000 chars (paper_id=%s)",
+            len(full_text),
+            paper_id,
+        )
     prompt = SUMMARIZE_PROMPT_TEMPLATE.format(
-        title=wrap_delimited("title", paper_row["title"]),
-        authors=wrap_delimited("authors", ", ".join(paper_row["authors"])),
-        text=wrap_delimited("paper_text", full_text, max_chars=50000),
+        title=safe_title,
+        authors=safe_authors,
+        text=paper_text_block,
     )
 
     # --- Phase 2: call LiteLLM via Instructor (no connection held) ---

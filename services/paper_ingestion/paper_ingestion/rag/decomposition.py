@@ -54,7 +54,7 @@ async def decompose_query(
     list[str]
         Sub-queries (2-4 strings), or ``[question]`` on fallback.
     """
-    safe_question = wrap_delimited("user_question", question)
+    safe_question, _ = wrap_delimited("user_question", question)
     prompt = (
         "You are a research query decomposer. Break the following complex research\n"
         "question into 2-4 simpler, self-contained sub-queries that together cover\n"

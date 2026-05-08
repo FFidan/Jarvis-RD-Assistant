@@ -11,6 +11,7 @@ from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownersh
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.paper_state import (  # noqa: I001
     assert_paper_in_states as _assert_paper_in_states,
+    restore_paper as _restore_paper,
     trash_paper as _trash_paper,
     upsert_paper_user_state as _upsert_paper_user_state,
 )
@@ -485,61 +486,6 @@ async def get_feed_counts(
     )
 
 
-# ---------------------------------------------------------------------------
-# Lifecycle helpers — Phase A Wave 1ab
-# ---------------------------------------------------------------------------
-
-
-async def _assert_paper_in_state(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-    state: str,
-) -> None:
-    """Raise 409 if the paper is not in the expected state.
-
-    Treats a missing ``paper_user_state`` row as ``state='inbox'`` per spec §6.
-    """
-    current = await conn.fetchval(
-        "SELECT COALESCE(state, 'inbox') FROM paper_user_state"
-        " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2",
-        paper_id,
-        user_id,
-    )
-    if current != state:
-        raise HTTPException(
-            status_code=409,
-            detail=(f"Paper must be in state '{state}'; currently '{current or 'inbox'}'"),
-        )
-
-
-async def _restore_paper(
-    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
-    paper_id: int,
-    user_id: int | None,
-) -> None:
-    """Restore from trash: ``state := COALESCE(state_before_trash, 'inbox')``.
-
-    Also clears ``state_before_trash`` so the field only carries meaning
-    while the paper is in trash.
-
-    Raises HTTPException(404) if no matching row was updated (paper not found
-    or not in trash for this caller).
-    """
-    status = await conn.execute(
-        """UPDATE paper_user_state
-              SET state = COALESCE(state_before_trash, 'inbox'),
-                  state_before_trash = NULL
-            WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2""",
-        paper_id,
-        user_id,
-    )
-    # asyncpg returns e.g. "UPDATE 1" — extract the count
-    updated = int(status.split()[-1]) if status else 0
-    if updated == 0:
-        raise HTTPException(status_code=404, detail="Paper not found or not in trash")
-
-
 async def _apply_bulk_action(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     paper_id: int,
@@ -560,7 +506,7 @@ async def _apply_bulk_action(
     elif action == "mark_done":
         await _upsert_state_and_starred(conn, paper_id, user_id, state="done")
     elif action == "restore":
-        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         await _restore_paper(conn, paper_id, user_id)
     elif action == "star":
         await _upsert_state_and_starred(conn, paper_id, user_id, starred=True)
@@ -571,7 +517,7 @@ async def _apply_bulk_action(
     elif action == "feedback_negative":
         await _upsert_recommendation_feedback(conn, paper_id, user_id, "negative", "feed_thumbs")
     elif action == "hard_delete":
-        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         # Caller (bulk_action_papers) already wraps each paper in a per-paper
         # SAVEPOINT (async with conn.transaction()), so no inner txn is needed.
         await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
@@ -638,7 +584,7 @@ async def unsave_paper(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_state(conn, paper_id, user_id, state="to_read")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("to_read",))
         await _upsert_state_and_starred(conn, paper_id, user_id, state="inbox")
     return {"status": "ok", "paper_id": paper_id}
 
@@ -853,7 +799,7 @@ async def restore_paper(
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
         if not row:
             raise HTTPException(status_code=404, detail="Paper not found")
-        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         await _restore_paper(conn, paper_id, user_id)
     return {"status": "ok", "paper_id": paper_id}
 
@@ -955,7 +901,7 @@ async def hard_delete_paper(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        await _assert_paper_in_state(conn, paper_id, user_id, state="trash")
+        await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
         async with conn.transaction():
             await conn.execute("DELETE FROM papers WHERE id = $1", paper_id)
         # Qdrant cleanup OUTSIDE the transaction — Qdrant is non-transactional;

@@ -35,8 +35,8 @@ ConnLike = asyncpg.Connection | asyncpg.pool.PoolConnectionProxy  # type: ignore
 
 def build_entity_prompt(title: str, text: str) -> str:
     """Build the knowledge-graph extraction prompt for a single paper."""
-    safe_title = wrap_delimited("title", title)
-    safe_text = wrap_delimited("paper_text", text, max_chars=12000)
+    safe_title, _ = wrap_delimited("title", title)
+    safe_text, _ = wrap_delimited("paper_text", text, max_chars=12000)
     return f"""You are a knowledge graph extractor for research papers. \
 Extract entities and relationships from the paper data below.
 

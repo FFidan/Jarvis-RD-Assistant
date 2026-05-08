@@ -24,21 +24,34 @@ function ModePicker({ mode, onChange, hasTask, hasReading }: ModePickerProps) {
   ];
   return (
     <div role="tablist" aria-label="Now mode" className="bg-zinc-100/80 dark:bg-zinc-800/60 rounded-md p-0.5 flex gap-0.5">
-      {tabs.filter((t) => t.show).map((t) => (
-        <button
-          key={t.value}
-          role="tab"
-          aria-selected={mode === t.value}
-          onClick={() => onChange(t.value)}
-          className={`h-6 px-2.5 rounded text-[10.5px] font-mono transition-colors ${
-            mode === t.value
-              ? 'bg-card text-strong shadow-sm'
-              : 'text-meta hover:text-soft'
-          }`}
-        >
-          {t.label}
-        </button>
-      ))}
+      {tabs.filter((t) => t.show).map((t) => {
+        const visibleTabs = tabs.filter((tab) => tab.show);
+        return (
+          <button
+            key={t.value}
+            role="tab"
+            aria-selected={mode === t.value}
+            tabIndex={mode === t.value ? 0 : -1}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                e.preventDefault();
+                const idx = visibleTabs.findIndex((tab) => tab.value === mode);
+                const next = (idx + (e.key === 'ArrowRight' ? 1 : -1) + visibleTabs.length) % visibleTabs.length;
+                const nextTab = visibleTabs[next];
+                if (nextTab) onChange(nextTab.value);
+              }
+            }}
+            onClick={() => onChange(t.value)}
+            className={`h-6 px-2.5 rounded text-[10.5px] font-mono transition-colors ${
+              mode === t.value
+                ? 'bg-card text-strong shadow-sm'
+                : 'text-meta hover:text-soft'
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

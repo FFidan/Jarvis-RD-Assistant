@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'sonner';
@@ -259,7 +260,7 @@ export function FeedView({ surface, filter, sourceTypes }: FeedViewProps) {
     return (
       <div className="py-8 text-center">
         <p className="text-sm text-destructive">
-          Failed to load papers: {(error as Error).message}
+          Failed to load papers: {errorMessage(error)}
         </p>
       </div>
     );

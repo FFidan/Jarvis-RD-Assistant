@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -86,8 +87,8 @@ export function ExtractionTablePage() {
           <p className="text-sm text-destructive">
             Failed to load data:{' '}
             {templatesQuery.isError
-              ? (templatesQuery.error as Error).message
-              : (tableQuery.error as Error).message}
+              ? errorMessage(templatesQuery.error)
+              : errorMessage(tableQuery.error)}
           </p>
         </div>
       )}
@@ -180,7 +181,7 @@ export function ExtractionTablePage() {
 
         {extractMutation.isError && (
           <span className="text-sm text-destructive">
-            Extraction failed: {(extractMutation.error as Error).message}
+            Extraction failed: {errorMessage(extractMutation.error)}
           </span>
         )}
       </div>

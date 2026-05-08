@@ -210,9 +210,14 @@ def register_tasks(
 # Test-only: noop.test
 # ---------------------------------------------------------------------------
 #
-# Registered unconditionally so test infrastructure can always use it.
-# Only added to KIND_TO_TASK (the create_job dispatch surface) when
-# JARVIS_ENABLE_TEST_JOBS=1, so production envs are unaffected.
+# noop_task is decorated @app.task at module-import time (always registered with
+# procrastinate). Insertion into KIND_TO_TASK is gated on JARVIS_ENABLE_TEST_JOBS=1.
+#
+# Two gate evaluations in sequence:
+# 1. Module-import time: KIND_TO_TASK["noop.test"] = noop_task if env set at import.
+# 2. Service startup, in services/<svc>/_task_register.py: re-checks env in case
+#    it was set after import. This is the canonical path; the import-time gate
+#    is a fallback for legacy direct imports of KIND_TO_TASK.
 
 
 @app.task(name="noop.test", queue="paper_ingestion", pass_context=True)

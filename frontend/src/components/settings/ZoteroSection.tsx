@@ -147,7 +147,7 @@ export function ZoteroSection() {
             <a
               href="https://www.zotero.org/settings/keys"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="underline"
             >
               zotero.org/settings/keys
@@ -174,7 +174,7 @@ export function ZoteroSection() {
             <a
               href="https://www.zotero.org/settings/keys"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               className="underline"
             >
               zotero.org/settings/keys

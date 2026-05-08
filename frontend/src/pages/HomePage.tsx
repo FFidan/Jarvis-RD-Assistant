@@ -9,6 +9,7 @@ import { MetricTileGrid } from '@/components/home/MetricTileGrid';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useUIStore } from '@/stores/ui-store';
+import { errorMessage } from '@/lib/errors';
 import { SetupBanner } from '@/components/setup/SetupBanner';
 
 interface BatchButtonProps<T> {
@@ -59,7 +60,7 @@ function BatchButton<T>({
       )}
       {mutation.isError && (
         <span className="text-xs text-[var(--status-bad)]">
-          Failed: {(mutation.error as Error).message}
+          Failed: {errorMessage(mutation.error)}
         </span>
       )}
     </div>

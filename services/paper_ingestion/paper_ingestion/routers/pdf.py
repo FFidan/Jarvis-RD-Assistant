@@ -8,7 +8,6 @@ from pathlib import Path
 import asyncpg
 from fastapi import (
     APIRouter,
-    BackgroundTasks,
     Depends,
     File,
     Form,
@@ -17,7 +16,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from jarvis_common import JobCreateResponse
+from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_or_none
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor, limiter
@@ -149,9 +148,12 @@ async def process_pdf(
 
         from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
+        user_id = await current_user_id_or_none(request)
+        async with db_pool.acquire() as conn:
+            await assert_paper_ownership(conn, paper_id, user_id)
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.process"].defer_async(
-            job_id=jarvis_job_id, user_id=None, paper_id=paper_id, force=force
+            job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id, force=force
         )
         return {"job_id": jarvis_job_id, "status": "queued"}
 
@@ -342,6 +344,7 @@ async def scan_local_pdfs(
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     jarvis_job_id = str(uuid.uuid4())
+    # allow-user-id-none: system-wide scan
     await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=None)
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
@@ -355,7 +358,6 @@ async def scan_local_pdfs(
 @limiter.limit("2/minute")
 async def batch_process_papers(
     request: Request,
-    background_tasks: BackgroundTasks,
     limit: int = Query(default=10, ge=1, le=50),
     force: bool = Query(default=False),
     db_pool: asyncpg.Pool = Depends(get_db_pool),

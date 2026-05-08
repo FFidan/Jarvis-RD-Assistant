@@ -129,7 +129,7 @@ def escape_llm_text(text: str) -> str:
     return safe_for_prompt(text, mode="escape")
 
 
-def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
+def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> tuple[str, bool]:
     """Escape, optionally truncate, and wrap text in XML-style delimiters.
 
     Produces a string of the form::
@@ -153,8 +153,9 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
 
     Returns
     -------
-    str
-        Delimited, escaped (and optionally truncated) string.
+    tuple[str, bool]
+        A ``(delimited_text, truncated)`` pair.  *truncated* is ``True`` when
+        *max_chars* was set and the escaped body exceeded that limit.
 
     Raises
     ------
@@ -164,6 +165,8 @@ def wrap_delimited(tag: str, text: str, *, max_chars: int | None = None) -> str:
     if not _TAG_RE.match(tag):
         raise ValueError(f"Invalid tag {tag!r}: must match [a-zA-Z_][a-zA-Z0-9_]*")
     body = escape_llm_text(_strip_bidi_zw(text))
+    truncated = False
     if max_chars is not None and len(body) > max_chars:
         body = body[:max_chars]
-    return f"<{tag}>\n{body}\n</{tag}>"
+        truncated = True
+    return f"<{tag}>\n{body}\n</{tag}>", truncated

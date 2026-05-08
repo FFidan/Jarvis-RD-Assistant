@@ -1760,7 +1760,8 @@ describe('ResearchFeedPage', () => {
     await user.click(screen.getByRole('button', { name: /save 1 selected/i }));
 
     await waitFor(() => {
-      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed', 'library'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
     });
   });
 

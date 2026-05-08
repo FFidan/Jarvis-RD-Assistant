@@ -47,11 +47,12 @@ class TestEscapeLlmText:
 
 class TestWrapDelimited:
     def test_basic_wrapping(self) -> None:
-        result = wrap_delimited("tag", "hello")
+        result, truncated = wrap_delimited("tag", "hello")
         assert result == "<tag>\nhello\n</tag>"
+        assert truncated is False
 
     def test_angle_brackets_escaped_inside(self) -> None:
-        result = wrap_delimited("paper_text", "<injection>")
+        result, _ = wrap_delimited("paper_text", "<injection>")
         assert "<injection>" not in result
         assert "&lt;injection&gt;" in result
         assert result.startswith("<paper_text>")
@@ -59,66 +60,70 @@ class TestWrapDelimited:
 
     def test_truncation_at_max_chars(self) -> None:
         long_text = "a" * 200
-        result = wrap_delimited("t", long_text, max_chars=100)
+        result, truncated = wrap_delimited("t", long_text, max_chars=100)
         # body should be exactly 100 chars
         inner = result[len("<t>\n") : -len("\n</t>")]
         assert len(inner) == 100
+        assert truncated is True
 
     def test_no_truncation_when_max_chars_none(self) -> None:
         long_text = "x" * 5000
-        result = wrap_delimited("t", long_text)
+        result, truncated = wrap_delimited("t", long_text)
         inner = result[len("<t>\n") : -len("\n</t>")]
         assert len(inner) == 5000
+        assert truncated is False
 
     def test_no_truncation_when_under_limit(self) -> None:
         text = "short"
-        result = wrap_delimited("t", text, max_chars=1000)
+        result, truncated = wrap_delimited("t", text, max_chars=1000)
         assert "short" in result
+        assert truncated is False
 
     def test_multiline_content(self) -> None:
         text = "line one\nline two\nline three"
-        result = wrap_delimited("q", text)
+        result, _ = wrap_delimited("q", text)
         assert "<q>\n" in result
         assert "\n</q>" in result
         assert "line two" in result
 
     def test_tag_name_used_correctly(self) -> None:
-        result = wrap_delimited("user_question", "why?")
+        result, _ = wrap_delimited("user_question", "why?")
         assert result.startswith("<user_question>")
         assert result.endswith("</user_question>")
 
     def test_empty_text(self) -> None:
-        result = wrap_delimited("t", "")
+        result, truncated = wrap_delimited("t", "")
         assert result == "<t>\n\n</t>"
+        assert truncated is False
 
     def test_wrap_delimited_strips_bidi_override(self) -> None:
         # U+202E = RIGHT-TO-LEFT OVERRIDE — must be removed
-        result = wrap_delimited("user", "hello\u202eworld")
+        result, _ = wrap_delimited("user", "hello\u202eworld")
         assert "\u202e" not in result
         assert "helloworld" in result
 
     def test_wrap_delimited_strips_zero_width(self) -> None:
         # U+200B = ZERO WIDTH SPACE — must be removed
-        result = wrap_delimited("user", "a\u200bb")
+        result, _ = wrap_delimited("user", "a\u200bb")
         assert "\u200b" not in result
         assert "ab" in result
 
     def test_wrap_delimited_preserves_cjk_and_emoji(self) -> None:
-        result = wrap_delimited("user", "日本語 🎉 café")
+        result, _ = wrap_delimited("user", "日本語 🎉 café")
         assert "日本語" in result
         assert "🎉" in result
         assert "café" in result
 
     def test_wrap_delimited_strips_bidi_isolate(self) -> None:
         # U+2066 = LEFT-TO-RIGHT ISOLATE, U+2069 = POP DIRECTIONAL ISOLATE
-        result = wrap_delimited("user", "\u2066hello\u2069")
+        result, _ = wrap_delimited("user", "\u2066hello\u2069")
         assert "\u2066" not in result
         assert "\u2069" not in result
         assert "hello" in result
 
     def test_wrap_delimited_strips_bom(self) -> None:
         # U+FEFF = BOM / zero-width no-break space
-        result = wrap_delimited("user", "\ufeffstart")
+        result, _ = wrap_delimited("user", "\ufeffstart")
         assert "\ufeff" not in result
         assert "start" in result
 
@@ -146,18 +151,18 @@ class TestWrapDelimitedTagValidation:
 
     def test_valid_tag_with_underscore_prefix(self) -> None:
         """Tag starting with underscore is valid."""
-        result = wrap_delimited("_private_tag", "hello")
+        result, _ = wrap_delimited("_private_tag", "hello")
         assert result.startswith("<_private_tag>")
         assert result.endswith("</_private_tag>")
 
     def test_valid_tag_with_digits(self) -> None:
         """Tag with digits after initial letter is valid."""
-        result = wrap_delimited("tag123", "hello")
+        result, _ = wrap_delimited("tag123", "hello")
         assert result.startswith("<tag123>")
 
     def test_valid_tag_with_underscore(self) -> None:
         """Tag with underscores is valid (regression: underscores were already tested)."""
-        result = wrap_delimited("paper_text", "body")
+        result, _ = wrap_delimited("paper_text", "body")
         assert result.startswith("<paper_text>")
 
 

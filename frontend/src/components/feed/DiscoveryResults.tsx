@@ -47,7 +47,7 @@ export function DiscoveryResults({ results, onClear }: DiscoveryResultsProps) {
                 <Badge variant="secondary">
                   {(dr.similarity_score * 100).toFixed(0)}% similar
                 </Badge>
-                {dr.url && dr.url.startsWith('http') && (
+                {dr.url && (dr.url.startsWith('http://') || dr.url.startsWith('https://')) && (
                   <a
                     href={dr.url}
                     target="_blank"

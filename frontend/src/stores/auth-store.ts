@@ -72,8 +72,12 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'jarvis-auth',
-      // Use sessionStorage so the API key is never written to disk-backed
-      // localStorage and is automatically cleared when the browser tab closes.
+      // Single-tenant storage (pre-Wave-6): the API key belongs to one user and
+      // is stored in sessionStorage rather than localStorage so it is never
+      // written to disk and is automatically cleared when the browser tab closes.
+      // Wave-6 multi-tenant plan: replace with a short-lived HttpOnly cookie set
+      // by the backend on login; remove the sessionStorage persist entirely and
+      // drive auth state from the cookie session on the server side.
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,

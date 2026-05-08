@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { errorMessage } from '@/lib/errors';
 import { useQuery } from '@tanstack/react-query';
 import { getCitationGraph } from '@/lib/api';
 import { CytoscapeGraph } from '@/components/graph/CytoscapeGraph';
@@ -122,7 +123,7 @@ export function CitationGraphPage() {
 
       {isError && (
         <p className="text-sm text-destructive">
-          Failed to load citation graph: {(error as Error).message}
+          Failed to load citation graph: {errorMessage(error)}
         </p>
       )}
 
