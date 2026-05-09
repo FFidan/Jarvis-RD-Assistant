@@ -410,12 +410,15 @@ services:
         NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
     restart: unless-stopped
     ports:
-      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3001}:3000"
+      # Dashboard publishes plain HTTP on host 3000 by default. For HTTPS on
+      # 3001 (matches prod TLS-at-edge), enable the caddy-local profile:
+      #   docker compose --profile caddy-local up -d
+      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3000}:3000"
     environment:
-      JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:localhost,IP:127.0.0.1}
-      JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-false}
+      JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
+      JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}
     volumes:
-      - dashboard_certs:/etc/nginx/certs
+      - ./certs:/etc/nginx/certs:ro
     mem_limit: 256m
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/ > /dev/null || exit 1"]
@@ -558,6 +561,37 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Local-dev Caddy with mkcert certs — matches prod TLS-at-edge pattern.
+  # Activate with: `docker compose --profile caddy-local up -d`
+  # Then access https://localhost:3001 (browsers trust the mkcert root CA).
+  caddy_local:
+    image: ${CADDY_IMAGE:?CADDY_IMAGE is not set — source versions.env before running docker compose}
+    profiles: [caddy-local]
+    container_name: jarvis_caddy_local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ./caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - ./certs:/certs:ro
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - jarvis
+
   caddy:
     image: ${CADDY_IMAGE:?CADDY_IMAGE is not set — source versions.env before running docker compose}
     profiles: [letsencrypt]
@@ -631,7 +665,6 @@ volumes:
   postgres_backups:
   marker_models:
   hf_cache:
-  dashboard_certs:
   caddy_data:
   caddy_config:
   langfuse_postgres_data:

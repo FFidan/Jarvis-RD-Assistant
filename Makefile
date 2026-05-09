@@ -2,7 +2,15 @@ SERVICES = services/paper_ingestion services/learning_engine services/telegram_b
 # Compose wrapper: pins image tags from versions.env and sets dummy letsencrypt vars for local dev
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose --env-file versions.env
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https
+
+## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
+certs:
+	bash scripts/init-mkcert.sh
+
+## Bring stack up with HTTPS on https://localhost:3001 via Caddy + mkcert
+up-https:
+	$(COMPOSE) --profile caddy-local up -d
 
 ## Create/update the root uv environment from uv.lock
 setup:

@@ -1,0 +1,29 @@
+# Local-dev Caddy: HTTPS via mkcert certs, matches prod TLS-terminator pattern.
+# Activated by `docker compose --profile caddy-local up -d`.
+#
+# The mkcert root CA is installed in your local trust store via `make certs`,
+# so browsers see a valid cert with no warnings on jarvis.localhost / localhost.
+
+{
+	auto_https off
+	servers {
+		max_header_size 16KB
+	}
+}
+
+# Listen on the host port that's mapped to 3001 inside the container.
+# Both hostnames share the same cert (mkcert SAN: jarvis.localhost, localhost,
+# 127.0.0.1). Browsers trust it because the mkcert root CA is in the system
+# trust store.
+:3001 {
+	tls /certs/cert.pem /certs/key.pem
+
+	request_body {
+		max_size 50MB
+	}
+
+	# Match prod hardening — HSTS belongs at the TLS terminator only.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	reverse_proxy http://dashboard:3000
+}
