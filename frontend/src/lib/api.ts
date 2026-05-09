@@ -231,6 +231,38 @@ export const verifyMagicLink = (token: string) =>
 export const logoutSession = () =>
   apiFetch<void>('/api/auth/logout', { method: 'POST' });
 
+// --- Admin user management (Phase 2 WS-2B) ---
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  role: 'user' | 'admin';
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/** List all non-deleted users. Requires admin role. */
+export const listUsers = () =>
+  apiFetch<AdminUser[]>('/api/admin/users');
+
+/** Invite a new user. Sends them a 24-hour magic link. Requires admin role. */
+export const inviteUser = (email: string, role: 'user' | 'admin') =>
+  apiFetch<AdminUser>('/api/admin/users', {
+    method: 'POST',
+    body: JSON.stringify({ email, role }),
+  });
+
+/** Change a user's role. Requires admin role. */
+export const updateUserRole = (userId: number, role: 'user' | 'admin') =>
+  apiFetch<AdminUser>(`/api/admin/users/${userId}/role`, {
+    method: 'PATCH',
+    body: JSON.stringify({ role }),
+  });
+
+/** Soft-delete a user (sets deleted_at). Requires admin role. */
+export const deleteUser = (userId: number) =>
+  apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
+
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
   apiFetch<DashboardMetrics>('/api/dashboard/metrics');
@@ -276,6 +308,58 @@ export const setConfig = (key: string, value: unknown) =>
 // --- Setup / Pairing ---
 export const getSetupStatus = () =>
   apiFetch<SetupStatus>('/api/system/setup-status');
+
+// --- WS-2F first-run wizard (pre-auth bootstrap) ---
+// These call /api/setup/* which is unauthenticated until the first admin exists.
+// Distinct surface from /api/system/setup-status above (post-login bootstrap).
+export interface FirstRunStatus { configured: boolean }
+export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
+export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
+export interface FirstRunSmtpBody {
+  host: string;
+  port: number;
+  user?: string | null;
+  pass?: string | null;
+  from_email: string;
+  test_send?: boolean;
+  test_recipient?: string | null;
+}
+export interface FirstRunSmtpResponse {
+  saved: boolean;
+  test_sent: boolean | null;
+  test_error: string | null;
+}
+export interface FirstRunAdminResponse { id: number; email: string; role: string }
+export interface FirstRunCloudKeysBody {
+  openai?: string | null;
+  anthropic?: string | null;
+  gemini?: string | null;
+}
+export interface FirstRunCloudKeysResponse { saved_providers: string[] }
+
+export const getFirstRunStatus = () =>
+  apiFetch<FirstRunStatus>('/api/setup/status');
+
+export const runFirstRunSystemCheck = () =>
+  apiFetch<FirstRunSystemCheck>('/api/setup/system-check', { method: 'POST' });
+
+export const saveFirstRunSmtp = (body: FirstRunSmtpBody) =>
+  apiFetch<FirstRunSmtpResponse>('/api/setup/smtp', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+
+export const createFirstRunAdmin = (email: string) =>
+  apiFetch<FirstRunAdminResponse>('/api/setup/admin', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+
+export const saveFirstRunCloudKeys = (body: FirstRunCloudKeysBody) =>
+  apiFetch<FirstRunCloudKeysResponse>('/api/setup/cloud-llm-keys', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 
 export const createPairingCode = () =>
   apiFetch<TelegramPairing>('/api/telegram/pairing', { method: 'POST' });

@@ -453,6 +453,7 @@ app.add_middleware(SessionMiddleware)
 # Router registration
 # ---------------------------------------------------------------------------
 
+from paper_ingestion.routers import admin as admin_router  # noqa: E402
 from paper_ingestion.routers import (  # noqa: E402
     analytics,
     analyze,
@@ -484,9 +485,17 @@ from paper_ingestion.routers import (  # noqa: E402
 )
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
+from paper_ingestion.routers import setup as setup_router  # noqa: E402
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
+# WS-2B: admin router uses session-only auth (no X-API-Key required for browser
+# sessions). Exempt from the global verify_api_key dep via dependencies=[].
+app.include_router(admin_router.router, dependencies=[])
+# WS-2F: setup router is the first-run bootstrap. Endpoints are wide open until
+# the first admin exists; afterwards each handler enforces admin-role itself
+# via require_unconfigured_or_admin. Exempt from global verify_api_key.
+app.include_router(setup_router.router, dependencies=[])
 app.include_router(topics.router)
 app.include_router(settings.router)
 app.include_router(analytics.router)

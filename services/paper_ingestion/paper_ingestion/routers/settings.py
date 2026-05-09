@@ -13,7 +13,7 @@ import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
-from jarvis_common.auth import verify_api_key
+from jarvis_common.auth import require_admin, verify_api_key
 from jarvis_common.crypto import (
     decrypt_secret,
     encrypt_secret,
@@ -126,6 +126,99 @@ def _is_allowed_config_key(key: str) -> bool:
     if _THINKING_DISABLED_PATTERN.fullmatch(key):
         return True
     return False
+
+
+# ---------------------------------------------------------------------------
+# Key classification: personal vs system
+#
+# PERSONAL_KEYS — per-user settings.  Any authenticated user (or non-session
+# caller in single-tenant mode) may read/write these.  In Wave-3 these will
+# be scoped to (user_id, key) rows; today the table has no user_id column, so
+# the scoping is enforced at the role level only.
+#
+# Consumers checked (grounding):
+#   zotero.*          → zotero_service._get_zotero_config()  (per-user Zotero API)
+#   llm.*.api_key     → _cloud_provider_key_present(), test_provider endpoint
+#   fsrs.*            → learning_engine FSRS (per-user retention schedule)
+#   user.timezone     → telegram_bot nudge reload
+#   recommendation.*  → recommendation engine; NOTE: currently system-wide
+#                        (no per-user table), left PERSONAL so users can tune
+#                        their own feed weights.
+#
+# SYSTEM_KEYS — deployment-wide settings.  Require admin role when the
+# request carries a browser session; API-key-only callers (Telegram bot,
+# cron) are unaffected (single-tenant legacy path).
+#
+# Consumers checked:
+#   llm.smart/fast/embed_model → main.py startup + litellm_config (all users)
+#   pulse.*                    → scheduler.py (system-wide overnight run)
+#   setup.completed            → setup wizard gate (system-wide)
+#   telegram.owner_chat_id     → Telegram pairing (one owner, system-wide)
+#   llm.<hostname>.*           → dynamic hardware patterns (system-wide)
+#
+# ---------------------------------------------------------------------------
+
+PERSONAL_KEYS: frozenset[str] = frozenset(
+    {
+        # FSRS (per-user spaced repetition schedule)
+        "fsrs.desired_retention",
+        "fsrs.learning_steps",
+        # User locale preference
+        "user.timezone",
+        # Per-user recommendation feed weights
+        "recommendation.liked_weight",
+        "recommendation.project_weight",
+        "recommendation.enabled",
+        # Zotero integration (per-user library credentials)
+        "zotero.api_key",
+        "zotero.user_id",
+        "zotero.library_type",
+        "zotero.poll_enabled",
+        "zotero.poll_cron",
+        "zotero.auto_push_on_star",
+        # Cloud LLM provider keys (per-user API credentials)
+        "llm.anthropic.api_key",
+        "llm.openai.api_key",
+        "llm.google.api_key",
+    }
+)
+
+SYSTEM_KEYS: frozenset[str] = frozenset(
+    {
+        # System-wide LLM model role assignments (affects all users + LiteLLM)
+        "llm.smart_model",
+        "llm.fast_model",
+        "llm.embed_model",
+        # Pulse overnight deck (system-wide scheduler job)
+        "pulse.enabled",
+        "pulse.cron",
+        "pulse.deck_size",
+        "pulse.stage2_top_k",
+        "pulse.weights",
+        "pulse.l2_lambda",
+        "pulse.lookback_days",
+        "pulse.startup_grace_seconds",
+        # Setup wizard gate
+        "setup.completed",
+        # Telegram owner pairing (single owner, system-wide)
+        "telegram.owner_chat_id",
+    }
+)
+# Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
+# They cannot be listed here as literals since they contain the machine hostname.
+# _classify_config_key() handles them via regex match.
+
+
+def _classify_config_key(key: str) -> str:
+    """Return 'personal', 'system', or 'unknown' for a config key."""
+    if key in PERSONAL_KEYS:
+        return "personal"
+    if key in SYSTEM_KEYS:
+        return "system"
+    # Dynamic hardware patterns are system-scoped
+    if _NUM_CTX_PATTERN.fullmatch(key) or _THINKING_DISABLED_PATTERN.fullmatch(key):
+        return "system"
+    return "unknown"
 
 
 _SECRET_KEYS: frozenset[str] = frozenset(
@@ -497,6 +590,14 @@ async def list_config(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[ConfigEntry]:
+    """Return all config entries.
+
+    Personal keys are returned for every authenticated caller.
+    System keys are returned for all callers — the frontend filters out
+    system settings for non-admin users.  No server-side data leak: all
+    sensitive values are masked/encrypted before being included in the
+    response regardless of caller role.
+    """
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT key, value, encrypted_value FROM user_config ORDER BY key")
     return [ConfigEntry(key=r["key"], value=_resolve_config_value(r["key"], r)) for r in rows]
@@ -532,6 +633,12 @@ async def set_config(
 ) -> ConfigEntry:
     if not _is_allowed_config_key(key):
         raise HTTPException(status_code=400, detail=f"Unknown config key: {key!r}")
+
+    # System-scope keys require admin role when a browser session is present.
+    # API-key-only callers (Telegram bot, cron, DEV_MODE) are exempt from role
+    # enforcement — they run as the implicit single-tenant owner.
+    if _classify_config_key(key) == "system":
+        await require_admin(request)
 
     # Dynamic-key validators (num_ctx and thinking_disabled patterns).
     # These are checked before the static _CONFIG_VALIDATORS dict lookup since
@@ -710,6 +817,7 @@ async def update_nudge(
     nudge_id: int,
     body: NudgeUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _admin: None = Depends(require_admin),
 ) -> NudgeResponse:
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM scheduled_nudges WHERE id = $1", nudge_id)
@@ -765,6 +873,7 @@ async def reorder_sources(
     request: Request,
     body: ReorderRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _admin: None = Depends(require_admin),
 ) -> list[SourceResponse]:
     """Persist UI drag-and-drop order by assigning display_order = position index."""
     async with db_pool.acquire() as conn:
@@ -793,6 +902,7 @@ async def update_source(
     source_id: int,
     body: SourceUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    _admin: None = Depends(require_admin),
 ) -> SourceResponse:
     async with db_pool.acquire() as conn:
         existing = await conn.fetchrow("SELECT * FROM paper_sources WHERE id = $1", source_id)

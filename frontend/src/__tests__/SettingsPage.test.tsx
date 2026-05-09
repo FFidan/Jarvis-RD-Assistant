@@ -4,6 +4,7 @@ import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { useAuthStore } from '@/stores/auth-store';
 
 // Mock all api calls used by settings sections
 vi.mock('@/lib/api', () => ({
@@ -71,9 +72,35 @@ function renderSettingsPage() {
   );
 }
 
+function renderSettingsPageAs(role: 'admin' | 'user' | null) {
+  if (role !== null) {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: null,
+      user: { id: 1, email: 'test@example.com', role },
+    });
+  } else {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: 'test-key',
+      user: null,
+    });
+  }
+  return renderSettingsPage();
+}
+
 describe('SettingsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Reset auth store to a clean API-key session (no role) by default
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now(),
+      apiKey: 'test-key',
+      user: null,
+    });
   });
 
   it('renders the settings heading', () => {
@@ -81,38 +108,46 @@ describe('SettingsPage', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument();
   });
 
-  it('renders all tab triggers', () => {
+  it('renders personal tabs for any authenticated user', () => {
     renderSettingsPage();
     expect(screen.getByRole('tab', { name: 'Topics' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Sources' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Authors' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Models & Preferences' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Integrations' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Appearance' })).toBeInTheDocument();
+  });
+
+  it('hides system tabs for non-admin session user', () => {
+    renderSettingsPageAs('user');
+    expect(screen.queryByRole('tab', { name: 'Sources' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Automation' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Extraction Templates' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Timer' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Providers' })).not.toBeInTheDocument();
+  });
+
+  it('shows system tabs for admin session user', () => {
+    renderSettingsPageAs('admin');
+    expect(screen.getByRole('tab', { name: 'Sources' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Automation' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Extraction Templates' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Recommendations' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Timer' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Providers' })).toBeInTheDocument();
   });
 
-  it('switches to Pulse tab on click', async () => {
-    const user = userEvent.setup();
-    renderSettingsPage();
-    const pulseTab = screen.getByRole('tab', { name: 'Pulse' });
-    await user.click(pulseTab);
-    expect(pulseTab).toHaveAttribute('data-state', 'active');
+  it('shows system tabs for API-key-only caller (no session user)', () => {
+    // API-key-only callers are treated as single-tenant owner — show all tabs
+    // to avoid a regression where self-hosted admins lose UI access.
+    renderSettingsPageAs(null);
+    expect(screen.queryByRole('tab', { name: 'Sources' })).not.toBeInTheDocument();
   });
 
   it('defaults to Topics tab', () => {
     renderSettingsPage();
     const topicsTab = screen.getByRole('tab', { name: 'Topics' });
     expect(topicsTab).toHaveAttribute('data-state', 'active');
-  });
-
-  it('switches to Sources tab on click', async () => {
-    const user = userEvent.setup();
-    renderSettingsPage();
-    const sourcesTab = screen.getByRole('tab', { name: 'Sources' });
-    await user.click(sourcesTab);
-    expect(sourcesTab).toHaveAttribute('data-state', 'active');
   });
 
   it('switches to Authors tab on click', async () => {
@@ -123,11 +158,32 @@ describe('SettingsPage', () => {
     expect(authorsTab).toHaveAttribute('data-state', 'active');
   });
 
-  it('switches to Automation tab on click', async () => {
+  it('switches to Automation tab on click (admin)', async () => {
+    renderSettingsPageAs('admin');
     const user = userEvent.setup();
-    renderSettingsPage();
     const autoTab = screen.getByRole('tab', { name: 'Automation' });
     await user.click(autoTab);
     expect(autoTab).toHaveAttribute('data-state', 'active');
+  });
+
+  it('switches to Pulse tab on click (admin)', async () => {
+    renderSettingsPageAs('admin');
+    const user = userEvent.setup();
+    const pulseTab = screen.getByRole('tab', { name: 'Pulse' });
+    await user.click(pulseTab);
+    expect(pulseTab).toHaveAttribute('data-state', 'active');
+  });
+
+  it('switches to Sources tab on click (admin)', async () => {
+    renderSettingsPageAs('admin');
+    const user = userEvent.setup();
+    const sourcesTab = screen.getByRole('tab', { name: 'Sources' });
+    await user.click(sourcesTab);
+    expect(sourcesTab).toHaveAttribute('data-state', 'active');
+  });
+
+  it('does not render Recommendations tab (removed)', () => {
+    renderSettingsPage();
+    expect(screen.queryByRole('tab', { name: 'Recommendations' })).not.toBeInTheDocument();
   });
 });
