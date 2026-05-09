@@ -28,6 +28,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.advisory_lock import AdvisoryLock, _kind_lock_key
+from jarvis_common.event_log import log_event
 from jarvis_common.jobs import JobContext
 from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
@@ -422,6 +423,35 @@ async def run_pulse(
             logger.debug("pulse: classifier training enqueue skipped", exc_info=True)
     if ctx:
         await ctx.update_progress(1.0, "Done")
+
+    # --- 9. emit verification telemetry (best-effort, after all other work) ---
+    _total_verified = sum(1 for sc in stage2_out if sc.reasoning_verified is not None)
+    _passed = sum(1 for sc in stage2_out if sc.reasoning_verified is True)
+    _failed = _total_verified - _passed
+    _pass_rate = round(_passed / _total_verified, 4) if _total_verified > 0 else 0.0
+    stats["verification_stats"] = {
+        "pass_rate": _pass_rate,
+        "total": _total_verified,
+        "passed": _passed,
+        "failed": _failed,
+    }
+    try:
+        await log_event(
+            pool=db_pool,
+            level="info",
+            category="job",
+            source="pulse",
+            message="pulse.verification_stats",
+            context={
+                "pass_rate": _pass_rate,
+                "total": _total_verified,
+                "passed": _passed,
+                "failed": _failed,
+            },
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never crash the pipeline
+        logger.warning("pulse: failed to emit verification_stats event", exc_info=True)
+
     logger.info("pulse.complete", extra=stats)
     return stats
 

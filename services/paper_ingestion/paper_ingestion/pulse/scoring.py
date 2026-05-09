@@ -261,7 +261,7 @@ async def stage2_llm_rerank(
     stage1_out: list[ScoredCandidate],
     profile: UserProfile,
     http_client: httpx.AsyncClient,
-    verifier: QuoteVerifier | None = None,
+    verifier: QuoteVerifier,
     openai_client: "openai.AsyncOpenAI | None" = None,
 ) -> list[ScoredCandidate]:
     """Score each candidate via LLM with bounded concurrency.
@@ -275,11 +275,9 @@ async def stage2_llm_rerank(
     http_client:
         Shared httpx.AsyncClient for LiteLLM requests (kept for back-compat).
     verifier:
-        Optional :class:`QuoteVerifier` used to check the LLM-generated
-        reasoning against the candidate's title+abstract.  When ``None``
-        (legacy callers / tests) the verification step is skipped and each
-        ``ScoredCandidate`` keeps ``reasoning_verified=None`` +
-        ``reasoning_confidence=None``.
+        :class:`QuoteVerifier` used to check the LLM-generated reasoning
+        against the candidate's title+abstract.  Required — every card must
+        carry a verification result so the frontend can render a trust badge.
     openai_client:
         Instructor-patched ``openai.AsyncOpenAI`` client for structured calls.
         When provided, ``call_llm_structured`` is used instead of the legacy
@@ -333,16 +331,28 @@ async def stage2_llm_rerank(
                 new_signals["llm_relevance"] = relevance / 10.0
                 new_signals["llm_novelty"] = novelty / 10.0
 
-                # Optional reasoning verification — reuses QuoteVerifier.
+                # Mandatory reasoning verification — reuses QuoteVerifier.
                 reasoning_verified: bool | None = None
                 reasoning_confidence: RagConfidence | None = None
-                if verifier is not None and reasoning:
+                if reasoning:
                     reasoning_verified, reasoning_confidence = await verify_pulse_reasoning(
                         reasoning,
                         sc.paper.title,
                         sc.paper.abstract or "",
                         verifier,
                     )
+                    if not reasoning_verified:
+                        logger.info(
+                            "verifier_reject",
+                            extra={
+                                "paper_id": sc.paper.external_id,
+                                "reason": (
+                                    reasoning_confidence.value
+                                    if reasoning_confidence is not None
+                                    else "no_confidence"
+                                ),
+                            },
+                        )
 
                 return ScoredCandidate(
                     paper=sc.paper,

@@ -17,6 +17,7 @@ try:
 except Exception:
     _HAS_RESPX = False
 
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
@@ -24,6 +25,12 @@ from paper_ingestion.pulse.scoring import (
     ScoredCandidate,
     stage2_llm_rerank,
 )
+
+
+def _make_verifier() -> QuoteVerifier:
+    """Return a real QuoteVerifier for tests that need mandatory verifier."""
+    return QuoteVerifier()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -91,7 +98,11 @@ async def test_stage2_fills_llm_scores():
         return_value=_make_scoring_output(relevance=8, novelty=6),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=mock_openai_client
+            stage1_out,
+            profile,
+            MagicMock(),
+            verifier=_make_verifier(),
+            openai_client=mock_openai_client,
         )
 
     assert len(result) == 3
@@ -123,7 +134,7 @@ async def test_stage2_uses_fast_model_and_single_retry_by_default(monkeypatch):
         return_value=_make_scoring_output(relevance=8, novelty=6),
     ) as call_llm:
         await scoring_mod.stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     call_kwargs = call_llm.await_args.kwargs
@@ -152,7 +163,7 @@ async def test_stage2_model_and_retry_budget_are_env_configurable(monkeypatch):
         return_value=_make_scoring_output(relevance=8, novelty=6),
     ) as call_llm:
         await scoring_mod.stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     call_kwargs = call_llm.await_args.kwargs
@@ -175,7 +186,11 @@ async def test_stage2_normalizes_scores_to_0_1():
         return_value=_make_scoring_output(relevance=8, novelty=6),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=mock_openai_client
+            stage1_out,
+            profile,
+            MagicMock(),
+            verifier=_make_verifier(),
+            openai_client=mock_openai_client,
         )
 
     assert result[0].llm_relevance == 8
@@ -198,7 +213,7 @@ async def test_stage2_graceful_llm_exception():
         side_effect=RuntimeError("LLM unavailable"),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert len(result) == 1
@@ -220,7 +235,7 @@ async def test_stage2_graceful_json_parse_error():
         side_effect=ValueError("Invalid structured output"),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert result[0].llm_relevance is None
@@ -240,7 +255,9 @@ async def test_stage2_preserves_stage1_signals():
         new_callable=AsyncMock,
         return_value=_make_scoring_output(relevance=9, novelty=7),
     ):
-        result = await stage2_llm_rerank([sc], profile, MagicMock(), openai_client=MagicMock())
+        result = await stage2_llm_rerank(
+            [sc], profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
+        )
 
     assert result[0].signals["embedding"] == 0.75
     assert "llm_relevance" in result[0].signals
@@ -272,7 +289,7 @@ async def test_stage2_concurrency_limit():
         side_effect=mock_call,
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert len(result) == num_candidates
@@ -286,7 +303,9 @@ async def test_stage2_empty_input_returns_empty():
     """Empty stage1_out returns empty list."""
     profile = _make_profile()
 
-    result = await stage2_llm_rerank([], profile, MagicMock(), openai_client=MagicMock())
+    result = await stage2_llm_rerank(
+        [], profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
+    )
 
     assert result == []
 
@@ -311,7 +330,7 @@ async def test_stage2_partial_failure_others_succeed():
         side_effect=mock_call,
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert len(result) == 3
@@ -342,7 +361,9 @@ async def test_stage2_falls_back_on_llm_error():
         new_callable=AsyncMock,
         side_effect=RuntimeError("LiteLLM unavailable"),
     ):
-        result = await stage2_llm_rerank([sc], profile, MagicMock(), openai_client=MagicMock())
+        result = await stage2_llm_rerank(
+            [sc], profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
+        )
 
     assert len(result) == 1
     out = result[0]
@@ -373,7 +394,7 @@ async def test_stage2_valid_json_missing_keys_graceful_fallback():
         side_effect=ValueError("Instructor could not parse LLM output"),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     assert len(result) == 1
@@ -395,7 +416,7 @@ async def test_stage2_field_validators_enforce_range():
         return_value=PulseScoringOutput(relevance=10, novelty=1, reasoning="extreme values"),
     ):
         result = await stage2_llm_rerank(
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=MagicMock()
         )
 
     # Pydantic-validated values are already in [1,10] — no clamping needed
@@ -455,7 +476,11 @@ async def test_stage2_passes_negative_topics_and_authors_to_prompt():
             return_value=PulseScoringOutput(relevance=7, novelty=5, reasoning="relevant"),
         ):
             result = await stage2_llm_rerank(
-                stage1_out, profile, MagicMock(), openai_client=MagicMock()
+                stage1_out,
+                profile,
+                MagicMock(),
+                verifier=_make_verifier(),
+                openai_client=MagicMock(),
             )
 
     assert len(result) == 1
@@ -487,4 +512,6 @@ async def test_stage2_raises_sentinel_when_openai_client_none():
     profile = _make_profile()
 
     with pytest.raises(_scoring.Stage2ClientUnavailableError):
-        await _scoring.stage2_llm_rerank(stage1_out, profile, MagicMock(), openai_client=None)
+        await _scoring.stage2_llm_rerank(
+            stage1_out, profile, MagicMock(), verifier=_make_verifier(), openai_client=None
+        )

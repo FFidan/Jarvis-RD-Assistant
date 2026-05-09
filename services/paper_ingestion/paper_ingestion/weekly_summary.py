@@ -73,9 +73,9 @@ Respond in JSON format:
 async def generate_weekly_summary(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
+    verifier: QuoteVerifier,
     litellm_url: str | None = None,
     days: int = 7,
-    verifier: QuoteVerifier | None = None,
     user_id: int | None = None,
     openai_client: openai.AsyncOpenAI | None = None,
 ) -> dict:
@@ -239,7 +239,7 @@ async def generate_weekly_summary(
         # for the topic.  Cheap fuzzy match (~ms per theme) — ephemeral, not persisted.
         verified_themes: list[dict] = []
         unverified_themes: list[dict] = []
-        if themes and verifier is not None:
+        if themes:
             corpus_parts: list[str] = []
             for p in papers[:10]:
                 corpus_parts.append(p.get("title") or "")
@@ -264,7 +264,7 @@ async def generate_weekly_summary(
                 else:
                     unverified_themes.append(theme)
         else:
-            # No verifier wired, or no themes — treat themes as unverified.
+            # No themes produced — both lists stay empty.
             unverified_themes = list(themes)
 
         result_topics.append(

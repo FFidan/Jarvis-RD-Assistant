@@ -6,8 +6,11 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from paper_ingestion.extraction.verify import QuoteVerifier
 from paper_ingestion.weekly_summary import generate_weekly_summary
 from paper_ingestion.weekly_summary_models import WeeklyDigestOutput
+
+_VERIFIER = QuoteVerifier()
 
 
 def _make_pool(rows: list[dict]) -> MagicMock:
@@ -65,6 +68,7 @@ async def test_generate_weekly_summary_returns_topics():
         result = await generate_weekly_summary(
             pool,
             AsyncMock(),
+            verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
 
@@ -85,6 +89,7 @@ async def test_generate_weekly_summary_uses_structured_output():
         await generate_weekly_summary(
             pool,
             AsyncMock(),
+            verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
 
@@ -107,6 +112,7 @@ async def test_generate_weekly_summary_honors_explicit_base_url_override(monkeyp
             pool,
             AsyncMock(),
             litellm_url="http://arg-url:4000",
+            verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
 
@@ -130,6 +136,7 @@ async def test_generate_weekly_summary_default_argument_still_overrides_env(monk
             pool,
             AsyncMock(),
             litellm_url="http://litellm:4000",
+            verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
 
