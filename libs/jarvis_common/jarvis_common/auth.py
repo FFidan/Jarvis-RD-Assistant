@@ -101,6 +101,29 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     )
 
 
+async def require_admin(request: Request) -> None:
+    """FastAPI dependency — raise 403 for non-admin browser sessions.
+
+    Reads ``request.state.user_role`` set by
+    :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
+    session cookie is present.
+
+    Design: when no session cookie is present (API-key-only callers such as the
+    Telegram bot, cron jobs, or DEV_MODE single-tenant) ``user_role`` is absent.
+    Those callers are allowed through so the legacy single-tenant path continues
+    to work without role infra.  Only browser sessions with an explicit
+    ``role != 'admin'`` are rejected with 403.
+
+    Raises
+    ------
+    fastapi.HTTPException
+        403 if the caller has a browser session with a non-admin role.
+    """
+    role = getattr(request.state, "user_role", None)
+    if role is not None and role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
 async def current_user_id(request: Request) -> int | None:
     """Return the authenticated user's integer ID, or None.
 

@@ -17,7 +17,7 @@ from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import verify_api_key
+from jarvis_common.auth import require_admin, verify_api_key
 from jarvis_common.sse import sse_event, sse_keepalive
 from starlette.responses import StreamingResponse
 
@@ -26,7 +26,7 @@ from paper_ingestion.deps import get_db_pool, limiter
 router = APIRouter(
     prefix="/api/logs",
     tags=["logs"],
-    dependencies=[Depends(verify_api_key)],
+    dependencies=[Depends(verify_api_key), Depends(require_admin)],
 )
 
 # ---------------------------------------------------------------------------

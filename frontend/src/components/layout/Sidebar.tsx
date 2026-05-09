@@ -14,6 +14,7 @@ import {
   Network,
   TableProperties,
   ScrollText,
+  Users,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -40,13 +41,19 @@ const navItems = [
   { path: '/citations', label: 'Citation Graph', icon: GitFork },
   { path: '/knowledge', label: 'Knowledge Graph', icon: Network },
   { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
+];
+
+/** Nav items that are only shown to users with role === 'admin'. */
+const adminNavItems = [
   { path: '/logs', label: 'System Logs', icon: ScrollText },
+  { path: '/admin/users', label: 'User Management', icon: Users },
 ];
 
 export function Sidebar() {
   const location = useLocation();
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
-  const { logout } = useAuthStore();
+  const { logout, user } = useAuthStore();
+  const isAdmin = user?.role === 'admin';
 
   const { data: paperIngestionHealthy } = useQuery({
     queryKey: ['health', 'paper_ingestion'],
@@ -82,7 +89,7 @@ export function Sidebar() {
 
         {/* Nav */}
         <nav className="flex-1 space-y-1 overflow-y-auto p-2">
-          {navItems.map((item) => {
+          {[...navItems, ...(isAdmin ? adminNavItems : [])].map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
             const link = (

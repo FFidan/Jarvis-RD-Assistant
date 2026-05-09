@@ -19,10 +19,12 @@ import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
 import { PaperDetailPage } from '@/pages/PaperDetailPage';
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { LogsPage } from '@/pages/LogsPage';
+import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { SetupWizard } from '@/pages/SetupWizard';
 import { getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
+import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 
 // Heavy pages lazy-loaded to reduce initial bundle size
 const KnowledgeGraphPage = lazy(() =>
@@ -111,7 +113,8 @@ export function App() {
                   <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
-                  <Route path="logs" element={<RouteErrorBoundary><LogsPage /></RouteErrorBoundary>} />
+                  <Route path="logs" element={<RouteErrorBoundary><AdminOnlyRoute><LogsPage /></AdminOnlyRoute></RouteErrorBoundary>} />
+                  <Route path="admin/users" element={<RouteErrorBoundary><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></RouteErrorBoundary>} />
                   <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
