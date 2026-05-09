@@ -53,6 +53,11 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
     if request.url.path in _HEALTH_PATHS:
         return
+    # /infra-events authenticates via X-Infra-Key (separate secret from
+    # JARVIS_API_KEY) so the Vector sidecar doesn't need the main API key.
+    # The endpoint enforces its own auth via _check_auth().
+    if request.url.path.startswith("/infra-events"):
+        return
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
         if not hmac.compare_digest(api_key or "", jarvis_api_key):

@@ -199,7 +199,7 @@ def _strip_outer_transaction_control(sql: str) -> str:
     in a way that could incorrectly suppress transaction-control keywords that
     appear in the same source line as an inline dollar-quoted block.
     """
-    lines: list[str] = []
+    pieces: list[str] = []
     in_dollar = False
     i = 0
     while i < len(sql):
@@ -211,14 +211,15 @@ def _strip_outer_transaction_control(sql: str) -> str:
             chunk = sql[i:dollar_idx]
             i = dollar_idx + 2
         if not in_dollar:
-            for line in chunk.split("\n"):
-                if not _TXN_LINE_RE.match(line):
-                    lines.append(line)
+            kept_lines = [line for line in chunk.split("\n") if not _TXN_LINE_RE.match(line)]
+            pieces.append("\n".join(kept_lines))
         else:
-            lines.extend(chunk.split("\n"))
+            pieces.append(chunk)
         if dollar_idx != -1:
+            # Re-emit the $$ delimiter we consumed during scanning
+            pieces.append("$$")
             in_dollar = not in_dollar
-    return "\n".join(lines)
+    return "".join(pieces)
 
 
 async def _repair_false_applied_migrations(

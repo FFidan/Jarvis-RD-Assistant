@@ -950,7 +950,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS daily_intent_user_date_uniq
 
 CREATE TABLE IF NOT EXISTS source_health (
     id BIGSERIAL PRIMARY KEY,
-    user_id INTEGER NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id INTEGER NULL,
     source_type TEXT NOT NULL,
     last_request_at TIMESTAMPTZ,
     last_success_at TIMESTAMPTZ,
@@ -964,7 +964,7 @@ CREATE INDEX IF NOT EXISTS ix_source_health_lookup ON source_health (user_id, so
 
 CREATE TABLE IF NOT EXISTS source_run_history (
     id BIGSERIAL PRIMARY KEY,
-    user_id INTEGER NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id INTEGER NULL,
     source_type TEXT NOT NULL,
     started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ,
