@@ -22,6 +22,8 @@ remain in the service so the factory does not need to know about them.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from collections.abc import Awaitable, Callable
@@ -112,6 +114,20 @@ _DB_POOL_DEFAULTS: dict[str, Any] = {
 
 
 LifespanHook = Callable[[FastAPI], Awaitable[None]]
+
+
+async def shutdown_procrastinate_worker(app: FastAPI) -> None:
+    """Cancel the procrastinate worker task and close the connector."""
+    task = getattr(app.state, "procrastinate_worker_task", None)
+    if task is not None:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    procrastinate_app = getattr(app.state, "procrastinate_app", None)
+    if procrastinate_app is not None:
+        with contextlib.suppress(Exception):
+            await procrastinate_app.close_async()
 
 
 @dataclass

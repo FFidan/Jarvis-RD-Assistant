@@ -95,7 +95,7 @@ async def batch_summarize_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> dict[str, int | str | None]:
     """Enqueue a single batch-summarize job for processed papers without summaries.
 
     Returns immediately with a ``job_id`` that can be polled via
@@ -144,7 +144,7 @@ async def ask_paper(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> dict[str, object]:
     """Answer a question about a specific paper using RAG.
 
     Embeds the question, retrieves the top-k relevant chunks from this
@@ -233,7 +233,7 @@ async def ask_paper_stream(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> StreamingResponse:
     """Stream RAG response for a single paper via SSE.
 
     Uses the same retrieval pipeline as ``/api/papers/{paper_id}/ask`` but
@@ -298,7 +298,7 @@ async def ask_cross_paper(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> dict[str, object]:
     """Ask a question across ALL embedded papers.
 
     Retrieves relevant chunks from multiple papers, builds a multi-paper
@@ -386,7 +386,7 @@ async def ask_cross_paper_stream(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> StreamingResponse:
     """Stream cross-paper RAG response via SSE.
 
     Uses the same retrieval pipeline as ``/api/ask`` but streams the LLM
@@ -456,7 +456,7 @@ async def get_weekly_digest(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
-):
+) -> dict[str, object]:
     """Generate a weekly research digest grouped by topic.
 
     Groups recent papers by topic and uses LLM cross-paper synthesis

@@ -36,6 +36,9 @@ from jarvis_common import (
     configure_middleware_and_errors,
     verify_api_key,
 )
+from jarvis_common.app_factory import (
+    shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
+)
 from jarvis_common.llm_client import get_litellm_config
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
@@ -376,18 +379,7 @@ async def _shutdown_scheduler(app: FastAPI) -> None:
 
 async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
     """Cancel the procrastinate worker task and close the connector."""
-    import contextlib  # noqa: PLC0415
-
-    task = getattr(app.state, "procrastinate_worker_task", None)
-    if task is not None:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
-
-    procrastinate_app = getattr(app.state, "procrastinate_app", None)
-    if procrastinate_app is not None:
-        with contextlib.suppress(Exception):
-            await procrastinate_app.close_async()
+    await shutdown_procrastinate_worker_common(app)
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +451,7 @@ from paper_ingestion.routers import (  # noqa: E402
     discovery,
     extractions,
     feed,
+    infra_events,
     jobs,
     knowledge_graph,
     logs,
@@ -508,6 +501,7 @@ app.include_router(telegram.router)
 app.include_router(system.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
+app.include_router(infra_events.router)
 
 
 # ---------------------------------------------------------------------------

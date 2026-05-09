@@ -275,6 +275,8 @@ services:
       RERANKER_ENABLED: ${RERANKER_ENABLED:-false}
       # JARVIS_CONFIG_KEY (Fernet) is injected via Docker Secret (_FILE convention)
       JARVIS_CONFIG_KEY_FILE: /run/secrets/jarvis_config_key
+      # Vector sidecar uses this to authenticate to POST /infra-events
+      INFRA_INGEST_KEY_FILE: /run/secrets/infra_ingest_key
     secrets:
       - jarvis_api_key
       - postgres_password
@@ -282,6 +284,7 @@ services:
       - qdrant_api_key
       - litellm_master_key
       - jarvis_config_key
+      - infra_ingest_key
     volumes:
       - ./shared/pdf_storage:/data/pdfs
       - ./shared/snapshots:/data/snapshots
@@ -604,14 +607,13 @@ services:
       - /bin/sh
       - -c
       - |
-        export PG_PWD=$(cat /run/secrets/vector_writer_password)
-        export PG_DSN="postgres://vector_writer:${PG_PWD}@postgres:5432/jarvis"
+        export INFRA_KEY=$(cat /run/secrets/infra_ingest_key)
         exec vector --config /etc/vector/vector.toml
     secrets:
-      - vector_writer_password
+      - infra_ingest_key
     depends_on:
-      postgres:
-        condition: service_healthy
+      paper_ingestion:
+        condition: service_started
     mem_limit: 256m
     logging:
       driver: json-file
@@ -668,3 +670,5 @@ secrets:
     file: ./secrets/backup_encrypt_key.txt
   vector_writer_password:
     file: ./secrets/vector_writer_password.txt
+  infra_ingest_key:
+    file: ./secrets/infra_ingest_key.txt

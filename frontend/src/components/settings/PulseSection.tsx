@@ -420,6 +420,7 @@ export function PulseSection() {
   const deckSize = getConfigValue<number>(safeConfigs, 'pulse.deck_size', 10);
   const stage2TopK = getConfigValue<number>(safeConfigs, 'pulse.stage2_top_k', 40);
   const lookbackDaysConfig = getConfigValue<number>(safeConfigs, 'pulse.lookback_days', 7);
+  const startupGraceConfig = getConfigValue<number>(safeConfigs, 'pulse.startup_grace_seconds', 0);
   const likedWeight = Number(getConfigValue(safeConfigs, 'recommendation.liked_weight', 0.6));
   const projectWeight = Number(getConfigValue(safeConfigs, 'recommendation.project_weight', 0.4));
   const l2LambdaConfig = Number(getConfigValue(safeConfigs, 'pulse.l2_lambda', 0.5));
@@ -434,6 +435,7 @@ export function PulseSection() {
   const [localProjectWeight, setLocalProjectWeight] = useState(projectWeight);
   const [l2Lambda, setL2Lambda] = useState(l2LambdaConfig);
   const [lookbackDays, setLookbackDays] = useState(lookbackDaysConfig);
+  const [startupGrace, setStartupGrace] = useState(startupGraceConfig);
   const [localPulseWeights, setLocalPulseWeights] =
     useState<Record<PulseWeightKey, number>>(pulseWeights);
   const [advancedOpen, setAdvancedOpen] = useState(false);
@@ -443,6 +445,7 @@ export function PulseSection() {
   useEffect(() => { setLocalProjectWeight(projectWeight); }, [projectWeight]);
   useEffect(() => { setL2Lambda(l2LambdaConfig); }, [l2LambdaConfig]);
   useEffect(() => { setLookbackDays(lookbackDaysConfig); }, [lookbackDaysConfig]);
+  useEffect(() => { setStartupGrace(startupGraceConfig); }, [startupGraceConfig]);
   useEffect(() => {
     setLocalPulseWeights(pulseWeights);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -672,6 +675,40 @@ export function PulseSection() {
             />
             <p className="text-xs text-muted-foreground">
               Days of paper history each source scans per Pulse run. Default 7.
+            </p>
+          </div>
+          {/* Startup grace */}
+          <div className="space-y-1">
+            <Label htmlFor="pulse-startup-grace" className="flex items-center justify-between">
+              <span className="flex items-center gap-1">
+                Startup grace
+                <InfoTooltip content="Seconds to wait before each source's first outbound HTTP burst after process start. Lets containers warm up. Default 0 (disabled)." />
+              </span>
+              <span className="text-muted-foreground text-sm font-normal">{startupGrace}s</span>
+            </Label>
+            <Slider
+              id="pulse-startup-grace"
+              min={0}
+              max={300}
+              step={5}
+              value={[startupGrace]}
+              onValueChange={([v]) => setStartupGrace(v ?? startupGrace)}
+              onValueCommit={([v]) =>
+                setMut.mutate(
+                  { key: 'pulse.startup_grace_seconds', value: v },
+                  {
+                    onError: (err) =>
+                      toast.error('Failed to update startup grace', {
+                        description: err instanceof Error ? err.message : 'Unknown error',
+                      }),
+                  },
+                )
+              }
+              disabled={settingsControlsDisabled}
+              className="w-full"
+            />
+            <p className="text-xs text-muted-foreground">
+              Warmup pause before first HTTP burst. Default 0s (disabled).
             </p>
           </div>
 

@@ -38,45 +38,36 @@ if contains(upper_msg, "ERROR") || contains(upper_msg, "FATAL") || contains(uppe
 type = "filter"
 inputs = ["infer_level"]
 condition = '''
+msg = to_string(.message) ?? ""
+cn = to_string(.container_name) ?? ""
 # Skip nginx access logs with status < 400
-if exists(.container_name) && .container_name == "jarvis_dashboard" {
-  if exists(.message) && match!(.message, r'" (1\d\d|2\d\d|3\d\d) ') {
-    return false
-  }
+if cn == "jarvis_dashboard" && match(msg, r'" (1\d\d|2\d\d|3\d\d) ') {
+  return false
 }
 # Skip Postgres routine info (LOG: but not WARNING/ERROR)
-if exists(.container_name) && .container_name == "jarvis_postgres" {
-  if exists(.message) && starts_with!(.message, "LOG:  ") && !contains(.message, "ERROR") {
-    return false
-  }
+if cn == "jarvis_postgres" && starts_with(msg, "LOG:  ") && !contains(msg, "ERROR") {
+  return false
 }
 # Skip Qdrant info-level chatter
-if exists(.container_name) && .container_name == "jarvis_qdrant" {
-  if exists(.message) && (contains(.message, "INFO ") && !contains(.message, "ERROR")) {
-    return false
-  }
+if cn == "jarvis_qdrant" && contains(msg, "INFO ") && !contains(msg, "ERROR") {
+  return false
 }
 # Skip Ollama per-request
-if exists(.container_name) && .container_name == "jarvis_ollama" {
-  if exists(.message) && contains(.message, " GET ") {
-    return false
-  }
+if cn == "jarvis_ollama" && contains(msg, " GET ") {
+  return false
 }
 true
 '''
 
-# Truncate message and reshape fields before writing to Postgres
-# NOTE: Vector 0.40.x postgres sink uses `endpoint` (DSN string) and `table`.
-# The `encoding.codec` field is not used by the postgres sink — it writes
-# column-by-column from the event object. Column names must match the table.
-# TODO: verify field mapping against timberio/vector:0.40.0-alpine release notes
-#       if the sink schema changed between 0.38→0.40 (encoding block may be removed).
+# Truncate message and reshape fields before shipping
+# Vector 0.40.0-alpine has no native `postgres` sink — only `postgresql_metrics`
+# (a metrics source) and `http`. We use the `http` sink to POST batches to
+# paper_ingestion's /infra-events endpoint, which bulk-inserts into system_events.
 [transforms.truncate_message]
 type = "remap"
 inputs = ["drop_noise"]
 source = '''
 .message = slice!(.message, 0, 4096)
-.level = .level
 .category = "infra"
 .source = .container_name
 .context = {
@@ -84,18 +75,31 @@ source = '''
   "image": .image,
   "stream": .stream,
 }
+# Strip Vector-internal fields the endpoint doesn't need
+del(.timestamp)
+del(.container_created_at)
+del(.container_id)
+del(.image)
+del(.stream)
+del(.label)
+del(.host)
 '''
 
-# --- Sink: Postgres system_events ---
+# --- Sink: HTTP → paper_ingestion /infra-events ---
 
-[sinks.postgres]
-type = "postgres"
+[sinks.http]
+type = "http"
 inputs = ["truncate_message"]
-endpoint = "${PG_DSN}"
-table = "system_events"
+uri = "http://paper_ingestion:8000/infra-events"
+method = "post"
+encoding.codec = "json"
+framing.method = "newline_delimited"
+request.headers.X-Infra-Key = "${INFRA_KEY}"
+batch.max_events = 100
+batch.timeout_secs = 5
 
-# Buffer & retries
-[sinks.postgres.buffer]
+# Buffer & retries — Vector 0.40 disk buffer requires max_size ≥ 268435488 (~256MB)
+[sinks.http.buffer]
 type = "disk"
-max_size = 104857600     # 100MB
+max_size = 268435488
 when_full = "drop_newest"

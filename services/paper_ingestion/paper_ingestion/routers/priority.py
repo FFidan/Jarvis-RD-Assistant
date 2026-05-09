@@ -24,7 +24,7 @@ async def compute_paper_priority(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> dict[str, int | float | str]:
     """Compute and store the priority score for a paper.
 
     Parameters
@@ -69,7 +69,7 @@ async def compute_paper_priority(
 async def recompute_all_priorities(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> dict[str, int]:
     """Recompute priority scores for all papers.
 
     Returns

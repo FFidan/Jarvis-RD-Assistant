@@ -84,7 +84,7 @@ async def batch_extract_entities(
     http_client: httpx.AsyncClient = Depends(get_http_client),
     embedder=Depends(get_optional_embedder),
     qdrant=Depends(get_optional_qdrant),
-):
+) -> dict[str, int]:
     """Backfill entity extraction for all summarized papers."""
     async with db_pool.acquire() as conn:
         # Get papers with summaries but no entities

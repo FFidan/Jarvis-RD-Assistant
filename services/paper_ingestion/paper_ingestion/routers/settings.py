@@ -71,6 +71,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "pulse.stage2_top_k",
         "pulse.weights",
         "pulse.l2_lambda",
+        "pulse.lookback_days",
+        "pulse.startup_grace_seconds",
         # Setup wizard
         "setup.completed",
         "telegram.owner_chat_id",
@@ -291,6 +293,22 @@ def _validate_l2_lambda(v: Any) -> None:
         raise ValueError("pulse.l2_lambda must be between 0.0 and 2.0")
 
 
+def _validate_lookback_days(v: Any) -> None:
+    """Validate pulse.lookback_days — discovery window in days, [1, 90]."""
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ValueError("pulse.lookback_days must be an integer")
+    if not (1 <= v <= 90):
+        raise ValueError("pulse.lookback_days must be between 1 and 90")
+
+
+def _validate_startup_grace_seconds(v: Any) -> None:
+    """Validate pulse.startup_grace_seconds — warmup pause, [0, 300]."""
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        raise ValueError("pulse.startup_grace_seconds must be a number")
+    if not (0.0 <= float(v) <= 300.0):
+        raise ValueError("pulse.startup_grace_seconds must be between 0 and 300")
+
+
 def _validate_nonempty_str(v: Any) -> None:
     if not isinstance(v, str) or not v.strip():
         raise ValueError("value must be a non-empty string")
@@ -356,6 +374,8 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "pulse.deck_size": _validate_positive_int,
     "pulse.stage2_top_k": _validate_positive_int,
     "pulse.l2_lambda": _validate_l2_lambda,
+    "pulse.lookback_days": _validate_lookback_days,
+    "pulse.startup_grace_seconds": _validate_startup_grace_seconds,
     "pulse.enabled": _validate_bool,
     "setup.completed": _validate_bool,
     "telegram.owner_chat_id": _validate_optional_int,

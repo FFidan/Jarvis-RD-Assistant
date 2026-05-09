@@ -315,7 +315,7 @@ async def get_extraction_table(
     paper_ids: str | None = None,
     format: str = Query(default="json", pattern="^(json|csv)$"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> list[ExtractionTableRow] | StreamingResponse:
     """Get cross-paper extraction comparison table.
 
     Parameters

@@ -27,6 +27,9 @@ from jarvis_common import (
     configure_middleware_and_errors,
     verify_api_key,
 )
+from jarvis_common.app_factory import (
+    shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
+)
 from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
@@ -147,18 +150,7 @@ async def _start_procrastinate_worker(app: FastAPI) -> None:
 
 async def _shutdown_procrastinate_worker(app: FastAPI) -> None:
     """Cancel the procrastinate worker task and close the connector."""
-    import contextlib  # noqa: PLC0415
-
-    task = getattr(app.state, "procrastinate_worker_task", None)
-    if task is not None:
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
-
-    procrastinate_app = getattr(app.state, "procrastinate_app", None)
-    if procrastinate_app is not None:
-        with contextlib.suppress(Exception):
-            await procrastinate_app.close_async()
+    await shutdown_procrastinate_worker_common(app)
 
 
 async def _log_le_started(app: FastAPI) -> None:

@@ -198,7 +198,7 @@ async def _analyze_stream(
     yield SSE_DONE
 
 
-@router.post("/papers/{paper_id}/analyze")
+@router.post("/papers/{paper_id}/analyze", response_model=None)
 @limiter.limit("5/minute")
 async def analyze_paper(
     request: Request,
@@ -209,7 +209,7 @@ async def analyze_paper(
     pdf_processor=Depends(get_pdf_processor),
     embedder=Depends(get_embedder),
     verifier=Depends(get_verifier),
-):
+) -> dict[str, str] | StreamingResponse:
     """Chain download → process → summarize with SSE progress events.
 
     Default (no ``?async=true``): returns a streaming ``text/event-stream`` response.

@@ -432,7 +432,7 @@ async def compute_relevance(
     topic_id: int = Query(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder: Embedder | None = Depends(get_embedder),
-):
+) -> dict[str, int | float]:
     """Compute and store relevance score between a paper and a topic."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:

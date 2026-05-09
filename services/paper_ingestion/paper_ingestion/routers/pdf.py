@@ -25,7 +25,7 @@ from paper_ingestion.models import (
     PaperResponse,
 )
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH, PDFProcessor
-from paper_ingestion.services.pdf_workflow import run_process_pdf
+from paper_ingestion.services.pdf_workflow import ProcessPdfResult, run_process_pdf
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["pdf"])
@@ -108,7 +108,7 @@ async def download_pdf(
 # response_model is intentionally omitted: the async branch returns {job_id, status}
 # while the sync branch returns {paper_id, chunk_count, status} — two different shapes.
 # FastAPI serialises whichever dict the handler returns without validation errors.
-@router.post("/process-pdf/{paper_id}")
+@router.post("/process-pdf/{paper_id}", response_model=None)
 @limiter.limit("5/minute")
 async def process_pdf(
     request: Request,
@@ -124,7 +124,7 @@ async def process_pdf(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     pdf_processor: PDFProcessor = Depends(get_pdf_processor),
     embedder=Depends(get_embedder),
-):
+) -> dict[str, object] | ProcessPdfResult:
     """Extract text, chunk, embed, and generate snapshots for a paper's PDF.
 
     Parameters
@@ -333,7 +333,7 @@ async def upload_pdf(
 async def scan_local_pdfs(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> JobCreateResponse:
     """Enqueue a local PDF directory scan job.
 
     The worker performs filesystem access and returns the import summary in
@@ -361,7 +361,7 @@ async def batch_process_papers(
     limit: int = Query(default=10, ge=1, le=50),
     force: bool = Query(default=False),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
-):
+) -> dict[str, object]:
     """Queue unprocessed papers for chunk extraction + embedding.
 
     Finds papers with ``pdf_downloaded=True`` that have no ``paper_chunks`` rows,

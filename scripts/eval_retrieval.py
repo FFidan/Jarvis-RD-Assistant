@@ -90,6 +90,14 @@ except ImportError:  # pragma: no cover - transformers/torch unavailable
 # Configuration
 # ---------------------------------------------------------------------------
 
+_DEFAULT_EMBED_TIMEOUT_SECONDS = 60.0
+_DB_POOL_MIN_SIZE = 1
+_DB_POOL_MAX_SIZE = 3
+_DEFAULT_RERANK_TOP_K = 3
+_MS_PER_SECOND = 1000
+_TABLE_WIDTH = 80
+_QUERY_PREVIEW_CHARS = 50
+
 LITELLM_CONFIG = get_litellm_config(base_url_default="http://localhost:4000")
 LITELLM_BASE_URL = LITELLM_CONFIG.base_url
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
@@ -119,7 +127,7 @@ async def embed_text(client: httpx.AsyncClient, text: str) -> list[float]:
         client,
         [text],
         model=EMBEDDING_MODEL,
-        timeout=60.0,
+        timeout=_DEFAULT_EMBED_TIMEOUT_SECONDS,
         config=LITELLM_CONFIG,
     )
     return embeddings[0]
@@ -275,7 +283,11 @@ async def main() -> None:
     if EVAL_RETRIEVAL_SET:
         cases, source_label = load_eval_set(EVAL_RETRIEVAL_SET), "fixed eval set"
     else:
-        pool = await asyncpg.create_pool(get_dsn(), min_size=1, max_size=3)
+        pool = await asyncpg.create_pool(
+            get_dsn(),
+            min_size=_DB_POOL_MIN_SIZE,
+            max_size=_DB_POOL_MAX_SIZE,
+        )
         if pool is None:
             raise ScriptError("Failed to create database pool")
         cases, source_label = await _load_cases(pool)
@@ -328,13 +340,13 @@ async def main() -> None:
     per_case_results: list[dict] = []
 
     # Retrieval limit: wider when reranking, narrow (3) when no reranker
-    retrieval_limit = EVAL_RERANK_K if reranker is not None else 3
+    retrieval_limit = EVAL_RERANK_K if reranker is not None else _DEFAULT_RERANK_TOP_K
 
     # Table header
     print()
     print(f"Evaluating source: {source_label}")
     print(f"{'#':>4}  {'Papers':>12}  {'P@1':>4}  {'R@3':>4}  {'nDCG':>5}  {'ms':>7}  Query")
-    print("-" * 80)
+    print("-" * _TABLE_WIDTH)
 
     async with httpx.AsyncClient() as http_client:
         for i, case in enumerate(cases, 1):
@@ -343,31 +355,33 @@ async def main() -> None:
             try:
                 embed_started = time.perf_counter()
                 query_emb = await embed_text(http_client, case.query)
-                embed_ms = (time.perf_counter() - embed_started) * 1000
+                embed_ms = (time.perf_counter() - embed_started) * _MS_PER_SECOND
 
                 results = await search_qdrant(qdrant, query_emb, limit=retrieval_limit)
 
                 rerank_started = time.perf_counter()
                 if reranker is not None:
                     passages = [r["content"] for r in results]
-                    ranked = reranker.rerank(case.query, passages, top_k=3)
+                    ranked = reranker.rerank(case.query, passages, top_k=_DEFAULT_RERANK_TOP_K)
                     results = [results[idx] for idx, _ in ranked]
                 else:
-                    results = results[:3]
-                rerank_ms = (time.perf_counter() - rerank_started) * 1000
+                    results = results[:_DEFAULT_RERANK_TOP_K]
+                rerank_ms = (time.perf_counter() - rerank_started) * _MS_PER_SECOND
 
                 p1 = precision_at_1(results, expected)
                 p_at_1_hits += int(p1)
-                r3 = recall_at_k(results, expected, 3)
+                r3 = recall_at_k(results, expected, _DEFAULT_RERANK_TOP_K)
                 r_at_3_hits += r3
-                ndcg3 = ndcg_at_k(results, expected, 3)
+                ndcg3 = ndcg_at_k(results, expected, _DEFAULT_RERANK_TOP_K)
                 ndcg_at_3_sum += ndcg3
 
                 top_score = results[0]["score"] if results else 0.0
-                query_short = case.query[:50] + ("..." if len(case.query) > 50 else "")
+                query_short = case.query[:_QUERY_PREVIEW_CHARS] + (
+                    "..." if len(case.query) > _QUERY_PREVIEW_CHARS else ""
+                )
                 ok1 = "Y" if p1 else "N"
                 ok3 = f"{r3:.0%}" if 0.0 < r3 < 1.0 else ("Y" if r3 else "N")
-                elapsed_ms = (time.perf_counter() - started) * 1000
+                elapsed_ms = (time.perf_counter() - started) * _MS_PER_SECOND
                 total_latency_ms += elapsed_ms
                 total_embed_ms += embed_ms
                 total_rerank_ms += rerank_ms
@@ -396,7 +410,7 @@ async def main() -> None:
 
     # Summary
     print()
-    print("=" * 80)
+    print("=" * _TABLE_WIDTH)
     denominator = total
     p_at_1 = p_at_1_hits / denominator if denominator > 0 else 0.0
     r_at_3 = r_at_3_hits / denominator if denominator > 0 else 0.0
@@ -409,7 +423,7 @@ async def main() -> None:
     print(f"Average latency: {avg_latency_ms:.1f} ms/query")
     print(f"Total queries: {denominator}")
     print(f"Failed queries: {failed_queries}")
-    print("=" * 80)
+    print("=" * _TABLE_WIDTH)
 
     if EVAL_OUTPUT_FILE:
         from datetime import UTC, datetime
@@ -424,7 +438,7 @@ async def main() -> None:
             "run_at": datetime.now(UTC).isoformat(),
             "collection": COLLECTION_NAME,
             "reranker": EVAL_RERANKER,
-            "rerank_k": EVAL_RERANK_K if reranker is not None else 3,
+            "rerank_k": EVAL_RERANK_K if reranker is not None else _DEFAULT_RERANK_TOP_K,
             "reranker_model": _reranker_out,
             "eval_source": source_label,
             "total_cases": total,

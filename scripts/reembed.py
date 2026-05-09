@@ -105,6 +105,13 @@ from paper_ingestion.ingestion.embedder import (  # noqa: E402
 # Configuration from environment
 # ---------------------------------------------------------------------------
 
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
+_QDRANT_UPSERT_BATCH_SIZE = 100
+_DB_POOL_MIN_SIZE = 1
+_DB_POOL_MAX_SIZE = 5
+_MS_PER_SECOND = 1000
+_WARMUP_WARNING_MS = 10_000
+
 LITELLM_CONFIG = get_litellm_config(base_url_default="http://localhost:4000")
 LITELLM_BASE_URL = LITELLM_CONFIG.base_url
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
@@ -172,7 +179,9 @@ class LiteLLMEmbeddingBackend:
             client,
             texts,
             model=EMBEDDING_MODEL,
-            timeout=float(os.environ.get("REEMBED_REQUEST_TIMEOUT", "120")),
+            timeout=float(
+                os.environ.get("REEMBED_REQUEST_TIMEOUT", str(_DEFAULT_REQUEST_TIMEOUT_SECONDS))
+            ),
             config=LITELLM_CONFIG,
         )
 
@@ -457,11 +466,11 @@ async def reembed_paper(
             )
         )
 
-    # Upsert in batches of 100 to avoid oversized requests
-    for i in range(0, len(points), 100):
+    # Upsert in batches to avoid oversized requests.
+    for i in range(0, len(points), _QDRANT_UPSERT_BATCH_SIZE):
         await qdrant.upsert(
             collection_name=COLLECTION_NAME,
-            points=points[i : i + 100],
+            points=points[i : i + _QDRANT_UPSERT_BATCH_SIZE],
             wait=True,
         )
 
@@ -636,7 +645,11 @@ async def main(argv: list[str] | None = None) -> None:
     )
     backend = build_embedding_backend()
 
-    pool = await asyncpg.create_pool(get_dsn(), min_size=1, max_size=5)
+    pool = await asyncpg.create_pool(
+        get_dsn(),
+        min_size=_DB_POOL_MIN_SIZE,
+        max_size=_DB_POOL_MAX_SIZE,
+    )
     if pool is None:
         raise ScriptError("Failed to create database pool")
 
@@ -677,9 +690,9 @@ async def main(argv: list[str] | None = None) -> None:
                     f"Warmup embed failed — aborting before processing corpus. "
                     f"Original error: {_warmup_exc}"
                 ) from _warmup_exc
-            _warmup_ms = (time.perf_counter() - _warmup_t0) * 1000
+            _warmup_ms = (time.perf_counter() - _warmup_t0) * _MS_PER_SECOND
             logger.info("Warmup embed: %.0f ms", _warmup_ms)
-            if _warmup_ms > 10_000:
+            if _warmup_ms > _WARMUP_WARNING_MS:
                 logger.warning(
                     "WARNING: warmup > 10s — model may be CPU-bound; "
                     "consider checking 'docker exec ollama ollama ps'"

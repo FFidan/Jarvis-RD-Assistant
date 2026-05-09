@@ -14,6 +14,8 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     import openai
 
+_ObservedFn = TypeVar("_ObservedFn", bound=Callable[..., Any])
+
 try:
     from langfuse.decorators import observe  # type: ignore[import-not-found]
 except ImportError:
@@ -21,7 +23,6 @@ except ImportError:
         # langfuse 3.x / 4.x — observe re-exported at the package root.
         from langfuse import observe  # type: ignore[no-redef]
     except ImportError:
-        _ObservedFn = TypeVar("_ObservedFn", bound=Callable[..., Any])
 
         @overload
         def observe(fn: _ObservedFn, /) -> _ObservedFn: ...
@@ -53,7 +54,7 @@ except ImportError:
 
             # Support both @observe and @observe(...) call styles.
             if args and callable(args[0]) and not kwargs:
-                return decorator(cast(_ObservedFn, args[0]))
+                return decorator(args[0])
             return decorator
 
 
