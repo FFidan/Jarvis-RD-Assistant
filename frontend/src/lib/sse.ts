@@ -107,6 +107,8 @@ export async function* streamSSE(
   const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(url, {
     method: 'POST',
+    // WS-2A: include the jarvis_session cookie alongside any X-API-Key.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey ? { 'X-API-Key': apiKey } : {}),
@@ -144,6 +146,8 @@ export async function* streamAnalyze(
   const apiKey = useAuthStore.getState().getApiKey();
   const res = await fetch(`/api/papers/${paperId}/analyze`, {
     method: 'POST',
+    // WS-2A: include the jarvis_session cookie alongside any X-API-Key.
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...(apiKey ? { 'X-API-Key': apiKey } : {}),

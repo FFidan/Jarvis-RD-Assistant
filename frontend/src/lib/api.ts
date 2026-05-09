@@ -77,6 +77,11 @@ export async function apiFetch<T>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetch(url, {
       ...init,
       signal: combinedSignal,
+      // WS-2A: send the jarvis_session HttpOnly cookie on every API call so
+      // the backend SessionMiddleware can populate request.state.user_id.
+      // 'include' (not 'same-origin') so cross-origin dev setups (Vite on
+      // :5173 hitting backend on :3001) still carry the cookie.
+      credentials: init?.credentials ?? 'include',
       headers: {
         ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
         ...authHeaders(),
@@ -109,6 +114,8 @@ export async function apiFetchRaw(url: string, init?: RequestInit): Promise<Resp
     const res = await fetch(url, {
       ...init,
       signal: combinedSignal,
+      // WS-2A: same rationale as apiFetch — carry the jarvis_session cookie.
+      credentials: init?.credentials ?? 'include',
       headers: {
         ...authHeaders(),
         ...init?.headers,
