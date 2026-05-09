@@ -116,7 +116,7 @@ async def test_stage2_missing_verifier_raises_type_error():
     with pytest.raises(TypeError):
         # verifier omitted — TypeError expected from Python's own argument check
         await stage2_llm_rerank(  # type: ignore[call-arg]
-            stage1_out, profile, MagicMock(), openai_client=MagicMock()
+            stage1_out, profile, openai_client=MagicMock()
         )
 
 
@@ -132,7 +132,7 @@ async def test_weekly_summary_missing_verifier_type_error():
 
     with pytest.raises(TypeError):
         await generate_weekly_summary(  # type: ignore[call-arg]
-            pool, AsyncMock(), days=7, openai_client=MagicMock()
+            pool, days=7, openai_client=MagicMock()
         )
 
 
@@ -182,7 +182,6 @@ async def test_stage2_verified_field_populated_true_and_false():
         result = await stage2_llm_rerank(
             stage1_out,
             profile,
-            MagicMock(),
             verifier=verifier,
             openai_client=MagicMock(),
         )
@@ -250,7 +249,6 @@ async def test_weekly_digest_theme_split_with_mandatory_verifier():
     ):
         result = await generate_weekly_summary(
             pool,
-            AsyncMock(),
             days=7,
             verifier=verifier,
             openai_client=MagicMock(),

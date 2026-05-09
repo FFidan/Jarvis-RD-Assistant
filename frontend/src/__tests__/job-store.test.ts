@@ -278,11 +278,14 @@ describe('JobStore', () => {
       const logout = vi.fn();
       vi.mocked(useAuthStore.getState).mockReturnValue({
         getApiKey: vi.fn(() => 'test-key'),
+        getUser: vi.fn(() => null),
         logout,
         isAuthenticated: true,
         authTime: null,
         apiKey: 'test-key',
+        user: null,
         login: vi.fn(),
+        loginWithSession: vi.fn(),
         checkSession: vi.fn(() => true),
       });
 

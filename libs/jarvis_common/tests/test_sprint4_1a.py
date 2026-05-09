@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -158,33 +159,45 @@ class TestValidationErrorResponseRedaction:
 
 
 class TestCurrentUserIdSec108:
-    def _make_request(self) -> MagicMock:
-        req = MagicMock()
-        req.method = "GET"
-        req.url.path = "/api/test"
-        return req
+    def _make_request(self, *, user_id: int | None = None) -> SimpleNamespace:
+        # Phase 2 WS-2A: helpers now read request.state.user_id populated by
+        # the session middleware, so the test fixture builds a real
+        # SimpleNamespace with the desired state instead of a MagicMock
+        # (whose attribute auto-vivification returns a Mock, not None).
+        state = SimpleNamespace()
+        if user_id is not None:
+            state.user_id = user_id
+        return SimpleNamespace(method="GET", url=SimpleNamespace(path="/api/test"), state=state)
 
     @pytest.mark.asyncio
-    async def test_current_user_id_or_none_still_returns_none(self) -> None:
-        """current_user_id_or_none must return None (single-tenant placeholder)."""
+    async def test_current_user_id_or_none_returns_none_without_session(self) -> None:
+        """current_user_id_or_none returns None when no session middleware ran."""
         from jarvis_common.auth import current_user_id_or_none
 
         result = await current_user_id_or_none(self._make_request())
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_current_user_id_still_returns_none_for_compat(self) -> None:
-        """current_user_id must still return None to avoid breaking existing Depends callers."""
+    async def test_current_user_id_returns_none_without_session(self) -> None:
+        """current_user_id returns None when no session middleware ran."""
         from jarvis_common.auth import current_user_id
 
         result = await current_user_id(self._make_request())
         assert result is None
 
-    def test_current_user_id_raises_not_implemented(self) -> None:
-        """assert_multi_tenant_not_implemented must raise NotImplementedError."""
+    @pytest.mark.asyncio
+    async def test_current_user_id_or_none_returns_state_value_when_session_present(self) -> None:
+        """WS-2A contract: helpers expose request.state.user_id when middleware set it."""
+        from jarvis_common.auth import current_user_id_or_none
+
+        result = await current_user_id_or_none(self._make_request(user_id=42))
+        assert result == 42
+
+    def test_assert_multi_tenant_not_implemented_raises(self) -> None:
+        """Guard still raises — semantics tightened from "not implemented" to "no session"."""
         from jarvis_common.auth import assert_multi_tenant_not_implemented
 
-        with pytest.raises(NotImplementedError, match="multi-tenant auth not yet implemented"):
+        with pytest.raises(NotImplementedError):
             assert_multi_tenant_not_implemented()
 
     def test_assert_multi_tenant_guard_exported_from_top_level(self) -> None:

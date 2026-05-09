@@ -8,6 +8,7 @@ import { ProjectsSection } from '@/components/my-day/sections/ProjectsSection';
 import { TodaysPulseSection } from '@/components/my-day/sections/TodaysPulseSection';
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import { LearningFocusSection } from '@/components/my-day/sections/LearningFocusSection';
+import { WeeklyDigestSection } from '@/components/my-day/sections/WeeklyDigestSection';
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
 import { MyDayFooter } from '@/components/my-day/sections/MyDayFooter';
 
@@ -43,6 +44,7 @@ export function MyDayPage() {
         <TodaysPulseSection />
         <TriageSection />
         <LearningFocusSection />
+        <WeeklyDigestSection />
         <EndOfDaySection />
         <MyDayFooter entryNum={entryNum} />
       </main>

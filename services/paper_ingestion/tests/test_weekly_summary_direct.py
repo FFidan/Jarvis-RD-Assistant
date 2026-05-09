@@ -67,7 +67,6 @@ async def test_generate_weekly_summary_returns_topics():
     ):
         result = await generate_weekly_summary(
             pool,
-            AsyncMock(),
             verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
@@ -88,7 +87,6 @@ async def test_generate_weekly_summary_uses_structured_output():
     ) as mock_call:
         await generate_weekly_summary(
             pool,
-            AsyncMock(),
             verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
         )
@@ -110,7 +108,6 @@ async def test_generate_weekly_summary_honors_explicit_base_url_override(monkeyp
     ) as mock_call:
         await generate_weekly_summary(
             pool,
-            AsyncMock(),
             litellm_url="http://arg-url:4000",
             verifier=_VERIFIER,
             openai_client=_mock_openai_client(),
@@ -134,7 +131,6 @@ async def test_generate_weekly_summary_default_argument_still_overrides_env(monk
     ) as mock_call:
         await generate_weekly_summary(
             pool,
-            AsyncMock(),
             litellm_url="http://litellm:4000",
             verifier=_VERIFIER,
             openai_client=_mock_openai_client(),

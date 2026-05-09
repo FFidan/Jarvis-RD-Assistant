@@ -195,6 +195,14 @@ configure_middleware_and_errors(
     app, limiter=limiter, trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list
 )
 
+# WS-2A: SessionMiddleware populates request.state.user_id from the
+# jarvis_session cookie issued by paper_ingestion's /api/auth/verify.
+# Sessions are shared across both services because both back onto the
+# same Postgres `sessions` table.
+from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
+
+app.add_middleware(SessionMiddleware)
+
 # ---------------------------------------------------------------------------
 # Router registration
 # ---------------------------------------------------------------------------

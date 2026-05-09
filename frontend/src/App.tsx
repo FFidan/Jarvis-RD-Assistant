@@ -7,6 +7,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { LoginPage } from '@/pages/LoginPage';
+import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
 import { HomePage } from '@/pages/HomePage';
 import { MyDayPage } from '@/pages/MyDayPage';
 import { SettingsPage } from '@/pages/SettingsPage';
@@ -86,6 +87,9 @@ export function App() {
   if (!authed) {
     return (
       <Routes>
+        {/* Magic-link landing must be reachable without an existing session — */}
+        {/* it's the page that CREATES the session. */}
+        <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
         <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
       </Routes>
     );

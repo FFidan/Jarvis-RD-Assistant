@@ -20,7 +20,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import asyncpg
-import httpx
 from jarvis_common import get_smart_model
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
@@ -72,7 +71,6 @@ Respond in JSON format:
 @observe()
 async def generate_weekly_summary(
     db_pool: asyncpg.Pool,
-    http_client: httpx.AsyncClient,
     verifier: QuoteVerifier,
     litellm_url: str | None = None,
     days: int = 7,
@@ -237,6 +235,11 @@ async def generate_weekly_summary(
 
         # Verify each theme title against concatenated paper title+summary_brief
         # for the topic.  Cheap fuzzy match (~ms per theme) — ephemeral, not persisted.
+        # Each theme is annotated in-place with `verified` (bool|None) and
+        # `verification_reason` (str|None) per the multi-user-rollout WS-2 spec so
+        # the frontend's VerificationBadge can render inline next to each theme.
+        # `verified_themes` / `unverified_themes` split lists are kept for backward
+        # compatibility with any consumers that still rely on them.
         verified_themes: list[dict] = []
         unverified_themes: list[dict] = []
         if themes:
@@ -251,21 +254,35 @@ async def generate_weekly_summary(
             for theme in themes:
                 theme_text = str(theme.get("theme", "") or "").strip()
                 if not theme_text or not corpus:
+                    theme["verified"] = False
+                    theme["verification_reason"] = (
+                        "empty theme text" if not theme_text else "no source corpus available"
+                    )
                     unverified_themes.append(theme)
                     continue
                 try:
                     result = await asyncio.to_thread(verifier.verify_quote, theme_text, corpus, [])
                 except Exception:
                     logger.warning("weekly_summary: theme verification raised", exc_info=True)
+                    theme["verified"] = False
+                    theme["verification_reason"] = "verifier raised an exception"
                     unverified_themes.append(theme)
                     continue
                 if result.verified:
+                    theme["verified"] = True
+                    theme["verification_reason"] = None
                     verified_themes.append(theme)
                 else:
+                    theme["verified"] = False
+                    score_pct = (
+                        f"{int(round(result.match_score * 100))}%"
+                        if result.match_score is not None
+                        else "no match"
+                    )
+                    theme["verification_reason"] = (
+                        f"theme text not supported by source papers (best fuzzy match: {score_pct})"
+                    )
                     unverified_themes.append(theme)
-        else:
-            # No themes produced — both lists stay empty.
-            unverified_themes = list(themes)
 
         result_topics.append(
             {

@@ -4,24 +4,45 @@ import { UI_STORE_KEY } from '@/stores/ui-store';
 import { abortAllStreams } from '@/stores/chat-store';
 
 /**
- * Real API-key-based authentication.
+ * Two coexisting authentication paths:
  *
- * The user enters their JARVIS_API_KEY to log in. The key is validated
- * against the backend (GET /api/topics) and stored locally so every
- * subsequent fetch includes the X-API-Key header.
+ * 1. Magic-link sessions (Phase 2 WS-2A): the backend issues a session cookie
+ *    after /api/auth/verify; the cookie is HttpOnly so the browser can't read
+ *    it. This store carries only the user record (id/email/role) returned by
+ *    /api/auth/verify so the UI can render greetings + role-gated chrome. The
+ *    cookie travels on every fetch automatically (credentials:'include' on
+ *    apiFetch).
  *
- * nginx does NOT inject the API key — the browser must send it.
+ * 2. API-key sessions (legacy): users sitting in front of the wizard or
+ *    self-hosters who haven't set up SMTP can still paste their JARVIS_API_KEY
+ *    into the login form. The key is stored in sessionStorage and threaded
+ *    through every fetch as X-API-Key. WS-2A keeps this path working so
+ *    Telegram bot + non-browser callers don't break and so dev-mode iteration
+ *    on a fresh install still works without an SMTP relay.
+ *
+ * When both a session cookie AND an X-API-Key are present the backend prefers
+ * the session cookie (verify_api_key skips /api/auth/* and the session
+ * middleware runs unconditionally).
  */
 const SESSION_DURATION_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+export interface SessionUser {
+  id: number;
+  email: string;
+  role: 'user' | 'admin';
+}
 
 interface AuthState {
   isAuthenticated: boolean;
   authTime: number | null;
   apiKey: string | null;
+  user: SessionUser | null;
   login: (apiKey: string) => Promise<boolean>;
+  loginWithSession: (user: SessionUser) => void;
   logout: () => void;
   checkSession: () => boolean;
   getApiKey: () => string | null;
+  getUser: () => SessionUser | null;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -30,6 +51,7 @@ export const useAuthStore = create<AuthState>()(
       isAuthenticated: false,
       authTime: null,
       apiKey: null,
+      user: null,
 
       async login(apiKey: string): Promise<boolean> {
         try {
@@ -38,7 +60,7 @@ export const useAuthStore = create<AuthState>()(
             headers: { 'X-API-Key': apiKey },
           });
           if (res.ok || res.status === 200) {
-            set({ isAuthenticated: true, authTime: Date.now(), apiKey });
+            set({ isAuthenticated: true, authTime: Date.now(), apiKey, user: null });
             return true;
           }
           return false;
@@ -47,20 +69,48 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
+      loginWithSession(user: SessionUser): void {
+        // Magic-link path: the session cookie is already set by the backend.
+        // We persist nothing security-sensitive here — just the user record so
+        // the UI can render. The cookie is HttpOnly so the browser/JS can't
+        // read or forge it; checkSession still gates on authTime so a stale
+        // tab doesn't pretend to be logged in forever after the cookie
+        // expires server-side.
+        set({
+          isAuthenticated: true,
+          authTime: Date.now(),
+          apiKey: null,
+          user,
+        });
+      },
+
       logout() {
         // Abort any in-flight SSE streams before clearing session state.
         abortAllStreams();
         // Clear the UI store's persisted localStorage entry so a fresh login
         // doesn't inherit stale UI state from a previous session.
         localStorage.removeItem(UI_STORE_KEY);
-        set({ isAuthenticated: false, authTime: null, apiKey: null });
+        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+        // Best-effort backend logout: clear the session cookie + revoke the row.
+        // Don't await — UI state is already cleared and a network failure
+        // shouldn't block the user.
+        try {
+          void fetch('/api/auth/logout', {
+            method: 'POST',
+            credentials: 'include',
+          });
+        } catch {
+          // ignore — frontend logout already happened
+        }
       },
 
       checkSession(): boolean {
-        const { authTime, isAuthenticated, apiKey } = get();
-        if (!isAuthenticated || authTime === null || !apiKey) return false;
+        const { authTime, isAuthenticated, apiKey, user } = get();
+        if (!isAuthenticated || authTime === null) return false;
+        // Either an API key OR a session user must be present
+        if (!apiKey && !user) return false;
         if (Date.now() - authTime > SESSION_DURATION_MS) {
-          set({ isAuthenticated: false, authTime: null, apiKey: null });
+          set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
           return false;
         }
         return true;
@@ -69,20 +119,23 @@ export const useAuthStore = create<AuthState>()(
       getApiKey(): string | null {
         return get().apiKey;
       },
+
+      getUser(): SessionUser | null {
+        return get().user;
+      },
     }),
     {
       name: 'jarvis-auth',
-      // Single-tenant storage (pre-Wave-6): the API key belongs to one user and
-      // is stored in sessionStorage rather than localStorage so it is never
-      // written to disk and is automatically cleared when the browser tab closes.
-      // Wave-6 multi-tenant plan: replace with a short-lived HttpOnly cookie set
-      // by the backend on login; remove the sessionStorage persist entirely and
-      // drive auth state from the cookie session on the server side.
+      // Storage strategy: sessionStorage so credentials are never written to
+      // disk and are cleared on tab close. The HttpOnly session cookie is the
+      // long-lived credential; this store is just enough to drive UI state
+      // for the current tab session.
       storage: createJSONStorage(() => sessionStorage),
       partialize: (state) => ({
         isAuthenticated: state.isAuthenticated,
         authTime: state.authTime,
         apiKey: state.apiKey,
+        user: state.user,
       }),
     },
   ),

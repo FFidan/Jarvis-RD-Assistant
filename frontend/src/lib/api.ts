@@ -201,6 +201,29 @@ import type {
 
 export type { SourceHealth, SourceRunRecord };
 
+// --- Auth (Phase 2 WS-2A magic-link) ---
+import type { SessionUser } from '@/stores/auth-store';
+
+/** Request a one-shot magic-link email. Always resolves true regardless of
+ *  whether the email exists (the backend deliberately doesn't leak account
+ *  existence). Throws ApiError only on network/transport failure. */
+export const requestMagicLink = (email: string) =>
+  apiFetch<{ sent: boolean }>('/api/auth/request-link', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+
+/** Exchange a magic-link token for a session cookie + user record. */
+export const verifyMagicLink = (token: string) =>
+  apiFetch<SessionUser>('/api/auth/verify', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+/** Revoke the current session and clear the cookie. */
+export const logoutSession = () =>
+  apiFetch<void>('/api/auth/logout', { method: 'POST' });
+
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
   apiFetch<DashboardMetrics>('/api/dashboard/metrics');

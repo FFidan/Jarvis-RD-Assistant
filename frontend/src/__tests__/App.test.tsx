@@ -52,7 +52,9 @@ describe('App', () => {
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
     renderApp();
     expect(screen.getByText('JARVIS RD Assistant')).toBeInTheDocument();
-    expect(screen.getByLabelText('API Key')).toBeInTheDocument();
+    // Phase 2 WS-2A: default mode is magic-link (email field). API-key form
+    // is reachable behind the "Use API key instead" toggle.
+    expect(screen.getByLabelText('Email')).toBeInTheDocument();
   });
 
   it('renders home for authenticated user', async () => {

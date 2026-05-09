@@ -23,6 +23,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchMissingFoundationalPapers: vi.fn(),
     fetchAndProcessFoundationalPaper: vi.fn(),
     ratePulseCard: vi.fn(),
+    fetchWeeklyDigest: vi.fn(),
   };
 });
 
@@ -98,6 +99,12 @@ describe('MyDayPage', () => {
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
+    vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({
+      topics: [],
+      total_papers: 0,
+      period_start: '2026-05-01T00:00:00Z',
+      period_end: '2026-05-08T00:00:00Z',
+    });
   });
 
   it('renders DateMasthead with research log header', async () => {
@@ -239,6 +246,12 @@ describe('HeroPulse behaviour', () => {
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
+    vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({
+      topics: [],
+      total_papers: 0,
+      period_start: '2026-05-01T00:00:00Z',
+      period_end: '2026-05-08T00:00:00Z',
+    });
   });
 
   it('two-card deck shows #1 of 2 in the meta text initially', async () => {
@@ -315,6 +328,12 @@ describe('MyDayPage hash-scroll', () => {
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
+    vi.mocked(api.fetchWeeklyDigest).mockResolvedValue({
+      topics: [],
+      total_papers: 0,
+      period_start: '2026-05-01T00:00:00Z',
+      period_end: '2026-05-08T00:00:00Z',
+    });
   });
 
   it('scrolls to #now section via rAF retry loop when element appears after mount', async () => {

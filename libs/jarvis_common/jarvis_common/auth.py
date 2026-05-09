@@ -58,6 +58,12 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # The endpoint enforces its own auth via _check_auth().
     if request.url.path.startswith("/infra-events"):
         return
+    # /api/auth/* IS the auth bootstrap surface — magic-link request, magic-link
+    # verify, and logout. They cannot themselves require API-key auth without
+    # locking out brand-new users who haven't been issued a key yet.
+    # WS-2A: these endpoints have their own validation (token TTL + single-use).
+    if request.url.path.startswith("/api/auth/"):
+        return
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
         if not hmac.compare_digest(api_key or "", jarvis_api_key):
@@ -95,70 +101,64 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     )
 
 
-def _resolve_single_tenant_user_id() -> None:  # type: ignore[return]
-    """Single-tenant placeholder — returns None until Wave-6 ships a real resolver."""
-    return None  # allow-user-id-none: pre-Wave-6 single-tenant
-
-
 async def current_user_id(request: Request) -> int | None:
-    """Return the current user's integer ID, or None in single-tenant mode.
+    """Return the authenticated user's integer ID, or None.
 
-    Placeholder: multi-user support is not implemented yet.  Always returns
-    None so that user_id ownership checks are a no-op for single-tenant
-    deployments while remaining forward-compatible with future multi-user work.
+    Reads from ``request.state.user_id``, populated by
+    :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
+    ``jarvis_session`` cookie is present. Falls back to None for callers
+    without a browser session (Telegram bot using only ``X-API-Key``,
+    health checks, etc.).
 
-    .. warning::
-        TODO(Wave-6): Replace this with real ownership helpers once multi-tenant
-        auth is implemented.  Do NOT add new business logic that depends on this
-        returning a real user ID — it will always be None until Wave-6 ships.
-        Use :func:`current_user_id_or_none` for new code to make the intent
-        explicit, and :func:`assert_multi_tenant_not_implemented` to guard paths
-        that must not run in single-tenant mode.
+    Phase 2 WS-2A replaced the previous single-tenant stub.
     """
-    # SEC-108: single-tenant placeholder — always None until Wave-6.
-    return _resolve_single_tenant_user_id()
+    return getattr(request.state, "user_id", None)
 
 
 async def current_user_id_or_none(request: Request) -> int | None:
-    """Safe single-tenant alias for :func:`current_user_id`.
+    """Explicit-intent alias for :func:`current_user_id`.
 
-    Prefer this function for new ``Depends(...)`` injection points so that the
-    call-site intent is explicit: "I know this can be None and I handle it."
-    Returns None in all current deployments (single-tenant).
+    Prefer this name in ``Depends(...)`` injection points so the call-site
+    reads "I know this can be None and I handle it." Same body as
+    :func:`current_user_id` — both read ``request.state.user_id`` set by
+    the session middleware.
     """
-    return _resolve_single_tenant_user_id()
+    return getattr(request.state, "user_id", None)
 
 
 def assert_multi_tenant_not_implemented() -> None:
     """Raise ``NotImplementedError`` to guard code paths requiring real user IDs.
 
-    Call this inside functions that MUST have a real user identity to work
-    correctly — e.g. cross-user data isolation, ownership transfer, or any
-    path that would be a privilege escalation bug if user_id is None.
+    Retained for callers that hard-block on a real identity. With WS-2A live
+    this is now reachable only when no session is present AND the caller
+    explicitly invoked the guard — so it doubles as a "not authenticated"
+    signal.
 
     Raises
     ------
     NotImplementedError
-        Always, until Wave-6 multi-tenant auth is implemented.
+        When called from a code path with no resolved user identity.
     """
-    # TODO(Wave-6): remove this guard once multi-tenant auth ships.
-    raise NotImplementedError("multi-tenant auth not yet implemented; use Wave-6 ownership helpers")
+    raise NotImplementedError(
+        "no authenticated user available; route requires a session or owner identity"
+    )
 
 
 def single_tenant_user_id() -> None:  # type: ignore[return]
-    """Return the implicit user-id for single-tenant (pre-Wave-4) callers.
+    """Legacy alias retained for the Telegram bot.
 
-    In the current single-tenant deployment every authenticated request belongs
-    to the one configured owner, which is represented in the DB as ``None`` for
-    ``user_id`` columns (matched via ``IS NOT DISTINCT FROM NULL``).
+    The Telegram bot has no browser session and its callers historically passed
+    ``None`` as ``user_id``. Returning ``None`` keeps the legacy single-tenant
+    Telegram path working until WS-2D rewires Telegram to the per-chat user
+    pairing table.
 
     Returns
     -------
     None
-        Always ``None`` — the single-tenant sentinel value. Wave-4 will replace
-        calls to this function with real user-id resolution from the pairing table.
+        Sentinel for "no resolved per-user identity" — DB queries match this
+        via ``IS NOT DISTINCT FROM NULL``.
     """
-    return _resolve_single_tenant_user_id()  # allow-user-id-none: pre-Wave-6 single-tenant
+    return None  # allow-user-id-none: legacy Telegram single-tenant path
 
 
 def validate_production_config() -> None:

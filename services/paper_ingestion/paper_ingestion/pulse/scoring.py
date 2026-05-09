@@ -260,7 +260,6 @@ async def stage1_embedding_filter(
 async def stage2_llm_rerank(
     stage1_out: list[ScoredCandidate],
     profile: UserProfile,
-    http_client: httpx.AsyncClient,
     verifier: QuoteVerifier,
     openai_client: "openai.AsyncOpenAI | None" = None,
 ) -> list[ScoredCandidate]:
@@ -272,8 +271,6 @@ async def stage2_llm_rerank(
         Candidates from stage1_embedding_filter.
     profile:
         UserProfile providing topic context and rating history.
-    http_client:
-        Shared httpx.AsyncClient for LiteLLM requests (kept for back-compat).
     verifier:
         :class:`QuoteVerifier` used to check the LLM-generated reasoning
         against the candidate's title+abstract.  Required — every card must

@@ -412,9 +412,11 @@ async def _digest_weekly_job(
     days = int(payload.get("days", 7))
     user_id: int | None = payload.get("user_id")
     await ctx.update_progress(0.1, "Generating weekly digest")
+    # weekly_summary uses openai_client directly; http_client kept on the
+    # jobs-router signature for backwards compat with other handlers.
+    _ = http_client
     digest = await generate_weekly_summary(
         pool,
-        http_client,
         days=days,
         verifier=verifier,
         user_id=user_id,

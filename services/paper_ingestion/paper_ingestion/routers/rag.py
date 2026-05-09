@@ -479,9 +479,9 @@ async def get_weekly_digest(
     """
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
+    _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
     return await generate_weekly_summary(
         db_pool,
-        http_client,
         days=days,
         verifier=verifier,
         user_id=user_id,

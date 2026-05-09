@@ -439,6 +439,16 @@ configure_middleware_and_errors(
     trusted_proxy_hosts=get_core_settings().trusted_proxy_hosts_list,
 )
 
+# WS-2A: SessionMiddleware reads the jarvis_session cookie and populates
+# request.state.user_id. Added AFTER configure_middleware_and_errors so it
+# sits inside (i.e. runs AFTER) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders
+# in the request flow — by then the request has its public scheme/host
+# resolved and a request-id attached, which makes session lookup events
+# correlatable in logs.
+from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
+
+app.add_middleware(SessionMiddleware)
+
 # ---------------------------------------------------------------------------
 # Router registration
 # ---------------------------------------------------------------------------
@@ -472,9 +482,11 @@ from paper_ingestion.routers import (  # noqa: E402
     telegram,
     topics,
 )
+from paper_ingestion.routers import auth as auth_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
+app.include_router(auth_router.router)
 app.include_router(topics.router)
 app.include_router(settings.router)
 app.include_router(analytics.router)

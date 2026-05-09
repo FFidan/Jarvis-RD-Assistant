@@ -140,6 +140,15 @@ wheels = [
 ]
 
 [[package]]
+name = "aiosmtplib"
+version = "3.0.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/2a/812517f8350cd317aad2ba1ce25dfc213c6f1f2e62e1cbf662b4bdc51d34/aiosmtplib-3.0.2.tar.gz", hash = "sha256:08fd840f9dbc23258025dca229e8a8f04d2ccf3ecb1319585615bfc7933f7f47", size = 59941, upload-time = "2024-07-31T05:13:10.065Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/87/35/441faea7a11159795881a6ec869454f40269e4e3806dced935a35d83a412/aiosmtplib-3.0.2-py3-none-any.whl", hash = "sha256:8783059603a34834c7c90ca51103c3aa129d5922003b5ce98dbaa6d4440f10fc", size = 27111, upload-time = "2024-07-31T05:13:08.515Z" },
+]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -635,12 +644,34 @@ wheels = [
 ]
 
 [[package]]
+name = "dnspython"
+version = "2.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/8c/8b/57666417c0f90f08bcafa776861060426765fdb422eb10212086fb811d26/dnspython-2.8.0.tar.gz", hash = "sha256:181d3c6996452cb1189c4046c61599b84a5a86e099562ffde77d26984ff26d0f", size = 368251, upload-time = "2025-09-07T18:58:00.022Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/5a/18ad964b0086c6e62e2e7500f7edc89e3faa45033c71c1893d34eed2b2de/dnspython-2.8.0-py3-none-any.whl", hash = "sha256:01d9bbc4a2d76bf0db7c1f729812ded6d912bd318d3b1cf81d30c0f845dbf3af", size = 331094, upload-time = "2025-09-07T18:57:58.071Z" },
+]
+
+[[package]]
 name = "docstring-parser"
 version = "0.18.0"
 source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/e0/4d/f332313098c1de1b2d2ff91cf2674415cc7cddab2ca1b01ae29774bd5fdf/docstring_parser-0.18.0.tar.gz", hash = "sha256:292510982205c12b1248696f44959db3cdd1740237a968ea1e2e7a900eeb2015", size = 29341, upload-time = "2026-04-14T04:09:19.867Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a7/5f/ed01f9a3cdffbd5a008556fc7b2a08ddb1cc6ace7effa7340604b1d16699/docstring_parser-0.18.0-py3-none-any.whl", hash = "sha256:b3fcbed555c47d8479be0796ef7e19c2670d428d72e96da63f3a40122860374b", size = 22484, upload-time = "2026-04-14T04:09:18.638Z" },
+]
+
+[[package]]
+name = "email-validator"
+version = "2.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "dnspython" },
+    { name = "idna" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f5/22/900cb125c76b7aaa450ce02fd727f452243f2e91a61af068b40adba60ea9/email_validator-2.3.0.tar.gz", hash = "sha256:9fc05c37f2f6cf439ff414f8fc46d917929974a82244c20eb10231ba60c54426", size = 51238, upload-time = "2025-08-26T13:09:06.831Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/15/545e2b6cf2e3be84bc1ed85613edd75b8aea69807a71c26f4ca6a9258e82/email_validator-2.3.0-py3-none-any.whl", hash = "sha256:80f13f623413e6b197ae73bb10bf4eb0908faf509ad8362c5edeb0be7fd450b4", size = 35604, upload-time = "2025-08-26T13:09:05.858Z" },
 ]
 
 [[package]]
@@ -1166,10 +1197,12 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "aiosmtplib" },
     { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "asyncpg-listen" },
     { name = "cryptography" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "fsrs" },
     { name = "genanki" },
@@ -1203,9 +1236,11 @@ dev = [
     { name = "uvloop" },
 ]
 jarvis-common = [
+    { name = "aiosmtplib" },
     { name = "asyncpg" },
     { name = "asyncpg-listen" },
     { name = "cryptography" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "instructor" },
@@ -1217,9 +1252,11 @@ jarvis-common = [
     { name = "slowapi" },
 ]
 learning-engine = [
+    { name = "aiosmtplib" },
     { name = "asyncpg" },
     { name = "asyncpg-listen" },
     { name = "cryptography" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "fsrs" },
     { name = "genanki" },
@@ -1237,10 +1274,12 @@ learning-engine = [
     { name = "uvloop" },
 ]
 paper-ingestion = [
+    { name = "aiosmtplib" },
     { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "asyncpg-listen" },
     { name = "cryptography" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "instructor" },
@@ -1272,10 +1311,12 @@ paper-ingestion-optional = [
     { name = "sentence-transformers" },
 ]
 telegram-bot = [
+    { name = "aiosmtplib" },
     { name = "apscheduler" },
     { name = "asyncpg" },
     { name = "asyncpg-listen" },
     { name = "cryptography" },
+    { name = "email-validator" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "instructor" },
@@ -1293,10 +1334,12 @@ telegram-bot = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=42" },
+    { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.111.0,<0.117.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.117.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
@@ -1332,9 +1375,11 @@ dev = [
     { name = "uvloop", specifier = ">=0.19,<1" },
 ]
 jarvis-common = [
+    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=42" },
+    { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.117.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "instructor", specifier = ">=1.5" },
@@ -1346,9 +1391,11 @@ jarvis-common = [
     { name = "slowapi", specifier = ">=0.1.9" },
 ]
 learning-engine = [
+    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=42" },
+    { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.117.0" },
     { name = "fsrs", specifier = ">=4.0.0,<6.0.0" },
     { name = "genanki", specifier = ">=0.13.0" },
@@ -1366,10 +1413,12 @@ learning-engine = [
     { name = "uvloop", specifier = ">=0.19,<1" },
 ]
 paper-ingestion = [
+    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=42" },
+    { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.117.0" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "instructor", specifier = ">=1.5" },
@@ -1401,10 +1450,12 @@ paper-ingestion-optional = [
     { name = "sentence-transformers", specifier = ">=3.2.0" },
 ]
 telegram-bot = [
+    { name = "aiosmtplib", specifier = ">=3.0,<4.0" },
     { name = "apscheduler", specifier = ">=3.10.0" },
     { name = "asyncpg", specifier = ">=0.30.0,<0.32.0" },
     { name = "asyncpg-listen", specifier = ">=0.0.9" },
     { name = "cryptography", specifier = ">=42" },
+    { name = "email-validator", specifier = ">=2.0" },
     { name = "fastapi", specifier = ">=0.111.0,<0.117.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.117.0" },
     { name = "httpx", specifier = ">=0.27.0" },

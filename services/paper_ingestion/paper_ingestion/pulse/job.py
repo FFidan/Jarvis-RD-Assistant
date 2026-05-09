@@ -220,7 +220,6 @@ async def run_pulse(
                 results = await stage2_llm_rerank(
                     stage1_out,
                     profile,
-                    http_client,
                     verifier=services.verifier,
                     openai_client=services.openai_client,
                 )
