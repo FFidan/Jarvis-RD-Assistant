@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import asyncpg
 import httpx
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.jobs import JobContext, JobError
 
-from paper_ingestion._state import svc
+from paper_ingestion._state import get_services
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
 
 logger = logging.getLogger(__name__)
@@ -104,10 +104,11 @@ async def _paper_process_job(
 
     await ctx.update_progress(0.1, "Downloaded")
 
-    pdf_processor = svc.pdf_processor
+    services = get_services()
+    pdf_processor = services.pdf_processor
     if pdf_processor is None:
         raise RuntimeError("pdf_processor not initialized")
-    embedder = svc.embedder
+    embedder = services.embedder
     if embedder is None:
         raise RuntimeError("embedder not initialized")
 
@@ -120,7 +121,7 @@ async def _paper_process_job(
         force=force,
         ctx=_SubCtx(ctx, 0.1, 1.0),
     )
-    return result
+    return cast(dict[str, Any], result)
 
 
 # ---------------------------------------------------------------------------
@@ -166,13 +167,14 @@ async def _paper_analyze_job(
     if not is_local and not row["pdf_url"]:
         raise JobError(f"Paper {paper_id} has no PDF URL")
 
-    pdf_processor = svc.pdf_processor
+    services = get_services()
+    pdf_processor = services.pdf_processor
     if pdf_processor is None:
         raise RuntimeError("pdf_processor not initialized")
-    embedder = svc.embedder
+    embedder = services.embedder
     if embedder is None:
         raise RuntimeError("embedder not initialized")
-    verifier = svc.verifier
+    verifier = services.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
 
@@ -246,10 +248,11 @@ async def _paper_summarize_job(
     async with pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
-    verifier = svc.verifier
+    services = get_services()
+    verifier = services.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
-    embedder = svc.embedder
+    embedder = services.embedder
     if embedder is None:
         raise RuntimeError("embedder not initialized")
 
@@ -280,10 +283,11 @@ async def _papers_batch_process_job(
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     total = len(paper_ids)
 
-    pdf_processor = svc.pdf_processor
+    services = get_services()
+    pdf_processor = services.pdf_processor
     if pdf_processor is None:
         raise RuntimeError("pdf_processor not initialized")
-    embedder = svc.embedder
+    embedder = services.embedder
     if embedder is None:
         raise RuntimeError("embedder not initialized")
 
@@ -362,10 +366,11 @@ async def _papers_batch_summarize_job(
     paper_ids: list[int] = list(payload.get("paper_ids", []))
     total = len(paper_ids)
 
-    verifier = svc.verifier
+    services = get_services()
+    verifier = services.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
-    embedder = svc.embedder
+    embedder = services.embedder
     if embedder is None:
         raise RuntimeError("embedder not initialized")
 
@@ -400,7 +405,8 @@ async def _digest_weekly_job(
     """Generate the weekly digest in a visible durable job."""
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
-    verifier = svc.verifier
+    services = get_services()
+    verifier = services.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
     days = int(payload.get("days", 7))
@@ -412,7 +418,7 @@ async def _digest_weekly_job(
         days=days,
         verifier=verifier,
         user_id=user_id,
-        openai_client=svc.openai_client,
+        openai_client=services.openai_client,
     )
     await ctx.update_progress(1.0, "Done")
     return digest

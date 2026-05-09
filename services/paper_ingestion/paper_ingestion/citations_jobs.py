@@ -14,7 +14,7 @@ import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
 
-from paper_ingestion._state import svc
+from paper_ingestion._state import get_services
 from paper_ingestion.sources.semantic_scholar_source import SemanticScholarSource
 
 logger = logging.getLogger(__name__)
@@ -37,7 +37,7 @@ async def _citations_batch_fetch_job(
     """
     from paper_ingestion.citations import sync_citations_for_paper  # noqa: PLC0415
 
-    sources = svc.sources or {}
+    sources = get_services().sources or {}
     s2_source: SemanticScholarSource | None = sources.get("semantic_scholar")
     if s2_source is None:
         raise RuntimeError("Semantic Scholar source not available")

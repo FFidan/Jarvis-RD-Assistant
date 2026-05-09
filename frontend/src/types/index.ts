@@ -1015,3 +1015,42 @@ export interface PartialGenJob {
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   error?: { message: string };
 }
+
+// --- Weekly Digest ---
+//
+// Shape returned by GET /api/digest/weekly.  Backend WS-2 (Phase 1) adds
+// `verified` and `verification_reason` to each theme object so the frontend
+// can show VerificationBadge inline next to each theme.
+
+export interface WeeklyDigestTheme {
+  theme: string;
+  supporting_papers: number[];
+  notes: string | null;
+  /** True when the QuoteVerifier confirmed the theme text against source corpus. */
+  verified: boolean | null;
+  /** Short reason from the verifier explaining why verification failed (null when verified). */
+  verification_reason: string | null;
+}
+
+export interface WeeklyDigestTopicPaper {
+  paper_id: number;
+  title: string;
+  url: string | null;
+  confidence: string | null;
+  relevance_score: number | null;
+}
+
+export interface WeeklyDigestTopic {
+  name: string;
+  paper_count: number;
+  themes: WeeklyDigestTheme[];
+  top_papers: WeeklyDigestTopicPaper[];
+  summary: string;
+}
+
+export interface WeeklyDigestResponse {
+  topics: WeeklyDigestTopic[];
+  total_papers: number;
+  period_start: string;
+  period_end: string;
+}

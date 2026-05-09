@@ -14,7 +14,7 @@ import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
 
-from paper_ingestion._state import svc
+from paper_ingestion._state import get_services
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,14 @@ async def _extraction_single_job(
         await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Extracting fields")
+    services = get_services()
     result = await extract_fields_for_paper(
         http_client,
         pool,
         paper_id,
         template_id,
-        embedder=svc.embedder,
-        verifier=svc.verifier,
+        embedder=services.embedder,
+        verifier=services.verifier,
     )
     await ctx.update_progress(1.0, "Done")
     return result.model_dump(mode="json")
@@ -82,8 +83,9 @@ async def _extraction_batch_job(
         for paper_id in paper_ids:
             await assert_paper_ownership(conn, paper_id, user_id)
 
-    embedder = svc.embedder
-    verifier = svc.verifier
+    services = get_services()
+    embedder = services.embedder
+    verifier = services.verifier
 
     result = await batch_extract(
         http_client,

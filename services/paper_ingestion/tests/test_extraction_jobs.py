@@ -33,10 +33,11 @@ def _install_fake_batch_extract(monkeypatch, result) -> None:
 
 def _install_fake_app(monkeypatch, *, embedder=None, verifier=None) -> None:
     """Populate svc so job handlers can resolve embedder/verifier."""
-    import paper_ingestion._state as _state_mod  # noqa: PLC0415
+    from paper_ingestion.extraction import jobs as jobs_mod  # noqa: PLC0415
 
-    _state_mod.svc.embedder = embedder
-    _state_mod.svc.verifier = verifier
+    services = jobs_mod.get_services()
+    services.embedder = embedder
+    services.verifier = verifier
 
 
 @pytest.mark.asyncio

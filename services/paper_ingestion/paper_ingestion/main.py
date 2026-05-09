@@ -96,7 +96,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
     from jarvis_common.llm_client import _langfuse_lifespan_hook  # noqa: PLC0415
     from jarvis_common.secrets import read_secret  # noqa: PLC0415
 
-    from paper_ingestion._state import svc  # noqa: PLC0415
+    from paper_ingestion._state import set_services  # noqa: PLC0415
 
     _langfuse_lifespan_hook()
     litellm_config = get_litellm_config()
@@ -108,7 +108,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
         mode=instructor.Mode.JSON,
     )
     app.state.openai_client = openai_client
-    svc.openai_client = openai_client
+    set_services(openai_client=openai_client)
 
 
 async def _warn_multitenant_stub(app: FastAPI) -> None:
@@ -166,11 +166,13 @@ async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
 
     # Populate module-level service state so job handlers can access these
     # objects without importing paper_ingestion.main (which would be circular).
-    from paper_ingestion._state import svc  # noqa: PLC0415
+    from paper_ingestion._state import set_services  # noqa: PLC0415
 
-    svc.pdf_processor = app.state.pdf_processor
-    svc.embedder = app.state.embedder
-    svc.verifier = app.state.verifier
+    set_services(
+        pdf_processor=app.state.pdf_processor,
+        embedder=app.state.embedder,
+        verifier=app.state.verifier,
+    )
 
 
 async def _init_source_singletons(app: FastAPI) -> None:
@@ -210,9 +212,9 @@ async def _init_source_singletons(app: FastAPI) -> None:
             )
 
     # Expose sources through module-level state so the pulse job can reach it.
-    from paper_ingestion._state import svc  # noqa: PLC0415
+    from paper_ingestion._state import set_services  # noqa: PLC0415
 
-    svc.sources = app.state.sources
+    set_services(sources=app.state.sources)
 
 
 async def _refresh_telegram_username(app: FastAPI) -> None:

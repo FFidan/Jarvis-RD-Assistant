@@ -69,7 +69,7 @@ async def generate_cards_core(
     """
     from jarvis_common.llm_client import get_litellm_config
 
-    from learning_engine._state import svc  # noqa: PLC0415
+    from learning_engine._state import get_services  # noqa: PLC0415
 
     # Lazily create dependencies when running inside a job handler
     if fsrs_manager is None:
@@ -81,7 +81,7 @@ async def generate_cards_core(
             litellm_config=litellm_config,
         )
 
-    openai_client = svc.openai_client
+    openai_client = get_services().openai_client
 
     if ctx:
         await ctx.update_progress(0.1, "Validating deck and paper")

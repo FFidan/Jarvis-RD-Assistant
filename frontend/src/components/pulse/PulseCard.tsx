@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Trash2, ThumbsDown, Bookmark, HelpCircle, CheckCircle, AlertTriangle } from 'lucide-react';
+import { Trash2, ThumbsDown, Bookmark, HelpCircle } from 'lucide-react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
@@ -7,12 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { WhyPopover } from '@/components/pulse/WhyPopover';
 import { FeedbackButtons } from '@/components/shared/FeedbackButtons';
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from '@/components/ui/tooltip';
+import { VerificationBadge } from '@/components/shared/VerificationBadge';
 import { cn } from '@/lib/utils';
 import { trashAndRejectPaper, unsavePaper } from '@/lib/api';
 import type { PulseCardItem, PulseRating } from '@/types';
@@ -192,38 +187,34 @@ export function PulseCard({
                 {card.reasoning}
               </p>
               {card.reasoning_verified === true && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <CheckCircle
-                        data-testid="reasoning-verified-icon"
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-green-600"
-                        aria-label="Reasoning verified"
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs text-xs">
-                      Reasoning verified against paper title/abstract
-                      {card.reasoning_confidence && ` (${card.reasoning_confidence})`}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <span
+                  data-testid="reasoning-verified-icon"
+                  className="mt-0.5 shrink-0"
+                >
+                  <VerificationBadge
+                    variant="verified"
+                    reason={
+                      card.reasoning_confidence
+                        ? `Reasoning verified against paper title/abstract (${card.reasoning_confidence})`
+                        : 'Reasoning verified against paper title/abstract'
+                    }
+                  />
+                </span>
               )}
               {card.reasoning_verified === false && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <AlertTriangle
-                        data-testid="reasoning-unverified-icon"
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500"
-                        aria-label="Reasoning not verified"
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-xs text-xs">
-                      Reasoning not verified against paper title/abstract
-                      {card.reasoning_confidence && ` (${card.reasoning_confidence})`}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
+                <span
+                  data-testid="reasoning-unverified-icon"
+                  className="mt-0.5 shrink-0"
+                >
+                  <VerificationBadge
+                    variant="unverified"
+                    reason={
+                      card.reasoning_confidence
+                        ? `Reasoning not verified against paper title/abstract (${card.reasoning_confidence})`
+                        : 'Reasoning not verified against paper title/abstract'
+                    }
+                  />
+                </span>
               )}
             </div>
           )}

@@ -37,7 +37,7 @@ validation errors.  Keeping annotations evaluated at runtime makes
 introspection work correctly.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any
 
 import asyncpg
@@ -105,6 +105,7 @@ def build_jobs_router(
     limiter: Limiter,
     payload_schemas: dict[str, type[BaseModel]] | None = None,
     paper_ownership_extractor: Callable[[dict[str, Any]], int | None] | None = None,
+    task_lookup: Callable[[], Mapping[str, Any]] | None = None,
 ) -> APIRouter:
     """Build a ``/api/jobs`` router wired to the given service's deps.
 
@@ -134,6 +135,9 @@ def build_jobs_router(
         own.  In single-tenant mode (``user_id=None``) the helper short-circuits
         and the call is a no-op.  ``None`` means the service has no paper-scoped
         jobs (e.g. ``learning_engine``).
+    task_lookup:
+        Optional callable returning the current kind→task mapping.  Defaults to
+        the compatibility ``jarvis_common.task_registry.KIND_TO_TASK`` mapping.
     """
     # ``service_name`` is currently informational but kept on the closure so
     # future audit/log integrations can read it without adding a parameter.
@@ -204,7 +208,8 @@ def build_jobs_router(
                     await assert_paper_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
 
         # Dispatch via procrastinate task registry.
-        task = KIND_TO_TASK.get(body.kind)
+        tasks = task_lookup() if task_lookup is not None else KIND_TO_TASK
+        task = tasks.get(body.kind)
         if task is None:
             raise HTTPException(
                 status_code=400,

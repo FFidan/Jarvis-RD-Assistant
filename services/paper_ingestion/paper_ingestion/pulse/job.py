@@ -32,7 +32,7 @@ from jarvis_common.jobs import JobContext
 from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
 
-from paper_ingestion._state import svc
+from paper_ingestion._state import get_services
 from paper_ingestion.pulse.citation_signals import compute_citation_signals
 from paper_ingestion.pulse.deck import assemble_deck, persist_deck
 from paper_ingestion.pulse.discovery import discover_candidates
@@ -215,12 +215,13 @@ async def run_pulse(
 
             async def _stage2_with_progress() -> list[ScoredCandidate]:
                 """Score all candidates in one call; inner stage2 handles concurrency."""
+                services = get_services()
                 results = await stage2_llm_rerank(
                     stage1_out,
                     profile,
                     http_client,
-                    verifier=svc.verifier,
-                    openai_client=svc.openai_client,
+                    verifier=services.verifier,
+                    openai_client=services.openai_client,
                 )
                 if ctx:
                     await ctx.update_progress(
@@ -451,12 +452,13 @@ async def _pulse_generate_job(
     ) as locked:
         if not locked:
             return {"status": "blocked", "reason": "Pulse already running"}
+        services = get_services()
         stats = await run_pulse(
             db_pool=pool,
             http_client=http_client,
-            embedder=svc.embedder,
+            embedder=services.embedder,
             now=now,
-            source_cache=svc.sources,
+            source_cache=services.sources,
             ctx=ctx,
         )
     return {

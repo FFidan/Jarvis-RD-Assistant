@@ -410,10 +410,12 @@ services:
         NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
     restart: unless-stopped
     ports:
-      # Dashboard publishes plain HTTP on host 3000 by default. For HTTPS on
-      # 3001 (matches prod TLS-at-edge), enable the caddy-local profile:
-      #   docker compose --profile caddy-local up -d
-      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3000}:3000"
+      # Dashboard publishes plain HTTP on host 3010 by default (NOT 3000 — that
+      # is reserved for sibling apps like Jarvis_BusinessAssistant on this
+      # machine). For HTTPS on 3001 (matches prod TLS-at-edge), enable the
+      # caddy-local profile: `docker compose --profile caddy-local up -d`.
+      # Override DASHBOARD_HOST_PORT in .env if you need a different port.
+      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3010}:3000"
     environment:
       JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
       JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}

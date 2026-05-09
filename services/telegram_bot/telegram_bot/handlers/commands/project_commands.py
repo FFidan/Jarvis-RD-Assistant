@@ -11,6 +11,7 @@ from telegram_bot.formatters import _BIDI_ZW_RE, escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
+from telegram_bot.handlers.types import ProjectRow
 from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -44,7 +45,13 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     for row in rows:
-        project = dict(row)
+        project: ProjectRow = {
+            "id": row["id"],
+            "name": row["name"],
+            "status": row["status"],
+            "description": row.get("description"),
+            "deadline": row.get("deadline"),
+        }
         name = escape(project.get("name", ""))
         desc = escape((project.get("description") or "")[:200])
         status_emoji = {"active": "🟢", "paused": "⏸️", "completed": "✅"}.get(

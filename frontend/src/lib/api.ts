@@ -196,6 +196,7 @@ import type {
   JournalPrompts,
   SourceHealth,
   SourceRunRecord,
+  WeeklyDigestResponse,
 } from '@/types';
 
 export type { SourceHealth, SourceRunRecord };
@@ -1120,6 +1121,12 @@ export async function upsertJournalEntry(date: string, prompts: JournalPrompts):
     method: 'POST',
     body: JSON.stringify({ date, prompts }),
   });
+}
+
+// --- Weekly Digest ---
+
+export async function fetchWeeklyDigest(days: number = 7): Promise<WeeklyDigestResponse> {
+  return apiFetch<WeeklyDigestResponse>(`/api/digest/weekly?days=${days}`);
 }
 
 // --- React Query hooks ---

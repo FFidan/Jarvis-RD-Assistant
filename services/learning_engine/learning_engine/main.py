@@ -69,7 +69,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
     )
     from jarvis_common.secrets import read_secret  # noqa: PLC0415
 
-    from learning_engine._state import svc  # noqa: PLC0415
+    from learning_engine._state import set_services  # noqa: PLC0415
 
     _langfuse_lifespan_hook()
     litellm_config = get_litellm_config()
@@ -81,7 +81,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
         mode=instructor.Mode.JSON,
     )
     app.state.openai_client = openai_client
-    svc.openai_client = openai_client
+    set_services(openai_client=openai_client)
 
 
 async def _warn_multitenant_stub(app: FastAPI) -> None:

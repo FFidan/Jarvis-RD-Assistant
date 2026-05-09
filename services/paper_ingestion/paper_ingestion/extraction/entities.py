@@ -523,15 +523,26 @@ async def get_knowledge_graph(
         entity_ids,
     )
 
-    entity_dicts = []
+    entity_dicts: list[dict[str, Any]] = []
     entity_type_counts: dict[str, int] = {}
     for e in entities:
-        d = dict(e)
-        paper_count = d.get("paper_count", 1)
-        d["display_size"] = min(40, max(15, 15 + paper_count * 3))
-        etype = d.get("entity_type", "unknown")
+        paper_count = e["paper_count"]
+        etype = e["entity_type"]
         entity_type_counts[etype] = entity_type_counts.get(etype, 0) + 1
-        entity_dicts.append(d)
+        entity_dicts.append(
+            {
+                "id": e["id"],
+                "name": e["name"],
+                "canonical_name": e.get("canonical_name"),
+                "entity_type": etype,
+                "description": e.get("description"),
+                "metadata": e.get("metadata"),
+                "embedding_id": e.get("embedding_id"),
+                "paper_count": paper_count,
+                "created_at": e.get("created_at"),
+                "display_size": min(40, max(15, 15 + paper_count * 3)),
+            }
+        )
 
     return {
         "entities": entity_dicts,

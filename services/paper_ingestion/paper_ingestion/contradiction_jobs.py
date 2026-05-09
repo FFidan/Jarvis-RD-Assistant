@@ -8,7 +8,7 @@ import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
 
-from paper_ingestion._state import svc
+from paper_ingestion._state import get_services
 from paper_ingestion.services.contradictions import scan_contradictions
 
 __all__ = ["_contradictions_scan_job"]
@@ -21,10 +21,11 @@ async def _contradictions_scan_job(
     ctx: JobContext,
 ) -> dict[str, Any]:
     """Scan verified paper findings for quote-verified contradictions."""
-    verifier = svc.verifier
+    services = get_services()
+    verifier = services.verifier
     if verifier is None:
         raise RuntimeError("verifier not initialized")
-    openai_client = svc.openai_client
+    openai_client = services.openai_client
     if openai_client is None:
         raise RuntimeError("openai_client not initialized")
     paper_id = payload.get("paper_id")

@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import procrastinate
@@ -60,6 +61,22 @@ if TYPE_CHECKING:
     import httpx
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class TaskDependencies:
+    """Runtime collaborators required by Procrastinate task dispatchers.
+
+    Parameters
+    ----------
+    pool:
+        Async PostgreSQL pool shared with the FastAPI service instance.
+    http_client:
+        Shared HTTP client owned by the service lifespan.
+    """
+
+    pool: asyncpg.Pool
+    http_client: httpx.AsyncClient
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +102,83 @@ app = procrastinate.App(connector=AiopgConnector())
 # This is identical in spirit to how the legacy ``run_job`` (jobs.py:584)
 # threads pool + http_client through the worker loop, just hoisted to module
 # scope instead of being a function argument.
+class TaskRegistry:
+    """Register Procrastinate tasks without hiding runtime dependencies in globals.
+
+    The class is intentionally small: it owns the task map and the service
+    dependencies needed by the generated task wrappers. Module-level functions
+    below delegate to a default instance so existing imports keep working while
+    newer call sites can depend on this explicit object directly.
+    """
+
+    def __init__(
+        self,
+        procrastinate_app: procrastinate.App,
+        *,
+        task_map: dict[str, Any] | None = None,
+    ) -> None:
+        self.app = procrastinate_app
+        self.kind_to_task = task_map if task_map is not None else {}
+        self._dependencies: TaskDependencies | None = None
+
+    def set_dependencies(
+        self,
+        pool: asyncpg.Pool,
+        http_client: httpx.AsyncClient,
+    ) -> None:
+        """Set the runtime collaborators read by this registry's task wrappers."""
+        self._dependencies = TaskDependencies(pool=pool, http_client=http_client)
+
+    def require_dependencies(self) -> TaskDependencies:
+        """Return configured runtime collaborators or raise a startup-order error."""
+        if self._dependencies is None:
+            raise RuntimeError(
+                "task_registry: set_dependencies(pool, http_client) must be called "
+                "during service lifespan startup before any procrastinate task runs."
+            )
+        return self._dependencies
+
+    def register_tasks(
+        self,
+        mapping: dict[str, Callable[..., Awaitable[dict[str, Any]]]],
+        queue: str,
+    ) -> None:
+        """Register kind→handler entries as tasks on this registry's app.
+
+        For each ``(kind, handler)`` pair, this registers a
+        ``@app.task(name=kind, queue=queue, pass_context=True)`` wrapper and
+        stores the resulting task object in ``kind_to_task`` for API dispatch.
+        """
+        for kind, handler in mapping.items():
+            # Capture handler in default arg to avoid late-binding closure bugs.
+            @self.app.task(name=kind, queue=queue, pass_context=True)
+            async def _task_wrapper(
+                context: procrastinate.JobContext,
+                _h: Callable[..., Awaitable[dict[str, Any]]] = handler,
+                **payload: Any,
+            ) -> dict[str, Any]:
+                return await _run_legacy_handler(
+                    context,
+                    payload,
+                    _h,
+                    dependencies=self.require_dependencies(),
+                )
+
+            self.kind_to_task[kind] = _task_wrapper
+
+        logger.debug(
+            "register_tasks: registered %d tasks on queue=%r: %s",
+            len(mapping),
+            queue,
+            sorted(mapping.keys()),
+        )
+
+
+KIND_TO_TASK: dict[str, Any] = {}
+_DEFAULT_REGISTRY = TaskRegistry(app, task_map=KIND_TO_TASK)
+
+# Backward-compatible mirrors for tests and legacy direct imports. New code
+# should use ``TaskRegistry`` / ``TaskDependencies`` instead.
 _pool: asyncpg.Pool | None = None
 _http_client: httpx.AsyncClient | None = None
 
@@ -103,16 +197,15 @@ def set_dependencies(
     global _pool, _http_client
     _pool = pool
     _http_client = http_client
+    _DEFAULT_REGISTRY.set_dependencies(pool, http_client)
 
 
 def _require_dependencies() -> tuple[asyncpg.Pool, httpx.AsyncClient]:
     """Return (pool, http_client) or raise if ``set_dependencies`` was never called."""
-    if _pool is None or _http_client is None:
-        raise RuntimeError(
-            "task_registry: set_dependencies(pool, http_client) must be called "
-            "during service lifespan startup before any procrastinate task runs."
-        )
-    return _pool, _http_client
+    if _pool is not None and _http_client is not None:
+        return _pool, _http_client
+    deps = _DEFAULT_REGISTRY.require_dependencies()
+    return deps.pool, deps.http_client
 
 
 def _terminal_error_payload(exc: BaseException) -> dict[str, Any]:
@@ -132,12 +225,17 @@ async def _run_legacy_handler(
         [asyncpg.Pool, httpx.AsyncClient, dict[str, Any], Any],
         Awaitable[dict[str, Any]],
     ],
+    *,
+    dependencies: TaskDependencies | None = None,
 ) -> dict[str, Any]:
     """Run a legacy handler and persist terminal Procrastinate outcome payloads."""
     import asyncio  # noqa: PLC0415
     import uuid  # noqa: PLC0415
 
-    pool, http_client = _require_dependencies()
+    if dependencies is None:
+        pool, http_client = _require_dependencies()
+    else:
+        pool, http_client = dependencies.pool, dependencies.http_client
     ctx = make_ctx_shim(context, pool=pool)
 
     # Derive task_kind and job_id for structured event emission.
@@ -203,9 +301,6 @@ async def _run_legacy_handler(
 # it is only added to KIND_TO_TASK when JARVIS_ENABLE_TEST_JOBS=1, preventing
 # production exposure via the create_job API.
 
-# Populated at runtime by ``register_tasks`` calls from service startup hooks.
-KIND_TO_TASK: dict[str, Any] = {}
-
 
 def register_tasks(
     procrastinate_app: procrastinate.App,
@@ -226,24 +321,12 @@ def register_tasks(
         mapping: Dict mapping JARVIS job kind strings to legacy handler callables.
         queue: The procrastinate queue name for this service (e.g. "paper_ingestion").
     """
-    for kind, handler in mapping.items():
-        # Capture handler in default arg to avoid late-binding closure bug.
-        @procrastinate_app.task(name=kind, queue=queue, pass_context=True)
-        async def _task_wrapper(
-            context: procrastinate.JobContext,
-            _h: Callable[..., Awaitable[dict[str, Any]]] = handler,
-            **payload: Any,
-        ) -> dict[str, Any]:
-            return await _run_legacy_handler(context, payload, _h)
-
-        KIND_TO_TASK[kind] = _task_wrapper
-
-    logger.debug(
-        "register_tasks: registered %d tasks on queue=%r: %s",
-        len(mapping),
-        queue,
-        sorted(mapping.keys()),
-    )
+    if procrastinate_app is _DEFAULT_REGISTRY.app:
+        registry = _DEFAULT_REGISTRY
+    else:
+        registry = TaskRegistry(procrastinate_app, task_map=KIND_TO_TASK)
+        registry._dependencies = _DEFAULT_REGISTRY._dependencies
+    registry.register_tasks(mapping, queue)
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +361,8 @@ if get_jobs_settings().test_jobs_enabled:
 
 __all__ = [
     "app",
+    "TaskDependencies",
+    "TaskRegistry",
     "set_dependencies",
     "register_tasks",
     "KIND_TO_TASK",

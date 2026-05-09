@@ -11,6 +11,7 @@ from telegram_bot.formatters import escape, truncate
 from telegram_bot.handlers.commands._auth import auth_required
 from telegram_bot.handlers.helpers import get_db
 from telegram_bot.handlers.rate_limit import rate_limit
+from telegram_bot.handlers.types import TaskRow
 from telegram_bot.project_manager import ProjectManager
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,12 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     lines = ["📋 <b>In-Progress Tasks</b>\n"]
     for row in rows:
-        task = dict(row)
+        task: TaskRow = {
+            "id": row["id"],
+            "title": row["title"],
+            "status": row["status"],
+            "project_name": row.get("project_name"),
+        }
         title = escape(task.get("title", ""))
         project_name = escape(task.get("project_name") or "")
         task_id = task.get("id", "")

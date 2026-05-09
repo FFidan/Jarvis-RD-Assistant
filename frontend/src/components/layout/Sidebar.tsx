@@ -13,6 +13,7 @@ import {
   GitFork,
   Network,
   TableProperties,
+  ScrollText,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -39,6 +40,7 @@ const navItems = [
   { path: '/citations', label: 'Citation Graph', icon: GitFork },
   { path: '/knowledge', label: 'Knowledge Graph', icon: Network },
   { path: '/extractions', label: 'Extraction Table', icon: TableProperties },
+  { path: '/logs', label: 'System Logs', icon: ScrollText },
 ];
 
 export function Sidebar() {
