@@ -373,6 +373,32 @@ export const unpairTelegram = () =>
     body: JSON.stringify({ key: 'telegram.owner_chat_id', value: null }),
   });
 
+// --- Per-user multi-tenant Telegram pairing (Sprint A) ---
+
+export interface TelegramPairTokenResponse {
+  token: string;
+  expires_at: string;
+}
+
+export interface UserTelegramPairingStatus {
+  paired: boolean;
+  chat_id: number | null;
+  telegram_username: string | null;
+  paired_at: string | null;
+}
+
+/** Issue a 15-minute per-user pairing token. Requires an authenticated session. */
+export const requestTelegramPairToken = () =>
+  apiFetch<TelegramPairTokenResponse>('/api/telegram/pair-token', { method: 'POST' });
+
+/** Return the current user's Telegram pairing status from telegram_user_pairings. */
+export const getTelegramPairing = () =>
+  apiFetch<UserTelegramPairingStatus>('/api/telegram/pairing');
+
+/** Remove the current user's Telegram pairing. */
+export const removeTelegramPairing = () =>
+  apiFetch<void>('/api/telegram/pairing', { method: 'DELETE' });
+
 export const markSetupCompleted = () =>
   apiFetch<void>('/api/config/setup.completed', {
     method: 'PUT',
