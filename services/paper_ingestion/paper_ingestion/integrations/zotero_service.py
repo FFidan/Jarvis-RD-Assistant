@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
+from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -307,17 +308,16 @@ async def sync_annotations_for_paper(
 
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
-            "SELECT id, zotero_item_key, user_id FROM papers WHERE id = $1",
+            "SELECT id, zotero_item_key, discovered_by FROM papers WHERE id = $1",
             paper_id,
         )
     if not paper:
         return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
     zotero_item_key = paper["zotero_item_key"]
-    # WS-2D: attribute imported annotations to the paper's owner so per-user
-    # note queries don't drop them as system-shared. Tolerate fixtures that
-    # don't expose user_id (NULL = system path).
+    # Sprint B: attribute imported annotations to the paper's discoverer
+    # (audit-trail column). Tolerate fixtures missing the column (NULL = system).
     try:
-        paper_owner_user_id = paper["user_id"]
+        paper_owner_user_id = paper["discovered_by"]
     except (KeyError, IndexError):
         paper_owner_user_id = None
     if not zotero_item_key:
@@ -475,7 +475,7 @@ async def poll_zotero_library(
             try:
                 async with db_pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        "SELECT id, zotero_item_key, user_id FROM papers"
+                        "SELECT id, zotero_item_key, discovered_by FROM papers"
                         " WHERE metadata->>'doi' = $1",
                         doi,
                     )
@@ -490,9 +490,9 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
-                                # WS-2D: attribute to paper's owner so per-user
-                                # note queries don't drop these annotations.
-                                user_id=row["user_id"],
+                                # Sprint B: attribute to paper's discoverer
+                                # (audit-trail column).
+                                user_id=row["discovered_by"],
                                 paper_id=row["id"],
                             )
                         except Exception:
@@ -539,9 +539,19 @@ async def poll_zotero_library(
 
         try:
             async with db_pool.acquire() as conn:
-                # WS-2D: attribute Zotero-imported papers to the polling user.
-                row = await upsert_paper(conn, paper_create, user_id=polling_user_id)
+                # Sprint B canonical-corpus: insert canonical, then mirror
+                # into the polling user's library so the imported item
+                # appears in *their* feed. ``discovered_by`` keeps the audit
+                # trail.
+                row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
                 paper_id = row["id"]
+                if polling_user_id is not None:
+                    await add_to_library(
+                        conn,
+                        user_id=polling_user_id,
+                        paper_id=paper_id,
+                        added_via="zotero_pull",
+                    )
                 # First-sync wins: INSERT to_read state but never overwrite
                 # existing user state (user may have trashed the paper).
                 await _upsert_paper_user_state(
