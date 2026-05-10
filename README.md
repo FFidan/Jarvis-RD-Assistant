@@ -66,41 +66,121 @@ JARVIS is designed for researchers who track multiple topics, read (or should re
 
 **Additional services:** n8n (optional workflow automation, `--profile n8n`), Telegram bot (optional, `--profile telegram`).
 
-## Quick Start
+## Pick your path
+
+JARVIS supports three audiences — pick the one that matches your situation.
+
+### "I want to host this for myself" — solo self-host
+
+The fastest path. Get JARVIS running on your own machine in one command, then finish configuration in your browser.
 
 ```bash
 git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
-./setup.sh
+
+# Linux / macOS
+./scripts/jarvis-setup.sh
+
+# Windows (PowerShell)
+.\scripts\jarvis-setup.ps1
 ```
 
-`setup.sh` generates all secrets, asks 2 questions (access mode, optional Telegram token), and starts the Docker stack. Open the dashboard URL it prints and complete setup via the guided 6-step wizard.
+The bootstrap script:
 
-- **Upgrading:** `git pull && ./update.sh`
-- See [docs/DEPLOYMENT.md — Solo deployment](docs/DEPLOYMENT.md#solo-deployment) for the minimal bring-up path.
-- See [docs/DEPLOYMENT.md — Remote access via Tailscale](docs/DEPLOYMENT.md#remote-access-via-tailscale) for off-LAN access.
-- **Local source rebuilds:** after editing or pulling source-only changes, use `make rebuild-local` to rebuild the core app containers, or `make rebuild-dashboard` for frontend-only changes. Telegram is optional and has its own `make rebuild-telegram` target.
+1. Verifies Docker is installed.
+2. Generates a fresh `.env` with strong random secrets (idempotent — never clobbers an existing `.env`).
+3. Starts the Docker Compose stack.
+4. Waits for the dashboard to come up.
+5. Prints the dashboard URL.
 
-First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) via the `ollama-bootstrap` init container (watch progress with `docker compose logs -f ollama-bootstrap`). The dashboard is served over plain HTTP on port 3001 by default (direct access). For public HTTPS, use Caddy with Let's Encrypt (`--profile letsencrypt`).
+Open **https://localhost:3001** in your browser. The first-run web wizard walks you through:
 
-### GPU Acceleration (optional)
+- A system check (Postgres, Qdrant, Ollama, LiteLLM reachability).
+- SMTP relay (skippable — magic-link emails will fall back to stdout in dev mode).
+- Your **admin email** — creates your account and signs you in immediately, no email round-trip.
+- Optional cloud LLM keys (OpenAI, Anthropic, Gemini).
 
-If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) before running `setup.sh`; the Ollama container will pick it up automatically.
+That's it. First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) in the background; you can use the dashboard while they download. **Upgrading later:** `git pull && ./update.sh`.
 
-## Advanced Configuration
+> The legacy interactive `./setup.sh` (which asks you about LAN access mode and Telegram) is still supported. Use it instead of `./scripts/jarvis-setup.sh` if you prefer being prompted up-front rather than configuring through the web wizard.
 
-If you would rather not run `setup.sh`, you can bring the stack up by hand. Copy the env template, generate secrets with `openssl rand -hex 32`, optionally `source versions.env` (or rely on the compose fallbacks), then `docker compose up -d`:
+### "I'm joining a hosted JARVIS instance" — end-user
+
+Your admin invited you. You don't need to install anything.
+
+1. Open the invitation email from your admin.
+2. Click the magic-link button (or paste the link into your browser). It expires after **24 hours** — ask for a re-send if it's lapsed.
+3. You're signed in. The link does not need a password and does not need to be saved; future logins are also magic-link based.
+4. Bookmark the dashboard URL your admin shared. To sign in next time, visit it and enter your email — JARVIS sends a fresh 15-minute magic link.
+
+That's the whole flow. The first time you log in, the dashboard shows a guided onboarding tour: connect a paper source, define a topic, wait for Pulse to deliver your first card deck.
+
+### "I'm running JARVIS for a small group" — admin operator
+
+Same install path as the solo case, plus the operational concerns of running an instance other people depend on. After running `./scripts/jarvis-setup.sh`, walk through the additional checklist below.
+
+#### 1. SMTP for magic-link delivery
+
+Real users need real emails. The wizard's SMTP step accepts any standard relay. **Recommended free option: [Resend](https://resend.com)** — 3000 emails/month free, modern API, fast onboarding.
+
+Resend SMTP credentials (paste into the wizard):
+
+| Field      | Value                       |
+|------------|-----------------------------|
+| Host       | `smtp.resend.com`           |
+| Port       | `465` (TLS) or `587` (STARTTLS) |
+| Username   | `resend`                    |
+| Password   | `re_...` (your Resend API key) |
+| From       | `you@your-verified-domain.dev` |
+
+Other supported relays: AWS SES, SendGrid, Postmark, Mailgun, your own postfix. Anything that speaks SMTP works.
+
+#### 2. Reverse proxy + public TLS
+
+Two common shapes:
+
+- **Caddy + Let's Encrypt** (built-in, simplest). Set `LETSENCRYPT_DOMAIN` and `LETSENCRYPT_EMAIL` in `.env`, then `docker compose --profile letsencrypt up -d caddy`. Caddy auto-provisions and renews certs.
+- **Cloudflare Tunnel** (zero open ports, requires a Cloudflare account). Set `CLOUDFLARE_TUNNEL_TOKEN` and run `docker compose --profile tunnel up -d`. Pair with Cloudflare Zero Trust access policies. **Always** set `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` only after you've configured ZT access — without it your dashboard is publicly reachable.
+
+Detailed walkthroughs in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+#### 3. Backups
+
+```bash
+# Encrypted nightly pg_dump → ./shared/backups/
+docker compose --profile backup up -d
+```
+
+The `init-secrets.sh` script auto-generates `secrets/backup_encrypt_key.txt`. Keep it offline. Configure S3 upload (optional) via `BACKUP_S3_BUCKET`.
+
+#### 4. Inviting other users
+
+After the wizard finishes, go to **Settings → Admin → Users**. Each invite emails the recipient a 24-hour magic link; they click it once to set a session and then log in by email going forward.
+
+You can mix admin and user roles. Admins see system-scope settings (SMTP, Pulse defaults, source feature flags); users see only their own personal settings (Zotero, model preferences).
+
+#### 5. Docker compose tuning
+
+Heavy CPU/GPU? See `OLLAMA_MAX_LOADED_MODELS` in `.env.example` and the GPU notes below. Multiple users on one box? Watch the LiteLLM dashboard for backpressure on the `smart` model.
+
+### GPU acceleration (optional, all paths)
+
+If you have an NVIDIA GPU, install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) before running the bootstrap script; the Ollama container will pick it up automatically.
+
+### Advanced: bring up the stack by hand
+
+If you don't want to use either bootstrap script, you can do everything manually:
 
 ```bash
 cp .env.example .env
 # Fill in POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, N8N_JWT_SECRET,
-# and JARVIS_API_KEY with: openssl rand -hex 32
+# JARVIS_API_KEY, JARVIS_CONFIG_KEY, LITELLM_MASTER_KEY (openssl rand -hex 32)
 bash scripts/init-dirs.sh
 source versions.env    # optional — docker-compose.yml has fallbacks
 docker compose up -d
 ```
 
-Then open the dashboard URL (default `http://localhost:3001`) and run the 6-step wizard. Every secret you generate here is equivalent to what `setup.sh` would have produced; the wizard still handles topics, models, and Telegram pairing.
+Open **https://localhost:3001** and the first-run web wizard will pick up from there.
 
 ## Database upgrade notes
 
@@ -403,7 +483,9 @@ These projects are credited for the ideas and patterns that informed JARVIS's de
 
 **I already had a `.env` and `setup.sh` asks to overwrite.** By design — `setup.sh` is idempotent and will not clobber secrets without confirmation. Pick **no** to keep your existing config; pick **yes** only if you intend to regenerate secrets from scratch and accept being logged out everywhere.
 
-**The setup wizard won't go away.** The wizard is gated on the `setup.completed` flag in `user_config`. You can flip it three ways: click **Done** on the final wizard step, toggle it from **Settings → Integrations**, or do it directly in psql:
+**The first-run wizard appears even though I've already run setup.** The first-run wizard at `/first-run` is gated on whether any admin user exists. If the `users` table is empty, every route redirects you there. If it's not empty but you're seeing it anyway, run `docker compose exec postgres psql -U jarvis -d jarvis -c "SELECT id, email, role FROM users WHERE role='admin' AND deleted_at IS NULL;"` — if it returns rows, force-refresh the browser. If it returns zero rows on a working install, the migration that creates the `users` table didn't run.
+
+**The post-login onboarding wizard won't go away.** The post-login wizard (topics, Pulse cron, Telegram) is a separate surface gated on the `setup.completed` flag in `user_config`. You can flip it three ways: click **Done** on the final wizard step, toggle it from **Settings → Integrations**, or do it directly in psql:
 
 ```bash
 docker compose exec postgres psql -U jarvis -d jarvis -c \

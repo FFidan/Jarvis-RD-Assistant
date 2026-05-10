@@ -21,7 +21,8 @@ import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { LogsPage } from '@/pages/LogsPage';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { SetupWizard } from '@/pages/SetupWizard';
-import { getSetupStatus } from '@/lib/api';
+import { FirstRunSetupPage } from '@/pages/FirstRunSetupPage';
+import { getFirstRunStatus, getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
@@ -82,28 +83,79 @@ function NavigateBridgeRegistrar() {
   return null;
 }
 
+/**
+ * WS-2F: gates ALL routes (auth + post-auth) behind a /api/setup/status check.
+ * When the install reports configured=false (no admin user exists yet), every
+ * route redirects to /first-run so the operator can run the bootstrap wizard.
+ *
+ * Once configured=true (after the wizard's create-admin step), the gate becomes
+ * a no-op and normal auth/route flow resumes.
+ *
+ * Failure-mode: if the status query errors (backend down), we fail OPEN so the
+ * login page is still reachable — losing access to your own install because
+ * the status probe blipped would be hostile.
+ */
+function FirstRunGate({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['first-run-status'],
+    queryFn: getFirstRunStatus,
+    staleTime: 30_000,
+    retry: false,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
+        Loading...
+      </div>
+    );
+  }
+
+  if (!isError && data && !data.configured && location.pathname !== '/first-run') {
+    return <Navigate to="/first-run" replace />;
+  }
+
+  // Conversely, if the install IS configured but the user lands on /first-run
+  // (stale link, refresh after wizard), kick them home.
+  if (!isError && data?.configured && location.pathname === '/first-run') {
+    return <Navigate to="/" replace />;
+  }
+
+  return <>{children}</>;
+}
+
 export function App() {
   const { isAuthenticated, checkSession } = useAuthStore();
   const authed = isAuthenticated && checkSession();
 
   if (!authed) {
     return (
-      <Routes>
-        {/* Magic-link landing must be reachable without an existing session — */}
-        {/* it's the page that CREATES the session. */}
-        <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
-        <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
-      </Routes>
+      <FirstRunGate>
+        <Routes>
+          {/* WS-2F: pre-auth wizard — reachable even with no session, by design. */}
+          <Route path="/first-run" element={<RouteErrorBoundary><FirstRunSetupPage /></RouteErrorBoundary>} />
+          {/* Magic-link landing must be reachable without an existing session — */}
+          {/* it's the page that CREATES the session. */}
+          <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
+          <Route path="*" element={<RouteErrorBoundary><LoginPage /></RouteErrorBoundary>} />
+        </Routes>
+      </FirstRunGate>
     );
   }
 
   return (
     <ErrorBoundary>
+      <FirstRunGate>
       <SetupGate>
         <NavigateBridgeRegistrar />
         <PomodoroAutoLogger />
         <Routes>
           <Route path="/setup" element={<RouteErrorBoundary><SetupWizard /></RouteErrorBoundary>} />
+          {/* WS-2F: when an authed-but-stale session lingers on an unconfigured */}
+          {/* install, FirstRunGate redirects to /first-run; this route renders */}
+          {/* the wizard outside of AppShell so the user can complete setup. */}
+          <Route path="/first-run" element={<RouteErrorBoundary><FirstRunSetupPage /></RouteErrorBoundary>} />
           <Route
             path="*"
             element={
@@ -131,6 +183,7 @@ export function App() {
           />
         </Routes>
       </SetupGate>
+      </FirstRunGate>
     </ErrorBoundary>
   );
 }

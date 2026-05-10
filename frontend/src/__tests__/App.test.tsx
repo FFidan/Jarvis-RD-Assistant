@@ -15,6 +15,9 @@ vi.mock('@/lib/api', async () => {
       telegram_configured: false,
       telegram_paired: false,
     }),
+    // WS-2F: FirstRunGate calls this on every render; mock as configured so
+    // the gate is a no-op in this test (test focuses on auth/setup gating only).
+    getFirstRunStatus: vi.fn().mockResolvedValue({ configured: true }),
     fetchDashboardMetrics: vi.fn().mockResolvedValue({
       total_papers: 0,
       unread_papers: 0,
@@ -48,10 +51,12 @@ function renderApp() {
 }
 
 describe('App', () => {
-  it('shows login page when not authenticated', () => {
+  it('shows login page when not authenticated', async () => {
     useAuthStore.setState({ isAuthenticated: false, authTime: null, apiKey: null });
     renderApp();
-    expect(screen.getByText('JARVIS RD Assistant')).toBeInTheDocument();
+    // WS-2F: FirstRunGate shows a loading placeholder until /api/setup/status
+    // resolves; once it does (configured=true mock), the LoginPage renders.
+    expect(await screen.findByText('JARVIS RD Assistant')).toBeInTheDocument();
     // Phase 2 WS-2A: default mode is magic-link (email field). API-key form
     // is reachable behind the "Use API key instead" toggle.
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
