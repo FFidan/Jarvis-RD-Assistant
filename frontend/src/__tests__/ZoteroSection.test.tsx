@@ -153,7 +153,12 @@ describe('ZoteroSection', () => {
 
     renderSection();
 
-    expect(await screen.findByLabelText('Group ID')).toBeInTheDocument();
+    // When library_type="group" two elements are labelled "Group ID":
+    //  1. The existing identifier field (#zotero-user-id) relabelled from "User ID"
+    //  2. The new group-id field (#zotero-group-id)
+    // Both being present confirms the UX relabelling landed correctly.
+    const groupIdInputs = await screen.findAllByLabelText('Group ID');
+    expect(groupIdInputs.length).toBeGreaterThanOrEqual(2);
   });
 
   it('writes Zotero boolean settings as booleans, not strings', async () => {

@@ -1,8 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
+
+// ---------------------------------------------------------------------------
+// Mocks
+// ---------------------------------------------------------------------------
 
 vi.mock('@/lib/logs', () => ({
   listEvents: vi.fn().mockResolvedValue({ events: [], next_cursor: null }),
@@ -22,7 +26,36 @@ vi.mock('@/lib/api', async (importOriginal) => {
   };
 });
 
+// ---------------------------------------------------------------------------
+// Imports after mocks
+// ---------------------------------------------------------------------------
+
 import { LogsPage } from '@/pages/LogsPage';
+import { EventsTab } from '@/components/logs/EventsTab';
+import { CorrelationGroup } from '@/components/logs/CorrelationGroup';
+import { ErrorSparkLine, buildSparkBuckets } from '@/components/logs/ErrorSparkLine';
+import { listEvents } from '@/lib/logs';
+import type { SystemEvent } from '@/lib/logs';
+
+const mockListEvents = vi.mocked(listEvents);
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeEvent(overrides: Partial<SystemEvent> = {}): SystemEvent {
+  return {
+    id: Math.floor(Math.random() * 100_000),
+    created_at: new Date().toISOString(),
+    level: 'info',
+    category: 'job',
+    source: 'test-source',
+    message: 'Default test message',
+    context: {},
+    correlation_id: null,
+    ...overrides,
+  };
+}
 
 function renderPage(initialPath = '/logs') {
   const queryClient = new QueryClient({
@@ -36,6 +69,23 @@ function renderPage(initialPath = '/logs') {
     </QueryClientProvider>,
   );
 }
+
+function renderEventsTab(initialPath = '/logs?tab=events') {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={[initialPath]}>
+        <EventsTab />
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// LogsPage — basic navigation (backward-compat with original tests)
+// ---------------------------------------------------------------------------
 
 describe('LogsPage', () => {
   beforeEach(() => {
@@ -83,5 +133,328 @@ describe('LogsPage', () => {
     renderPage('/logs?tab=jobs');
     const jobsTab = screen.getByRole('tab', { name: /jobs/i });
     expect(jobsTab).toHaveAttribute('data-state', 'active');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Preset selection
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — preset selection', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListEvents.mockResolvedValue({ events: [], next_cursor: null });
+  });
+
+  it('renders the preset dropdown', () => {
+    renderEventsTab();
+    expect(screen.getByTestId('preset-select')).toBeInTheDocument();
+  });
+
+  it('shows all four named presets', () => {
+    renderEventsTab();
+    const select = screen.getByTestId('preset-select');
+    expect(within(select).getByText('Last 1h errors')).toBeInTheDocument();
+    expect(within(select).getByText("Today's slow queries")).toBeInTheDocument();
+    expect(within(select).getByText('Failed jobs (24h)')).toBeInTheDocument();
+    expect(within(select).getByText('Telegram orchestrator runs')).toBeInTheDocument();
+  });
+
+  it('selecting "Last 1h errors" triggers an events fetch with level=error', async () => {
+    renderEventsTab();
+    const select = screen.getByTestId('preset-select');
+    await userEvent.selectOptions(select, 'last-1h-errors');
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ level: 'error' });
+    });
+  });
+
+  it('selecting "Failed jobs (24h)" triggers fetch with category=job and query=failed', async () => {
+    renderEventsTab();
+    const select = screen.getByTestId('preset-select');
+    await userEvent.selectOptions(select, 'failed-jobs-24h');
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ category: 'job', q: 'failed' });
+    });
+  });
+
+  it('selecting "Telegram orchestrator runs" triggers fetch with query=telegram', async () => {
+    renderEventsTab();
+    const select = screen.getByTestId('preset-select');
+    await userEvent.selectOptions(select, 'telegram-orchestrator');
+    await waitFor(() => {
+      const calls = mockListEvents.mock.calls;
+      const lastCall = calls[calls.length - 1]?.[0];
+      expect(lastCall).toMatchObject({ q: 'telegram' });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Free-text search (client-side filter)
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — free-text search', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('renders the search input', () => {
+    mockListEvents.mockResolvedValue({ events: [], next_cursor: null });
+    renderEventsTab();
+    expect(screen.getByTestId('search-input')).toBeInTheDocument();
+  });
+
+  it('filters displayed rows by message substring', async () => {
+    mockListEvents.mockResolvedValue({
+      events: [
+        makeEvent({ id: 1, message: 'Alpha event' }),
+        makeEvent({ id: 2, message: 'Beta event' }),
+        makeEvent({ id: 3, message: 'Alpha again' }),
+      ],
+      next_cursor: null,
+    });
+    renderEventsTab();
+
+    await waitFor(() => {
+      expect(screen.getByText('Alpha event')).toBeInTheDocument();
+      expect(screen.getByText('Beta event')).toBeInTheDocument();
+    });
+
+    const input = screen.getByTestId('search-input');
+    await userEvent.type(input, 'Alpha');
+
+    expect(screen.getByText('Alpha event')).toBeInTheDocument();
+    expect(screen.getByText('Alpha again')).toBeInTheDocument();
+    expect(screen.queryByText('Beta event')).not.toBeInTheDocument();
+  });
+
+  it('shows all rows when search input is cleared', async () => {
+    mockListEvents.mockResolvedValue({
+      events: [
+        makeEvent({ id: 1, message: 'Alpha event' }),
+        makeEvent({ id: 2, message: 'Beta event' }),
+      ],
+      next_cursor: null,
+    });
+    renderEventsTab();
+
+    await waitFor(() => screen.getByText('Alpha event'));
+
+    const input = screen.getByTestId('search-input');
+    await userEvent.type(input, 'Alpha');
+    expect(screen.queryByText('Beta event')).not.toBeInTheDocument();
+
+    await userEvent.clear(input);
+    expect(screen.getByText('Alpha event')).toBeInTheDocument();
+    expect(screen.getByText('Beta event')).toBeInTheDocument();
+  });
+
+  it('is case-insensitive', async () => {
+    mockListEvents.mockResolvedValue({
+      events: [makeEvent({ id: 1, message: 'UPPERCASE message' })],
+      next_cursor: null,
+    });
+    renderEventsTab();
+    await waitFor(() => screen.getByText('UPPERCASE message'));
+
+    const input = screen.getByTestId('search-input');
+    await userEvent.type(input, 'uppercase');
+    expect(screen.getByText('UPPERCASE message')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Correlation group expand/collapse
+// ---------------------------------------------------------------------------
+
+describe('CorrelationGroup — expand/collapse', () => {
+  const corrId = 'corr-test-abc123';
+  const events: SystemEvent[] = [
+    makeEvent({ id: 101, correlation_id: corrId, message: 'First event', level: 'info' }),
+    makeEvent({ id: 102, correlation_id: corrId, message: 'Error event', level: 'error' }),
+    makeEvent({ id: 103, correlation_id: corrId, message: 'Third event', level: 'info' }),
+  ];
+
+  function renderGroup(searchText = '') {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <CorrelationGroup
+            correlationId={corrId}
+            events={events}
+            searchText={searchText}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('renders summary row with event count', () => {
+    renderGroup();
+    expect(screen.getByText(/3 events/)).toBeInTheDocument();
+  });
+
+  it('shows error count badge when errors present', () => {
+    renderGroup();
+    expect(screen.getByText(/1 error/)).toBeInTheDocument();
+  });
+
+  it('event messages are hidden before expand', () => {
+    renderGroup();
+    expect(screen.queryByText('First event')).not.toBeInTheDocument();
+    expect(screen.queryByText('Error event')).not.toBeInTheDocument();
+  });
+
+  it('expands on click and shows nested event list', async () => {
+    renderGroup();
+    const summaryButton = screen.getByTestId(`group-${corrId}`);
+    await userEvent.click(summaryButton);
+    expect(screen.getByText('First event')).toBeInTheDocument();
+    expect(screen.getByText('Error event')).toBeInTheDocument();
+    expect(screen.getByText('Third event')).toBeInTheDocument();
+  });
+
+  it('collapses on second click', async () => {
+    renderGroup();
+    const summaryButton = screen.getByTestId(`group-${corrId}`);
+    await userEvent.click(summaryButton);
+    expect(screen.getByText('First event')).toBeInTheDocument();
+    await userEvent.click(summaryButton);
+    expect(screen.queryByText('First event')).not.toBeInTheDocument();
+  });
+
+  it('searchText filters events within expanded group', async () => {
+    renderGroup('Error');
+    const summaryButton = screen.getByTestId(`group-${corrId}`);
+    await userEvent.click(summaryButton);
+    expect(screen.getByText('Error event')).toBeInTheDocument();
+    expect(screen.queryByText('First event')).not.toBeInTheDocument();
+    expect(screen.queryByText('Third event')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Group-by-correlation toggle
+// ---------------------------------------------------------------------------
+
+describe('EventsTab — group by correlation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockListEvents.mockResolvedValue({
+      events: [
+        makeEvent({ id: 1, correlation_id: 'corr-A', message: 'Event A1' }),
+        makeEvent({ id: 2, correlation_id: 'corr-A', message: 'Event A2' }),
+        makeEvent({ id: 3, correlation_id: 'corr-B', message: 'Event B1' }),
+      ],
+      next_cursor: null,
+    });
+  });
+
+  it('renders the group toggle button', () => {
+    renderEventsTab();
+    expect(screen.getByTestId('group-toggle')).toBeInTheDocument();
+  });
+
+  it('in flat mode, all events are visible individually', async () => {
+    renderEventsTab();
+    await waitFor(() => screen.getByText('Event A1'));
+    expect(screen.getByText('Event A2')).toBeInTheDocument();
+    expect(screen.getByText('Event B1')).toBeInTheDocument();
+  });
+
+  it('in group mode, shows correlation group rows instead of flat events', async () => {
+    renderEventsTab();
+    await waitFor(() => screen.getByText('Event A1'));
+
+    await userEvent.click(screen.getByTestId('group-toggle'));
+
+    // Groups should be present (summary rows)
+    expect(screen.getByTestId('group-corr-A')).toBeInTheDocument();
+    expect(screen.getByTestId('group-corr-B')).toBeInTheDocument();
+
+    // Individual messages should be collapsed (not visible in summary)
+    expect(screen.queryByText('Event A1')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ErrorSparkLine — renders; no-error state
+// ---------------------------------------------------------------------------
+
+describe('ErrorSparkLine', () => {
+  it('shows "no errors" message when no error events exist', () => {
+    const events = [makeEvent({ level: 'info' }), makeEvent({ level: 'debug' })];
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ErrorSparkLine events={events} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText(/No errors in the last hour/i)).toBeInTheDocument();
+  });
+
+  it('renders spark-line chart when error events exist', () => {
+    const events = [makeEvent({ level: 'error', message: 'boom' })];
+    const queryClient = new QueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ErrorSparkLine events={events} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByTestId('error-sparkline')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildSparkBuckets unit tests
+// ---------------------------------------------------------------------------
+
+describe('buildSparkBuckets', () => {
+  it('returns 60 buckets', () => {
+    expect(buildSparkBuckets([])).toHaveLength(60);
+  });
+
+  it('counts error events in the correct bucket', () => {
+    const event: SystemEvent = makeEvent({
+      level: 'error',
+      // ~30 minutes ago
+      created_at: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+    });
+    const buckets = buildSparkBuckets([event]);
+    const total = buckets.reduce((s, b) => s + b.errors, 0);
+    expect(total).toBe(1);
+  });
+
+  it('ignores info events', () => {
+    const event: SystemEvent = makeEvent({ level: 'info' });
+    const buckets = buildSparkBuckets([event]);
+    const total = buckets.reduce((s, b) => s + b.errors, 0);
+    expect(total).toBe(0);
+  });
+
+  it('counts critical events', () => {
+    const event: SystemEvent = makeEvent({
+      level: 'critical',
+      created_at: new Date(Date.now() - 5 * 60 * 1000).toISOString(),
+    });
+    const buckets = buildSparkBuckets([event]);
+    const total = buckets.reduce((s, b) => s + b.errors, 0);
+    expect(total).toBe(1);
+  });
+
+  it('ignores events older than 60 minutes', () => {
+    const event: SystemEvent = makeEvent({
+      level: 'error',
+      created_at: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
+    });
+    const buckets = buildSparkBuckets([event]);
+    const total = buckets.reduce((s, b) => s + b.errors, 0);
+    expect(total).toBe(0);
   });
 });

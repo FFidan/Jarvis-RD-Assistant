@@ -647,11 +647,16 @@ async def _async_user_99(_request):
 
 @pytest.mark.asyncio
 async def test_get_paper_detail_403_for_other_user(monkeypatch):
-    """WS-6B-α: paper owned by user 42, caller is user 99 → 403 from helper."""
+    """Sprint B: paper discovered_by=42, caller=99 + not in library → 403."""
     monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
     pool, conn = _make_pool_and_conn()
-    # First fetchrow is the ownership check on `papers` table.
+    # First fetchrow is the ownership check on `papers` table — return the
+    # legacy ``user_id`` key (the helper falls back to it when
+    # ``discovered_by`` is missing).
     conn.fetchrow.return_value = FakeRecord(user_id=42)
+    # Sprint B: assert_paper_ownership now also probes user_library via
+    # fetchval; force a "not in library" miss so the 403 fires.
+    conn.fetchval = AsyncMock(return_value=None)
 
     with pytest.raises(HTTPException) as exc_info:
         await papers.get_paper_detail.__wrapped__(
@@ -1280,23 +1285,32 @@ async def test_bulk_partial_failure_records_savepoint_isolation(monkeypatch):
     monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
     pool, conn = _make_pool_and_conn()
 
-    # Build a side_effect for assert_paper_ownership that fails on paper_id=2.
-    # The router calls conn.fetchrow("SELECT user_id FROM papers WHERE id = $1", paper_id)
-    # — return user_id=99 for {1,3} and a mismatched 999 for paper 2 to trigger 403.
+    # Sprint B: assert_paper_ownership now reads ``discovered_by`` (audit) +
+    # may probe ``user_library`` membership via fetchval. Build a side_effect
+    # that returns the legacy ``user_id`` key (fallback path) and mismatches
+    # paper 2 to trigger a 403 (combined with a fetchval miss below).
     fetched: list[FakeRecord] = []
 
     async def _fetchrow(sql: str, *args, **kwargs):
         del kwargs  # unused but required by asyncpg.Connection.fetchrow signature
-        if "SELECT user_id FROM papers" in sql:
+        if "FROM papers WHERE id" in sql or "SELECT discovered_by FROM papers" in sql:
             paper_id = args[0]
             if paper_id == 2:
                 fetched.append(FakeRecord(user_id=999))
-                return FakeRecord(user_id=999)  # mismatch → 403 from helper
+                return FakeRecord(user_id=999)  # mismatch → library probe + 403
             fetched.append(FakeRecord(user_id=99))
             return FakeRecord(user_id=99)
         return None
 
+    async def _fetchval(sql: str, *args, **kwargs):
+        del kwargs
+        if "FROM user_library" in sql:
+            paper_id = args[0]
+            return None if paper_id == 2 else 1
+        return None
+
     conn.fetchrow.side_effect = _fetchrow
+    conn.fetchval = AsyncMock(side_effect=_fetchval)
 
     body = BulkActionRequest(paper_ids=[1, 2, 3], action="save")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
@@ -1560,8 +1574,10 @@ async def test_annotate_paper_unauthorized_user(monkeypatch):
     """
     monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
     pool, conn = _make_pool_and_conn()
-    # assert_paper_ownership reads user_id from the papers table.
+    # Sprint B: assert_paper_ownership reads discovered_by (with legacy
+    # user_id fallback for fixtures), then checks user_library membership.
     conn.fetchrow.return_value = FakeRecord(user_id=42)
+    conn.fetchval = AsyncMock(return_value=None)  # not in caller's library
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1608,11 +1624,13 @@ async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
 
     async def _fetchrow(sql: str, *args, **kwargs):
         del kwargs
-        if "SELECT user_id FROM papers" in sql:
+        # Sprint B: ownership probe selects ``discovered_by`` (mocks may still
+        # use the legacy ``user_id`` key — the helper falls back to it).
+        if "FROM papers WHERE id" in sql or "SELECT discovered_by FROM papers" in sql:
             paper_id = args[0]
             if paper_id == 99999:
                 return None  # paper not found → assert_paper_ownership raises 404
-            return FakeRecord(user_id=99)  # caller owns this paper
+            return FakeRecord(user_id=99)  # caller is also discoverer
         return None
 
     conn.fetchrow.side_effect = _fetchrow

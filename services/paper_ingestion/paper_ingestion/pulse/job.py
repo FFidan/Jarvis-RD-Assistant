@@ -97,6 +97,7 @@ async def run_pulse(
     now: datetime | None = None,
     source_cache: dict | None = None,
     ctx: JobContext | None = None,
+    user_id: int | None = None,
 ) -> dict:
     """Run the full overnight Pulse pipeline.
 
@@ -376,6 +377,10 @@ async def run_pulse(
                         # so a single-card failure cannot poison the outer transaction.
                         async with conn.transaction():
                             card.paper.discovery_origin = "pulse"
+                            # Sprint B: pulse inserts canonical-only; library
+                            # membership for the deck owner is recorded when
+                            # the user accepts the card (rate=save) via the
+                            # /api/pulse/rate endpoint.
                             await upsert_paper(conn, card.paper)
                         successes += 1
                     except Exception as exc:  # per-card: roll back savepoint, keep outer txn alive
@@ -411,9 +416,11 @@ async def run_pulse(
     if ctx:
         try:
             classifier_job_id = str(uuid.uuid4())
+            # Sprint B / Wave-2: thread the deck owner's user_id so the
+            # follow-up classifier-training job is attributable.
             await KIND_TO_TASK["pulse.train_classifier"].defer_async(
                 job_id=classifier_job_id,
-                user_id=None,  # allow-user-id-none: pulse job — no user context at schedule time
+                user_id=user_id,
             )
             stats["classifier_training_enqueued"] = True
             stats["classifier_training_job_id"] = classifier_job_id
@@ -475,7 +482,9 @@ async def _pulse_generate_job(
     now_str = payload.get("now")
     now = datetime.fromisoformat(now_str) if now_str else None
 
-    user_id_or_zero = payload.get("user_id") or 0
+    user_id_raw = payload.get("user_id")
+    user_id = int(user_id_raw) if user_id_raw is not None else None
+    user_id_or_zero = user_id or 0
     async with AdvisoryLock(
         pool, key1=_kind_lock_key("pulse.generate"), key2=user_id_or_zero
     ) as locked:
@@ -489,6 +498,7 @@ async def _pulse_generate_job(
             now=now,
             source_cache=services.sources,
             ctx=ctx,
+            user_id=user_id,
         )
     return {
         "deck_date": stats.get("deck_date"),
