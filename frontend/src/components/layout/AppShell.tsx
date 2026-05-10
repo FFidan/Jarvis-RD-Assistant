@@ -8,6 +8,7 @@ import { useThemeEffect } from '@/hooks/use-theme-effect';
 import { useAppearance } from '@/hooks/use-appearance';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
+import { OnboardingTour } from '@/components/onboarding/OnboardingTour';
 
 interface AppShellProps {
   children: ReactNode;
@@ -54,6 +55,7 @@ export function AppShell({ children }: AppShellProps) {
 
       <Toaster position="bottom-right" toastOptions={{ style: { paddingBottom: 'env(safe-area-inset-bottom)' } }} />
       <KeyboardCheatSheet />
+      <OnboardingTour />
     </div>
   );
 }

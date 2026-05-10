@@ -145,6 +145,7 @@ export function PulseDeck() {
             No Pulse deck yet today.
           </p>
           <Button
+            data-tour-id="pulse-generate-btn"
             size="sm"
             onClick={handleGenerateNow}
             disabled={isGenerating}
@@ -173,6 +174,7 @@ export function PulseDeck() {
             No papers have been ingested yet. Add some sources or upload papers to get started.
           </p>
           <Button
+            data-tour-id="pulse-generate-btn"
             size="sm"
             onClick={handleGenerateNow}
             disabled={isGenerating}
@@ -242,14 +244,18 @@ export function PulseDeck() {
         </div>
       )}
       <div className="space-y-3">
-        {deck.cards.map((card) => (
-          <PulseCard
+        {deck.cards.map((card, idx) => (
+          <div
             key={card.card_id}
-            card={card}
-            onRate={handleRate}
-            onOpen={handleOpen}
-            rated={ratedCards.has(card.paper_id)}
-          />
+            data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
+          >
+            <PulseCard
+              card={card}
+              onRate={handleRate}
+              onOpen={handleOpen}
+              rated={ratedCards.has(card.paper_id)}
+            />
+          </div>
         ))}
       </div>
     </section>
