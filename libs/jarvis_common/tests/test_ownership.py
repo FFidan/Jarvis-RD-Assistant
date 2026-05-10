@@ -16,17 +16,25 @@ import pytest
 from fastapi import HTTPException
 
 
-def _make_conn(fetchrow_return) -> AsyncMock:
-    """Return an asyncpg Connection mock with fetchrow() pre-wired."""
+def _make_conn(fetchrow_return, *, in_library: bool = False) -> AsyncMock:
+    """Return an asyncpg Connection mock with fetchrow + fetchval pre-wired.
+
+    Sprint B: ``assert_paper_ownership`` reads ``papers.discovered_by`` first
+    via fetchrow, then optionally checks ``user_library`` membership via
+    fetchval. ``in_library`` controls the second probe.
+    """
     conn = AsyncMock()
     conn.fetchrow = AsyncMock(return_value=fetchrow_return)
+    conn.fetchval = AsyncMock(return_value=1 if in_library else None)
     return conn
 
 
-def _make_row(user_id: int | None) -> MagicMock:
-    """Return a mock asyncpg Record for a paper row."""
+def _make_row(discovered_by: int | None) -> MagicMock:
+    """Return a mock asyncpg Record for a paper row (Sprint B columns)."""
     row = MagicMock()
-    row.__getitem__ = MagicMock(side_effect=lambda key: user_id if key == "user_id" else None)
+    row.__getitem__ = MagicMock(
+        side_effect=lambda key: discovered_by if key == "discovered_by" else None
+    )
     return row
 
 
@@ -113,10 +121,11 @@ async def test_assert_paper_ownership_403_for_other_user() -> None:
     """A different user accessing an owned paper must get 403."""
     from jarvis_common.db_helpers import assert_paper_ownership
 
-    row = _make_row(42)  # paper owned by user 42
-    conn = _make_conn(row)
+    row = _make_row(42)  # paper discovered by user 42
+    # Sprint B: 403 fires only when paper is NOT in the caller's library either.
+    conn = _make_conn(row, in_library=False)
 
-    # Caller is user 99 — different from the owner
+    # Caller is user 99 — different from the discoverer, paper not in library.
     with pytest.raises(HTTPException) as exc_info:
         await assert_paper_ownership(conn, paper_id=7, user_id=99)
 

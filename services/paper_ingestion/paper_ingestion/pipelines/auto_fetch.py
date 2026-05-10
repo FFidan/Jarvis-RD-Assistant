@@ -9,6 +9,8 @@ import logging
 import os
 from pathlib import Path
 
+from jarvis_common.library import fan_out_to_topic_users
+
 from paper_ingestion.models import PaperSourceConfig
 from paper_ingestion.pdf_processor import PDF_STORAGE_PATH
 from paper_ingestion.services.pdf_workflow import run_process_pdf, upsert_paper
@@ -39,11 +41,26 @@ async def run_auto_pipeline(app) -> None:
                 "SELECT * FROM paper_sources WHERE enabled = TRUE"
                 " ORDER BY display_order ASC, id ASC"
             )
-            topics_rows = await conn.fetch("SELECT name FROM topics")
+            topics_rows = await conn.fetch("SELECT id, name FROM topics")
 
-        topics = [row["name"] for row in topics_rows]
-        if not topics:
-            topics = ["machine learning"]  # sensible default
+        # Sprint B: keep topic id alongside name so a search-result paper can
+        # be fanned out to users subscribed to that topic via user_library.
+        # Defensive: tolerate fixtures / partial-schema rows that omit ``id``.
+        def _row_get(row: object, key: str) -> object | None:
+            try:
+                return row[key]  # type: ignore[index]
+            except (KeyError, IndexError, TypeError):
+                return None
+
+        topic_pairs: list[tuple[int | None, str]] = []
+        for row in topics_rows:
+            name = _row_get(row, "name")
+            if not name:
+                continue
+            tid = _row_get(row, "id")
+            topic_pairs.append((int(tid) if tid is not None else None, str(name)))
+        if not topic_pairs:
+            topic_pairs = [(None, "machine learning")]  # sensible default
 
         # 2. For each enabled source: search per topic and save results
         papers_added = 0
@@ -61,9 +78,9 @@ async def run_auto_pipeline(app) -> None:
                     config=src_row["config"] or {},
                 )
                 source = source_class(config, app.state.http_client)
-                for topic in topics:
+                for topic_id, topic_name in topic_pairs:
                     try:
-                        results = await source.search(topic, max_results=20)
+                        results = await source.search(topic_name, max_results=20)
                         if results:
                             # batch save via internal function (bypasses HTTP rate limiter)
                             async with db_pool.acquire() as conn:
@@ -74,13 +91,31 @@ async def run_auto_pipeline(app) -> None:
                                         row = await upsert_paper(conn, paper)
                                         if row and row["is_insert"]:
                                             papers_added += 1
+                                        # Sprint B: fan out to every user
+                                        # subscribed to this topic. Idempotent
+                                        # via ON CONFLICT DO NOTHING.
+                                        if row and topic_id is not None:
+                                            try:
+                                                await fan_out_to_topic_users(
+                                                    conn,
+                                                    paper_id=row["id"],
+                                                    topic_ids=[topic_id],
+                                                )
+                                            except Exception as fan_exc:
+                                                logger.warning(
+                                                    "auto_pipeline: fan-out failed "
+                                                    "for paper %d topic %d: %s",
+                                                    row["id"],
+                                                    topic_id,
+                                                    fan_exc,
+                                                )
                                     except Exception as e:
                                         logger.warning("auto_pipeline: failed to save paper: %s", e)
                     except Exception as e:
                         logger.warning(
                             "auto_pipeline: source %s topic '%s' failed: %s",
                             source_type,
-                            topic,
+                            topic_name,
                             e,
                         )
             except Exception as e:

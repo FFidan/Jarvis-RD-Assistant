@@ -6,6 +6,11 @@ that existing import paths keep working:
     from telegram_bot.handlers.commands import papers_command, register_command_handlers
 """
 
+from telegram_bot.handlers.commands.pairing_commands import (
+    pair_command,
+    unpair_command,
+    whoami_command,
+)
 from telegram_bot.handlers.commands.paper_commands import (
     briefing_command,
     inbox_command,
@@ -47,6 +52,10 @@ __all__ = [
     "help_command",
     "focus_command",
     "pulse_now_command",
+    # pairing domain (Sprint A)
+    "pair_command",
+    "unpair_command",
+    "whoami_command",
     # registration
     "register_command_handlers",
 ]

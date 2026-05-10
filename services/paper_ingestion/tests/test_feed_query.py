@@ -26,6 +26,9 @@ def test_build_feed_queries_collects_filters_and_pagination():
 
     Phase-A redesign: statuses= is deprecated/dead; the view= param replaces it.
     pus.state (not pus.status) is used throughout.
+
+    Sprint B: with user_id supplied, the FROM clause JOINs ``user_library``;
+    with user_id=None it falls back to canonical-corpus-only scope.
     """
     query_parts = build_feed_queries(
         unread_only=True,
@@ -38,10 +41,13 @@ def test_build_feed_queries_collects_filters_and_pagination():
         topic_names="agents,rag",
         date_from=date(2026, 1, 1),
         date_to=date(2026, 3, 1),
+        user_id=42,
     )
 
-    # WS-6B-β: user-scoping predicate at $1; single-user mode short-circuits to TRUE.
-    assert "($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)" in query_parts.data_query
+    # Sprint B: user_library JOIN replaces the legacy `p.user_id IS NULL OR ...` predicate.
+    assert (
+        "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1" in query_parts.data_query
+    )
     # Phase-A: pus.user_id scoping is in _BASE_FROM (LEFT JOIN)
     assert "pus.user_id IS NOT DISTINCT FROM $1" in query_parts.data_query
     # unread_only → VIEW_PREDICATES['active'] (Phase-A state machine)
@@ -57,7 +63,7 @@ def test_build_feed_queries_collects_filters_and_pagination():
     assert "ORDER BY p.priority_score DESC NULLS LAST" in query_parts.data_query
 
     assert query_parts.params == [
-        None,  # $1 user_id (single-user default)
+        42,  # $1 user_id
         "attention",  # $2 q
         "arxiv",  # $3 source_type
         ["agents", "rag"],  # $4 topic_list
@@ -104,7 +110,7 @@ def test_derive_feed_search_mode_marks_bm25_only_when_query_present():
 
 
 def test_build_feed_queries_user_id_kwarg_threads_into_params():
-    """WS-6B-β: passing user_id binds it to the user-scoping predicate at $1."""
+    """Sprint B: passing user_id binds the user_library JOIN at $1."""
     query_parts = build_feed_queries(
         unread_only=False,
         sort="discovered_at",
@@ -119,7 +125,33 @@ def test_build_feed_queries_user_id_kwarg_threads_into_params():
         user_id=42,
     )
 
-    assert "($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)" in query_parts.data_query
+    assert (
+        "JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1" in query_parts.data_query
+    )
     # user_id is bound at $1, then LIMIT ($2) and OFFSET ($3)
     assert query_parts.params == [42, 10, 0]
     assert query_parts.count_params == [42]
+
+
+def test_build_feed_queries_no_user_id_uses_canonical_corpus_fallback():
+    """Sprint B: user_id=None bypasses the JOIN and returns the canonical corpus.
+
+    This preserves single-tenant / pre-multi-user-mode behaviour where the
+    feed shows every canonical paper regardless of library membership.
+    """
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=5,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=None,
+    )
+
+    assert "JOIN user_library" not in query_parts.data_query
+    assert " FROM papers p" in query_parts.data_query

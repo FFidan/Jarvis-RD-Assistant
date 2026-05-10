@@ -9,6 +9,7 @@ import { ExtractionTemplateSection } from '@/components/settings/ExtractionTempl
 import { PulseSection } from '@/components/settings/PulseSection';
 import { TimerSection } from '@/components/settings/TimerSection';
 import { PairTelegram } from '@/components/setup/PairTelegram';
+import { TelegramPairingSection } from '@/components/settings/TelegramPairingSection';
 import { ZoteroSection } from '@/components/settings/ZoteroSection';
 import { ProvidersSection } from '@/components/settings/ProvidersSection';
 import { AppearanceSection } from '@/components/settings/AppearanceSection';
@@ -109,10 +110,16 @@ export function SettingsPage() {
 
         <TabsContent value="integrations">
           <div className="space-y-8">
+            {/* Per-user multi-tenant Telegram pairing (Sprint A) */}
+            <TelegramPairingSection />
+
+            {/* Legacy single-tenant pairing — kept for admin/setup-wizard use */}
             <div className="space-y-4">
               <div>
-                <p className="text-sm text-muted-foreground">
-                  Pair a Telegram chat to receive briefings and interact with JARVIS from your phone.
+                <h3 className="text-sm font-medium">System Telegram pairing</h3>
+                <p className="text-sm text-muted-foreground mt-0.5">
+                  Pair this JARVIS instance to a Telegram chat for system notifications
+                  (setup wizard / admin).
                 </p>
               </div>
               <PairTelegram />

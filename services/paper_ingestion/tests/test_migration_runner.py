@@ -48,6 +48,22 @@ def _count_real_migrations() -> int:
     return count
 
 
+def _real_migration_versions() -> list[int]:
+    """Return the sorted list of migration versions present on disk.
+
+    The numbering may have gaps (e.g. migration 71 is reserved for Sprint A
+    and lives on a parallel branch). Tests must use this rather than
+    ``range(1, count + 1)`` to avoid spurious "missing migration" runs.
+    """
+    versions: list[int] = []
+    for f in _MIGRATIONS_DIR.glob("*.sql"):
+        try:
+            versions.append(int(f.name.split("_")[0]))
+        except (ValueError, IndexError):
+            continue
+    return sorted(versions)
+
+
 def _import_run_migrations():
     """Lazy import to avoid module-level import chain issues in test collection."""
     from paper_ingestion.migrations_runner import run_migrations
@@ -75,8 +91,8 @@ async def test_skips_already_applied_migrations():
     """Migrations already in schema_migrations should not be re-executed."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    total = _count_real_migrations()
-    conn.fetch.return_value = [{"version": i} for i in range(1, total + 1)]
+    versions = _real_migration_versions()
+    conn.fetch.return_value = [{"version": v} for v in versions]
 
     await run_migrations(pool)
 
@@ -88,17 +104,18 @@ async def test_applies_unapplied_migration():
     """A migration not yet in schema_migrations should be executed in a transaction."""
     run_migrations = _import_run_migrations()
     pool, conn = _make_pool_and_conn()
-    total = _count_real_migrations()
-    # All applied except version 1
-    conn.fetch.return_value = [{"version": i} for i in range(2, total + 1)]
+    versions = _real_migration_versions()
+    # All applied except the lowest version (typically 1).
+    first = versions[0]
+    conn.fetch.return_value = [{"version": v} for v in versions if v != first]
 
     await run_migrations(pool)
 
     # Outer transaction (1) + one migration transaction (1) = 2
     assert conn.transaction.call_count == 2
-    # The INSERT into schema_migrations should include version 1
+    # The INSERT into schema_migrations should include the missing version
     execute_calls = [str(c) for c in conn.execute.call_args_list]
-    assert any("1" in c and "schema_migrations" in c for c in execute_calls[1:])
+    assert any(str(first) in c and "schema_migrations" in c for c in execute_calls[1:])
 
 
 async def test_applies_multiple_unapplied_in_order():
