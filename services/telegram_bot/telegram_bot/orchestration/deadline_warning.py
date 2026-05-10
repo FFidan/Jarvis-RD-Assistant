@@ -13,22 +13,46 @@ from telegram_bot.formatters import escape, truncate
 logger = logging.getLogger(__name__)
 
 
-async def _send_deadline_warning(
+async def run_deadline_warning(
+    http_client: httpx.AsyncClient,
+    db_pool: asyncpg.Pool,
     bot: Bot,
-    chat_id: int,
-    milestones: list,
+    config: BotConfig,
 ) -> None:
-    """Format and send deadline warning to a single chat.
+    """Send warnings for milestones due in the next 3 days.
 
     Parameters
     ----------
+    http_client : httpx.AsyncClient
+        Shared HTTP client.
+    db_pool : asyncpg.Pool
+        Database connection pool.
     bot : Bot
         Telegram bot instance.
-    chat_id : int
-        Target Telegram chat ID.
-    milestones : list
-        asyncpg records with name, deadline, project_name.
+    config : BotConfig
+        Bot configuration.
     """
+    from telegram_bot.owner import resolve_owner_chat_id
+
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping deadline warning: no telegram owner paired")
+        return
+
+    milestones = await db_pool.fetch(
+        """SELECT m.name, m.deadline, p.name as project_name
+        FROM milestones m
+        JOIN projects p ON m.project_id = p.id
+        WHERE m.completed = FALSE
+          AND m.deadline <= NOW() + INTERVAL '3 days'
+          AND m.deadline > NOW()
+        ORDER BY m.deadline"""
+    )
+
+    if not milestones:
+        logger.info("No upcoming deadlines in next 3 days")
+        return
+
     lines = ["\u26a0\ufe0f <b>Deadline Warning</b>\n"]
     now = datetime.now(UTC)
 
@@ -50,63 +74,10 @@ async def _send_deadline_warning(
 
     try:
         await bot.send_message(
-            chat_id=chat_id,
+            chat_id=owner,
             text=truncate("\n".join(lines)),
             parse_mode="HTML",
         )
-        logger.info("Deadline warning sent to chat_id=%d: %d milestones", chat_id, len(milestones))
+        logger.info("Deadline warning sent: %d milestones", len(milestones))
     except Exception:
-        logger.exception("Failed to send deadline warning to chat_id=%d", chat_id)
-
-
-async def run_deadline_warning(
-    http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
-    bot: Bot,
-    config: BotConfig,
-) -> None:
-    """Send warnings for milestones due in the next 3 days.
-
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    warnings.  Falls back to the legacy single-tenant owner when no per-user
-    pairings exist.
-
-    Parameters
-    ----------
-    http_client : httpx.AsyncClient
-        Shared HTTP client.
-    db_pool : asyncpg.Pool
-        Database connection pool.
-    bot : Bot
-        Telegram bot instance.
-    config : BotConfig
-        Bot configuration.
-    """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
-
-    milestones = await db_pool.fetch(
-        """SELECT m.name, m.deadline, p.name as project_name
-        FROM milestones m
-        JOIN projects p ON m.project_id = p.id
-        WHERE m.completed = FALSE
-          AND m.deadline <= NOW() + INTERVAL '3 days'
-          AND m.deadline > NOW()
-        ORDER BY m.deadline"""
-    )
-
-    if not milestones:
-        logger.info("No upcoming deadlines in next 3 days")
-        return
-
-    pairings = await list_user_pairings(db_pool)
-    if pairings:
-        for pairing in pairings:
-            await _send_deadline_warning(bot, pairing.chat_id, milestones)
-        return
-
-    # Legacy single-tenant fallback
-    owner = await resolve_owner_chat_id(db_pool, config)
-    if owner is None:
-        logger.info("Skipping deadline warning: no telegram owner paired")
-        return
-    await _send_deadline_warning(bot, owner, milestones)
+        logger.exception("Failed to send message")

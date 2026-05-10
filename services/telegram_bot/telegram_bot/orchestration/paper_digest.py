@@ -266,36 +266,8 @@ async def run_paper_digest(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import resolve_owner_chat_id
 
-    pairings = await list_user_pairings(db_pool)
-    if pairings:
-        # Multi-tenant: deliver per-user digest for each pairing.
-        digest = await _fetch_digest_from_api(http_client, config)
-        for pairing in pairings:
-            if digest and digest.get("topics"):
-                text = format_weekly_digest(digest)
-                lines = text.split("\n")
-                lines.append(
-                    "\n\U0001f4f1 "
-                    '<a href="/feed?surface=inbox&amp;filter=pulse-this-week">'
-                    "View in JARVIS inbox</a>"
-                )
-                await _send_chunked(bot, pairing.chat_id, lines)
-                logger.info(
-                    "LLM digest sent to chat_id=%d: %d papers in %d topics",
-                    pairing.chat_id,
-                    digest.get("total_papers", 0),
-                    len(digest.get("topics", [])),
-                )
-            else:
-                logger.warning("Falling back to simple digest for chat_id=%d", pairing.chat_id)
-                await _simple_digest(
-                    db_pool, bot, config, pairing.chat_id, db_user_id=pairing.user_id
-                )
-        return
-
-    # Legacy single-tenant fallback
     owner = await resolve_owner_chat_id(db_pool, config)
     if owner is None:
         logger.info("Skipping paper digest: no telegram owner paired")
@@ -322,4 +294,5 @@ async def run_paper_digest(
 
     # Fallback to simple digest
     logger.warning("Falling back to simple digest (API returned no data)")
+    # TODO multi-tenant: resolve db_user_id via Telegram chat → DB user pairing
     await _simple_digest(db_pool, bot, config, owner, db_user_id=single_tenant_user_id())
