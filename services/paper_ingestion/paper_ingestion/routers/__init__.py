@@ -1,3 +1,3 @@
-from . import zotero
+from . import admin, auth, setup, zotero
 
-__all__ = ["zotero"]
+__all__ = ["admin", "auth", "setup", "zotero"]

@@ -124,6 +124,28 @@ async def require_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Admin role required")
 
 
+def _resolve_request_user_id(request: Request) -> int | None:
+    """Best-effort extraction of ``request.state.user_id`` as an ``int``.
+
+    Returns ``None`` when:
+    - the request object lacks ``.state`` (e.g. ``SimpleNamespace`` test mocks),
+    - ``state`` lacks ``user_id`` (no session middleware ran),
+    - the attribute is not coercible to an ``int`` (e.g. ``MagicMock``
+      auto-attributes in tests).
+
+    Production session middleware always sets an ``int`` here, so the strict
+    ``int`` check only filters out test-double noise; it never drops a real
+    authenticated identity.
+    """
+    state = getattr(request, "state", None)
+    if state is None:
+        return None
+    user_id = getattr(state, "user_id", None)
+    if isinstance(user_id, bool) or not isinstance(user_id, int):
+        return None
+    return user_id
+
+
 async def current_user_id(request: Request) -> int | None:
     """Return the authenticated user's integer ID, or None.
 
@@ -133,9 +155,12 @@ async def current_user_id(request: Request) -> int | None:
     without a browser session (Telegram bot using only ``X-API-Key``,
     health checks, etc.).
 
-    Phase 2 WS-2A replaced the previous single-tenant stub.
+    Phase 2 WS-2A replaced the previous single-tenant stub. Phase 2 final
+    integration hardened the resolver to ignore non-int values so
+    ``SimpleNamespace`` / ``MagicMock`` request stand-ins in legacy
+    single-tenant unit tests still see ``None``.
     """
-    return getattr(request.state, "user_id", None)
+    return _resolve_request_user_id(request)
 
 
 async def current_user_id_or_none(request: Request) -> int | None:
@@ -144,9 +169,9 @@ async def current_user_id_or_none(request: Request) -> int | None:
     Prefer this name in ``Depends(...)`` injection points so the call-site
     reads "I know this can be None and I handle it." Same body as
     :func:`current_user_id` — both read ``request.state.user_id`` set by
-    the session middleware.
+    the session middleware (with defensive fallback to ``None``).
     """
-    return getattr(request.state, "user_id", None)
+    return _resolve_request_user_id(request)
 
 
 def assert_multi_tenant_not_implemented() -> None:
