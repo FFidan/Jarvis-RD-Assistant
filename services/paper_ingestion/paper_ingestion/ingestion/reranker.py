@@ -10,7 +10,6 @@ returns ``None`` and callers fall back to retrieval-score ordering.
 """
 
 import logging
-import os
 from typing import Any
 
 try:
@@ -164,7 +163,9 @@ class _RerankerState:
             return None
         self.attempted = True
         try:
-            model = os.environ.get("RERANKER_MODEL", "mixedbread-ai/mxbai-rerank-base-v2")
+            from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+            model = get_paper_ingestion_settings().reranker_model
             reranker = Reranker(model_name=model)
             reranker._load_model_if_needed()
             self.instance = reranker

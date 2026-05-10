@@ -112,70 +112,36 @@ HTTP client.
 
 ## Authentication And Ownership
 
-Phase 1+2 (shipped 2026-05-10) replaced the single-user stubs with a real
-multi-user auth system. The current state:
+Current ownership helpers in `jarvis_common.auth` are single-user stubs. They
+return `None` or pass through, so single-user mode works. Multi-tenant mode is
+blocked until a real user resolver replaces the stubs and all read/write paths
+thread `user_id` consistently.
 
-- **Magic-link auth** — `db/migrations/069_auth.sql` introduced `users`,
-  `magic_link_tokens`, and `user_sessions` tables. `jarvis_common.auth` resolves
-  the caller user from a session cookie; admin endpoints require `role='admin'`.
-- **Per-user ownership** — migrations 062–070 added `user_id` columns to
-  `daily_log`, `paper_recommendations`, `projects`, `tasks`, `milestones`,
-  `pulse_source_health`, `system_events`, and the multi-tenant sweep table. All
-  read/write paths in routers thread `user_id` from `get_current_user`.
-- **IDOR guards** — router endpoints that read by PK assert ownership before
-  returning data. The defensive `_resolve_request_user_id` helper (added in the
-  final Phase 2 patch) tolerates mocked requests for test harnesses.
-- **Per-user secrets** — Zotero, SMTP, and other per-user credentials are stored
-  encrypted via `jarvis_common.crypto` (MultiFernet, `JARVIS_CONFIG_KEY`); user
-  config lives in `user_config` with JSONB values.
-- **Admin bootstrap** — the first-run web wizard creates the admin account; the
-  admin can invite additional users via **Settings → Admin → Users**.
+Do not claim multi-tenant enforcement is complete until this is implemented and
+verified with live tests.
 
-### Telegram Pairing
+### Future Multi-User Boundary
 
-Telegram chat-to-user pairing is deferred to Sprint A (see
-`docs/plans/2026-05-10-multiuser-followup-sprints.md`). Until Sprint A ships:
+The next real multi-user phase must be an auth and ownership project, not a
+Tailscale or deployment-mode tweak. Minimum scope:
 
-- The bot authenticates via `TELEGRAM_BOT_TOKEN` and sends notifications to
-  `TELEGRAM_CHAT_ID` (global, not per-user).
-- When Sprint A lands: `db/migrations/071_telegram_pairings.sql` adds
-  `telegram_user_pairings`; all six orchestrators iterate paired users instead
-  of broadcasting globally.
-
-### Canonical Corpus And user_library
-
-The `papers.user_id` column currently serves double duty (creator vs
-library-owner). Sprint B (`db/migrations/072_canonical_corpus.sql`) will:
-
-- Introduce the `user_library` join table (user_id, paper_id, added_via).
-- Rename `papers.user_id` → `papers.discovered_by`.
-- Refactor feed queries to JOIN on `user_library` rather than the ambiguous
-  `user_id` predicate.
-
-Until Sprint B ships, the feed query in `feed_query.py` uses the legacy
-`WHERE p.user_id IS NULL OR p.user_id = $N` predicate.
-
-### Residual Risks
-
-Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
-
-- Pulse `generate_pulse` and Zotero `poll_now` still pass `user_id=None` to
-  `defer_async`; scheduled-cron wrappers in `scheduler.py` do not yet iterate
-  per-user (bundled into Sprint B scope).
-- `pulse_cards` INSERT omits `user_id`; classifier training returns zero rows in
-  multi-tenant mode (B-PULSE-2 in the 2026-05-09 audit).
-- IDOR regression test suite is not yet comprehensive; live multi-tenant tests
-  are in progress.
+- Replace the single-user auth stubs with a real user/session resolver.
+- Add a durable user/session model and thread resolved users through every API,
+  job, Telegram, and background-worker path.
+- Enforce per-user ownership on reads and writes before exposing shared access
+  as multi-user.
+- Map Telegram chat IDs to users instead of treating pairing state globally.
+- Revisit per-paper `discovery_origin`; if multiple users can see the same paper,
+  origin may need to become per-user state rather than paper-global metadata.
+- Ship live IDOR regression tests before any multi-user claim.
 
 ## Persistence
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
-`paper_ingestion` startup. As of 2026-05-10 there are 70 migrations (001–070).
-Migrations 071 (Telegram pairings) and 072 (canonical corpus) are pending
-Sprint A and Sprint B respectively. Fresh-install validation must replay
-`db/init.sql` and migrations against live Docker Postgres when schema
-duplication risk is in scope.
+`paper_ingestion` startup. Fresh-install validation must replay `db/init.sql`
+and migrations against live Docker Postgres when schema duplication risk is in
+scope.
 
 ## Specs
 

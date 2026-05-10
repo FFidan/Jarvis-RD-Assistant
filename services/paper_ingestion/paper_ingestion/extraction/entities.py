@@ -6,7 +6,6 @@ in a dedicated Qdrant collection.
 """
 
 import logging
-import os
 import uuid
 from typing import Any
 
@@ -90,7 +89,9 @@ async def _ensure_kg_collection(qdrant_client: Any) -> None:
     """Ensure the kg_entities Qdrant collection exists."""
     from qdrant_client.models import Distance, VectorParams
 
-    embedding_dim = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    embedding_dim = get_paper_ingestion_settings().embedding_dimension
 
     collections = await qdrant_client.get_collections()
     existing = {c.name for c in collections.collections}

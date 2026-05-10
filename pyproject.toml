@@ -21,6 +21,7 @@ jarvis-common = [
     "psycopg[binary]>=3.1",  # procrastinate 3.x imports psycopg unconditionally; bundled libpq
     "pydantic-settings>=2.0",
     "slowapi>=0.1.9",
+    "structlog>=24.0",
 ]
 paper-ingestion = [
     { include-group = "jarvis-common" },

@@ -105,28 +105,17 @@ async def batch_summarize_papers(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    # Sprint B: select only papers in the caller's user_library; in
-    # single-user mode (user_id=None) fall back to the canonical corpus.
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        if user_id is not None:
-            rows = await conn.fetch(
-                """SELECT p.id FROM papers p
-                   JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
-                   WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
-                     AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
-                   ORDER BY p.created_at DESC LIMIT $1""",
-                limit,
-                user_id,
-            )
-        else:
-            rows = await conn.fetch(
-                """SELECT p.id FROM papers p
-                   WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
-                     AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
-                   ORDER BY p.created_at DESC LIMIT $1""",
-                limit,
-            )
+        rows = await conn.fetch(
+            """SELECT p.id FROM papers p
+               WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
+                 AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
+                 AND ($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)
+               ORDER BY p.created_at DESC LIMIT $1""",
+            limit,
+            user_id,
+        )
     paper_ids = [row["id"] for row in rows]
     job_id: str | None = None
     if paper_ids:

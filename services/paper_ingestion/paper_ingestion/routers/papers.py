@@ -9,7 +9,6 @@ import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
 from jarvis_common.auth import current_user_id_or_none
-from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import (  # noqa: I001
     assert_paper_in_states as _assert_paper_in_states,
     restore_paper as _restore_paper,
@@ -72,48 +71,28 @@ async def list_papers_brief(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return lightweight paper list for selector dropdowns."""
-    # Sprint B: scope to the caller's user_library when authenticated;
-    # in single-user mode (caller_id=None) fall back to the canonical corpus.
     caller_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        if caller_id is not None:
-            if search:
-                rows = await conn.fetch(
-                    """SELECT p.id, p.title, p.source_type, p.published_date
-                       FROM papers p
-                       JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
-                       WHERE p.title ILIKE '%' || $1 || '%' ESCAPE '\\'
-                       ORDER BY p.created_at DESC
-                       LIMIT 200""",
-                    escape_like(search),
-                    caller_id,
-                )
-            else:
-                rows = await conn.fetch(
-                    """SELECT p.id, p.title, p.source_type, p.published_date
-                       FROM papers p
-                       JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-                       ORDER BY p.created_at DESC
-                       LIMIT 200""",
-                    caller_id,
-                )
+        if search:
+            rows = await conn.fetch(
+                """SELECT id, title, source_type, published_date
+                   FROM papers
+                   WHERE title ILIKE '%' || $1 || '%' ESCAPE '\\'
+                     AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2)
+                   ORDER BY created_at DESC
+                   LIMIT 200""",
+                escape_like(search),
+                caller_id,
+            )
         else:
-            if search:
-                rows = await conn.fetch(
-                    """SELECT id, title, source_type, published_date
-                       FROM papers
-                       WHERE title ILIKE '%' || $1 || '%' ESCAPE '\\'
-                       ORDER BY created_at DESC
-                       LIMIT 200""",
-                    escape_like(search),
-                )
-            else:
-                rows = await conn.fetch(
-                    """SELECT id, title, source_type, published_date
-                       FROM papers
-                       ORDER BY created_at DESC
-                       LIMIT 200""",
-                )
+            rows = await conn.fetch(
+                """SELECT id, title, source_type, published_date
+                   FROM papers
+                   WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)
+                   ORDER BY created_at DESC
+                   LIMIT 200""",
+                caller_id,
+            )
     return [dict(r) for r in rows]
 
 
@@ -353,9 +332,8 @@ async def batch_save_papers(
         raise HTTPException(400, f"Batch size cannot exceed {max_batch}")
     if not papers:
         return []
-    # Sprint B canonical-corpus: papers are inserted into the canonical
-    # corpus (no owner column), then mirrored into the caller's user_library
-    # so they show up in *their* feed.
+    # WS-2D: attribute fan-out to caller so user A's citation-graph batch save
+    # doesn't end up visible in user B's library.
     user_id = await current_user_id_or_none(request)
     results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
@@ -365,14 +343,7 @@ async def batch_save_papers(
                 # PaperCreate's "user_initiated" default — the batch endpoint
                 # is the canonical citation-graph fan-out path).
                 paper.discovery_origin = "citation_batch"
-                row = await upsert_paper(conn, paper, discovered_by=user_id)
-                if user_id is not None:
-                    await add_to_library(
-                        conn,
-                        user_id=user_id,
-                        paper_id=row["id"],
-                        added_via="batch_save",
-                    )
+                row = await upsert_paper(conn, paper, user_id=user_id)
                 results.append(row_to_paper_response(row))
     return results
 
@@ -483,48 +454,25 @@ async def get_feed_counts(
             f"THEN 1 ELSE 0 END), 0)::int AS {alias}"
         )
 
-    # Sprint B: scope feed counts via the caller's user_library; single-user
-    # mode (user_id=None) falls back to the canonical corpus.
-    if user_id is not None:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id IS NOT DISTINCT FROM $1
-        """
-    else:
-        sql = f"""
-            SELECT
-                {_sum("inbox", "inbox")},
-                {_sum("library", "library")},
-                {_sum("reading_list", "reading_list")},
-                {_sum("reading", "reading")},
-                {_sum("done", "done")},
-                {_sum("starred", "starred")},
-                {_sum("trash", "trash")},
-                {_sum("active", "active")},
-                {_sum("kept", "kept")},
-                {_sum("all_non_trash", "all_non_trash")}
-              FROM papers p
-              LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
-                AND pus.user_id IS NULL
-        """
+    sql = f"""
+        SELECT
+            {_sum("inbox", "inbox")},
+            {_sum("library", "library")},
+            {_sum("reading_list", "reading_list")},
+            {_sum("reading", "reading")},
+            {_sum("done", "done")},
+            {_sum("starred", "starred")},
+            {_sum("trash", "trash")},
+            {_sum("active", "active")},
+            {_sum("kept", "kept")},
+            {_sum("all_non_trash", "all_non_trash")}
+          FROM papers p
+          LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+            AND ($1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1)
+         WHERE p.user_id IS NOT DISTINCT FROM $1
+    """
     async with db_pool.acquire() as conn:
-        if user_id is not None:
-            row = await conn.fetchrow(sql, user_id)
-        else:
-            row = await conn.fetchrow(sql)
+        row = await conn.fetchrow(sql, user_id)
     assert row is not None  # aggregate query always returns one row
     return FeedCountsResponse(
         inbox=row["inbox"],

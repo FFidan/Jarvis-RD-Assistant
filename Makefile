@@ -2,7 +2,7 @@ SERVICES = services/paper_ingestion services/learning_engine services/telegram_b
 # Compose wrapper: pins image tags from versions.env and sets dummy letsencrypt vars for local dev
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose --env-file versions.env
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -100,8 +100,3 @@ rebuild-local:
 
 up-build:
 	$(COMPOSE) up -d --build
-
-## Capture a perf snapshot (frontend bundle + backend timings + py-spy + pg_stat_statements)
-## Output: artifacts/perf/<UTC-timestamp>/. See docs/perf/HOWTO.md for prerequisites.
-profile:
-	bash scripts/profile.sh

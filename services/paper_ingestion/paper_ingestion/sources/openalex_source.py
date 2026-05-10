@@ -26,7 +26,6 @@ shared across all calls on the same instance.
 """
 
 import logging
-import os
 import time as _time
 from datetime import UTC, date, datetime
 from typing import Any
@@ -110,9 +109,14 @@ class OpenAlexSource(PaperSource):
         db_pool: Any = None,
     ) -> None:
         super().__init__(config, http_client, db_pool)
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        _cfg = get_paper_ingestion_settings()
         cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or os.environ.get("OPENALEX_API_KEY")
-        self._email: str = os.environ.get("OPENALEX_EMAIL", "")
+        self._api_key: str | None = cfg_key or (
+            _cfg.openalex_api_key.get_secret_value() if _cfg.openalex_api_key else None
+        )
+        self._email: str = _cfg.openalex_email
         self._missing_key_warned = False
         # rate: ~9 req/s (polite-pool target ≤10 req/s)
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / 0.11)

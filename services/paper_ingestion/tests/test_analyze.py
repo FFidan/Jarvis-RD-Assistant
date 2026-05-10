@@ -6,7 +6,6 @@ inside ``_analyze_stream`` run.
 """
 
 import json
-import os
 import sys
 import types
 from typing import Any
@@ -105,16 +104,12 @@ async def _collect_events(
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.pdf_workflow", fake_pdf_workflow)
     monkeypatch.setitem(sys.modules, "paper_ingestion.services.summarization", fake_summarization)
 
-    _real_env_get = os.environ.get
-
-    def _selective_env_get(key, default=None):
-        if key == "PDF_STORAGE_PATH":
-            return "/data/pdfs"
-        return _real_env_get(key, default)
+    # PDF_STORAGE_PATH is now read via get_paper_ingestion_settings(); use setenv so
+    # the Settings instance built inside the route sees the right value.
+    monkeypatch.setenv("PDF_STORAGE_PATH", "/data/pdfs")
 
     with (
         patch("paper_ingestion.routers.analyze.Path") as MockPath,  # noqa: N806
-        patch("paper_ingestion.routers.analyze.os.environ.get", side_effect=_selective_env_get),
     ):
         mock_path_instance = MagicMock()
         mock_path_instance.resolve.return_value.is_relative_to.return_value = True

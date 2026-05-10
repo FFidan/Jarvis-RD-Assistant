@@ -5,7 +5,6 @@ Extracted from main.py so that the rag and summarize routers can share
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -302,7 +301,9 @@ async def generate_paper_summary(
     verified_findings = [f for f in key_findings if f.verified]
 
     # Link verified findings to page snapshots (AGENTS.md rule 7)
-    snapshot_base = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    snapshot_base = get_paper_ingestion_settings().snapshot_storage_path
     snapshot_base_path = Path(snapshot_base).resolve()
     for f in verified_findings:
         if isinstance(f.page_number, int) and f.page_number > 0:

@@ -73,7 +73,9 @@ def _hash_token(token: str) -> str:
 
 def _build_magic_link(request: Request, token: str) -> str:
     """Construct the URL the user clicks. Honours X-Forwarded-* via ProxyHeadersMiddleware."""
-    base = os.environ.get("APP_BASE_URL")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    base = get_paper_ingestion_settings().app_base_url
     if base:
         return f"{base.rstrip('/')}/auth/verify?token={token}"
     # Fallback: derive from the incoming request. ProxyHeadersMiddleware has

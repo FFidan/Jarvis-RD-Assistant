@@ -2,7 +2,6 @@
 
 import contextlib
 import logging
-import os
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -80,7 +79,6 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "zotero.api_key",
         "zotero.user_id",
         "zotero.library_type",
-        "zotero.group_id",
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
@@ -174,7 +172,6 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "zotero.api_key",
         "zotero.user_id",
         "zotero.library_type",
-        "zotero.group_id",
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
@@ -414,21 +411,6 @@ def _validate_library_type(v: Any) -> None:
         raise ValueError("zotero.library_type must be 'user' or 'group'")
 
 
-def _validate_group_id(v: Any) -> None:
-    """Validate zotero.group_id — positive integer or null.
-
-    ``null`` is allowed so users can clear the field when switching back to
-    a personal library.  When ``library_type`` is ``"group"`` the backend
-    requires a non-null positive integer, but that cross-field validation is
-    enforced by :class:`~paper_ingestion.integrations.zotero_client.ZoteroClient`
-    at construction time.
-    """
-    if v is None:
-        return
-    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
-        raise ValueError("zotero.group_id must be a positive integer or null")
-
-
 async def _reload_telegram_nudges() -> None:
     """Best-effort POST to telegram_bot /internal/reload-nudges."""
     telegram_url = get_telegram_settings().url_or_none
@@ -497,7 +479,6 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.api_key": _validate_nonempty_str,
     "zotero.user_id": _validate_nonempty_str,
     "zotero.library_type": _validate_library_type,
-    "zotero.group_id": _validate_group_id,
     "zotero.poll_enabled": _validate_bool,
     "zotero.poll_cron": _validate_zotero_cron,
     "zotero.auto_push_on_star": _validate_bool,
@@ -514,7 +495,9 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
 async def _fetch_installed_ollama_names(request: Request) -> set[str]:
     """Return normalized Ollama model names for assignment validation."""
     http = request.app.state.http_client
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
     try:
         resp = await http.get(f"{ollama_url}/api/tags", timeout=10.0)
     except Exception as exc:

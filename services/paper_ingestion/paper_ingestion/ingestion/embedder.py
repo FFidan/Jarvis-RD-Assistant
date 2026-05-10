@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 import re
 import uuid
 from collections import defaultdict
@@ -27,14 +26,16 @@ from jarvis_common.llm_client import (
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import ChunkForEmbedding
 
 logger = logging.getLogger(__name__)
 
-EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "qwen3-embedding:0.6b")
-EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://qdrant:6333")
+_cfg = get_paper_ingestion_settings()
+EMBEDDING_MODEL = _cfg.embedding_model
+EMBEDDING_MODEL_NAME = _cfg.embedding_model_name
+EMBEDDING_DIMENSION = _cfg.embedding_dimension
+QDRANT_URL = _cfg.qdrant_url
 
 COLLECTION_NAME = "paper_chunks"
 CHUNK_TOKEN_LIMIT = 512

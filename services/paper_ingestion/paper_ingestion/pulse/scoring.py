@@ -8,7 +8,6 @@ Stage 3 — combine:          Weighted sum → final ranking.
 import asyncio
 import logging
 import math
-import os
 from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, Any
@@ -35,6 +34,7 @@ if TYPE_CHECKING:
 
 from jarvis_common.verify import QuoteVerifier
 
+from paper_ingestion.config import get_paper_ingestion_settings as _get_cfg
 from paper_ingestion.models import PaperCreate
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
@@ -50,21 +50,13 @@ class Stage2ClientUnavailableError(RuntimeError):
 
 
 _LLM_CONCURRENCY = 8
-_LLM_MODEL = os.environ.get("PULSE_STAGE2_MODEL", "fast").strip() or "fast"
+_LLM_MODEL = _get_cfg().pulse_stage2_model or "fast"
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0
 
 
 def _stage2_max_retries() -> int:
-    raw = os.environ.get("PULSE_STAGE2_MAX_RETRIES", "1")
-    try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
-        logger.warning(
-            "Invalid PULSE_STAGE2_MAX_RETRIES=%r; using default retry budget of 1",
-            raw,
-        )
-        return 1
+    return _get_cfg().pulse_stage2_max_retries
 
 
 # ---------------------------------------------------------------------------

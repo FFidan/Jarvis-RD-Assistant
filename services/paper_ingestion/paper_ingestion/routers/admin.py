@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -100,7 +99,9 @@ def _hash_token(token: str) -> str:
 
 def _build_invite_link(request: Request, token: str) -> str:
     """Construct the magic-link URL for an invited user."""
-    base = os.environ.get("APP_BASE_URL")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    base = get_paper_ingestion_settings().app_base_url
     if base:
         return f"{base.rstrip('/')}/auth/verify?token={token}"
     return str(request.url.replace(path="/auth/verify", query=f"token={token}"))

@@ -34,6 +34,7 @@ from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.card_generator import CardGenerator
+from learning_engine.config import get_learning_engine_settings
 from learning_engine.deps import limiter
 from learning_engine.fsrs_manager import FSRSManager
 
@@ -86,7 +87,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
 
 async def _warn_multitenant_stub(app: FastAPI) -> None:
     """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
-    if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
+    if get_learning_engine_settings().multitenant_enabled:
         logger.critical(
             "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
         )

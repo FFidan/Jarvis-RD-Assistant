@@ -16,20 +16,18 @@ import { LearningCardsPage } from '@/pages/LearningCardsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
 import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
+import { PaperDetailPage } from '@/pages/PaperDetailPage';
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
+import { LogsPage } from '@/pages/LogsPage';
+import { AdminUsersPage } from '@/pages/AdminUsersPage';
+import { SetupWizard } from '@/pages/SetupWizard';
+import { FirstRunSetupPage } from '@/pages/FirstRunSetupPage';
 import { getFirstRunStatus, getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
 import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 
-// Heavy pages lazy-loaded to reduce initial bundle size.
-// - Graph pages pull cytoscape (~432 kB).
-// - Analytics page pulls recharts (~404 kB).
-// - LogsPage pulls recharts (via ErrorSparkLine) — lazy here removes recharts
-//   from the main bundle for users who never visit /logs.
-// - PaperDetailPage pulls react-markdown + math/syntax stacks (~392 kB).
-// - Setup wizards & AdminUsersPage are large (12-16 kB each) and only used
-//   by admins / on first run.
+// Heavy pages lazy-loaded to reduce initial bundle size
 const KnowledgeGraphPage = lazy(() =>
   import('@/pages/KnowledgeGraphPage').then((m) => ({ default: m.KnowledgeGraphPage })),
 );
@@ -38,21 +36,6 @@ const CitationGraphPage = lazy(() =>
 );
 const AnalyticsPage = lazy(() =>
   import('@/pages/AnalyticsPage').then((m) => ({ default: m.AnalyticsPage })),
-);
-const LogsPage = lazy(() =>
-  import('@/pages/LogsPage').then((m) => ({ default: m.LogsPage })),
-);
-const PaperDetailPage = lazy(() =>
-  import('@/pages/PaperDetailPage').then((m) => ({ default: m.PaperDetailPage })),
-);
-const AdminUsersPage = lazy(() =>
-  import('@/pages/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })),
-);
-const SetupWizard = lazy(() =>
-  import('@/pages/SetupWizard').then((m) => ({ default: m.SetupWizard })),
-);
-const FirstRunSetupPage = lazy(() =>
-  import('@/pages/FirstRunSetupPage').then((m) => ({ default: m.FirstRunSetupPage })),
 );
 
 function PageFallback() {

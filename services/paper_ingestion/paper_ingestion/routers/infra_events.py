@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -33,10 +32,12 @@ class InfraEvent(BaseModel):
 
 def _load_ingest_key() -> str | None:
     """Load INFRA_INGEST_KEY from env or _FILE convention. Cached on first call."""
-    direct = os.environ.get("INFRA_INGEST_KEY")
-    if direct:
-        return direct.strip() or None
-    file_path = os.environ.get("INFRA_INGEST_KEY_FILE")
+    from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+    _cfg = get_paper_ingestion_settings()
+    if _cfg.infra_ingest_key:
+        return _cfg.infra_ingest_key.get_secret_value().strip() or None
+    file_path = _cfg.infra_ingest_key_file
     if file_path and Path(file_path).is_file():
         try:
             return Path(file_path).read_text().strip() or None

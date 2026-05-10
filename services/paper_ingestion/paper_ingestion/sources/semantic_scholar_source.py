@@ -6,7 +6,6 @@ Rate limit: 1 request/second on the free tier.
 """
 
 import logging
-import os
 import time as _time
 from datetime import UTC, date, datetime
 from typing import Any
@@ -52,8 +51,15 @@ class SemanticScholarSource(PaperSource):
     ) -> None:
         super().__init__(config, http_client, db_pool)
         # Optional API key for higher rate limits (config overrides env var)
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        _cfg = get_paper_ingestion_settings()
         cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or os.environ.get("SEMANTIC_SCHOLAR_API_KEY")
+        self._api_key: str | None = cfg_key or (
+            _cfg.semantic_scholar_api_key.get_secret_value()
+            if _cfg.semantic_scholar_api_key
+            else None
+        )
         # rate: 1/RATE_LIMIT_DELAY req/s (S2 free-tier 1 req/s)
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 

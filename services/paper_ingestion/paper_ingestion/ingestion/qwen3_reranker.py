@@ -19,7 +19,6 @@ Inputs are capped at ``MAX_PASSAGES`` passages per call to bound latency.
 from __future__ import annotations
 
 import logging
-import os
 
 try:
     import torch
@@ -194,7 +193,9 @@ def get_qwen3_reranker() -> Qwen3Reranker | None:
     if _instance is not None:
         return _instance
     try:
-        model_name = os.environ.get("QWEN3_RERANKER_MODEL", "Qwen/Qwen3-Reranker-0.6B")
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        model_name = get_paper_ingestion_settings().qwen3_reranker_model
         _instance = Qwen3Reranker(model_name=model_name)
         return _instance
     except Exception:

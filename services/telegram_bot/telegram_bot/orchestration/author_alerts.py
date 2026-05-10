@@ -33,18 +33,12 @@ async def run_author_alerts(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import resolve_owner_chat_id
 
-    pairings = await list_user_pairings(db_pool)
-    # Resolve which chat IDs to deliver to (multi-tenant takes priority over legacy)
-    if pairings:
-        chat_ids = [p.chat_id for p in pairings]
-    else:
-        owner = await resolve_owner_chat_id(db_pool, config)
-        if owner is None:
-            logger.info("Skipping author alerts: no telegram owner paired")
-            return
-        chat_ids = [owner]
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping author alerts: no telegram owner paired")
+        return
 
     async with db_pool.acquire() as conn:
         authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
@@ -124,25 +118,19 @@ async def run_author_alerts(
             # Send notification if there are new papers
             if matched_papers:
                 message = format_author_alert(tracked_name, matched_papers)
-                for chat_id in chat_ids:
-                    try:
-                        await bot.send_message(
-                            chat_id=chat_id,
-                            text=message,
-                            parse_mode="HTML",
-                        )
-                        logger.info(
-                            "Author alert sent to chat_id=%d: %s (%d papers)",
-                            chat_id,
-                            tracked_name,
-                            len(matched_papers),
-                        )
-                    except Exception:
-                        logger.exception(
-                            "Failed to send author alert for %s to chat_id=%d",
-                            tracked_name,
-                            chat_id,
-                        )
+                try:
+                    await bot.send_message(
+                        chat_id=owner,
+                        text=message,
+                        parse_mode="HTML",
+                    )
+                    logger.info(
+                        "Author alert sent: %s (%d papers)",
+                        tracked_name,
+                        len(matched_papers),
+                    )
+                except Exception:
+                    logger.exception("Failed to send author alert for %s", tracked_name)
         except Exception:
             logger.exception("Error processing author %s", author_row.get("author_name", "unknown"))
             continue

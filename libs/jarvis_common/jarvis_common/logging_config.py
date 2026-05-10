@@ -11,6 +11,8 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
+import structlog
+
 if TYPE_CHECKING:
     import asyncpg
 
@@ -166,6 +168,11 @@ class SystemEventHandler(logging.Handler):
 def configure_logging(service_name: str, log_level: str = "INFO") -> None:
     """Replace default logging config with structured JSON output.
 
+    Wires both stdlib logging (via ``JSONFormatter``) and structlog so that
+    code using either ``logging.getLogger`` or ``structlog.get_logger`` emits
+    the same JSON shape.  structlog is configured to delegate to stdlib so the
+    ``JSONFormatter`` remains the single authoritative renderer.
+
     Parameters
     ----------
     service_name : str
@@ -182,3 +189,23 @@ def configure_logging(service_name: str, log_level: str = "INFO") -> None:
     # Quiet noisy third-party loggers
     for noisy in ("httpx", "httpcore", "asyncio", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+
+    # Wire structlog to emit through stdlib so JSONFormatter stays the single
+    # renderer.  Processors up to PrintLoggerFactory are stdlib-agnostic;
+    # PrintLoggerFactory is replaced by stdlib binding so events flow through
+    # the handler + formatter wired above.
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="iso", utc=True),
+            structlog.stdlib.PositionalArgumentsFormatter(),
+            structlog.processors.StackInfoRenderer(),
+            structlog.processors.format_exc_info,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )

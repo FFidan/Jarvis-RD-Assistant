@@ -255,7 +255,6 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.1.0}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -326,7 +325,6 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.1.0}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -365,7 +363,6 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.1.0}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -406,7 +403,6 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.1.0}
     build:
       context: ./frontend
       args:

@@ -32,7 +32,6 @@ export function ZoteroSection() {
   const apiKey = getConfigValue(configs, 'zotero.api_key');
   const userId = getConfigValue(configs, 'zotero.user_id');
   const libraryType = getConfigValue(configs, 'zotero.library_type') || 'user';
-  const groupIdRaw = getConfigValue(configs, 'zotero.group_id');
   const autoPush = getConfigValue(configs, 'zotero.auto_push_on_star') === 'true';
   const pollEnabled = getConfigValue(configs, 'zotero.poll_enabled') === 'true';
   const pollCron = getConfigValue(configs, 'zotero.poll_cron') || '';
@@ -40,7 +39,6 @@ export function ZoteroSection() {
   // Local draft state for text inputs (saved on blur)
   const [draftApiKey, setDraftApiKey] = useState<string | null>(null);
   const [draftUserId, setDraftUserId] = useState<string | null>(null);
-  const [draftGroupId, setDraftGroupId] = useState<string | null>(null);
   const [draftPollCron, setDraftPollCron] = useState<string | null>(null);
 
   // Test connection state
@@ -69,17 +67,6 @@ export function ZoteroSection() {
       setMut.mutate({ key: 'zotero.user_id', value: draftUserId });
     }
     setDraftUserId(null);
-  };
-
-  const handleBlurGroupId = () => {
-    const currentGroupId = groupIdRaw;
-    if (draftGroupId !== null && draftGroupId !== currentGroupId) {
-      const parsed = draftGroupId === '' ? null : parseInt(draftGroupId, 10);
-      if (draftGroupId === '' || (!isNaN(parsed as number) && (parsed as number) > 0)) {
-        setMut.mutate({ key: 'zotero.group_id', value: parsed });
-      }
-    }
-    setDraftGroupId(null);
   };
 
   const handleBlurPollCron = () => {
@@ -226,38 +213,6 @@ export function ZoteroSection() {
             </label>
           </div>
         </div>
-
-        {/* Group ID — visible only when library type is "group" */}
-        {libraryType === 'group' && (
-          <div className="space-y-2">
-            <Label htmlFor="zotero-group-id">Group ID</Label>
-            <Input
-              id="zotero-group-id"
-              type="text"
-              inputMode="numeric"
-              pattern="[0-9]*"
-              placeholder="e.g. 987654"
-              value={draftGroupId ?? groupIdRaw}
-              onChange={(e) => setDraftGroupId(e.target.value)}
-              onBlur={handleBlurGroupId}
-            />
-            <p className="text-xs text-muted-foreground">
-              The numeric group ID from the Zotero group library URL
-              (e.g.{' '}
-              <code className="font-mono">zotero.org/groups/987654/...</code>
-              ) or from{' '}
-              <a
-                href="https://www.zotero.org/settings/keys"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline"
-              >
-                zotero.org/settings/keys
-              </a>
-              {' '}next to the group library API path.
-            </p>
-          </div>
-        )}
 
         {/* Test connection */}
         <div className="flex items-center gap-3">

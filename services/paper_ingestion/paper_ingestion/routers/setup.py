@@ -234,7 +234,9 @@ async def system_check(request: Request) -> SystemCheckResponse:
 
     # Ollama
     try:
-        base = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        base = get_paper_ingestion_settings().ollama_base_url
         resp = await asyncio.wait_for(http.get(f"{base}/api/tags"), timeout=5.0)
         services.append(
             ServiceStatus(

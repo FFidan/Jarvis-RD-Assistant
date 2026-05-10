@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import os
 import shutil
 from pathlib import Path
 from typing import Any
 
 from jarvis_common.jobs import JobError
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.pdf_processor import MAX_PDF_SIZE, PDF_STORAGE_PATH
 
-LOCAL_PDF_SCAN_DIR = os.environ.get("LOCAL_PDF_SCAN_DIR", "/data/local_pdfs")
+LOCAL_PDF_SCAN_DIR = get_paper_ingestion_settings().local_pdf_scan_dir
 
 
 async def scan_local_pdf_directory(db_pool: Any, *, scan_dir: str | None = None) -> dict[str, int]:

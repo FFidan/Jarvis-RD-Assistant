@@ -12,7 +12,6 @@ Implements AGENTS.md anti-hallucination rules 5/6/7:
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -143,7 +142,9 @@ class CardGenerator:
         chunk_objects = [DictChunk(c) for c in chunks]
 
         # Rule 7: snapshot path base
-        snapshot_base = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")
+        from learning_engine.config import get_learning_engine_settings  # noqa: PLC0415
+
+        snapshot_base = get_learning_engine_settings().snapshot_storage_path
         snapshot_base_path = Path(snapshot_base).resolve()
 
         for card in raw_cards:

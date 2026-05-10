@@ -19,6 +19,7 @@ import httpx
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.models import ChunkForEmbedding
 
@@ -38,8 +39,9 @@ __all__ = [
     "_validate_pdf_url",
 ]
 
-PDF_STORAGE_PATH = os.environ.get("PDF_STORAGE_PATH", "/data/pdfs")
-SNAPSHOT_STORAGE_PATH = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")
+_cfg = get_paper_ingestion_settings()
+PDF_STORAGE_PATH = _cfg.pdf_storage_path
+SNAPSHOT_STORAGE_PATH = _cfg.snapshot_storage_path
 SNAPSHOT_DPI = 150
 MAX_PDF_SIZE = 100 * 1024 * 1024  # 100 MB
 MAX_PDF_PAGES = 500  # Reject PDFs with excessive page counts (anti-bomb)

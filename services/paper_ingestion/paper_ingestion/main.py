@@ -46,6 +46,7 @@ from qdrant_client import AsyncQdrantClient
 
 # Trigger source registration via imports
 import paper_ingestion.sources  # noqa: F401
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import limiter
 from paper_ingestion.ingestion.embedder import Embedder
 from paper_ingestion.integrations.zotero_client import validate_bbt_base_url
@@ -67,7 +68,9 @@ if not os.environ.get("PYTEST_CURRENT_TEST"):
     except ImportError:
         pass
 
-configure_logging("paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO"))
+configure_logging(
+    "paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO")
+)  # LOG_LEVEL not in Settings — intentionally left as-is (startup-only env read)
 logger = logging.getLogger(__name__)
 
 try:
@@ -113,7 +116,7 @@ async def _init_langfuse_hook(app: FastAPI) -> None:
 
 async def _warn_multitenant_stub(app: FastAPI) -> None:
     """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
-    if os.getenv("MULTITENANT_ENABLED", "false").lower() == "true":
+    if get_paper_ingestion_settings().multitenant_enabled:
         logger.critical(
             "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
         )
@@ -154,8 +157,9 @@ async def _migrate_plaintext_secrets_hook(app: FastAPI) -> None:
 
 async def _init_qdrant_and_pdf_pipeline(app: FastAPI) -> None:
     """Construct Qdrant client + Embedder + PDFProcessor + QuoteVerifier."""
-    qdrant_url = os.environ.get("QDRANT_URL", "http://qdrant:6333")
-    qdrant_api_key = os.environ.get("QDRANT_API_KEY") or None
+    _cfg = get_paper_ingestion_settings()
+    qdrant_url = _cfg.qdrant_url
+    qdrant_api_key = _cfg.qdrant_api_key.get_secret_value() if _cfg.qdrant_api_key else None
     app.state.qdrant_client = AsyncQdrantClient(
         url=qdrant_url, api_key=qdrant_api_key, check_compatibility=False
     )
@@ -314,7 +318,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
 
 async def _start_scheduler_hook(app: FastAPI) -> None:
     """Always start the scheduler so live toggles take effect without restart."""
-    interval = float(os.environ.get("AUTO_FETCH_INTERVAL_HOURS", "0"))
+    interval = get_paper_ingestion_settings().auto_fetch_interval_hours
     from .scheduler import start_scheduler  # noqa: PLC0415
 
     app.state.scheduler = await start_scheduler(app, interval_hours=interval)
@@ -565,34 +569,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
         logger.warning("Health check: LiteLLM unavailable", exc_info=True)
         checks["litellm"] = "unavailable"
 
-    # Ollama
-    try:
-        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
-        resp = await asyncio.wait_for(
-            request.app.state.http_client.get(f"{ollama_url}/api/tags"),
-            timeout=5.0,
-        )
-        checks["ollama"] = "ok" if resp.status_code == 200 else "unavailable"
-    except Exception:
-        logger.warning("Health check: Ollama unavailable", exc_info=True)
-        checks["ollama"] = "unavailable"
-
-    # Vector sidecar — probed via its internal API; API is disabled in production
-    # so we attempt the connection and report "unknown" on any failure rather than
-    # "unavailable" (which would drag overall status to "degraded").
-    try:
-        vector_url = os.environ.get("VECTOR_API_URL", "http://vector:8686")
-        resp = await asyncio.wait_for(
-            request.app.state.http_client.get(f"{vector_url}/health"),
-            timeout=3.0,
-        )
-        checks["vector"] = "ok" if resp.status_code == 200 else "unknown"
-    except Exception:
-        # Vector API is disabled by default; treat as unknown, not degraded
-        checks["vector"] = "unknown"
-
-    # "unknown" (e.g. vector with API disabled) does not trigger degraded status
-    status = "ok" if all(v in ("ok", "unknown") for v in checks.values()) else "degraded"
+    status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
     return status, checks
 
 

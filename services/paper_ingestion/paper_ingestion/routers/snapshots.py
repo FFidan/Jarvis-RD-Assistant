@@ -1,16 +1,16 @@
 """PDF page snapshot serving endpoint."""
 
-import os
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import limiter
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 
-SNAPSHOT_STORAGE_PATH = os.environ.get("SNAPSHOT_STORAGE_PATH", "/data/snapshots")
+SNAPSHOT_STORAGE_PATH = get_paper_ingestion_settings().snapshot_storage_path
 
 
 @router.get("/{paper_id}/{page}")

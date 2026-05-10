@@ -27,7 +27,6 @@ the first of the month when day is absent, and January 1 when month is absent.
 """
 
 import logging
-import os
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -224,8 +223,13 @@ class PubMedSource(PaperSource):
 
     def __init__(self, config: PaperSourceConfig, http_client: httpx.AsyncClient) -> None:
         super().__init__(config, http_client)
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        _cfg = get_paper_ingestion_settings()
         cfg_key = config.config.get("api_key") if config.config else None
-        self._api_key: str | None = cfg_key or os.environ.get("PUBMED_API_KEY")
+        self._api_key: str | None = cfg_key or (
+            _cfg.pubmed_api_key.get_secret_value() if _cfg.pubmed_api_key else None
+        )
         # rate: 10 req/s with API key, ~3 req/s otherwise
         interval = 0.1 if self._api_key else 0.34
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / interval)

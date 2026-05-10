@@ -11,7 +11,6 @@ from jarvis_common.auth import (
     assert_multi_tenant_not_implemented,
     current_user_id,
     current_user_id_or_none,
-    current_user_id_with_owner_override,
     validate_production_config,
     verify_api_key,
 )
@@ -88,7 +87,6 @@ __all__ = [
     "validate_production_config",
     "current_user_id",
     "current_user_id_or_none",
-    "current_user_id_with_owner_override",
     "assert_multi_tenant_not_implemented",
     # DRY-003: crypto helpers re-exported from jarvis_common top-level
     "encrypt_secret",

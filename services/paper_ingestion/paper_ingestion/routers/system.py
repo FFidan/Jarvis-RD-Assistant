@@ -1,7 +1,6 @@
 """System status endpoints: setup wizard readiness + Ollama model info."""
 
 import logging
-import os
 import re
 import time
 import uuid
@@ -14,6 +13,7 @@ from jarvis_common import JobCreateResponse, current_user_id
 from jarvis_common.model_catalog import Role
 from pydantic import BaseModel
 
+from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.ingestion.embedder import (
     EMBEDDING_DIMENSION,
@@ -139,7 +139,7 @@ async def _probe_ollama() -> tuple[bool, list[str]]:
     if cached is not None:
         return cached
 
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", _OLLAMA_DEFAULT_BASE_URL)
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{ollama_url}/api/tags")
@@ -207,7 +207,7 @@ async def get_setup_status(
     telegram_paired = _is_owner_chat_paired(config.get("telegram.owner_chat_id"))
     topics_count = int(topics_row["n"]) if topics_row else 0
 
-    telegram_configured = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    telegram_configured = bool(get_paper_ingestion_settings().telegram_bot_token)
 
     models_ready, models_downloading = await _probe_ollama()
 
@@ -230,7 +230,7 @@ async def get_setup_status(
 @limiter.limit("30/minute")
 async def get_system_models(request: Request) -> SystemModelsResponse:
     """Return installed Ollama models + hardware info + current assignments."""
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
     http = request.app.state.http_client
     result: dict[str, Any] = {
         "status": "ok",
@@ -397,7 +397,7 @@ async def pull_system_model(
         job_id=jarvis_job_id,
         user_id=user_id,
         ollama_tag=entry.ollama_tag or entry.id,
-        ollama_url=os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434"),
+        ollama_url=get_paper_ingestion_settings().ollama_base_url,
     )
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
@@ -425,7 +425,7 @@ async def delete_system_model(tag: str, request: Request) -> Response:
         raise HTTPException(status_code=409, detail="Cannot delete an active model assignment")
 
     http = request.app.state.http_client
-    ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+    ollama_url = get_paper_ingestion_settings().ollama_base_url
     delete_name = entry.ollama_tag or entry.id
     try:
         resp = await http.request(

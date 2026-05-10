@@ -1,7 +1,6 @@
 """Compound Analyze Paper endpoint — SSE streaming of download → process → summarize."""
 
 import logging
-import os
 from pathlib import Path
 
 import asyncpg
@@ -126,7 +125,9 @@ async def _analyze_stream(
             yield SSE_DONE
             return
         pdf_path = Path(pdf_local_path)
-        pdf_storage = os.environ.get("PDF_STORAGE_PATH", "/data/pdfs")
+        from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
+
+        pdf_storage = get_paper_ingestion_settings().pdf_storage_path
         if not pdf_path.resolve().is_relative_to(Path(pdf_storage).resolve()):
             yield sse_event({"type": "error", "step": "processing", "message": "Invalid PDF path"})
             yield SSE_DONE
