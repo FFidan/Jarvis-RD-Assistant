@@ -249,16 +249,14 @@ async def assert_paper_ownership(
 ) -> None:
     """Raise HTTPException if the caller does not own the paper.
 
-    Sprint B canonical-corpus semantics
-    ------------------------------------
-    Papers are global (canonical corpus). Ownership = library membership.
-    Rules:
-
+    Ownership rules
+    ---------------
     * Single-user mode (``user_id=None``): all papers are accessible — no check.
     * Multi-user mode (``user_id`` is set):
       - Paper not found → 404.
-      - Paper present AND row exists in ``user_library`` for the caller → allowed.
-      - Paper present BUT NOT in caller's ``user_library`` → 403.
+      - Paper ``user_id`` is NULL → system-owned, accessible to all callers.
+      - Paper ``user_id`` matches caller → allowed.
+      - Paper ``user_id`` differs from caller → 403.
 
     Parameters
     ----------
@@ -275,34 +273,17 @@ async def assert_paper_ownership(
         return
 
     row = await conn.fetchrow(
-        "SELECT discovered_by FROM papers WHERE id = $1",
+        "SELECT user_id FROM papers WHERE id = $1",
         paper_id,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="paper not found")
 
-    # Sprint B: papers are canonical. Discovered-by-system (NULL) papers
-    # remain freely accessible (canonical-corpus semantics). For papers
-    # discovered by a user, library membership grants access.
-    # Defensive: tolerate fixtures that still expose the legacy ``user_id``
-    # key while production rows ship with ``discovered_by``.
-    discovered_by: int | None
-    try:
-        discovered_by = row["discovered_by"]
-    except (KeyError, IndexError):
-        try:
-            discovered_by = row["user_id"]
-        except (KeyError, IndexError):
-            discovered_by = None
-    if discovered_by is None or str(discovered_by) == str(user_id):
-        return
-
-    in_library = await conn.fetchval(
-        "SELECT 1 FROM user_library WHERE paper_id = $1 AND user_id = $2",
-        paper_id,
-        user_id,
-    )
-    if in_library is None:
+    paper_owner: int | None = row["user_id"]
+    # NULL owner means system-owned — accessible to all authenticated users.
+    # H18: use str() coercion to tolerate asyncpg str/int type mismatches
+    # (matches the _owner_matches pattern in jarvis_common/jobs_router.py).
+    if paper_owner is not None and str(paper_owner) != str(user_id):
         raise HTTPException(status_code=403, detail="paper not owned by current user")
 
 

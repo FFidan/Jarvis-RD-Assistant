@@ -437,59 +437,29 @@ async def _load_local_library_matches(
               )
         """
 
-    # Sprint B: scope library-preview to the caller's user_library when
-    # authenticated; single-user fallback returns canonical-corpus matches.
     async with db_pool.acquire() as conn:
-        if args[0] is not None:  # user_id present
-            rows = await conn.fetch(
-                f"""
-                SELECT p.id,
-                       p.external_id,
-                       p.title,
-                       p.authors,
-                       p.published_date,
-                       p.url,
-                       p.metadata,
-                       p.zotero_item_key,
-                       EXISTS (
-                           SELECT 1
-                           FROM project_papers pp
-                           WHERE pp.paper_id = p.id
-                       ) AS has_project_links
-                FROM papers p
-                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
-                WHERE TRUE
-                {candidate_predicate}
-                ORDER BY p.id ASC
-                """,
-                *args,
-            )
-        else:
-            # In single-user mode the leading $1 still consumes a parameter,
-            # but we drop the predicate so all canonical papers are
-            # candidates.
-            rows = await conn.fetch(
-                f"""
-                SELECT p.id,
-                       p.external_id,
-                       p.title,
-                       p.authors,
-                       p.published_date,
-                       p.url,
-                       p.metadata,
-                       p.zotero_item_key,
-                       EXISTS (
-                           SELECT 1
-                           FROM project_papers pp
-                           WHERE pp.paper_id = p.id
-                       ) AS has_project_links
-                FROM papers p
-                WHERE ($1::int IS NULL OR TRUE)
-                {candidate_predicate}
-                ORDER BY p.id ASC
-                """,
-                *args,
-            )
+        rows = await conn.fetch(
+            f"""
+            SELECT p.id,
+                   p.external_id,
+                   p.title,
+                   p.authors,
+                   p.published_date,
+                   p.url,
+                   p.metadata,
+                   p.zotero_item_key,
+                   EXISTS (
+                       SELECT 1
+                       FROM project_papers pp
+                       WHERE pp.paper_id = p.id
+                   ) AS has_project_links
+            FROM papers p
+            WHERE ($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)
+            {candidate_predicate}
+            ORDER BY p.id ASC
+            """,
+            *args,
+        )
 
     indexes: dict[tuple[str, Any], SearchPreviewLibraryMatch] = {}
     priorities: dict[tuple[str, Any], tuple[int, int, int]] = {}

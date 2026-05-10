@@ -48,23 +48,11 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
     )
 
 
-# Sprint B canonical-corpus refactor: papers are canonical (no owner
-# column); per-user library membership is in `user_library`. The feed
-# joins `user_library` so users see *their* library; system-wide single-
-# user mode (user_id=None) bypasses the join via a UNION fallback.
-_BASE_FROM_USER = (
+_BASE_FROM = (
     " FROM papers p"
-    " JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
     " LEFT JOIN paper_user_state pus"
     " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
-    " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
-)
-_BASE_FROM_NO_USER = (
-    " FROM papers p"
-    " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
-    " LEFT JOIN paper_user_state pus"
-    " ON p.id = pus.paper_id AND pus.user_id IS NULL"
     " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
 )
 
@@ -106,12 +94,10 @@ def build_feed_queries(
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters.
 
-    Sprint B canonical-corpus refactor: papers are a canonical shared
-    corpus; per-user library membership is in ``user_library``. The data
-    query JOINs ``user_library`` so each user only sees what's actually in
-    *their* library. When ``user_id`` is ``None`` (single-user / pre-multi-
-    user fallback) the JOIN is skipped and the query returns the entire
-    canonical corpus.
+    The optional ``user_id`` filter scopes returned papers to the caller plus
+    system-owned (``papers.user_id IS NULL``) rows.  When ``user_id`` is
+    ``None`` (single-user mode) the predicate is a no-op and all papers are
+    returned.
 
     The ``view`` parameter maps to a set of fixed SQL predicates defined in
     :data:`VIEW_PREDICATES`.  Valid values:
@@ -130,12 +116,11 @@ def build_feed_queries(
     params: list[object] = []
     param_idx = 1
 
-    # Sprint B: user_library JOIN replaces the muddled
-    # `p.user_id IS NULL OR p.user_id = $N` predicate. The first parameter is
-    # always reserved for user_id so downstream parameter numbering matches
-    # historical expectations (and the LEFT JOIN onto paper_user_state still
-    # binds against $1).
-    base_from = _BASE_FROM_USER if user_id is not None else _BASE_FROM_NO_USER
+    # Multi-tenant scoping: caller's papers + system-owned (NULL).  In
+    # single-user mode (user_id=None) the predicate short-circuits to TRUE.
+    conditions.append(
+        f"(${param_idx}::int IS NULL OR p.user_id IS NULL OR p.user_id = ${param_idx})"
+    )
     params.append(user_id)
     param_idx += 1
 
@@ -218,14 +203,15 @@ def build_feed_queries(
     base_select = _select_sql(note_query_param=note_query_param, include_tldr=True)
     fallback_select = _select_sql(note_query_param=note_query_param, include_tldr=False)
     data_query = (
-        f"{base_select}{base_from}{where_sql}{order_sql} LIMIT ${param_idx} OFFSET ${param_idx + 1}"
+        f"{base_select}{_BASE_FROM}{where_sql}{order_sql}"
+        f" LIMIT ${param_idx} OFFSET ${param_idx + 1}"
     )
     fallback_data_query = (
-        f"{fallback_select}{base_from}{where_sql}{order_sql}"
+        f"{fallback_select}{_BASE_FROM}{where_sql}{order_sql}"
         f" LIMIT ${param_idx} OFFSET ${param_idx + 1}"
     )
     params.extend([limit, offset])
-    count_query = f"SELECT COUNT(*) AS total{base_from}{where_sql}"
+    count_query = f"SELECT COUNT(*) AS total{_BASE_FROM}{where_sql}"
 
     return FeedQueryParts(
         data_query=data_query,

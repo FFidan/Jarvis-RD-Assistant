@@ -355,19 +355,18 @@ async def get_extraction_table(
                     status_code=400,
                     detail="paper_ids must be comma-separated integers",
                 )
-            # Sprint B canonical-corpus: papers are global; extractions are
-            # the per-template artifact whose ownership lives elsewhere.
             try:
                 rows = await conn.fetch(
                     """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1 AND pe.paper_id = ANY($2)
+                         AND ($3::int IS NULL OR p.user_id IS NULL OR p.user_id = $3)
                        ORDER BY p.title""",
                     template_id,
                     ids,
+                    user_id,
                 )
-                _ = user_id
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
                     503, "extraction_templates table not found (migration 011 not applied)"
@@ -379,10 +378,11 @@ async def get_extraction_table(
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1
+                         AND ($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)
                        ORDER BY p.title""",
                     template_id,
+                    user_id,
                 )
-                _ = user_id
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
                     503, "extraction_templates table not found (migration 011 not applied)"

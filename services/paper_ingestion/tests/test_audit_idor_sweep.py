@@ -203,13 +203,9 @@ async def test_papers_brief_idor_user_id_filter_no_search():
 
     assert resp.status_code == 200
     sql: str = conn.fetch.call_args.args[0]
-    # Sprint B: in single-user mode (user_id=None) the brief endpoint serves
-    # the canonical corpus directly (no library JOIN, no IDOR predicate
-    # because there's nothing to leak between users when there's only one
-    # tenant). The test still verifies the absence of any cross-user
-    # leakage path.
-    assert "p.user_id" not in sql, f"legacy p.user_id leaked into brief SQL: {sql!r}"
-    assert "p.discovered_by" not in sql, f"audit column must not gate brief SQL: {sql!r}"
+    assert "IS NOT DISTINCT FROM" in sql, (
+        f"brief SQL must include IS NOT DISTINCT FROM for user_id IDOR guard; got:\n{sql!r}"
+    )
 
 
 @pytest.mark.asyncio
@@ -251,12 +247,8 @@ async def test_papers_brief_idor_user_id_filter_with_search():
 
     assert resp.status_code == 200
     sql: str = conn.fetch.call_args.args[0]
-    # Sprint B: with an authenticated caller the brief endpoint JOINs
-    # user_library so user A cannot see user B's saved papers. The IDOR
-    # guard moves from a `WHERE p.user_id IS NOT DISTINCT FROM $N`
-    # predicate to a `JOIN user_library ul ON ... AND ul.user_id = $N`.
-    assert "JOIN user_library" in sql, (
-        f"brief SQL with search must JOIN user_library for IDOR guard; got:\n{sql!r}"
+    assert "IS NOT DISTINCT FROM" in sql, (
+        f"brief SQL with search must include IS NOT DISTINCT FROM for user_id; got:\n{sql!r}"
     )
     # user_id=42 must be passed as a query parameter
     args = conn.fetch.call_args.args

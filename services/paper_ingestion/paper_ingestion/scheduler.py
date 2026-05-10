@@ -140,11 +140,9 @@ async def _defer_per_user(
 ) -> int:
     """Iterate active users and defer one ``task_kind`` job per user.
 
-    Sprint B: returns 0 (no-op) when no active users exist. The pre-Sprint-B
-    "fall back to a single system-shared defer with ``user_id=None``" path
-    has been removed — a multi-user system with zero users has nothing to
-    do, and ``user_id=None`` defers leak unattributable work into the job
-    table.
+    Falls back to a single system-shared defer (``user_id=None``) if no users
+    table exists or the table is empty (single-tenant pre-multi-user
+    deployments). Returns the count of jobs deferred.
     """
     import uuid  # noqa: PLC0415
 
@@ -152,12 +150,20 @@ async def _defer_per_user(
 
     user_ids = await _list_active_users(db_pool)
     if not user_ids:
+        # Pre-multi-user fallback: single system run.
+        jarvis_job_id = str(uuid.uuid4())
+        await KIND_TO_TASK[task_kind].defer_async(
+            job_id=jarvis_job_id,
+            user_id=None,  # allow-user-id-none: pre-multi-user fallback
+            **task_kwargs,
+        )
         logger.info(
-            "%s: no active users — skipping %s deferral",
+            "%s: no active users — deferred system-wide %s job %s",
             log_label,
             task_kind,
+            jarvis_job_id,
         )
-        return 0
+        return 1
     deferred = 0
     for uid in user_ids:
         try:

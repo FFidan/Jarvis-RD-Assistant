@@ -85,15 +85,13 @@ async def find_similar_papers(
         # Enrich with paper metadata (batch query to avoid N+1)
         paper_ids = [r["paper_id"] for r in sorted_results]
         if paper_ids:
-            # Sprint B canonical-corpus: papers are global; no per-paper
-            # owner filter remains. The seed-paper ownership check above
-            # already enforces "you may only discover from your own seeds".
             meta_rows = await conn.fetch(
                 """SELECT id, title, authors, url FROM papers
-                   WHERE id = ANY($1::int[])""",
+                   WHERE id = ANY($1::int[])
+                     AND ($2::int IS NULL OR user_id IS NULL OR user_id = $2)""",
                 paper_ids,
+                user_id,
             )
-            _ = user_id  # retained for future per-library scoping
             meta_map = {row["id"]: row for row in meta_rows}
         else:
             meta_map = {}
@@ -177,14 +175,13 @@ async def discover_papers(
     # Enrich with paper metadata
     paper_ids = [r["paper_id"] for r in results]
     async with db_pool.acquire() as conn:
-        # Sprint B canonical-corpus: papers are global; ownership of seed
-        # papers is enforced upstream via assert_paper_ownership.
         meta_rows = await conn.fetch(
             """SELECT id, title, authors, url FROM papers
-               WHERE id = ANY($1::int[])""",
+               WHERE id = ANY($1::int[])
+                 AND ($2::int IS NULL OR user_id IS NULL OR user_id = $2)""",
             paper_ids,
+            user_id,
         )
-    _ = user_id
     meta_map = {row["id"]: row for row in meta_rows}
 
     enriched: list[dict] = []

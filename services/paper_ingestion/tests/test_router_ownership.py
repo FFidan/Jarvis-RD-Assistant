@@ -196,16 +196,10 @@ async def test_feed_list_papers_includes_user_filter_in_query(_app):
         resp = await client.get("/api/papers/feed")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B: in single-user mode (current_user_id_or_none → None), the
-    # feed query takes the canonical-corpus fallback FROM clause — no
-    # user_library JOIN, no legacy `p.user_id IS NULL` predicate. The
-    # rendered SQL must root on `FROM papers p` and contain neither legacy
-    # owner nor renamed-audit references.
-    feed_queries = [q for q in captured_queries if " FROM papers p" in q]
-    assert feed_queries, f"feed query never issued: {captured_queries}"
-    for q in feed_queries:
-        assert "p.user_id" not in q, f"legacy p.user_id leaked into query: {q}"
-        assert "p.discovered_by" not in q, f"audit column must not scope feed: {q}"
+    # Both data + count queries should embed the user-scoping predicate
+    assert any(
+        "($1::int IS NULL OR p.user_id IS NULL OR p.user_id = $1)" in q for q in captured_queries
+    ), f"user filter missing from queries: {captured_queries}"
 
 
 # ---------------------------------------------------------------------------
@@ -273,14 +267,9 @@ async def test_discovery_similar_enrichment_query_includes_user_filter(_app):
         resp = await client.get("/api/similar/42")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B canonical-corpus: discovery enrichment SELECT no longer
-    # scopes by the (renamed) audit column. The query rooted on `FROM
-    # papers` should not reference user_id / discovered_by predicates.
-    enrich_queries = [q for q in captured_queries if "FROM papers" in q]
-    assert enrich_queries, f"enrichment never queried: {captured_queries}"
-    for q in enrich_queries:
-        assert "user_id" not in q, f"legacy user_id predicate leaked: {q}"
-        assert "discovered_by" not in q, f"audit column must not gate access: {q}"
+    assert any(
+        "($2::int IS NULL OR user_id IS NULL OR user_id = $2)" in q for q in captured_queries
+    ), f"enrichment user filter missing: {captured_queries}"
 
 
 # ---------------------------------------------------------------------------
@@ -313,15 +302,9 @@ async def test_rag_batch_summarize_query_includes_user_filter(_app, monkeypatch)
         resp = await client.post("/api/papers/batch-summarize")
 
     assert resp.status_code == 200, resp.text
-    # Sprint B canonical-corpus: in single-user mode the batch-summarize SQL
-    # selects unsummarized papers from the canonical corpus directly (no
-    # legacy `p.user_id IS NULL OR p.user_id = $N` predicate; no rename
-    # leak either). The query is rooted on `FROM papers p`.
-    bs_queries = [q for q in captured_queries if "FROM papers p" in q]
-    assert bs_queries, f"batch_summarize never queried: {captured_queries}"
-    for q in bs_queries:
-        assert "p.user_id" not in q, f"legacy predicate leaked: {q}"
-        assert "p.discovered_by" not in q, f"audit column must not gate access: {q}"
+    assert any(
+        "($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)" in q for q in captured_queries
+    ), f"batch_summarize user filter missing: {captured_queries}"
 
 
 # Touch unused imports so static analysers don't complain in editor environments

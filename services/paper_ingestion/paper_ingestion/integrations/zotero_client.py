@@ -9,6 +9,7 @@ import logging
 import os
 import urllib.parse
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -153,14 +154,47 @@ class ZoteroClient:
         self,
         api_key: str,
         user_id: str,
-        library_type: str = "user",
+        library_type: Literal["user", "group"] = "user",
+        group_id: int | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
+        """Create a Zotero API client.
+
+        Parameters
+        ----------
+        api_key:
+            Zotero Web API key with read/write library access.
+        user_id:
+            Numeric Zotero user ID (from zotero.org/settings/keys).
+        library_type:
+            ``"user"`` for a personal library (default) or ``"group"`` for a
+            group library.  When ``"group"``, ``group_id`` must be provided.
+        group_id:
+            Numeric Zotero group ID.  Required when ``library_type="group"``;
+            must be a positive integer.  Ignored when ``library_type="user"``.
+        http_client:
+            Optional shared ``httpx.AsyncClient`` to reuse across calls.
+        """
+        if library_type not in ("user", "group"):
+            raise ValueError(f"library_type must be 'user' or 'group', got {library_type!r}")
+        if library_type == "group":
+            if group_id is None:
+                raise ValueError("group_id is required when library_type='group'")
+            if not isinstance(group_id, int) or isinstance(group_id, bool) or group_id <= 0:
+                raise ValueError(f"group_id must be a positive integer, got {group_id!r}")
+
         self.api_key = api_key
         self.user_id = user_id
-        self.library_type = library_type  # "user" or "group"
+        self.library_type: Literal["user", "group"] = library_type
+        self.group_id = group_id
         self._http = http_client or httpx.AsyncClient()
-        self._base = f"{ZOTERO_API_BASE}/{library_type}s/{user_id}"
+        # URL structure:
+        #   personal library → https://api.zotero.org/users/{user_id}/...
+        #   group library    → https://api.zotero.org/groups/{group_id}/...
+        if library_type == "group":
+            self._base = f"{ZOTERO_API_BASE}/groups/{group_id}"
+        else:
+            self._base = f"{ZOTERO_API_BASE}/users/{user_id}"
 
     def _headers(self) -> dict[str, str]:
         return {"Zotero-API-Key": self.api_key, "Zotero-API-Version": "3"}
