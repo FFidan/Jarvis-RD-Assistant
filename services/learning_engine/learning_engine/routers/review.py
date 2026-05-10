@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
+from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.streak import compute_streak
 
 from learning_engine.converters import row_to_card_response
@@ -67,9 +68,13 @@ async def get_next_review(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[CardResponse]:
     """Get next due card(s) for review."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT * FROM cards WHERE due_at <= NOW() ORDER BY due_at ASC LIMIT $1",
+            "SELECT * FROM cards WHERE due_at <= NOW() "
+            "AND user_id IS NOT DISTINCT FROM $1 "
+            "ORDER BY due_at ASC LIMIT $2",
+            user_id,
             limit,
         )
     return [row_to_card_response(row) for row in rows]
@@ -88,9 +93,14 @@ async def submit_review(
     Builds a fresh FSRSManager per request so that live edits to
     fsrs.desired_retention and fsrs.learning_steps take effect immediately.
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
+            row = await conn.fetchrow(
+                "SELECT * FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                card_id,
+                user_id,
+            )
             if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
 
@@ -108,14 +118,15 @@ async def submit_review(
 
             log_id = await conn.fetchval(
                 """
-                INSERT INTO review_logs (card_id, rating, review_duration_ms, fsrs_log)
-                VALUES ($1, $2, $3, $4)
+                INSERT INTO review_logs (card_id, rating, review_duration_ms, fsrs_log, user_id)
+                VALUES ($1, $2, $3, $4, $5)
                 RETURNING id
                 """,
                 card_id,
                 body.rating.value,
                 body.review_duration_ms,
                 log_dict,
+                user_id,
             )
 
     return ReviewResponse(
@@ -134,9 +145,11 @@ async def get_stats(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> RetentionStats:
     """Get retention and review statistics."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # Single CTE query for card counts and rating breakdown
+            # Single CTE query for card counts and rating breakdown.
+            # WS-2D: scope every aggregate by caller's user_id (NULL-tolerant).
             stats_row = await conn.fetchrow(
                 """
                 WITH card_stats AS (
@@ -144,16 +157,19 @@ async def get_stats(
                         COUNT(*) AS total_cards,
                         COUNT(*) FILTER (WHERE due_at <= NOW()) AS due_now
                     FROM cards
+                    WHERE user_id IS NOT DISTINCT FROM $1
                 ),
                 today_stats AS (
                     SELECT COUNT(*) AS reviewed_today
                     FROM review_logs
                     WHERE (reviewed_at AT TIME ZONE 'UTC')::date = (NOW() AT TIME ZONE 'UTC')::date
+                      AND user_id IS NOT DISTINCT FROM $1
                 ),
                 rating_stats AS (
                     SELECT rating, COUNT(*) AS cnt
                     FROM review_logs
                     WHERE reviewed_at >= NOW() - INTERVAL '30 days'
+                      AND user_id IS NOT DISTINCT FROM $1
                     GROUP BY rating
                 ),
                 rating_agg AS (
@@ -171,7 +187,8 @@ async def get_stats(
                     ra.total_recent,
                     ra.good_easy
                 FROM card_stats cs, today_stats ts, rating_agg ra
-                """
+                """,
+                user_id,
             )
 
             total_cards = stats_row["total_cards"] or 0
@@ -186,8 +203,11 @@ async def get_stats(
             streak_rows = await conn.fetch(
                 """
                 SELECT DISTINCT (reviewed_at AT TIME ZONE 'UTC')::date AS review_date
-                FROM review_logs ORDER BY review_date DESC LIMIT 365
-                """
+                FROM review_logs
+                WHERE user_id IS NOT DISTINCT FROM $1
+                ORDER BY review_date DESC LIMIT 365
+                """,
+                user_id,
             )
             streak_days = compute_streak(
                 [

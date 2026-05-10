@@ -95,13 +95,25 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
 # ---------------------------------------------------------------------------
 
 
-async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
-    """Insert or update a paper, returning the row."""
+async def upsert_paper(
+    conn: ConnLike,
+    paper: PaperCreate,
+    user_id: int | None = None,
+) -> asyncpg.Record:
+    """Insert or update a paper, returning the row.
+
+    ``user_id`` is recorded ONLY on the initial insert. On conflict (existing
+    paper with the same ``external_id``) the original owner is preserved —
+    later interactions don't quietly transfer ownership. Pass ``None`` for
+    truly system-shared papers (cron auto-fetch, citation-graph fan-out,
+    pulse discovery); pass the caller's user_id for user-initiated upserts
+    (manual save, batch save, Zotero pull).
+    """
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, pdf_url, citation_count, metadata,
-                               discovery_origin)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                               discovery_origin, user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (external_id) DO UPDATE SET
                title = EXCLUDED.title,
                authors = EXCLUDED.authors,
@@ -120,6 +132,7 @@ async def upsert_paper(conn: ConnLike, paper: PaperCreate) -> asyncpg.Record:
         paper.citation_count,
         paper.metadata,
         paper.discovery_origin,
+        user_id,
     )
     if row is None:
         raise RuntimeError("upsert_paper RETURNING always yields a row")

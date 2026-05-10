@@ -80,7 +80,8 @@ class _StubSource:
         self.last_poll_diagnostic = diagnostic
         self.fetch_new_since_calls = 0
 
-    async def fetch_new_since(self, since, topics, limit=100):
+    async def fetch_new_since(self, since, topics, limit=100, user_id=None):
+        # WS-2D: accept user_id kwarg for base-class signature compatibility.
         self.fetch_new_since_calls += 1
         if self._raises is not None:
             raise self._raises

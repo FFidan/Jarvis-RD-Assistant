@@ -22,12 +22,17 @@ async def insert_card(
     evidence: dict | None,
     fsrs_state: dict,
     due_at: datetime,
+    user_id: int | None = None,
 ) -> asyncpg.Record | None:
-    """Insert a card row and return the created record."""
+    """Insert a card row and return the created record.
+
+    ``user_id`` (added by migration 070) is written as NULL when the caller
+    has no resolved per-user identity (single-tenant or system path).
+    """
     return await conn.fetchrow(
         """INSERT INTO cards (deck_id, paper_id, card_type, front, back,
-                              evidence, fsrs_state, due_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                              evidence, fsrs_state, due_at, user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING *""",
         deck_id,
         paper_id,
@@ -37,4 +42,5 @@ async def insert_card(
         evidence,
         fsrs_state,
         due_at,
+        user_id,
     )

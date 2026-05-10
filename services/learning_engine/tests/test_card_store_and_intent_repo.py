@@ -52,6 +52,7 @@ async def test_insert_card_persists_all_card_fields() -> None:
     assert result is row
     args = conn.fetchrow.await_args.args
     assert "INSERT INTO cards" in args[0]
+    # WS-2D: insert_card now also writes user_id (NULL by default for system path).
     assert args[1:] == (
         1,
         2,
@@ -61,6 +62,7 @@ async def test_insert_card_persists_all_card_fields() -> None:
         {"quote": "evidence"},
         {"stability": 1.0},
         due_at,
+        None,
     )
 
 

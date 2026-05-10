@@ -100,17 +100,24 @@ async def refresh_recommendations(app: Any, user_id: int | None = None) -> int:
         if not merged:
             return 0
 
+        # Migration 063 dropped the single-column unique on paper_id and replaced
+        # it with UNIQUE NULLS NOT DISTINCT (paper_id, user_id). The ON CONFLICT
+        # target must reference that composite constraint, AND user_id must be
+        # included in the INSERT — otherwise the upsert errors with
+        # "no unique or exclusion constraint matching the ON CONFLICT
+        # specification" the moment a duplicate row exists.
         upsert_sql = (
             "INSERT INTO paper_recommendations"
-            " (paper_id, score, modes, explanation, recommended_at)"
-            " VALUES ($1, $2, $3, $4, NOW())"
-            " ON CONFLICT (paper_id) DO UPDATE"
+            " (paper_id, user_id, score, modes, explanation, recommended_at)"
+            " VALUES ($1, $2, $3, $4, $5, NOW())"
+            " ON CONFLICT (paper_id, user_id) DO UPDATE"
             " SET score = EXCLUDED.score, modes = EXCLUDED.modes,"
             "     explanation = EXCLUDED.explanation, recommended_at = NOW(),"
             "     dismissed = FALSE"
         )
         await conn.executemany(
-            upsert_sql, [(r["paper_id"], r["score"], r["modes"], r["explanation"]) for r in merged]
+            upsert_sql,
+            [(r["paper_id"], user_id, r["score"], r["modes"], r["explanation"]) for r in merged],
         )
     _logger.info("recommendation: saved %d recommendations", len(merged))
     return len(merged)

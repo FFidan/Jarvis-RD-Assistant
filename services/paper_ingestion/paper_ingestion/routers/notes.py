@@ -102,10 +102,14 @@ async def create_note(
         if not paper:
             raise HTTPException(status_code=404, detail=f"Paper {paper_id} not found")
 
+        # Phase 2 WS-2D: write user_id so notes are scoped to their author.
+        # NULL user_id continues to mean "system-shared" (single-tenant legacy).
         row = await conn.fetchrow(
-            """INSERT INTO paper_notes (paper_id, user_note, highlight_text, page_number)
-            VALUES ($1, $2, $3, $4) RETURNING *""",
+            """INSERT INTO paper_notes
+                   (paper_id, user_id, user_note, highlight_text, page_number)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *""",
             paper_id,
+            user_id,
             body.user_note,
             body.highlight_text,
             body.page_number,

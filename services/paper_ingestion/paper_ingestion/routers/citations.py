@@ -10,6 +10,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.citations import build_citation_graph, sync_citations_for_paper
@@ -51,10 +52,12 @@ async def batch_fetch_citations(
     The job is durable and visible in the jobs table.  The handler runs in the
     paper_ingestion worker loop (``citations_jobs.py``).
     """
+    user_id = await current_user_id_or_none(request)
     jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["citations.batch_fetch"].defer_async(
-        job_id=jarvis_job_id, user_id=None
-    )  # allow-user-id-none: discovery job — batched across all papers
+    # Phase 2 WS-2D: pass caller user_id for audit-trail attribution. The job
+    # body is still system-wide discovery (batched across all papers), but the
+    # user that triggered the batch should be recorded.
+    await KIND_TO_TASK["citations.batch_fetch"].defer_async(job_id=jarvis_job_id, user_id=user_id)
     return BatchCitationFetchResponse(queued=1, message=f"Job {jarvis_job_id} queued")
 
 

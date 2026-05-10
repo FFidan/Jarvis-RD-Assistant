@@ -736,7 +736,8 @@ class TestRefreshRecommendations:
         await refresh_recommendations(app)
         conn = app.state.db_pool.acquire.return_value.__aenter__.return_value
         rows = conn.executemany.call_args.args[1]
-        modes = rows[0][2]  # 3rd column is modes list
+        # WS-2D: row tuple is now (paper_id, user_id, score, modes, explanation).
+        modes = rows[0][3]
         assert modes == ["liked"]
 
     @pytest.mark.asyncio
@@ -753,7 +754,8 @@ class TestRefreshRecommendations:
         await refresh_recommendations(app)
         conn = app.state.db_pool.acquire.return_value.__aenter__.return_value
         rows = conn.executemany.call_args.args[1]
-        pid, score, modes, _explanation = rows[0]
+        # WS-2D: row tuple is now (paper_id, user_id, score, modes, explanation).
+        pid, _user_id, score, modes, _explanation = rows[0]
         assert pid == 20
         assert score == pytest.approx(0.8 * 0.6 + 0.7 * 0.4)
         assert set(modes) == {"liked", "project"}

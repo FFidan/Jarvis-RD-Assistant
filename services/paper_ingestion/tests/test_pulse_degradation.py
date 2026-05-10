@@ -61,7 +61,7 @@ class _Src:
         self._papers = papers or []
         self._raises = raises
 
-    async def fetch_new_since(self, since, topics, limit=100):
+    async def fetch_new_since(self, since, topics, limit=100, user_id=None):
         if self._raises:
             raise self._raises
         return list(self._papers)

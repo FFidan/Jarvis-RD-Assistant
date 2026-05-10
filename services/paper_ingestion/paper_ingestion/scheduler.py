@@ -50,6 +50,27 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
     return bool(value)
 
 
+async def _list_active_users(db_pool: Any) -> list[int]:
+    """List active (non-deleted) user IDs for per-user cron fan-out.
+
+    WS-2D: schedulers iterate users-with-feature-enabled. ``user_config`` is
+    still global (Wave-3 deferred per-user keying), so this helper currently
+    returns all active users; once ``user_config`` becomes per-user the
+    callers should narrow on ``key=feature.enabled AND value=true``.
+
+    Returns an empty list when the ``users`` table is missing (single-tenant
+    pre-migration-069 deployments) so callers fall back to the legacy
+    system-shared single defer.
+    """
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id FROM users WHERE deleted_at IS NULL ORDER BY id ASC")
+        return [int(r["id"]) for r in rows]
+    except Exception:
+        logger.debug("scheduler: users table unreadable; falling back to system run")
+        return []
+
+
 async def _get_pulse_cron(db_pool: Any) -> str:
     """Read ``user_config['pulse.cron']`` — defaults to ``'0 4 * * *'``."""
     try:
@@ -114,6 +135,53 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
     return True, cron_expr
 
 
+async def _defer_per_user(
+    *, task_kind: str, db_pool: Any, log_label: str, **task_kwargs: Any
+) -> int:
+    """Iterate active users and defer one ``task_kind`` job per user.
+
+    Falls back to a single system-shared defer (``user_id=None``) if no users
+    table exists or the table is empty (single-tenant pre-multi-user
+    deployments). Returns the count of jobs deferred.
+    """
+    import uuid  # noqa: PLC0415
+
+    from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
+
+    user_ids = await _list_active_users(db_pool)
+    if not user_ids:
+        # Pre-multi-user fallback: single system run.
+        jarvis_job_id = str(uuid.uuid4())
+        await KIND_TO_TASK[task_kind].defer_async(
+            job_id=jarvis_job_id,
+            user_id=None,  # allow-user-id-none: pre-multi-user fallback
+            **task_kwargs,
+        )
+        logger.info(
+            "%s: no active users — deferred system-wide %s job %s",
+            log_label,
+            task_kind,
+            jarvis_job_id,
+        )
+        return 1
+    deferred = 0
+    for uid in user_ids:
+        try:
+            jarvis_job_id = str(uuid.uuid4())
+            await KIND_TO_TASK[task_kind].defer_async(
+                job_id=jarvis_job_id,
+                user_id=uid,
+                **task_kwargs,
+            )
+            deferred += 1
+            logger.info(
+                "%s: deferred %s job %s for user %d", log_label, task_kind, jarvis_job_id, uid
+            )
+        except Exception:
+            logger.exception("%s: failed to defer %s for user %d", log_label, task_kind, uid)
+    return deferred
+
+
 async def run_zotero_sync_wrapper(app: Any) -> None:
     """APScheduler entrypoint for Zotero library sync — defers via procrastinate."""
     db_pool = app.state.db_pool
@@ -122,18 +190,12 @@ async def run_zotero_sync_wrapper(app: Any) -> None:
         logger.info("zotero: poll disabled via user_config, skipping scheduled sync")
         return
     try:
-        import uuid  # noqa: PLC0415
-
-        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
-
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(
-            job_id=jarvis_job_id,
-            user_id=None,  # allow-user-id-none: system-wide cron
-        )
-        logger.info(
-            "zotero: deferred zotero.sync_from_zotero job %s via procrastinate",
-            jarvis_job_id,
+        # WS-2D: per-user fan-out so each Zotero-paired user's poll attributes
+        # to them. With user_config still global, this currently iterates ALL
+        # active users — once Zotero credentials become per-user, narrow this
+        # helper to "users with zotero.poll_enabled=true" specifically.
+        await _defer_per_user(
+            task_kind="zotero.sync_from_zotero", db_pool=db_pool, log_label="zotero"
         )
     except Exception:
         logger.exception("zotero: failed to defer sync job")
@@ -146,18 +208,8 @@ async def run_pulse_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping nightly run")
         return
     try:
-        import uuid  # noqa: PLC0415
-
-        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
-
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["pulse.generate"].defer_async(
-            job_id=jarvis_job_id, user_id=None
-        )  # allow-user-id-none: system-wide cron
-        logger.info(
-            "pulse: deferred pulse.generate job %s via procrastinate",
-            jarvis_job_id,
-        )
+        # WS-2D: one Pulse deck per user (audit BLOCKING #15).
+        await _defer_per_user(task_kind="pulse.generate", db_pool=db_pool, log_label="pulse")
     except Exception:
         logger.exception("pulse: failed to defer pulse.generate job")
 
@@ -169,17 +221,9 @@ async def run_pulse_classifier_training_wrapper(app: Any) -> None:
         logger.info("pulse: disabled via user_config, skipping classifier retraining")
         return
     try:
-        import uuid  # noqa: PLC0415
-
-        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
-
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["pulse.train_classifier"].defer_async(
-            job_id=jarvis_job_id, user_id=None
-        )  # allow-user-id-none: system-wide cron
-        logger.info(
-            "pulse: deferred pulse.train_classifier job %s via procrastinate",
-            jarvis_job_id,
+        # WS-2D: train per-user classifier (audit BLOCKING #16).
+        await _defer_per_user(
+            task_kind="pulse.train_classifier", db_pool=db_pool, log_label="pulse"
         )
     except Exception:
         logger.exception("pulse: failed to defer classifier training job")
@@ -195,16 +239,15 @@ async def run_weekly_digest_wrapper(app: Any) -> None:
     dispatches into it via the registry shim. The JARVIS UUID is generated
     upfront and passed as the ``job_id`` kwarg so the SSE bridge can locate
     the procrastinate row via ``args->>'job_id'``.
+
+    WS-2D: fans out one digest job per active user instead of producing a
+    single global digest (audit BLOCKING #17).
     """
-    import uuid  # noqa: PLC0415
-
-    _ = app.state.db_pool  # touch to surface AttributeError early in tests
+    db_pool = app.state.db_pool  # touch to surface AttributeError early in tests
     try:
-        from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
-
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK["digest.weekly"].defer_async(job_id=jarvis_job_id, days=7)
-        logger.info("digest: deferred digest.weekly job %s via procrastinate", jarvis_job_id)
+        await _defer_per_user(
+            task_kind="digest.weekly", db_pool=db_pool, log_label="digest", days=7
+        )
     except Exception:
         logger.exception("digest: failed to defer weekly digest job")
 

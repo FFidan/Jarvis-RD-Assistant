@@ -296,11 +296,14 @@ async def batch_generate_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue batch card generation; returns 202 immediately with a *job_id* to poll."""
-    # TODO(multi-tenant): decks table has no user_id column yet — add assert_deck_ownership
-    # once the decks table gains a user_id column (Wave-2 multi-tenant prep).
+    # WS-2D: deck ownership now enforced (decks.user_id added in migration 070).
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", body.deck_id)
+        deck = await conn.fetchval(
+            "SELECT id FROM decks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            body.deck_id,
+            user_id,
+        )
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
 

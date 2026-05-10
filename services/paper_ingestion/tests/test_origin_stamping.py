@@ -319,7 +319,7 @@ async def test_pulse_job_stamps_pulse() -> None:
 
     captured_papers: list[PaperCreate] = []
 
-    async def _fake_upsert(conn, paper: PaperCreate):
+    async def _fake_upsert(conn, paper: PaperCreate, user_id=None):
         captured_papers.append(paper)
         return FakeRecord(
             {
@@ -440,7 +440,7 @@ async def test_search_then_save_stamps_user_initiated() -> None:
         url="https://www.semanticscholar.org/paper/1",
     )
 
-    async def _fake_upsert(conn, paper: PaperCreate):
+    async def _fake_upsert(conn, paper: PaperCreate, user_id=None):
         captured_papers.append(paper)
         return FakeRecord(
             {
@@ -522,7 +522,7 @@ async def test_auto_fetch_stamps_recommender() -> None:
         source_type=SourceType.ARXIV,
     )
 
-    async def _fake_upsert(conn, paper: PaperCreate):
+    async def _fake_upsert(conn, paper: PaperCreate, user_id=None):
         captured_papers.append(paper)
         return FakeRecord(
             {
@@ -635,7 +635,7 @@ async def test_batch_save_papers_stamps_citation_batch() -> None:
 
     captured_papers: list[PaperCreate] = []
 
-    async def _fake_upsert(conn, paper: PaperCreate):
+    async def _fake_upsert(conn, paper: PaperCreate, user_id=None):
         captured_papers.append(paper)
         return FakeRecord(
             {
@@ -706,7 +706,7 @@ async def test_zotero_sync_stamps_user_initiated() -> None:
 
     captured_papers: list[PaperCreate] = []
 
-    async def _fake_upsert(conn, paper: PaperCreate):
+    async def _fake_upsert(conn, paper: PaperCreate, user_id=None):
         captured_papers.append(paper)
         return FakeRecord(
             {

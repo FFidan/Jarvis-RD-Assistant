@@ -452,7 +452,6 @@ async def ask_cross_paper_stream(
 async def get_weekly_digest(
     request: Request,
     days: int = Query(default=7, ge=1, le=30),
-    user_id: int | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
@@ -464,13 +463,15 @@ async def get_weekly_digest(
     against the topic corpus and returned in ``verified_themes`` /
     ``unverified_themes`` (ephemeral — not persisted to DB).
 
+    Phase 2 WS-2D: ``user_id`` is resolved from the session via
+    ``current_user_id_or_none`` rather than accepted as a query parameter
+    (which was an IDOR vector pre-WS-2A — any authenticated user could pass
+    any user_id and read another user's digest).
+
     Parameters
     ----------
     days : int
         Number of days to look back (1-30, default 7).
-    user_id : int, optional
-        When provided, restricts the digest to papers engaged with by this
-        user only.  Omit (or pass ``None``) for the global aggregate.
 
     Returns
     -------
@@ -480,6 +481,7 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
+    user_id = await current_user_id_or_none(request)
     return await generate_weekly_summary(
         db_pool,
         days=days,
@@ -508,6 +510,9 @@ async def enqueue_weekly_digest(
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
+    user_id = await current_user_id_or_none(request)
     jarvis_job_id = str(uuid.uuid4())
-    await KIND_TO_TASK["digest.weekly"].defer_async(job_id=jarvis_job_id, days=days)
+    await KIND_TO_TASK["digest.weekly"].defer_async(
+        job_id=jarvis_job_id, days=days, user_id=user_id
+    )
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")

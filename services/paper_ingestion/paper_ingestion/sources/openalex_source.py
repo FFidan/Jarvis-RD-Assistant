@@ -409,6 +409,7 @@ class OpenAlexSource(PaperSource):
         since: datetime,
         topics: list[TopicRef],
         limit: int = 100,
+        user_id: int | None = None,
     ) -> list[PaperCreate]:
         """Fetch OpenAlex works published after *since* relevant to the given topics.
 
@@ -447,7 +448,7 @@ class OpenAlexSource(PaperSource):
         if self.db_pool is not None:
             p_limiter = PersistentSourceRateLimiter(
                 source_type="openalex",
-                user_id=None,
+                user_id=user_id,
                 min_interval_seconds=0.11,
                 db_pool=self.db_pool,
                 fallback=self._rate_limiter,
@@ -510,6 +511,7 @@ class OpenAlexSource(PaperSource):
                         status=p_status,
                         candidate_count=0,
                         duration_ms=int((_time.monotonic() - started_at) * 1000),
+                        user_id=user_id,
                     )
                     if self.db_pool is not None:
                         try:
@@ -563,6 +565,7 @@ class OpenAlexSource(PaperSource):
                     status="error",
                     candidate_count=0,
                     duration_ms=int((_time.monotonic() - started_at) * 1000),
+                    user_id=user_id,
                 )
                 if self.db_pool is not None:
                     try:
@@ -602,6 +605,7 @@ class OpenAlexSource(PaperSource):
                 status="ok",
                 candidate_count=candidate_count,
                 duration_ms=duration_ms,
+                user_id=user_id,
             )
             if self.db_pool is not None:
                 try:
@@ -629,6 +633,7 @@ class OpenAlexSource(PaperSource):
         status: str,
         candidate_count: int,
         duration_ms: int,
+        user_id: int | None = None,
     ) -> None:
         """Insert a row into ``source_run_history`` if ``db_pool`` is available."""
         if self.db_pool is None:
@@ -646,7 +651,7 @@ class OpenAlexSource(PaperSource):
                          status, candidate_count, duration_ms, detail)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
                     """,
-                    None,
+                    user_id,
                     "openalex",
                     started_utc,
                     now_utc,

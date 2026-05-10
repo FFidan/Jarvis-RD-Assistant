@@ -25,9 +25,14 @@ async def list_project_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """List papers linked to a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        # Verify project exists (same connection as data query to avoid TOCTOU)
-        project = await conn.fetchval("SELECT id FROM projects WHERE id = $1", project_id)
+        # WS-2D: scope project lookup by owner — IDOR otherwise.
+        project = await conn.fetchval(
+            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -59,12 +64,24 @@ async def link_paper(
 ) -> dict | JSONResponse:
     """Link a paper to a project."""
     should_push_zotero = False
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            project = await conn.fetchrow("SELECT id FROM projects WHERE id = $1", project_id)
+            # WS-2D: scope by owner. Cannot link a paper into another user's project.
+            project = await conn.fetchrow(
+                "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                project_id,
+                user_id,
+            )
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
-            paper = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
+            # Paper visibility: NULL-owned (system) papers OR caller-owned papers.
+            paper = await conn.fetchrow(
+                "SELECT id FROM papers WHERE id = $1 "
+                "AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2)",
+                paper_id,
+                user_id,
+            )
             if not paper:
                 raise HTTPException(status_code=404, detail="Paper not found")
             result = await conn.execute(
@@ -140,15 +157,19 @@ async def unlink_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Unlink a paper from a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        # WS-2D: prevent IDOR — only delete links whose project belongs to caller.
         result = await conn.execute(
-            "DELETE FROM project_papers WHERE project_id = $1 AND paper_id = $2",
+            "DELETE FROM project_papers pp USING projects p "
+            "WHERE pp.project_id = $1 AND pp.paper_id = $2 "
+            "AND p.id = pp.project_id AND p.user_id IS NOT DISTINCT FROM $3",
             project_id,
             paper_id,
+            user_id,
         )
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Link not found")
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",

@@ -202,9 +202,11 @@ async def test_my_day_limit_recommendations_query_param(exec_app):
         resp = await client.get("/api/executive/my-day", params={"limit_recommendations": 1})
 
     assert resp.status_code == 200
-    # Verify the query param was actually passed to the SQL call (second fetch call)
+    # Verify the query param was actually passed to the SQL call (second fetch call).
+    # WS-2D: the recommendations query is now `($1=user_id, $2=limit)` — limit
+    # shifted from $1 to $2 because user_id scoping was added.
     rec_fetch_call = conn.fetch.call_args_list[1]
-    assert rec_fetch_call[0][1] == 1  # positional arg $1 = limit_recommendations
+    assert rec_fetch_call[0][2] == 1  # positional arg $2 = limit_recommendations
 
 
 # ---------------------------------------------------------------------------

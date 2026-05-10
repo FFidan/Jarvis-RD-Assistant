@@ -259,7 +259,9 @@ async def discover_candidates(
 
     results = await asyncio.gather(
         *[
-            src.fetch_new_since(since, profile.topics, limit=per_source_cap)
+            src.fetch_new_since(
+                since, profile.topics, limit=per_source_cap, user_id=profile.user_id
+            )
             for src in ready_sources
         ],
         return_exceptions=True,

@@ -327,12 +327,14 @@ async def batch_save_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PaperResponse]:
     """Upsert a list of papers to the database (by external_id)."""
-    _ = request  # required by @limiter.limit; not used in body
     max_batch = 100
     if len(papers) > max_batch:
         raise HTTPException(400, f"Batch size cannot exceed {max_batch}")
     if not papers:
         return []
+    # WS-2D: attribute fan-out to caller so user A's citation-graph batch save
+    # doesn't end up visible in user B's library.
+    user_id = await current_user_id_or_none(request)
     results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -341,7 +343,7 @@ async def batch_save_papers(
                 # PaperCreate's "user_initiated" default — the batch endpoint
                 # is the canonical citation-graph fan-out path).
                 paper.discovery_origin = "citation_batch"
-                row = await upsert_paper(conn, paper)
+                row = await upsert_paper(conn, paper, user_id=user_id)
                 results.append(row_to_paper_response(row))
     return results
 

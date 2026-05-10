@@ -414,6 +414,7 @@ class PubMedSource(PaperSource):
         since: datetime,
         topics: list[TopicRef],
         limit: int = 100,
+        user_id: int | None = None,  # noqa: ARG002 — accepted for base-class compat
     ) -> list[PaperCreate]:
         """Fetch PubMed papers published after *since* relevant to the given topics.
 

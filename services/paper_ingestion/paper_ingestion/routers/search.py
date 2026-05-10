@@ -237,12 +237,14 @@ async def search_papers(
         interleaved = _round_robin_merge(per_source)
         deduped = _dedup_papers(interleaved)
 
-    # Upsert into DB (per original /api/search behavior)
+    # Upsert into DB (per original /api/search behavior).
+    # WS-2D: attribute saved papers to caller (`user_initiated` discovery).
+    user_id = await current_user_id_or_none(request)
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
             paper.discovery_origin = "user_initiated"
-            row = await upsert_paper(conn, paper)
+            row = await upsert_paper(conn, paper, user_id=user_id)
             saved_results.append(row_to_paper_response(row))
 
     # Build per_source_counts from deduped results

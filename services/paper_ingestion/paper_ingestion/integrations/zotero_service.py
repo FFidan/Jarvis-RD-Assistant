@@ -307,12 +307,19 @@ async def sync_annotations_for_paper(
 
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
-            "SELECT id, zotero_item_key FROM papers WHERE id = $1",
+            "SELECT id, zotero_item_key, user_id FROM papers WHERE id = $1",
             paper_id,
         )
     if not paper:
         return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
     zotero_item_key = paper["zotero_item_key"]
+    # WS-2D: attribute imported annotations to the paper's owner so per-user
+    # note queries don't drop them as system-shared. Tolerate fixtures that
+    # don't expose user_id (NULL = system path).
+    try:
+        paper_owner_user_id = paper["user_id"]
+    except (KeyError, IndexError):
+        paper_owner_user_id = None
     if not zotero_item_key:
         return {"paper_id": paper_id, "imported": 0, "status": "not_linked"}
 
@@ -342,8 +349,8 @@ async def sync_annotations_for_paper(
                     """
                     INSERT INTO paper_notes
                         (paper_id, source, zotero_annotation_key, user_note, highlight_text,
-                         page_number)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                         page_number, user_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                     ON CONFLICT (paper_id, zotero_annotation_key) DO UPDATE
                         SET user_note      = EXCLUDED.user_note,
                             highlight_text = EXCLUDED.highlight_text,
@@ -383,6 +390,7 @@ async def sync_annotations_for_paper(
                     note,
                     highlight,
                     page_number,
+                    paper_owner_user_id,
                 )
                 imported += 1
 
@@ -392,6 +400,7 @@ async def sync_annotations_for_paper(
 async def poll_zotero_library(
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
+    polling_user_id: int | None = None,
 ) -> dict[str, Any]:
     """Incremental poll of Zotero library since last known version.
 
@@ -466,7 +475,8 @@ async def poll_zotero_library(
             try:
                 async with db_pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        "SELECT id, zotero_item_key FROM papers WHERE metadata->>'doi' = $1",
+                        "SELECT id, zotero_item_key, user_id FROM papers"
+                        " WHERE metadata->>'doi' = $1",
                         doi,
                     )
                 if row:
@@ -480,8 +490,9 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
-                                # allow-user-id-none: discovery job — batched across all users
-                                user_id=None,
+                                # WS-2D: attribute to paper's owner so per-user
+                                # note queries don't drop these annotations.
+                                user_id=row["user_id"],
                                 paper_id=row["id"],
                             )
                         except Exception:
@@ -528,14 +539,15 @@ async def poll_zotero_library(
 
         try:
             async with db_pool.acquire() as conn:
-                row = await upsert_paper(conn, paper_create)
-                paper_id: int = row["id"]
+                # WS-2D: attribute Zotero-imported papers to the polling user.
+                row = await upsert_paper(conn, paper_create, user_id=polling_user_id)
+                paper_id = row["id"]
                 # First-sync wins: INSERT to_read state but never overwrite
                 # existing user state (user may have trashed the paper).
                 await _upsert_paper_user_state(
                     conn,
                     paper_id,
-                    None,  # single-tenant; multi-tenant deferred per spec §10
+                    polling_user_id,
                     state="to_read",
                     starred=False,
                     on_conflict="do_nothing",
@@ -550,7 +562,7 @@ async def poll_zotero_library(
                     )
             await KIND_TO_TASK["paper.analyze"].defer_async(
                 job_id=str(uuid.uuid4()),
-                user_id=None,  # allow-user-id-none: discovery job — batched across all users
+                user_id=polling_user_id,
                 paper_id=paper_id,
             )
             enqueued_count += 1
@@ -682,7 +694,10 @@ async def _zotero_sync_from_zotero_job(
     enqueues paper.process jobs for any new items not originating in JARVIS.
     """
     await ctx.update_progress(0.1, "Starting Zotero library poll")
-    result = await poll_zotero_library(pool, http_client)
+    # WS-2D: thread caller user_id through so imported papers/state/annotations
+    # are attributed correctly. NULL when scheduler-cron-invoked (system poll).
+    polling_user_id = payload.get("user_id")
+    result = await poll_zotero_library(pool, http_client, polling_user_id=polling_user_id)
     await ctx.update_progress(1.0, "Done")
     return result
 

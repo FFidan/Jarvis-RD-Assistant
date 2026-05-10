@@ -23,7 +23,10 @@ from learning_engine.routers.tasks import _VALID_TASK_STATUSES, list_tasks  # no
 
 
 def _fake_request():
-    return SimpleNamespace()
+    # WS-2A: routers read user_id from request.state.user_id (set by session middleware).
+    # Tests pass a SimpleNamespace stand-in with user_id=None to mirror an
+    # API-key-only / single-tenant caller.
+    return SimpleNamespace(state=SimpleNamespace(user_id=None))
 
 
 # ---------------------------------------------------------------------------

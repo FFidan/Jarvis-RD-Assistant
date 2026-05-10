@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -101,13 +102,19 @@ async def test_create_card_success_uses_evidence_payload():
 
 @pytest.mark.asyncio
 async def test_list_cards_builds_query_with_filters():
-    """list_cards includes deck and due filters in the generated SQL."""
+    """list_cards includes deck and due filters in the generated SQL.
+
+    WS-2D: list_cards now always prefixes a ``user_id IS NOT DISTINCT FROM $1``
+    predicate (even in single-tenant mode where user_id is None) to enforce
+    multi-user isolation.
+    """
     pool, conn = _make_pool_and_conn()
     due_before = _now()
     conn.fetch.return_value = [_make_card_row()]
 
+    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     rows = await cards.list_cards.__wrapped__(
-        MagicMock(),
+        req,
         deck_id=3,
         due_before=due_before,
         limit=10,
@@ -118,9 +125,11 @@ async def test_list_cards_builds_query_with_filters():
     assert len(rows) == 1
     sql = conn.fetch.await_args.args[0]
     params = conn.fetch.await_args.args[1:]
-    assert "deck_id = $1" in sql
-    assert "due_at <= $2" in sql
-    assert params == (3, due_before, 10, 5)
+    # WS-2D: $1 is now user_id, deck_id shifts to $2, due_before to $3.
+    assert "user_id IS NOT DISTINCT FROM $1" in sql
+    assert "deck_id = $2" in sql
+    assert "due_at <= $3" in sql
+    assert params == (None, 3, due_before, 10, 5)
 
 
 @pytest.mark.asyncio
@@ -236,13 +245,18 @@ async def test_create_card_raises_404_on_fk_violation_deck():
 
 
 @pytest.mark.asyncio
-async def test_list_cards_no_filters_omits_where_clause():
-    """list_cards without any filter issues a plain SELECT with no WHERE."""
+async def test_list_cards_no_filters_includes_user_predicate_only():
+    """list_cards without any filter still scopes by user_id (WS-2D).
+
+    Pre-WS-2D this returned a plain SELECT with no WHERE; post-WS-2D the
+    user_id predicate is unconditional even when no other filters are set.
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
 
+    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     result = await cards.list_cards.__wrapped__(
-        MagicMock(),
+        req,
         deck_id=None,
         due_before=None,
         limit=20,
@@ -252,4 +266,8 @@ async def test_list_cards_no_filters_omits_where_clause():
 
     assert result == []
     sql = conn.fetch.await_args.args[0]
-    assert "WHERE" not in sql
+    # WS-2D: WHERE is now always present (user_id predicate).
+    assert "WHERE user_id IS NOT DISTINCT FROM $1" in sql
+    # No deck_id / due_at clauses.
+    assert "deck_id" not in sql
+    assert "due_at <=" not in sql

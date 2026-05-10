@@ -37,6 +37,7 @@ async def create_card(
     fsrs_manager: FSRSManager = Depends(get_fsrs_manager),
 ) -> CardResponse:
     """Create a flashcard manually."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         fsrs_state, due_at = fsrs_manager.create_new_card()
         evidence = body.evidence.model_dump() if body.evidence else {}
@@ -52,6 +53,7 @@ async def create_card(
                 evidence,
                 fsrs_state,
                 due_at,
+                user_id=user_id,
             )
         except asyncpg.ForeignKeyViolationError as exc:
             constraint = getattr(exc, "constraint_name", "") or ""
@@ -72,8 +74,14 @@ async def list_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[CardResponse]:
     """List cards with optional filters."""
+    user_id = await current_user_id_or_none(request)
     conditions: list[str] = []
     params: list = []
+
+    # WS-2D: scope to caller's user_id (NULL-tolerant: matches both system rows
+    # and the caller's own rows in single-tenant mode).
+    conditions.append(f"user_id IS NOT DISTINCT FROM ${len(params) + 1}")
+    params.append(user_id)
 
     if deck_id is not None:
         conditions.append(f"deck_id = ${len(params) + 1}")
@@ -103,9 +111,15 @@ async def update_card(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> CardResponse:
     """Update a card's content (does not affect FSRS state)."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            existing = await conn.fetchrow("SELECT * FROM cards WHERE id = $1 FOR UPDATE", card_id)
+            # WS-2D: scope by user_id to prevent IDOR — user A must not edit user B's card.
+            existing = await conn.fetchrow(
+                "SELECT * FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                card_id,
+                user_id,
+            )
             if not existing:
                 raise HTTPException(status_code=404, detail="Card not found")
 
@@ -144,11 +158,16 @@ async def delete_card(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Delete a card."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        result = await conn.execute("DELETE FROM cards WHERE id = $1", card_id)
+        # WS-2D: scope by user_id to prevent IDOR delete.
+        result = await conn.execute(
+            "DELETE FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            card_id,
+            user_id,
+        )
         if result == "DELETE 0":
             raise HTTPException(status_code=404, detail="Card not found")
-    user_id = await current_user_id_or_none(request)
     await log_audit(
         db_pool,
         action="delete",

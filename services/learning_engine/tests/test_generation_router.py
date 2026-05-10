@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -227,9 +228,10 @@ async def test_generate_cards_endpoint_returns_job_id():
     mock_card_generate_task = MagicMock()
     mock_defer = AsyncMock()
     mock_card_generate_task.defer_async = mock_defer
+    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}):
         response = await generation.generate_cards.__wrapped__(
-            MagicMock(),
+            req,
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
             db_pool=pool,
         )
@@ -261,11 +263,12 @@ async def test_batch_generate_cards_returns_202_with_job_id():
     mock_card_generate_batch_task = MagicMock()
     mock_defer = AsyncMock()
     mock_card_generate_batch_task.defer_async = mock_defer
+    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     with patch.dict(
         task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_generate_batch_task}
     ):
         response = await generation.batch_generate_cards.__wrapped__(
-            MagicMock(),
+            req,
             body=BatchGenerateRequest(deck_id=1),
             db_pool=pool,
         )

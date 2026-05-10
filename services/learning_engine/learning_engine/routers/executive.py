@@ -39,47 +39,54 @@ async def get_my_day(
     limit_recommendations: int = Query(3, ge=1, le=10),
 ) -> MyDayResponse:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers)."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        # Tasks: Todo (due today/overdue) + completed today, with project context
+        # Tasks: Todo (due today/overdue) + completed today, with project context.
+        # WS-2D: scope by user_id (Wave-3B added tasks.user_id).
         tasks = await conn.fetch(
             """
             SELECT t.id, t.project_id, t.title, t.priority, t.deadline, t.status,
                    t.completed_at, p.name AS project_name, p.color AS project_color
             FROM tasks t
             LEFT JOIN projects p ON p.id = t.project_id
-            WHERE (t.status = 'todo'
-                   AND (t.deadline IS NULL OR t.deadline < CURRENT_DATE + INTERVAL '1 day'))
-               OR (t.status = 'done' AND t.completed_at::date = CURRENT_DATE)
-               OR t.status IN ('in_progress', 'blocked')
+            WHERE t.user_id IS NOT DISTINCT FROM $1
+              AND ((t.status = 'todo'
+                     AND (t.deadline IS NULL OR t.deadline < CURRENT_DATE + INTERVAL '1 day'))
+                 OR (t.status = 'done' AND t.completed_at::date = CURRENT_DATE)
+                 OR t.status IN ('in_progress', 'blocked'))
             ORDER BY t.status ASC, t.priority ASC, t.deadline ASC NULLS LAST
             LIMIT 20
-            """
+            """,
+            user_id,
         )
 
-        # Flashcards due
+        # Flashcards due — WS-2D: scope by user_id (cards.user_id added in 070).
         cards_due = await conn.fetchval(
             """
             SELECT COUNT(*)
             FROM cards
             WHERE due_at <= NOW()
-            """
+              AND user_id IS NOT DISTINCT FROM $1
+            """,
+            user_id,
         )
 
-        # Recommended papers
+        # Recommended papers — WS-2D: scope by user_id (Wave-3A added the column).
         recommendations = await conn.fetch(
             """
             SELECT pr.id as recommendation_id, pr.paper_id, pr.score, p.title, p.authors
             FROM paper_recommendations pr
             JOIN papers p ON pr.paper_id = p.id
             WHERE pr.dismissed = FALSE
+              AND pr.user_id IS NOT DISTINCT FROM $1
             ORDER BY pr.score DESC
-            LIMIT $1
+            LIMIT $2
             """,
+            user_id,
             limit_recommendations,
         )
 
         # Focus hours logged today
-        user_id = await current_user_id_or_none(request)
         today_focus_hours = (
             await conn.fetchval(
                 "SELECT COALESCE(focus_hours, 0) FROM daily_log "
@@ -111,8 +118,10 @@ async def get_my_day(
                     else:
                         break
 
-        # Project pulse: active projects with task progress and next milestone
-        project_pulse = await conn.fetch("""
+        # Project pulse: active projects with task progress and next milestone.
+        # WS-2D: scope projects by owner (projects.user_id from Wave-3 / migration 064).
+        project_pulse = await conn.fetch(
+            """
             SELECT p.id, p.name, p.color,
                    COUNT(t.id) AS total_tasks,
                    COUNT(t.id) FILTER (WHERE t.status = 'done') AS done_tasks,
@@ -124,10 +133,14 @@ async def get_my_day(
                     ORDER BY m.deadline ASC NULLS LAST LIMIT 1) AS next_milestone_deadline
             FROM projects p
             LEFT JOIN tasks t ON t.project_id = p.id
+                AND t.user_id IS NOT DISTINCT FROM $1
             WHERE p.status = 'active'
+              AND p.user_id IS NOT DISTINCT FROM $1
             GROUP BY p.id
             ORDER BY p.name
-        """)
+            """,
+            user_id,
+        )
 
     return MyDayResponse(
         tasks=[MyDayTaskItem.model_validate(dict(t)) for t in tasks],
@@ -147,21 +160,26 @@ async def quick_add_task(
     db_pool: Pool = Depends(get_db_pool),
 ) -> dict[str, Any]:
     """Quick-add a task, optionally linked to a project."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if payload.project_id is not None:
+            # WS-2D: scope project lookup by owner — IDOR otherwise.
             project_exists = await conn.fetchval(
-                "SELECT id FROM projects WHERE id = $1",
+                "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
                 payload.project_id,
+                user_id,
             )
             if not project_exists:
                 raise HTTPException(status_code=404, detail="Project not found")
 
+        # WS-2D: write user_id (Wave-3B added the column but this insert never set it).
         row = await conn.fetchrow(
-            "INSERT INTO tasks (title, project_id, priority, status) "
-            "VALUES ($1, $2, $3, 'todo') RETURNING *",
+            "INSERT INTO tasks (title, project_id, priority, status, user_id) "
+            "VALUES ($1, $2, $3, 'todo', $4) RETURNING *",
             payload.title,
             payload.project_id,
             payload.priority,
+            user_id,
         )
     return dict(row)  # type: ignore[arg-type]
 
@@ -178,21 +196,29 @@ async def log_focus_session(
     Validation and mutations run inside a single transaction using SELECT FOR UPDATE
     to eliminate the TOCTOU race between existence checks and DML (LE-009).
     """
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # Validate and lock referenced rows inside the transaction (LE-009: FOR UPDATE
             # prevents concurrent deletes from racing between the check and the DML).
+            # WS-2D: scope by user_id to prevent IDOR — user A cannot log focus
+            # against user B's task.
             if payload.task_id is not None:
                 task_row = await conn.fetchrow(
-                    "SELECT id FROM tasks WHERE id = $1 FOR UPDATE",
+                    "SELECT id FROM tasks WHERE id = $1 "
+                    "AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
                     payload.task_id,
+                    user_id,
                 )
                 if task_row is None:
                     raise HTTPException(status_code=404, detail="Task not found")
             if payload.paper_id is not None:
+                # Papers stay visible across users when NULL-owned (system papers).
                 paper_row = await conn.fetchrow(
-                    "SELECT id FROM papers WHERE id = $1 FOR UPDATE",
+                    "SELECT id FROM papers WHERE id = $1 "
+                    "AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2) FOR UPDATE",
                     payload.paper_id,
+                    user_id,
                 )
                 if paper_row is None:
                     raise HTTPException(status_code=404, detail="Paper not found")
@@ -200,12 +226,13 @@ async def log_focus_session(
             if payload.task_id is not None:
                 await conn.execute(
                     "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
-                    "updated_at = NOW() WHERE id = $2",
+                    "updated_at = NOW() WHERE id = $2 "
+                    "AND user_id IS NOT DISTINCT FROM $3",
                     payload.duration_hours,
                     payload.task_id,
+                    user_id,
                 )
             if payload.paper_id is not None:
-                user_id = await current_user_id_or_none(request)
                 await _upsert_paper_user_state(
                     conn,
                     payload.paper_id,
@@ -214,7 +241,7 @@ async def log_focus_session(
                     on_conflict="update_state_when_inbox_or_to_read",
                 )
             # Atomic upsert — ON CONFLICT handles concurrent inserts safely.
-            _user_id = await current_user_id_or_none(request)
+            _user_id = user_id
             await conn.execute(
                 """INSERT INTO daily_log (user_id, log_date, focus_hours)
                 VALUES ($1, CURRENT_DATE, $2)

@@ -115,8 +115,10 @@ async def generate_pulse(
 
     logger.info("pulse.generate: enqueueing job")
     jarvis_job_id = str(uuid.uuid4())
-    # allow-user-id-none: system-level cron job
-    await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=None)
+    # Phase 2 WS-2D: pass caller user_id so the resulting deck is owned by the
+    # user that clicked "generate Pulse". Pre-WS-2A this was a system-wide
+    # deck (incorrect once auth resolver returns real IDs).
+    await KIND_TO_TASK["pulse.generate"].defer_async(job_id=jarvis_job_id, user_id=current_uid)
     await log_audit(
         db_pool,
         action="pulse_generate_enqueued",

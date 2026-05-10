@@ -343,9 +343,12 @@ async def scan_local_pdfs(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
+    user_id = await current_user_id_or_none(request)
     jarvis_job_id = str(uuid.uuid4())
-    # allow-user-id-none: system-wide scan
-    await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=None)
+    # Phase 2 WS-2D: thread caller user_id for audit-trail attribution. The
+    # scan itself is filesystem-wide; per-user PDF dirs are deferred until
+    # multi-user PDF storage spec lands.
+    await KIND_TO_TASK["papers.scan_local"].defer_async(job_id=jarvis_job_id, user_id=user_id)
     return JobCreateResponse(job_id=jarvis_job_id, status="queued")
 
 
@@ -388,6 +391,7 @@ async def batch_process_papers(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if force:
             rows = await conn.fetch(
@@ -434,10 +438,13 @@ async def batch_process_papers(
     job_id: str | None = None
     if queued_ids:
         job_id = str(uuid.uuid4())
+        # Phase 2 WS-2D: thread caller user_id for audit-trail attribution.
+        # Re-embedding is paper-level (not per-user), but the caller identity
+        # should still flow through the job record.
         await KIND_TO_TASK["papers.batch_process"].defer_async(
             job_id=job_id,
-            user_id=None,
-            paper_ids=queued_ids,  # allow-user-id-none: batch reembed job
+            user_id=user_id,
+            paper_ids=queued_ids,
         )
 
     return {

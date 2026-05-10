@@ -220,7 +220,10 @@ async def poll_now(
     from jarvis_common.task_registry import KIND_TO_TASK
 
     logger.info("zotero.poll: enqueueing sync job")
+    user_id = await current_user_id_or_none(request)
     jarvis_job_id = str(uuid.uuid4())
-    # allow-user-id-none: system-wide cron
-    await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(job_id=jarvis_job_id, user_id=None)
+    # Phase 2 WS-2D: thread caller user_id so per-user paper attribution works
+    # in multi-user mode. (Pre-WS-2A this was annotated `system-wide cron` but
+    # this is an interactive user-triggered poll, not a cron — audit reclassify.)
+    await KIND_TO_TASK["zotero.sync_from_zotero"].defer_async(job_id=jarvis_job_id, user_id=user_id)
     return JobEnqueuedResponse(job_id=jarvis_job_id, status="queued")
