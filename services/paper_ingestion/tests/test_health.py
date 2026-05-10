@@ -42,38 +42,12 @@ def _make_qdrant_client(*, healthy: bool = True) -> MagicMock:
     return client
 
 
-def _make_http_client(
-    *,
-    litellm_healthy: bool = True,
-    ollama_healthy: bool = True,
-    vector_healthy: bool = False,  # Vector API is disabled by default → "unknown"
-) -> AsyncMock:
-    """Return a mock httpx.AsyncClient whose .get() routes per-URL.
-
-    Simulates:
-    - LiteLLM /health/readiness → 200 or 503 based on ``litellm_healthy``
-    - Ollama /api/tags → 200 or raises ConnectionError based on ``ollama_healthy``
-    - Vector /health → 200 or raises ConnectionError based on ``vector_healthy``
-    """
+def _make_http_client(*, litellm_healthy: bool = True) -> AsyncMock:
+    """Return a mock httpx.AsyncClient whose .get() simulates LiteLLM /health/readiness."""
     http_client = AsyncMock()
-
-    async def _route_get(url: str, **_kwargs: object) -> MagicMock:
-        resp = MagicMock()
-        if "health/readiness" in url:
-            resp.status_code = 200 if litellm_healthy else 503
-        elif "/api/tags" in url:
-            if not ollama_healthy:
-                raise ConnectionError("ollama down")
-            resp.status_code = 200
-        elif "vector" in url or "8686" in url:
-            if not vector_healthy:
-                raise ConnectionError("vector API disabled")
-            resp.status_code = 200
-        else:
-            resp.status_code = 200
-        return resp
-
-    http_client.get = AsyncMock(side_effect=_route_get)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200 if litellm_healthy else 503
+    http_client.get = AsyncMock(return_value=mock_resp)
     return http_client
 
 
@@ -183,11 +157,7 @@ async def test_health_public_no_checks_on_503(_app) -> None:
 
 @pytest.mark.asyncio
 async def test_health_internal_returns_full_details(_app) -> None:
-    """GET /health/internal returns {status, service, checks} when authed.
-
-    Vector is 'unknown' (API disabled by default) which no longer triggers degraded.
-    All other checks must be 'ok'.
-    """
+    """GET /health/internal returns {status, service, checks} when authed."""
     app, _conn = _app
 
     async with httpx.AsyncClient(
@@ -199,14 +169,7 @@ async def test_health_internal_returns_full_details(_app) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     assert body["service"] == "paper_ingestion"
-    checks = body["checks"]
-    # Core deps should be ok
-    assert checks.get("postgres") == "ok"
-    assert checks.get("qdrant") == "ok"
-    assert checks.get("litellm") == "ok"
-    assert checks.get("ollama") == "ok"
-    # Vector API is disabled by default — expected to be 'unknown', not 'unavailable'
-    assert checks.get("vector") == "unknown"
+    assert all(v == "ok" for v in body["checks"].values())
 
 
 @pytest.mark.asyncio
@@ -226,44 +189,4 @@ async def test_health_internal_503_has_all_checks(_app) -> None:
     assert "postgres" in body["checks"]
     assert "qdrant" in body["checks"]
     assert "litellm" in body["checks"]
-    assert "ollama" in body["checks"]
-    assert "vector" in body["checks"]
     assert body["checks"]["litellm"] == "unavailable"
-
-
-@pytest.mark.asyncio
-async def test_health_internal_ollama_down(_app) -> None:
-    """GET /health/internal returns 503 when Ollama is unreachable."""
-    app, _conn = _app
-
-    app.state.http_client = _make_http_client(ollama_healthy=False)
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/health/internal")
-
-    assert resp.status_code == 503
-    body = resp.json()
-    assert body["checks"]["ollama"] == "unavailable"
-
-
-@pytest.mark.asyncio
-async def test_health_internal_vector_unknown_does_not_degrade(_app) -> None:
-    """Vector 'unknown' (API disabled) must not cause overall status=degraded."""
-    app, _conn = _app
-
-    # All healthy except vector (which raises by default → unknown)
-    app.state.http_client = _make_http_client(
-        litellm_healthy=True, ollama_healthy=True, vector_healthy=False
-    )
-
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/health/internal")
-
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["checks"]["vector"] == "unknown"

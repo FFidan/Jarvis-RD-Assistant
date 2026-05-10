@@ -1,4 +1,5 @@
 import { Link, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   Home,
   Sun,
@@ -19,13 +20,13 @@ import {
   LogOut,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { checkHealth } from '@/lib/api';
 import { useUIStore } from '@/stores/ui-store';
 import { useAuthStore } from '@/stores/auth-store';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { BrandMark } from '@/components/layout/BrandMark';
-import { HealthDots } from '@/components/shared/HealthDots';
 
 const navItems = [
   { path: '/', label: 'Home', icon: Home },
@@ -53,6 +54,18 @@ export function Sidebar() {
   const { sidebarCollapsed, toggleSidebar } = useUIStore();
   const { logout, user } = useAuthStore();
   const isAdmin = user?.role === 'admin';
+
+  const { data: paperIngestionHealthy } = useQuery({
+    queryKey: ['health', 'paper_ingestion'],
+    queryFn: () => checkHealth('/health/paper_ingestion'),
+    refetchInterval: 30_000,
+  });
+
+  const { data: learningEngineHealthy } = useQuery({
+    queryKey: ['health', 'learning_engine'],
+    queryFn: () => checkHealth('/health/learning_engine'),
+    refetchInterval: 30_000,
+  });
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -114,7 +127,24 @@ export function Sidebar() {
 
         {/* Footer: service health + logout */}
         <div className="p-3 space-y-2">
-          <HealthDots compact={sidebarCollapsed} />
+          {!sidebarCollapsed && (
+            <div className="space-y-1 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span className={cn('h-2 w-2 rounded-full', paperIngestionHealthy ? 'bg-green-500' : 'bg-red-500')} />
+                <span>Paper Ingestion</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={cn('h-2 w-2 rounded-full', learningEngineHealthy ? 'bg-green-500' : 'bg-red-500')} />
+                <span>Learning Engine</span>
+              </div>
+            </div>
+          )}
+          {sidebarCollapsed && (
+            <div className="flex justify-center gap-1">
+              <span className={cn('h-2 w-2 rounded-full', paperIngestionHealthy ? 'bg-green-500' : 'bg-red-500')} />
+              <span className={cn('h-2 w-2 rounded-full', learningEngineHealthy ? 'bg-green-500' : 'bg-red-500')} />
+            </div>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size={sidebarCollapsed ? 'icon' : 'sm'} onClick={logout} className="w-full">
