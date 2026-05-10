@@ -1,9 +1,11 @@
 """API key authentication shared across JARVIS services."""
 
 import hmac
+import ipaddress
 import logging
 import os
 
+import asyncpg
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
@@ -190,6 +192,148 @@ def assert_multi_tenant_not_implemented() -> None:
     raise NotImplementedError(
         "no authenticated user available; route requires a session or owner identity"
     )
+
+
+# ---------------------------------------------------------------------------
+# X-Owner-User-Id override — Sprint A (Telegram per-user orchestration)
+# ---------------------------------------------------------------------------
+
+_OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"
+_DEFAULT_OWNER_CIDRS = "127.0.0.0/8,172.16.0.0/12"
+
+
+def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Parse ``OWNER_OVERRIDE_ALLOWED_CIDRS`` env var into network objects.
+
+    Falls back to the default loopback + docker-bridge CIDR list when the
+    variable is unset or empty.
+    """
+    raw = os.environ.get("OWNER_OVERRIDE_ALLOWED_CIDRS", _DEFAULT_OWNER_CIDRS)
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("OWNER_OVERRIDE_ALLOWED_CIDRS: invalid CIDR %r — skipping", part)
+    return networks
+
+
+def _ip_in_allowlist(ip_str: str | None) -> bool:
+    """Return True when *ip_str* falls within one of the allowed CIDRs."""
+    if not ip_str:
+        return False
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    for net in _parse_allowed_networks():
+        if addr in net:
+            return True
+    return False
+
+
+async def current_user_id_with_owner_override(
+    request: Request,
+    api_key: str | None = Depends(_api_key_header),
+) -> int | None:
+    """Resolve the effective user ID for Telegram-bot orchestrator calls.
+
+    Priority order:
+    1. ``request.state.user_id`` set by session middleware (browser session).
+    2. ``X-Owner-User-Id`` header — trusted **only** when ALL three guards pass:
+       a. The request bears a valid ``JARVIS_API_KEY`` (same check as
+          :func:`verify_api_key`).
+       b. The source IP is within the allowlist (loopback + docker-bridge by
+          default; configurable via ``OWNER_OVERRIDE_ALLOWED_CIDRS``).
+       c. The supplied ``user_id`` value is an integer that exists in the
+          ``users`` table.
+
+    Returns ``None`` when no identity can be resolved (caller may be an
+    unauthenticated health-check or a bot call without a pairing).
+
+    Raises ``HTTPException(403)`` when the header is present but any of the
+    three guards fails — this surfaces a misconfiguration loudly rather than
+    silently falling back to ``None``.
+    """
+    # 1. Session-authenticated caller wins.
+    uid = _resolve_request_user_id(request)
+    if uid is not None:
+        return uid
+
+    # 2. X-Owner-User-Id override path.
+    raw_override = request.headers.get(_OWNER_OVERRIDE_HEADER)
+    if raw_override is None:
+        return None
+
+    # Guard (a): valid API key required.
+    jarvis_api_key = _CACHED_API_KEY
+    if not jarvis_api_key or not hmac.compare_digest(api_key or "", jarvis_api_key):
+        logger.warning(
+            "X-Owner-User-Id header present but API key check failed from %s",
+            request.client.host if request.client else "unknown",
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="X-Owner-User-Id requires a valid X-API-Key",
+        )
+
+    # Guard (b): source IP must be in the allowlist.
+    client_ip = request.client.host if request.client else None
+    if not _ip_in_allowlist(client_ip):
+        logger.warning(
+            "X-Owner-User-Id header rejected: IP %s not in allowlist",
+            client_ip,
+        )
+        raise HTTPException(
+            status_code=403,
+            detail="X-Owner-User-Id not allowed from this source IP",
+        )
+
+    # Parse the user_id value.
+    try:
+        override_uid = int(raw_override)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=403,
+            detail="X-Owner-User-Id must be an integer",
+        ) from None
+
+    # Guard (c): user_id must exist in the users table.
+    # We access the DB pool via app.state — same pattern as other auth helpers.
+    try:
+        pool: asyncpg.Pool | None = getattr(getattr(request, "app", None), "state", None)
+        pool = getattr(pool, "db_pool", None) if pool is not None else None
+        if pool is None:
+            raise HTTPException(
+                status_code=503,
+                detail="DB pool unavailable for X-Owner-User-Id validation",
+            )
+        exists = await pool.fetchval(
+            "SELECT 1 FROM users WHERE id = $1 AND deleted_at IS NULL",
+            override_uid,
+        )
+        if not exists:
+            logger.warning(
+                "X-Owner-User-Id user_id=%d does not exist or is deleted",
+                override_uid,
+            )
+            raise HTTPException(
+                status_code=403,
+                detail="X-Owner-User-Id references unknown user",
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("DB error during X-Owner-User-Id validation")
+        raise HTTPException(
+            status_code=503,
+            detail="DB error validating X-Owner-User-Id",
+        ) from None
+
+    return override_uid
 
 
 def single_tenant_user_id() -> None:  # type: ignore[return]
