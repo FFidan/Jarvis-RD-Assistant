@@ -27,7 +27,6 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
-from jarvis_common.library import add_to_library
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
@@ -239,21 +238,13 @@ async def search_papers(
         deduped = _dedup_papers(interleaved)
 
     # Upsert into DB (per original /api/search behavior).
-    # Sprint B canonical-corpus: insert canonical, then add to the caller's
-    # user_library so the manually-searched paper appears in *their* feed.
+    # WS-2D: attribute saved papers to caller (`user_initiated` discovery).
     user_id = await current_user_id_or_none(request)
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
             paper.discovery_origin = "user_initiated"
-            row = await upsert_paper(conn, paper, discovered_by=user_id)
-            if user_id is not None:
-                await add_to_library(
-                    conn,
-                    user_id=user_id,
-                    paper_id=row["id"],
-                    added_via="manual_save",
-                )
+            row = await upsert_paper(conn, paper, user_id=user_id)
             saved_results.append(row_to_paper_response(row))
 
     # Build per_source_counts from deduped results

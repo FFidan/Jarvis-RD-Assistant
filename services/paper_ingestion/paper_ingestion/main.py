@@ -565,7 +565,34 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
         logger.warning("Health check: LiteLLM unavailable", exc_info=True)
         checks["litellm"] = "unavailable"
 
-    status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    # Ollama
+    try:
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+        resp = await asyncio.wait_for(
+            request.app.state.http_client.get(f"{ollama_url}/api/tags"),
+            timeout=5.0,
+        )
+        checks["ollama"] = "ok" if resp.status_code == 200 else "unavailable"
+    except Exception:
+        logger.warning("Health check: Ollama unavailable", exc_info=True)
+        checks["ollama"] = "unavailable"
+
+    # Vector sidecar — probed via its internal API; API is disabled in production
+    # so we attempt the connection and report "unknown" on any failure rather than
+    # "unavailable" (which would drag overall status to "degraded").
+    try:
+        vector_url = os.environ.get("VECTOR_API_URL", "http://vector:8686")
+        resp = await asyncio.wait_for(
+            request.app.state.http_client.get(f"{vector_url}/health"),
+            timeout=3.0,
+        )
+        checks["vector"] = "ok" if resp.status_code == 200 else "unknown"
+    except Exception:
+        # Vector API is disabled by default; treat as unknown, not degraded
+        checks["vector"] = "unknown"
+
+    # "unknown" (e.g. vector with API disabled) does not trigger degraded status
+    status = "ok" if all(v in ("ok", "unknown") for v in checks.values()) else "degraded"
     return status, checks
 
 

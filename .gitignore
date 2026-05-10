@@ -54,7 +54,7 @@ n8n/credentials/
 
 # Logs
 *.log
-/logs/
+logs/
 
 # Testing
 .pytest_cache/

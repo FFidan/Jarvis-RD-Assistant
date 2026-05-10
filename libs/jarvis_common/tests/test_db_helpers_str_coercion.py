@@ -14,43 +14,37 @@ from fastapi import HTTPException
 from jarvis_common.db_helpers import assert_paper_ownership
 
 
-def _make_conn(
-    discovered_by_value: int | str | None,
-    *,
-    in_library: bool = False,
-) -> AsyncMock:
-    """Return a mock asyncpg Connection.
-
-    Sprint B canonical-corpus: ``assert_paper_ownership`` first reads
-    ``papers.discovered_by`` (audit column). If that matches the caller or
-    is NULL (system), access is allowed. Otherwise the helper checks
-    ``user_library`` membership for a 403/200 split.
-    """
+def _make_conn(user_id_value: int | str | None) -> AsyncMock:
+    """Return a mock asyncpg Connection whose fetchrow returns user_id_value."""
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"discovered_by": discovered_by_value}
-    conn.fetchval.return_value = 1 if in_library else None
+    conn.fetchrow.return_value = {"user_id": user_id_value}
     return conn
 
 
 @pytest.mark.asyncio
 async def test_assert_paper_ownership_uses_string_coercion():
-    """discovered_by=42 (int from DB) and user_id='42' (str from caller) must not raise."""
-    conn = _make_conn(discovered_by_value=42)  # DB returns int
+    """paper_owner=42 (int from DB) and user_id='42' (str from caller) must not raise.
+
+    H18: assert_paper_ownership must use str() coercion on both sides so that
+    asyncpg int vs caller str mismatches don't result in a false 403.
+    """
+    conn = _make_conn(user_id_value=42)  # DB returns int
     # Should not raise — str(42) == str("42")
     await assert_paper_ownership(conn, paper_id=1, user_id="42")  # type: ignore[arg-type]
 
 
 @pytest.mark.asyncio
 async def test_assert_paper_ownership_int_int_match():
-    """Same type comparison (int==int) on discovered_by still works."""
-    conn = _make_conn(discovered_by_value=42)
+    """Same type comparison (int==int) must still work after the fix."""
+    conn = _make_conn(user_id_value=42)
+    # Should not raise
     await assert_paper_ownership(conn, paper_id=1, user_id=42)
 
 
 @pytest.mark.asyncio
 async def test_assert_paper_ownership_str_str_mismatch_raises_403():
-    """Different discoverer + paper not in caller's library → 403."""
-    conn = _make_conn(discovered_by_value=99, in_library=False)
+    """Different owners must still raise 403."""
+    conn = _make_conn(user_id_value=99)
     with pytest.raises(HTTPException) as exc_info:
         await assert_paper_ownership(conn, paper_id=1, user_id=42)
     assert exc_info.value.status_code == 403
@@ -58,15 +52,9 @@ async def test_assert_paper_ownership_str_str_mismatch_raises_403():
 
 @pytest.mark.asyncio
 async def test_assert_paper_ownership_null_owner_allows_all():
-    """System-discovered papers (discovered_by=NULL) remain freely accessible."""
-    conn = _make_conn(discovered_by_value=None)
-    await assert_paper_ownership(conn, paper_id=1, user_id=42)
-
-
-@pytest.mark.asyncio
-async def test_assert_paper_ownership_in_library_grants_access():
-    """Paper discovered by user A but in user B's library → user B has access."""
-    conn = _make_conn(discovered_by_value=99, in_library=True)
+    """System-owned papers (user_id=NULL) must be accessible to any caller."""
+    conn = _make_conn(user_id_value=None)
+    # Should not raise — NULL owner = system-owned, accessible to all
     await assert_paper_ownership(conn, paper_id=1, user_id=42)
 
 

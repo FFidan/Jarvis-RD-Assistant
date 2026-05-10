@@ -58,35 +58,23 @@ async def _send(bot: Bot, chat_id: int, text: str, **kwargs) -> None:
         logger.exception("Failed to send Pulse message")
 
 
-async def _deliver_pulse_to_chat(
+async def run_research_pulse(
     http_client: httpx.AsyncClient,
+    db_pool: asyncpg.Pool,
     bot: Bot,
     config: BotConfig,
-    chat_id: int,
-    user_id: int | None = None,
 ) -> None:
-    """Fetch today's Pulse deck and deliver to a single chat.
+    """Fetch today's Pulse deck and deliver the top cards to Telegram."""
+    from telegram_bot.owner import resolve_owner_chat_id
 
-    Parameters
-    ----------
-    http_client : httpx.AsyncClient
-        Shared HTTP client.
-    bot : Bot
-        Telegram bot instance.
-    config : BotConfig
-        Bot configuration.
-    chat_id : int
-        Target Telegram chat ID.
-    user_id : int | None
-        DB user PK. When set, adds ``X-Owner-User-Id`` header so the backend
-        returns per-user Pulse data.
-    """
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-    if user_id is not None:
-        headers["X-Owner-User-Id"] = str(user_id)
+    owner = await resolve_owner_chat_id(db_pool, config)
+    if owner is None:
+        logger.info("Skipping research pulse: no telegram owner paired")
+        return
 
+    headers = (
+        {"X-API-Key": config.jarvis_api_key.get_secret_value()} if config.jarvis_api_key else {}
+    )
     try:
         resp = await http_client.get(
             f"{config.paper_ingestion_url}/api/pulse/today",
@@ -99,28 +87,28 @@ async def _deliver_pulse_to_chat(
         if exc.response is not None and exc.response.status_code == 404:
             await _send(
                 bot,
-                chat_id,
+                owner,
                 "\U0001f4ed No Pulse deck yet — run /pulse_now to generate one.",
             )
             return
-        logger.warning("Pulse fetch failed for chat_id=%d: %s", chat_id, exc)
-        await _send(bot, chat_id, "⚠️ Pulse fetch failed — try again later.")
+        logger.warning("Pulse fetch failed: %s", exc)
+        await _send(bot, owner, "\u26a0\ufe0f Pulse fetch failed — try again later.")
         return
     except Exception:  # noqa: BLE001 — top-level catch-all
-        logger.exception("Unexpected error fetching Pulse deck for chat_id=%d", chat_id)
-        await _send(bot, chat_id, "⚠️ Pulse fetch failed — try again later.")
+        logger.exception("Unexpected error fetching Pulse deck")
+        await _send(bot, owner, "\u26a0\ufe0f Pulse fetch failed — try again later.")
         return
 
     cards = deck.get("cards") or []
     if not cards:
         await _send(
             bot,
-            chat_id,
+            owner,
             "\U0001f4ed No Pulse cards today — run /pulse_now to generate a fresh deck.",
         )
         return
 
-    await _send(bot, chat_id, f"\U0001f4e1 <b>Pulse — {len(cards)} scored paper(s)</b>")
+    await _send(bot, owner, f"\U0001f4e1 <b>Pulse — {len(cards)} scored paper(s)</b>")
     for card in cards[:PULSE_TELEGRAM_TOP_N]:
         paper_id = card.get("paper_id")
         if paper_id is None:
@@ -134,35 +122,7 @@ async def _deliver_pulse_to_chat(
         }
         await _send(
             bot,
-            chat_id,
+            owner,
             truncate(format_paper_card(paper)),
             reply_markup=_pulse_keyboard(int(paper_id)),
         )
-
-
-async def run_research_pulse(
-    http_client: httpx.AsyncClient,
-    db_pool: asyncpg.Pool,
-    bot: Bot,
-    config: BotConfig,
-) -> None:
-    """Fetch today's Pulse deck and deliver the top cards to Telegram.
-
-    Sprint A: iterates ``telegram_user_pairings`` and delivers per-user Pulse
-    by sending ``X-Owner-User-Id`` + ``X-API-Key`` headers to the backend.
-    Falls back to the legacy single-tenant owner when no per-user pairings exist.
-    """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
-
-    pairings = await list_user_pairings(db_pool)
-    if pairings:
-        for pairing in pairings:
-            await _deliver_pulse_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
-        return
-
-    # Legacy single-tenant fallback
-    owner = await resolve_owner_chat_id(db_pool, config)
-    if owner is None:
-        logger.info("Skipping research pulse: no telegram owner paired")
-        return
-    await _deliver_pulse_to_chat(http_client, bot, config, owner)

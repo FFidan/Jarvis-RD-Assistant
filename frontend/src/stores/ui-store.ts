@@ -12,15 +12,12 @@ interface UIState {
   paperDetailNoteDismissed: boolean;
   setupBannerDismissed: boolean;
   heroMode: HeroMode;
-  /** Last-used preset id on the Logs Events tab. Empty string = no preset. */
-  logsPreset: string;
   toggleSidebar: () => void;
   setSelectedPaperId: (id: number | null) => void;
   dismissChecklist: () => void;
   setPaperDetailNoteDismissed: (value: boolean) => void;
   dismissSetupBanner: () => void;
   setHeroMode: (mode: HeroMode) => void;
-  setLogsPreset: (id: string) => void;
 }
 
 export const useUIStore = create<UIState>()(
@@ -32,7 +29,6 @@ export const useUIStore = create<UIState>()(
       paperDetailNoteDismissed: false,
       setupBannerDismissed: false,
       heroMode: 'pulse',
-      logsPreset: '',
 
       toggleSidebar() {
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed }));
@@ -52,9 +48,6 @@ export const useUIStore = create<UIState>()(
       setHeroMode(mode: HeroMode) {
         set({ heroMode: mode });
       },
-      setLogsPreset(id: string) {
-        set({ logsPreset: id });
-      },
     }),
     {
       name: UI_STORE_KEY,
@@ -63,7 +56,6 @@ export const useUIStore = create<UIState>()(
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,
         setupBannerDismissed: state.setupBannerDismissed,
         heroMode: state.heroMode,
-        logsPreset: state.logsPreset,
       }),
     },
   ),

@@ -102,11 +102,7 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     # 69: Phase 2 WS-2A auth foundation (users / magic_link_tokens / sessions) —
     #      applied by runtime runner so first-boot installs get the schema lazily.
     # 70: Phase 2 WS-2D multi-tenant user_id columns on remaining tables — same.
-    # 71: Sprint A telegram_pairing_tokens + telegram_user_pairings — applied by
-    #      runtime runner on existing installs (new tables only, no column changes).
-    # 72: Sprint B canonical-corpus refactor (user_library, papers.discovered_by rename) —
-    #      applied at runtime on existing installs; init.sql bake-in is a separate pass.
-    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72}
+    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (

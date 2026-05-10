@@ -143,6 +143,86 @@ export async function checkHealth(path: string): Promise<boolean> {
   }
 }
 
+export type ServiceHealthStatus = 'ok' | 'degraded' | 'down' | 'unknown';
+
+export interface ServiceHealth {
+  name: string;
+  label: string;
+  status: ServiceHealthStatus;
+}
+
+export interface StackHealthSummary {
+  services: ServiceHealth[];
+  /** Number of services with status 'degraded' */
+  degradedCount: number;
+  /** Number of services with status 'down' */
+  downCount: number;
+  /** Overall rollup: ok / degraded / down */
+  overall: ServiceHealthStatus;
+}
+
+/**
+ * Fetch full health status for all stack components.
+ *
+ * Calls public endpoints for service-level status (paper_ingestion,
+ * learning_engine) and the authenticated internal endpoint for
+ * per-dependency breakdown (postgres, qdrant, ollama, litellm, vector).
+ *
+ * Individual fetch failures are mapped to 'down' so a single unreachable
+ * service never throws — callers always get a StackHealthSummary.
+ */
+export async function fetchStackHealth(): Promise<StackHealthSummary> {
+  // Dependency statuses from paper_ingestion internal health endpoint
+  const depLabels: Record<string, string> = {
+    postgres: 'PostgreSQL',
+    qdrant: 'Qdrant',
+    litellm: 'LiteLLM',
+    ollama: 'Ollama',
+    vector: 'Vector',
+  };
+
+  let depChecks: Record<string, string> = {};
+  try {
+    const internal = await apiFetch<{ status: string; checks: Record<string, string> }>(
+      '/health/paper_ingestion/internal',
+    );
+    depChecks = internal.checks ?? {};
+  } catch {
+    // If internal endpoint is unreachable, mark all deps as unknown
+    for (const key of Object.keys(depLabels)) depChecks[key] = 'unknown';
+  }
+
+  // Service-level status from public health endpoints
+  const [piOk, leOk] = await Promise.all([
+    checkHealth('/health/paper_ingestion'),
+    checkHealth('/health/learning_engine'),
+  ]);
+
+  const toStatus = (raw: string | undefined): ServiceHealthStatus => {
+    if (raw === 'ok') return 'ok';
+    if (raw === 'unknown') return 'unknown';
+    if (raw === 'unavailable') return 'down';
+    return 'unknown';
+  };
+
+  const services: ServiceHealth[] = [
+    { name: 'paper_ingestion', label: 'Paper Ingestion', status: piOk ? 'ok' : 'down' },
+    { name: 'learning_engine', label: 'Learning Engine', status: leOk ? 'ok' : 'down' },
+    { name: 'postgres', label: 'PostgreSQL', status: toStatus(depChecks['postgres']) },
+    { name: 'qdrant', label: 'Qdrant', status: toStatus(depChecks['qdrant']) },
+    { name: 'ollama', label: 'Ollama', status: toStatus(depChecks['ollama']) },
+    { name: 'litellm', label: 'LiteLLM', status: toStatus(depChecks['litellm']) },
+    { name: 'vector', label: 'Vector', status: toStatus(depChecks['vector']) },
+  ];
+
+  const degradedCount = services.filter((s) => s.status === 'degraded').length;
+  const downCount = services.filter((s) => s.status === 'down').length;
+  const overall: ServiceHealthStatus =
+    downCount > 0 ? 'down' : degradedCount > 0 ? 'degraded' : 'ok';
+
+  return { services, degradedCount, downCount, overall };
+}
+
 // --- Imports for types ---
 import type {
   DashboardMetrics,
@@ -372,32 +452,6 @@ export const unpairTelegram = () =>
     method: 'PUT',
     body: JSON.stringify({ key: 'telegram.owner_chat_id', value: null }),
   });
-
-// --- Per-user multi-tenant Telegram pairing (Sprint A) ---
-
-export interface TelegramPairTokenResponse {
-  token: string;
-  expires_at: string;
-}
-
-export interface UserTelegramPairingStatus {
-  paired: boolean;
-  chat_id: number | null;
-  telegram_username: string | null;
-  paired_at: string | null;
-}
-
-/** Issue a 15-minute per-user pairing token. Requires an authenticated session. */
-export const requestTelegramPairToken = () =>
-  apiFetch<TelegramPairTokenResponse>('/api/telegram/pair-token', { method: 'POST' });
-
-/** Return the current user's Telegram pairing status from telegram_user_pairings. */
-export const getTelegramPairing = () =>
-  apiFetch<UserTelegramPairingStatus>('/api/telegram/pairing');
-
-/** Remove the current user's Telegram pairing. */
-export const removeTelegramPairing = () =>
-  apiFetch<void>('/api/telegram/pairing', { method: 'DELETE' });
 
 export const markSetupCompleted = () =>
   apiFetch<void>('/api/config/setup.completed', {

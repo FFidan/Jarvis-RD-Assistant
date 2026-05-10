@@ -361,13 +361,10 @@ async def test_create_job_skips_ownership_check_in_single_tenant_mode():
 
 @pytest.mark.asyncio
 async def test_create_job_403_when_paper_owned_by_other_user():
-    """Sprint B: caller=99, paper.discovered_by=42 + caller not in library → 403."""
+    """WS-6B-α: caller=99, paper.user_id=42 → assert_paper_ownership raises 403."""
     _r, request_model, pool, conn, handlers = _build_factory_with_owner_hook()
-    # Sprint B canonical-corpus: the ownership probe reads ``discovered_by``
-    # then falls back to a ``user_library`` membership check. Return a row
-    # discovered by user 42 and force the library fetchval probe to MISS.
-    conn.fetchrow.return_value = {"discovered_by": 42}
-    conn.fetchval.return_value = None  # not in caller's library
+    # The ownership check fetches user_id from papers — return a row owned by 42.
+    conn.fetchrow.return_value = {"user_id": 42}
 
     fake_task = AsyncMock()
     fake_task.defer_async = AsyncMock(return_value=None)

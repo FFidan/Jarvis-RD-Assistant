@@ -82,15 +82,15 @@ async def test_run_pulse_wrapper_skips_when_disabled(scheduler_module):
 
 @pytest.mark.asyncio
 async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
-    """Sprint B / Wave-2: ``run_pulse_wrapper`` fans out one defer per
-    active user (no legacy ``user_id=None`` system fallback).
+    """Group G (W2-7): run_pulse_wrapper defers via KIND_TO_TASK["pulse.generate"].
+
+    Asserts defer_async was called with a JARVIS UUID under ``job_id`` and
+    ``user_id=None`` (system call).
     """
     import jarvis_common.task_registry as task_registry
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
-    # _list_active_users uses conn.fetch — return one user.
-    conn.fetch.return_value = [{"id": 1}]
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
     mock_pulse_task = MagicMock()
@@ -103,7 +103,7 @@ async def test_run_pulse_wrapper_runs_when_enabled(scheduler_module):
     mock_pulse_defer.assert_awaited_once()
     assert mock_pulse_defer.await_args is not None
     call_kwargs = mock_pulse_defer.await_args.kwargs
-    assert call_kwargs["user_id"] == 1
+    assert call_kwargs["user_id"] is None
     assert isinstance(call_kwargs["job_id"], str)
     assert len(call_kwargs["job_id"]) == 36  # uuid4 string form
 
@@ -150,12 +150,15 @@ async def test_run_pulse_classifier_training_wrapper_skips_when_disabled(schedul
 
 @pytest.mark.asyncio
 async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(scheduler_module):
-    """Sprint B / Wave-2: pulse.train_classifier defers per active user."""
+    """B.4 Step 3: pulse.train_classifier now defers via KIND_TO_TASK.
+
+    Asserts defer_async was called with a JARVIS UUID under ``job_id`` and
+    ``user_id=None`` (system call).
+    """
     import jarvis_common.task_registry as task_registry
 
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = FakeRecord({"value": True})
-    conn.fetch.return_value = [{"id": 99}]
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
     mock_train_task = MagicMock()
@@ -168,18 +171,22 @@ async def test_run_pulse_classifier_training_wrapper_defers_when_enabled(schedul
     mock_train_defer.assert_awaited_once()
     assert mock_train_defer.await_args is not None
     call_kwargs = mock_train_defer.await_args.kwargs
-    assert call_kwargs["user_id"] == 99
+    assert call_kwargs["user_id"] is None
     assert isinstance(call_kwargs["job_id"], str)
     assert len(call_kwargs["job_id"]) == 36  # uuid4 string form
 
 
 @pytest.mark.asyncio
 async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module):
-    """Sprint B / Wave-2: digest.weekly defers per active user with days=7."""
+    """B.4 Step 3 canary: digest.weekly now defers via KIND_TO_TASK["digest.weekly"].
+
+    Asserts defer_async was called with the ``days=7`` payload from the
+    scheduler wrapper and a JARVIS UUID under ``job_id`` (the SSE bridge keys
+    on this).
+    """
     import jarvis_common.task_registry as task_registry
 
-    pool, conn = _make_pool_and_conn()
-    conn.fetch.return_value = [{"id": 7}]
+    pool, _conn = _make_pool_and_conn()
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
     mock_digest_task = MagicMock()
@@ -193,7 +200,6 @@ async def test_run_weekly_digest_wrapper_enqueues_digest_weekly(scheduler_module
     assert mock_digest_defer.await_args is not None
     call_kwargs = mock_digest_defer.await_args.kwargs
     assert call_kwargs["days"] == 7
-    assert call_kwargs["user_id"] == 7
     # Critical SSE-bridge contract: JARVIS UUID must travel as args.job_id.
     assert isinstance(call_kwargs["job_id"], str)
     assert len(call_kwargs["job_id"]) == 36  # uuid4 string form

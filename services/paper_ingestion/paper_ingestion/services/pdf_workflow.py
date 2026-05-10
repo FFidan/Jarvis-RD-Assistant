@@ -98,28 +98,21 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
 async def upsert_paper(
     conn: ConnLike,
     paper: PaperCreate,
-    *,
-    discovered_by: int | None = None,
+    user_id: int | None = None,
 ) -> asyncpg.Record:
-    """Insert or update a canonical paper, returning the row.
+    """Insert or update a paper, returning the row.
 
-    Sprint B (canonical corpus): ``papers`` is the canonical, shared corpus
-    — there is no per-user ownership column on this table any more. Library
-    membership is recorded in ``user_library`` (see
-    :func:`jarvis_common.library.add_to_library`). Callers that want a user
-    to "have" the paper MUST follow this upsert with an ``add_to_library``
-    call.
-
-    The legacy ``papers.user_id`` column has been renamed to
-    ``papers.discovered_by`` and is now audit-only ("which user (or NULL for
-    system) first discovered this paper"). The optional ``discovered_by``
-    keyword preserves that audit trail; it is recorded on initial INSERT
-    only — on ``ON CONFLICT`` the original discoverer is preserved.
+    ``user_id`` is recorded ONLY on the initial insert. On conflict (existing
+    paper with the same ``external_id``) the original owner is preserved —
+    later interactions don't quietly transfer ownership. Pass ``None`` for
+    truly system-shared papers (cron auto-fetch, citation-graph fan-out,
+    pulse discovery); pass the caller's user_id for user-initiated upserts
+    (manual save, batch save, Zotero pull).
     """
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, pdf_url, citation_count, metadata,
-                               discovery_origin, discovered_by)
+                               discovery_origin, user_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (external_id) DO UPDATE SET
                title = EXCLUDED.title,
@@ -139,7 +132,7 @@ async def upsert_paper(
         paper.citation_count,
         paper.metadata,
         paper.discovery_origin,
-        discovered_by,
+        user_id,
     )
     if row is None:
         raise RuntimeError("upsert_paper RETURNING always yields a row")
