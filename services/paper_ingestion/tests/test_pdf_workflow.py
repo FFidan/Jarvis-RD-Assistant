@@ -60,27 +60,45 @@ async def test_run_process_pdf_returns_already_processed_without_force():
 
 
 @pytest.mark.asyncio
-async def test_run_process_pdf_raises_when_qdrant_cleanup_fails():
-    """Force-reprocessing fails clearly if old vectors cannot be removed."""
+async def test_run_process_pdf_keeps_new_chunks_when_qdrant_cleanup_fails():
+    """Force-reprocessing replaces DB chunks even if stale vector cleanup fails."""
     conn = AsyncMock()
     conn.fetchval.return_value = 2
     conn.fetch.return_value = [{"embedding_id": "vec-1"}]
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
     pool = _make_pool(conn)
+    chunks = [
+        SimpleNamespace(
+            chunk_index=0,
+            content="New chunk",
+            page_number=1,
+            start_char=0,
+            end_char=9,
+        )
+    ]
     pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(return_value=("full text", chunks, ["vec-new"]))
     embedder = MagicMock()
     embedder.qdrant.delete = AsyncMock(side_effect=RuntimeError("qdrant down"))
 
-    with pytest.raises(RuntimeError, match="Failed to clean old Qdrant vectors"):
-        await run_process_pdf(
-            paper_id=5,
-            pdf_path=Path("/tmp/paper.pdf"),
-            db_pool=pool,
-            pdf_processor=pdf_processor,
-            embedder=embedder,
-            force=True,
-        )
+    result = await run_process_pdf(
+        paper_id=5,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool,
+        pdf_processor=pdf_processor,
+        embedder=embedder,
+        force=True,
+    )
 
-    pdf_processor.process.assert_not_called()
+    assert result == {"paper_id": 5, "chunk_count": 1, "status": "processed"}
+    conn.execute.assert_any_await("DELETE FROM paper_chunks WHERE paper_id = $1", 5)
+    conn.executemany.assert_awaited_once()
+    embedder.qdrant.delete.assert_awaited_once()
 
 
 @pytest.mark.asyncio

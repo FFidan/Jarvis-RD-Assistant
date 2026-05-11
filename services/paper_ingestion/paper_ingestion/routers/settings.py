@@ -12,7 +12,7 @@ import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
-from jarvis_common.auth import require_admin, verify_api_key
+from jarvis_common.auth import current_user_id_or_none, require_admin, verify_api_key
 from jarvis_common.crypto import (
     decrypt_secret,
     encrypt_secret,
@@ -79,6 +79,7 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "zotero.api_key",
         "zotero.user_id",
         "zotero.library_type",
+        "zotero.group_id",
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
@@ -172,6 +173,7 @@ PERSONAL_KEYS: frozenset[str] = frozenset(
         "zotero.api_key",
         "zotero.user_id",
         "zotero.library_type",
+        "zotero.group_id",
         "zotero.poll_enabled",
         "zotero.poll_cron",
         "zotero.auto_push_on_star",
@@ -257,7 +259,7 @@ async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
     rewritten = 0
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT key, value FROM user_config "
+            "SELECT id, key, value FROM user_config "
             "WHERE key = ANY($1::text[]) AND value IS NOT NULL AND encrypted_value IS NULL",
             keys,
         )
@@ -280,8 +282,8 @@ async def migrate_plaintext_secrets(db_pool: asyncpg.Pool) -> int:
                 continue
             await conn.execute(
                 "UPDATE user_config SET value = NULL, encrypted_value = $2, updated_at = NOW() "
-                "WHERE key = $1",
-                row["key"],
+                "WHERE id = $1",
+                row["id"],
                 ciphertext_bytes,
             )
             rewritten += 1
@@ -411,6 +413,21 @@ def _validate_library_type(v: Any) -> None:
         raise ValueError("zotero.library_type must be 'user' or 'group'")
 
 
+def _validate_group_id(v: Any) -> None:
+    """Validate zotero.group_id — positive integer or null.
+
+    ``null`` is allowed so users can clear the field when switching back to
+    a personal library.  When ``library_type`` is ``"group"`` the backend
+    requires a non-null positive integer, but that cross-field validation is
+    enforced by :class:`~paper_ingestion.integrations.zotero_client.ZoteroClient`
+    at construction time.
+    """
+    if v is None:
+        return
+    if isinstance(v, bool) or not isinstance(v, int) or v <= 0:
+        raise ValueError("zotero.group_id must be a positive integer or null")
+
+
 async def _reload_telegram_nudges() -> None:
     """Best-effort POST to telegram_bot /internal/reload-nudges."""
     telegram_url = get_telegram_settings().url_or_none
@@ -479,6 +496,7 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.api_key": _validate_nonempty_str,
     "zotero.user_id": _validate_nonempty_str,
     "zotero.library_type": _validate_library_type,
+    "zotero.group_id": _validate_group_id,
     "zotero.poll_enabled": _validate_bool,
     "zotero.poll_cron": _validate_zotero_cron,
     "zotero.auto_push_on_star": _validate_bool,
@@ -515,7 +533,7 @@ async def _cloud_provider_key_present(provider: str, db_pool: asyncpg.Pool) -> b
     config_key = f"llm.{provider}.api_key"
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config WHERE key = $1",
+            "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
             config_key,
         )
     return bool(
@@ -585,6 +603,65 @@ def _resolve_config_value(key: str, row: dict) -> Any:
     return row.get("value")
 
 
+def _has_browser_session(request: Request) -> bool:
+    return getattr(request.state, "user_role", None) is not None
+
+
+async def _fetch_effective_config_row(
+    conn: asyncpg.Connection,
+    key: str,
+    user_id: int | None,
+) -> asyncpg.Record | None:
+    """Return caller-specific personal config with system/default fallback."""
+    scope = _classify_config_key(key)
+    if scope == "personal" and user_id is not None:
+        return await conn.fetchrow(
+            """SELECT key, value, encrypted_value, user_id
+               FROM user_config
+               WHERE key = $1 AND (user_id = $2 OR user_id IS NULL)
+               ORDER BY user_id IS NULL
+               LIMIT 1""",
+            key,
+            user_id,
+        )
+    return await conn.fetchrow(
+        """SELECT key, value, encrypted_value, user_id
+           FROM user_config
+           WHERE key = $1 AND user_id IS NULL""",
+        key,
+    )
+
+
+async def _write_config_row(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int | None,
+    key: str,
+    value: Any,
+    encrypted_value: bytes | None = None,
+) -> None:
+    if encrypted_value is not None:
+        await conn.execute(
+            """INSERT INTO user_config (user_id, key, value, encrypted_value)
+               VALUES ($1, $2, NULL, $3)
+               ON CONFLICT (user_id, key) DO UPDATE
+                   SET value = NULL, encrypted_value = $3, updated_at = NOW()""",
+            user_id,
+            key,
+            encrypted_value,
+        )
+        return
+    await conn.execute(
+        """INSERT INTO user_config (user_id, key, value)
+           VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (user_id, key) DO UPDATE
+               SET value = $3::jsonb, encrypted_value = NULL, updated_at = NOW()""",
+        user_id,
+        key,
+        value,
+    )
+
+
 @router.get("/config", response_model=list[ConfigEntry])
 @limiter.limit("60/minute")
 async def list_config(
@@ -593,14 +670,39 @@ async def list_config(
 ) -> list[ConfigEntry]:
     """Return all config entries.
 
-    Personal keys are returned for every authenticated caller.
-    System keys are returned for all callers — the frontend filters out
-    system settings for non-admin users.  No server-side data leak: all
-    sensitive values are masked/encrypted before being included in the
-    response regardless of caller role.
+    Browser users only receive personal settings unless they are admins.
+    API-key-only callers preserve the legacy single-tenant view.
     """
+    caller_user_id = await current_user_id_or_none(request)
+    browser_session = _has_browser_session(request)
+    role = getattr(request.state, "user_role", None)
+    personal_keys = sorted(PERSONAL_KEYS)
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT key, value, encrypted_value FROM user_config ORDER BY key")
+        if browser_session and role != "admin":
+            rows = await conn.fetch(
+                """SELECT DISTINCT ON (key) key, value, encrypted_value, user_id
+                   FROM user_config
+                   WHERE key = ANY($1::text[])
+                     AND (user_id = $2 OR user_id IS NULL)
+                   ORDER BY key, user_id IS NULL""",
+                personal_keys,
+                caller_user_id,
+            )
+        elif browser_session and caller_user_id is not None:
+            rows = await conn.fetch(
+                """SELECT DISTINCT ON (key) key, value, encrypted_value, user_id
+                   FROM user_config
+                   WHERE user_id IS NULL OR user_id = $1
+                   ORDER BY key, user_id IS NULL""",
+                caller_user_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT key, value, encrypted_value, user_id
+                   FROM user_config
+                   WHERE user_id IS NULL
+                   ORDER BY key"""
+            )
     return [ConfigEntry(key=r["key"], value=_resolve_config_value(r["key"], r)) for r in rows]
 
 
@@ -613,10 +715,11 @@ async def get_config(
 ) -> ConfigEntry:
     if not _is_allowed_config_key(key):
         raise HTTPException(404, f"Config key '{key}' not found")
+    if _classify_config_key(key) == "system" and _has_browser_session(request):
+        await require_admin(request)
+    caller_user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT key, value, encrypted_value FROM user_config WHERE key = $1", key
-        )
+        row = await _fetch_effective_config_row(conn, key, caller_user_id)
     if not row:
         raise HTTPException(404, f"Config key '{key}' not found")
     value = _resolve_config_value(key, row)
@@ -640,6 +743,8 @@ async def set_config(
     # enforcement — they run as the implicit single-tenant owner.
     if _classify_config_key(key) == "system":
         await require_admin(request)
+    caller_user_id = await current_user_id_or_none(request)
+    row_user_id = caller_user_id if _classify_config_key(key) == "personal" else None
 
     # Dynamic-key validators (num_ctx and thinking_disabled patterns).
     # These are checked before the static _CONFIG_VALIDATORS dict lookup since
@@ -672,7 +777,9 @@ async def set_config(
     old_pulse_cron: str | None = None
     if key == "pulse.cron":
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
+            )
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
 
@@ -697,22 +804,16 @@ async def set_config(
         # Encrypt the secret and store in encrypted_value; clear plaintext value column.
         ciphertext_bytes = encrypt_secret(str(body.value)).encode("ascii")
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO user_config (key, value, encrypted_value)
-                VALUES ($1, NULL, $2)
-                ON CONFLICT (key) DO UPDATE
-                    SET value = NULL, encrypted_value = $2, updated_at = NOW()""",
-                key,
-                ciphertext_bytes,
+            await _write_config_row(
+                conn,
+                user_id=row_user_id,
+                key=key,
+                value=None,
+                encrypted_value=ciphertext_bytes,
             )
     else:
         async with db_pool.acquire() as conn:
-            await conn.execute(
-                """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
-                ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
-                key,
-                body.value,
-            )
+            await _write_config_row(conn, user_id=row_user_id, key=key, value=body.value)
     if key == "pulse.cron":
         try:
             if scheduler is not None:
@@ -737,14 +838,19 @@ async def set_config(
                     )
                     # Roll back DB to the old cron value.
                     _rollback_sql = (
-                        "INSERT INTO user_config (key, value) VALUES ('pulse.cron', $1::jsonb)"
-                        " ON CONFLICT (key) DO UPDATE SET value = $1::jsonb, updated_at = NOW()"
+                        "INSERT INTO user_config (user_id, key, value)"
+                        " VALUES (NULL, 'pulse.cron', $1::jsonb)"
+                        " ON CONFLICT (user_id, key) DO UPDATE"
+                        " SET value = $1::jsonb, updated_at = NOW()"
                     )
                     async with db_pool.acquire() as conn:
                         if old_pulse_cron is not None:
                             await conn.execute(_rollback_sql, old_pulse_cron)
                         else:
-                            await conn.execute("DELETE FROM user_config WHERE key = 'pulse.cron'")
+                            await conn.execute(
+                                "DELETE FROM user_config "
+                                "WHERE key = 'pulse.cron' AND user_id IS NULL"
+                            )
                     # Revert the live scheduler trigger.
                     with contextlib.suppress(Exception):
                         if old_pulse_cron is not None:
@@ -981,10 +1087,9 @@ async def test_provider(
         raise HTTPException(status_code=400, detail="unsupported provider")
 
     config_key = f"llm.{provider}.api_key"
+    caller_user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config WHERE key = $1", config_key
-        )
+        row = await _fetch_effective_config_row(conn, config_key, caller_user_id)
 
     api_key: str | None = None
     if row is not None:

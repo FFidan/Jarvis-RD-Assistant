@@ -176,6 +176,7 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
                 'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda',
                 'pulse.lookback_days', 'pulse.startup_grace_seconds'
             )
+            AND user_id IS NULL
             """
         )
         cfg: dict[str, Any] = {r["key"]: r["value"] for r in config_rows}

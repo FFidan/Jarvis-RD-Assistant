@@ -236,7 +236,7 @@ For reaching JARVIS from outside your LAN, see [docs/DEPLOYMENT.md — Remote ac
 | `EMBEDDING_MODEL` | `embed` | LiteLLM alias for embedding model |
 | `EMBEDDING_MODEL_NAME` | `qwen3-embedding:0.6b` | Human-readable embedding model stored on chunk metadata |
 | `EMBEDDING_DIMENSION` | `1024` | Must match the embedding model |
-| `DASHBOARD_PASSWORD` | _(empty)_ | Dashboard login password (empty = no auth) |
+| `DASHBOARD_PASSWORD` | _(empty)_ | **Deprecated.** Magic-link auth replaced the password gate in Phase 2 (2026-05-10). This variable is ignored; use `JARVIS_API_KEY` + the `/first-run` wizard instead. |
 | `DEV_MODE` | `false` | **⚠️ Bypasses ALL authentication on every endpoint when `true`.** Only for local development. The service refuses to start with `DEV_MODE=true` if `ENVIRONMENT=production`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
 | `DASHBOARD_HOST_PORT` | `3001` | Host port for the dashboard |
@@ -278,7 +278,7 @@ The Telegram bot delivers daily paper digests, Pulse cards with 👍/👎/💾 r
 
 | Command | What it does | Rate limit | Auth |
 |---|---|---|---|
-| `/start` | Pair this chat with your JARVIS install (first use) / greet you (subsequent uses). | per-user default | Any chat; pairing code required on first use |
+| `/start` | Greet the bot and confirm connectivity. Currently authenticates against the global `TELEGRAM_CHAT_ID` env var. Sprint A will add per-user pairing via `/start <code>`. | per-user default | Chat matching `TELEGRAM_CHAT_ID` |
 | `/help` | List available commands. | per-user default | Paired chat only |
 | `/papers` | Show the latest papers in your library. | per-user default | Paired chat only |
 | `/inbox` | Show inbox papers (state='inbox') with origin-conditional 👍/👎/🗑+👎 keyboard. Maps to GET /api/papers/feed?view=inbox. | per-user default | Paired chat only |
@@ -318,7 +318,7 @@ Six cron-scheduled nudge types are delivered to the paired chat (timezone-aware,
 
 Commands are rate-limited per-user by a sliding-window decorator. `/pulse_now` additionally has a **5-minute cooldown** to protect the LLM gateway from manual refresh loops.
 
-**Security note on `TELEGRAM_CHAT_ID`:** The bot only checks this single chat ID. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. For personal use, keep the bot in a private DM. For a shared setup, add a per-user allowlist in `services/telegram_bot/telegram_bot/handlers/` (not currently supported out of the box).
+**Security note on `TELEGRAM_CHAT_ID`:** The current release uses a global `TELEGRAM_CHAT_ID` env var; all notifications go to a single chat. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. Keep the bot in a private DM for now. **Sprint A** (see `docs/plans/2026-05-10-multiuser-followup-sprints.md`) will replace `TELEGRAM_CHAT_ID` with per-user chat pairing: each user generates a pairing code in Settings and sends `/start <code>` to the bot; notifications are then routed per-user.
 
 ## Remote Access (LAN)
 
@@ -339,10 +339,9 @@ Then `docker compose up -d`. From another device, open `http://<host-lan-ip>:300
 ENVIRONMENT=production
 DEV_MODE=false
 JARVIS_API_KEY=<at least 32 random chars, e.g. openssl rand -hex 32>
-DASHBOARD_PASSWORD=<strong password>
 ```
 
-With those set the dashboard requires login and the backend API requires `X-API-Key` with timing-safe comparison. Anyone on your LAN who cannot authenticate cannot do anything. This is safe on a trusted home network. **Do not expose any of these ports to the public internet without a proper TLS reverse proxy.**
+With those set the dashboard requires magic-link login and the backend API requires `X-API-Key` with timing-safe comparison. Anyone on your LAN who cannot authenticate cannot do anything. This is safe on a trusted home network. **Do not expose any of these ports to the public internet without a proper TLS reverse proxy.**
 
 For a zero-config alternative, SSH-tunnel from your client device instead of editing compose:
 

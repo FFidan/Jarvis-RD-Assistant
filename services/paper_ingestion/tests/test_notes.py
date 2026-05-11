@@ -667,11 +667,17 @@ async def _async_user_99(_request):
 
 
 async def test_promote_note_403_for_other_user(_app, monkeypatch):
-    """WS-6B-α: promote endpoint enforces paper ownership when multi-user."""
+    """Sprint B: promote endpoint enforces canonical-corpus ownership.
+
+    Paper discovered_by=42 + caller user_id=99 + caller's user_library does
+    not contain paper → 403. The helper reads ``discovered_by`` (with legacy
+    ``user_id`` fallback) then probes ``user_library`` via fetchval.
+    """
     monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_99)
     app, conn = _app
     # First fetchrow = SELECT * FROM paper_notes WHERE id=$1 (zotero source).
-    # Second fetchrow = ownership SELECT user_id FROM papers (owner = 42).
+    # Second fetchrow = ownership SELECT discovered_by FROM papers (mock still
+    # ships ``user_id`` for backward-compat — the helper falls back to it).
     conn.fetchrow.side_effect = [
         _make_note_record(
             note_id=5,
@@ -680,8 +686,10 @@ async def test_promote_note_403_for_other_user(_app, monkeypatch):
             zotero_annotation_key="Z1",
             highlight_text="quote",
         ),
-        {"user_id": 42},  # paper owned by user 42, caller is user 99 → 403
+        {"user_id": 42},  # discoverer = 42 (legacy key, helper handles)
     ]
+    # Sprint B: force the user_library probe to MISS so the 403 fires.
+    conn.fetchval = AsyncMock(return_value=None)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"

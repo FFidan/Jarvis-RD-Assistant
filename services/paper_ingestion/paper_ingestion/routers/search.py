@@ -27,6 +27,7 @@ import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common.auth import current_user_id_or_none
 from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.library import add_to_library
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_http_client, limiter
@@ -195,7 +196,7 @@ async def search_papers(
     # Fan-out search across all available sources concurrently
     async def _search_one(
         source_name: str, plugin: Any, budget: int
-    ) -> tuple[str, list[PaperCreate]]:
+    ) -> tuple[str, list[PaperCreate], bool]:
         try:
             papers = await plugin.search(
                 body.query,
@@ -205,25 +206,18 @@ async def search_papers(
                 sort_by=body.sort_by,
                 author=body.author,
             )
-            return source_name, papers
+            return source_name, papers, False
         except Exception as exc:  # broad: heterogeneous plugins raise different exception types
             logger.warning("Source %s search failed: %s", source_name, exc, exc_info=True)
-            return source_name, []
+            return source_name, [], True
 
     raw_results = await asyncio.gather(*[_search_one(n, p, b) for n, p, b in plugins])
 
     # Collect per-source results, track errors
     per_source: dict[str, list[PaperCreate]] = {}
-    for source_name, papers in raw_results:
-        if not papers and source_name not in degraded_sources:
-            # Empty but not an exception — still record counts
-            per_source[source_name] = []
-        else:
-            per_source[source_name] = papers
-
-    # Mark sources that errored (returned empty due to exception)
-    for source_name, papers in raw_results:
-        if not papers and source_name not in per_source:
+    for source_name, papers, failed in raw_results:
+        per_source[source_name] = papers
+        if failed and source_name not in degraded_sources:
             degraded_sources.append(source_name)
 
     # Merge: date sort → sort merged list; else round-robin interleave
@@ -238,13 +232,21 @@ async def search_papers(
         deduped = _dedup_papers(interleaved)
 
     # Upsert into DB (per original /api/search behavior).
-    # WS-2D: attribute saved papers to caller (`user_initiated` discovery).
+    # Sprint B canonical-corpus: insert canonical, then add to the caller's
+    # user_library so the manually-searched paper appears in *their* feed.
     user_id = await current_user_id_or_none(request)
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
             paper.discovery_origin = "user_initiated"
-            row = await upsert_paper(conn, paper, user_id=user_id)
+            row = await upsert_paper(conn, paper, discovered_by=user_id)
+            if user_id is not None:
+                await add_to_library(
+                    conn,
+                    user_id=user_id,
+                    paper_id=row["id"],
+                    added_via="manual_save",
+                )
             saved_results.append(row_to_paper_response(row))
 
     # Build per_source_counts from deduped results

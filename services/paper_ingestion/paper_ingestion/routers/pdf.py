@@ -445,6 +445,7 @@ async def batch_process_papers(
             job_id=job_id,
             user_id=user_id,
             paper_ids=queued_ids,
+            force=force,
         )
 
     return {

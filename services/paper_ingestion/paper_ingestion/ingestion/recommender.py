@@ -137,6 +137,7 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
         " ('recommendation.liked_weight',"
         " 'recommendation.project_weight',"
         " 'recommendation.enabled')"
+        " AND user_id IS NULL"
     )
     cfg = {r["key"]: r["value"] for r in rows}
     liked = _safe_float(

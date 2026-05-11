@@ -11,6 +11,7 @@ from jarvis_common.auth import (
     assert_multi_tenant_not_implemented,
     current_user_id,
     current_user_id_or_none,
+    current_user_id_with_owner_override,
     validate_production_config,
     verify_api_key,
 )
@@ -24,6 +25,7 @@ from jarvis_common.crypto import (
 )
 from jarvis_common.db_helpers import (
     assert_paper_ownership,
+    assert_papers_ownership,
     delete_or_404,
     dynamic_update,
     escape_like,
@@ -87,6 +89,7 @@ __all__ = [
     "validate_production_config",
     "current_user_id",
     "current_user_id_or_none",
+    "current_user_id_with_owner_override",
     "assert_multi_tenant_not_implemented",
     # DRY-003: crypto helpers re-exported from jarvis_common top-level
     "encrypt_secret",
@@ -99,6 +102,7 @@ __all__ = [
     "create_limiter",
     "rate_limit_exceeded_handler",
     "assert_paper_ownership",
+    "assert_papers_ownership",
     "dynamic_update",
     "delete_or_404",
     "escape_like",

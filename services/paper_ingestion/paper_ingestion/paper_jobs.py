@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import asyncpg
 import httpx
-from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_ownership
 from jarvis_common.jobs import JobContext, JobError
 
 from paper_ingestion._state import get_services
@@ -281,7 +281,12 @@ async def _papers_batch_process_job(
     from paper_ingestion.services.pdf_workflow import run_process_pdf
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
+    user_id: int | None = payload.get("user_id")
+    force: bool = bool(payload.get("force", False))
     total = len(paper_ids)
+    if user_id is not None:
+        async with pool.acquire() as conn:
+            await assert_papers_ownership(conn, paper_ids, user_id)
 
     services = get_services()
     pdf_processor = services.pdf_processor
@@ -320,7 +325,15 @@ async def _papers_batch_process_job(
                 skipped += 1
                 continue
             sub_ctx = _SubCtx(ctx, inner_start, inner_end)
-            await run_process_pdf(paper_id, pdf_path, pool, pdf_processor, embedder, ctx=sub_ctx)
+            await run_process_pdf(
+                paper_id,
+                pdf_path,
+                pool,
+                pdf_processor,
+                embedder,
+                force=force,
+                ctx=sub_ctx,
+            )
             processed += 1
         except Exception as exc:  # noqa: BLE001
             logger.exception("Batch process failed for paper %s", paper_id)
@@ -364,7 +377,11 @@ async def _papers_batch_summarize_job(
     from paper_ingestion.services.summarization import generate_paper_summary
 
     paper_ids: list[int] = list(payload.get("paper_ids", []))
+    user_id: int | None = payload.get("user_id")
     total = len(paper_ids)
+    if user_id is not None:
+        async with pool.acquire() as conn:
+            await assert_papers_ownership(conn, paper_ids, user_id)
 
     services = get_services()
     verifier = services.verifier

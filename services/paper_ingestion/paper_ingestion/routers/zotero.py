@@ -52,14 +52,20 @@ async def test_zotero_connection(
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
+    raw_group_id = cfg.get("group_id")
+    group_id = int(raw_group_id) if raw_group_id is not None else None
 
     if not api_key or not user_id:
         return {"ok": False, "detail": "Zotero API key or user ID not configured"}
 
+    if library_type == "group" and group_id is None:
+        return {"ok": False, "detail": "Group ID is required when library type is 'group'"}
+
     client = ZoteroClient(
         api_key=str(api_key),
         user_id=str(user_id),
-        library_type=str(library_type),
+        library_type=str(library_type),  # type: ignore[arg-type]
+        group_id=group_id,
         http_client=http_client,
     )
     ok = await client.test_connection()

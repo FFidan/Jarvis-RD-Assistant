@@ -62,7 +62,7 @@ async def auth_check(
         return True
     try:
         row = await db_pool.fetchval(
-            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id'"
+            "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
         )
     except Exception:
         return False

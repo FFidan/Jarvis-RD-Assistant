@@ -391,7 +391,7 @@ verifiability over fluency.
 >   heuristics remain future polish.
 >
 > Remaining hardening work is tracked in
-> [`docs/plans/2026-04-24-post-r14-roadmap.md`](plans/2026-04-24-post-r14-roadmap.md) WS-2
+> [`docs/archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md`](archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md) WS-2
 > (anti-hallucination hardening). The aspirational requirements below remain
 > the target state.
 
@@ -596,7 +596,7 @@ captures the roadmap phasing, acceptance criteria, and attribution.
 
 **Goal.** A natural-language control plane over the JARVIS REST API. A user should be able to say *"find last week's AI safety Pulse cards I haven't rated"* and have the agent compose the right API calls, present results, and honor the anti-hallucination policy end-to-end.
 
-**Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record. See [`docs/plans/2026-04-24-post-r14-roadmap.md`](plans/2026-04-24-post-r14-roadmap.md) WS-7 for the spike scope.
+**Architectural pattern.** Agent-as-client over the existing REST surface. JARVIS services stay authoritative for data, verification, and persistence — the agent is never the system of record. See [`docs/archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md`](archive/2026-05/old-plans/2026-04-24-post-r14-roadmap.md) WS-7 for the spike scope.
 
 **Decision point.** Adopt [`NousResearch/hermes-agent`](https://github.com/NousResearch) (MIT, 2026) as-is, or build natively on LiteLLM tool-calling plus our existing prompt harness. The WS-7 spike will resolve this.
 

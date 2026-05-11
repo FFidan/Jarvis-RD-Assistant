@@ -98,21 +98,28 @@ async def advisory_lock(conn: ConnLike, lock_key: int, paper_id: int):
 async def upsert_paper(
     conn: ConnLike,
     paper: PaperCreate,
-    user_id: int | None = None,
+    *,
+    discovered_by: int | None = None,
 ) -> asyncpg.Record:
-    """Insert or update a paper, returning the row.
+    """Insert or update a canonical paper, returning the row.
 
-    ``user_id`` is recorded ONLY on the initial insert. On conflict (existing
-    paper with the same ``external_id``) the original owner is preserved —
-    later interactions don't quietly transfer ownership. Pass ``None`` for
-    truly system-shared papers (cron auto-fetch, citation-graph fan-out,
-    pulse discovery); pass the caller's user_id for user-initiated upserts
-    (manual save, batch save, Zotero pull).
+    Sprint B (canonical corpus): ``papers`` is the canonical, shared corpus
+    — there is no per-user ownership column on this table any more. Library
+    membership is recorded in ``user_library`` (see
+    :func:`jarvis_common.library.add_to_library`). Callers that want a user
+    to "have" the paper MUST follow this upsert with an ``add_to_library``
+    call.
+
+    The legacy ``papers.user_id`` column has been renamed to
+    ``papers.discovered_by`` and is now audit-only ("which user (or NULL for
+    system) first discovered this paper"). The optional ``discovered_by``
+    keyword preserves that audit trail; it is recorded on initial INSERT
+    only — on ``ON CONFLICT`` the original discoverer is preserved.
     """
     row = await conn.fetchrow(
         """INSERT INTO papers (external_id, source_type, title, authors, abstract,
                                published_date, url, pdf_url, citation_count, metadata,
-                               discovery_origin, user_id)
+                               discovery_origin, discovered_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
            ON CONFLICT (external_id) DO UPDATE SET
                title = EXCLUDED.title,
@@ -132,7 +139,7 @@ async def upsert_paper(
         paper.citation_count,
         paper.metadata,
         paper.discovery_origin,
-        user_id,
+        discovered_by,
     )
     if row is None:
         raise RuntimeError("upsert_paper RETURNING always yields a row")
@@ -202,25 +209,10 @@ async def run_process_pdf(
                     "WHERE paper_id = $1 AND embedding_id IS NOT NULL",
                     paper_id,
                 )
-                await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
                 point_ids_to_delete = [r["embedding_id"] for r in old_rows]
     # Lock and connection released here.
 
     await _maybe_progress(0.1, "Downloaded")
-
-    # Qdrant cleanup runs outside the advisory lock to avoid holding it during
-    # network I/O.  DB rows are already deleted; if Qdrant delete fails, old
-    # vectors become orphaned (harmless — they won't be matched by paper_id
-    # filter during search).
-    if point_ids_to_delete:
-        try:
-            await embedder.qdrant.delete(
-                collection_name=COLLECTION_NAME,
-                points_selector=PointIdsList(points=point_ids_to_delete),  # type: ignore[arg-type]
-            )
-        except Exception as e:
-            logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e)
-            raise RuntimeError("Failed to clean old Qdrant vectors before reprocessing.") from e
 
     # --- Phase 2: Extract text, chunk, embed (no lock, no connection held) ---
     try:
@@ -255,6 +247,8 @@ async def run_process_pdf(
     total_batches = max((len(chunks) + batch_size - 1) // batch_size, 1)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
+            if force:
+                await conn.execute("DELETE FROM paper_chunks WHERE paper_id = $1", paper_id)
             await conn.executemany(
                 """INSERT INTO paper_chunks (paper_id, chunk_index, content, page_number,
                                              start_char, end_char, embedding_id,
@@ -275,6 +269,18 @@ async def run_process_pdf(
                     for chunk, point_id in zip(chunks, point_ids)
                 ],
             )
+
+    # Qdrant cleanup runs after DB replacement so a failed force reprocess keeps
+    # the previous chunk rows intact. If vector deletion fails, old vectors are
+    # orphaned but harmless because DB metadata now points at the new embeddings.
+    if point_ids_to_delete:
+        try:
+            await embedder.qdrant.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=PointIdsList(points=point_ids_to_delete),  # type: ignore[arg-type]
+            )
+        except Exception as e:
+            logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e)
 
     # Report embedding progress (single batch for now since executemany is atomic)
     await _maybe_progress(0.7 + 0.3 * (1 / total_batches), f"Embedding batch 1/{total_batches}")

@@ -70,7 +70,7 @@ async def test_get_provider_api_key_encrypted(monkeypatch):
 
     # Verify correct key was queried.
     conn.fetchrow.assert_awaited_once_with(
-        "SELECT value, encrypted_value FROM user_config WHERE key = $1",
+        "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
         "llm.anthropic.api_key",
     )
 

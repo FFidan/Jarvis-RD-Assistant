@@ -74,7 +74,7 @@ async def get_provider_api_key(provider: str, db_pool: Any) -> str | None:
     config_key = f"llm.{provider}.api_key"
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT value, encrypted_value FROM user_config WHERE key = $1",
+            "SELECT value, encrypted_value FROM user_config WHERE key = $1 AND user_id IS NULL",
             config_key,
         )
 
@@ -123,7 +123,7 @@ async def _get_thinking_disabled(
     try:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = $1",
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
                 config_key,
             )
         if row is None:

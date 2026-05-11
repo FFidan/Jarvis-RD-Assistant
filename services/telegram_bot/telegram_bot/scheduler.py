@@ -79,7 +79,7 @@ class JarvisScheduler:
         """
         # Resolve user timezone
         tz_row = await self.db_pool.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'user.timezone'"
+            "SELECT value FROM user_config WHERE key = 'user.timezone' AND user_id IS NULL"
         )
         tz_str: str = (tz_row["value"] if tz_row else None) or "UTC"
         try:

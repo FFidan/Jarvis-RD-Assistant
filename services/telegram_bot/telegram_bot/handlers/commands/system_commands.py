@@ -71,7 +71,8 @@ async def _handle_pairing(
             async with conn.transaction():
                 # Refuse if an owner is already paired (takeover prevention)
                 current_owner = await conn.fetchval(
-                    "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id'"
+                    "SELECT value FROM user_config "
+                    "WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
                 )
                 if current_owner is not None:
                     await message.reply_text(
@@ -92,9 +93,10 @@ async def _handle_pairing(
                     await message.reply_text("Invalid or expired pairing code.")
                     return
                 await conn.execute(
-                    "INSERT INTO user_config (key, value) "
-                    "VALUES ('telegram.owner_chat_id', $1::jsonb) "
-                    "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                    "INSERT INTO user_config (user_id, key, value) "
+                    "VALUES (NULL, 'telegram.owner_chat_id', $1::jsonb) "
+                    "ON CONFLICT (user_id, key) DO UPDATE "
+                    "SET value = EXCLUDED.value, updated_at = NOW()",
                     json.dumps(chat.id),
                 )
                 await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)

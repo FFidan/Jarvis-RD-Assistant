@@ -32,13 +32,19 @@ BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$ LANGUAGE plpgsql;
 
 CREATE TABLE user_config (
     id              SERIAL PRIMARY KEY,
-    key             VARCHAR(255) UNIQUE NOT NULL,
-    value           JSONB NOT NULL,
+    user_id         INTEGER NULL,
+    key             VARCHAR(255) NOT NULL,
+    value           JSONB NULL,
+    encrypted_value BYTEA NULL,
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-COMMENT ON TABLE user_config IS 'Key-value store for user preferences. Single-user system.';
+CREATE UNIQUE INDEX user_config_user_key_idx
+    ON user_config (user_id, key) NULLS NOT DISTINCT;
+CREATE INDEX idx_user_config_user_id ON user_config(user_id);
+
+COMMENT ON TABLE user_config IS 'Key-value store for system defaults and per-user preferences.';
 
 -- Seed default configuration
 INSERT INTO user_config (key, value) VALUES
@@ -48,7 +54,7 @@ INSERT INTO user_config (key, value) VALUES
     ('user.timezone', '"UTC"'),
     ('fsrs.desired_retention', '0.9'),
     ('fsrs.learning_steps', '[1, 10]')
-ON CONFLICT (key) DO NOTHING;
+ON CONFLICT (user_id, key) DO NOTHING;
 
 CREATE TABLE llm_usage_log (
     id                  SERIAL PRIMARY KEY,
@@ -854,7 +860,7 @@ INSERT INTO user_config (key, value) VALUES
     ('pulse.stage2_top_k', '40'::jsonb),
     ('pulse.weights',
      '{"embedding": 0.2, "topic": 0.2, "llm_relevance": 0.3, "llm_novelty": 0.1, "author_bonus": 0.15, "recency": 0.05, "citation_pagerank": 0.0, "citation_count": 0.0, "citation_adamic_adar": 0.0, "classifier": 0.0}'::jsonb)
-ON CONFLICT (key) DO NOTHING;
+ON CONFLICT (user_id, key) DO NOTHING;
 
 -- Telegram pairing — short-lived codes used by the setup wizard to link a
 -- Telegram chat to the JARVIS owner (migration 020).
@@ -871,7 +877,7 @@ CREATE INDEX IF NOT EXISTS telegram_pairing_expires_idx
 INSERT INTO user_config (key, value) VALUES
     ('telegram.owner_chat_id', 'null'::jsonb),
     ('setup.completed',        'false'::jsonb)
-ON CONFLICT (key) DO NOTHING;
+ON CONFLICT (user_id, key) DO NOTHING;
 
 -- Audit log for security events + destructive mutations (migration 030).
 CREATE TABLE IF NOT EXISTS audit_log (

@@ -277,6 +277,7 @@ export const useJobStore = create<JobStore>()(
           try {
             const res = await fetch(`/api/jobs/${jobId}/stream`, {
               method: 'GET',
+              credentials: 'include',
               headers,
               signal: controller.signal,
             });
@@ -368,12 +369,15 @@ export const useJobStore = create<JobStore>()(
       },
 
       async cancelJob(jobId) {
-        get()._cleanupSubscription(jobId);
         try {
           await apiCancelJob(jobId);
-        } catch {
-          /* best-effort */
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Failed to cancel job';
+          toast.error(msg);
+          get().subscribe(jobId);
+          return;
         }
+        get()._cleanupSubscription(jobId);
         // Optimistically update local status
         const job = get().jobs[jobId];
         if (job) {

@@ -16,7 +16,7 @@ who writes it, who reads it, and current LIVE/GHOST/PARTIAL status.
 
 **Out of scope.**
 - Per-paper user state (`paper_user_state` columns) — covered by the
-  [paper-lifecycle redesign spec](../specs/archive/2026-04-29-paper-lifecycle-redesign.md).
+  [paper-lifecycle redesign spec](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md).
 - Pomodoro timer settings (`usePomodoroStore` Zustand) — UI-local only,
   never persisted server-side.
 - Authentication (`JARVIS_API_KEY` in env / `auth-store`) — bootstrap, not
@@ -34,7 +34,7 @@ own row-level state.
 
 | Table | Source-of-truth migration | Purpose |
 |---|---|---|
-| `user_config` | [db/init.sql:33-42](../../db/init.sql#L33-L42); `encrypted_value BYTEA` added by migration 033 | Single-row key/value store. JSON values for plain settings; ciphertext bytes for encrypted secrets. Single-user system today; multi-tenant gating tracked separately in [ARCHITECTURE.md](../ARCHITECTURE.md) "Authentication And Ownership". |
+| `user_config` | [db/init.sql:33-48](../../db/init.sql#L33-L48); `user_id` scope added by migration 073 | Key/value store for system defaults (`user_id IS NULL`) and per-user overrides (`user_id=<users.id>`). JSON values for plain settings; ciphertext bytes for encrypted secrets. Browser callers read/write personal keys in their own scope with fallback to system rows; system keys stay admin-only and system-scoped. |
 | `topics` | [db/init.sql:90-97](../../db/init.sql#L90-L97); `description TEXT` added by migration 018 | User-defined research topics. `enabled` filters which topics feed Pulse + recommendation. |
 | `tracked_authors` | `db/init.sql` (post-merger schema); `source` column tracks `manual / auto_starred / auto_rated` | Authors the user wants alerts for. `enabled` filters which feed Stage-1 `author_bonus`. |
 | `paper_sources` | [db/init.sql:71-88](../../db/init.sql#L71-L88); `display_order` added by migration 023 | Pluggable source registry (arXiv, Semantic Scholar, OpenAlex, PubMed, Local). `enabled` toggles ingestion. `config` JSONB holds per-source settings (e.g. `requires_key`). |
@@ -54,6 +54,15 @@ because their entities have richer state than a JSON value can carry
 The headline table. Every key the API may write through `PUT /api/config/{key}`
 must appear in `_ALLOWED_CONFIG_KEYS` ([settings.py:49-90](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L49-L90)). Status reflects whether the value is consulted by runtime
 behavior somewhere.
+
+Scope is part of the contract:
+
+- `PERSONAL_KEYS` are stored as `(user_id, key)` when a browser session has a
+  real `user_id`; API-key-only callers use the legacy system/default row.
+- `SYSTEM_KEYS` and dynamic hardware keys always use `user_id IS NULL` and
+  require admin role for browser sessions.
+- `GET /api/config` hides system rows from non-admin browser users; `GET
+  /api/config/{key}` applies the same server-side role check.
 
 ### 2.1 LIVE keys (written and read by code that affects user-visible behavior)
 
@@ -94,7 +103,7 @@ behavior somewhere.
 ### 2.3 GHOST keys (allowed by API; no consumer reads them)
 
 **Empty as of 2026-05-02.** All seven historical GHOST entries were resolved in
-the [Settings cleanup sprint](../plans/archive/2026-05-02-contracts-settings-and-ux.md):
+the [Settings cleanup sprint](../archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md):
 five were deleted from `_ALLOWED_CONFIG_KEYS` and the seed (see §9.1) and two
 (`fsrs.learning_steps`, `zotero.auto_push_on_star`) were promoted to LIVE in
 §2.1.
@@ -271,7 +280,7 @@ The implementation MUST satisfy these. Testable.
 
 ### 9.1 Resolved 2026-05-02 (Settings cleanup sprint)
 
-Plan: [docs/plans/archive/2026-05-02-contracts-settings-and-ux.md](../plans/archive/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
+Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](../archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md). All seven historical GHOST entries plus the `fsrs.desired_retention` PARTIAL and the `zotero.enabled` ANOMALY were resolved.
 
 | Item | Disposition | Implementation |
 |---|---|---|
@@ -301,7 +310,7 @@ Plan: [docs/plans/archive/2026-05-02-contracts-settings-and-ux.md](../plans/arch
 - **[02-pulse.md](02-pulse.md) §3** — the four GHOST weights inside `pulse.weights` (`citation_pagerank`, `citation_count`, `citation_adamic_adar`, `classifier`) — UI-exposed, validator-accepted, but no signal computation populates them.
 - **[03-llm.md](03-llm.md) §2** — `llm.{smart,fast,embed}_model` and the cloud-provider keys behave at the LiteLLM layer; this contract documents only the `user_config` storage plane.
 - **[04-observability.md](04-observability.md)** — privacy rules forbid logging raw `user_config.value` for any key in `_SECRET_KEYS` / `_ENCRYPTED_KEYS`.
-- **[docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](../specs/archive/2026-04-29-paper-lifecycle-redesign.md)** — `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
+- **[docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md)** — `paper_user_state` columns (state, starred, state_before_trash) are NOT in this contract; they are per-paper user state, not user-controllable settings.
 
 ---
 
@@ -336,7 +345,7 @@ Future agents who edit this file MUST re-Read before re-citing.
 | `_validate_desired_retention` / `_validate_learning_steps` | services/paper_ingestion/paper_ingestion/routers/settings.py | Range `(0,1)` for retention; `list[int]` length-2 positive for learning_steps |
 | `setup_completed` resolution | services/paper_ingestion/paper_ingestion/routers/system.py:144-149 | Reads `setup.completed`; gates wizard |
 | Telegram owner_chat_id resolution | services/telegram_bot/telegram_bot/owner.py:48-51, helpers.py:65, system_commands.py:73 + 95-110 | Resolver, fallback, pairing-write paths |
-| `user_config` table schema | db/init.sql:33-42 | `key UNIQUE`, `value JSONB`, `encrypted_value BYTEA` (added M033), updated_at |
+| `user_config` table schema | db/init.sql:33-48 | `(user_id, key) UNIQUE NULLS NOT DISTINCT`, nullable `value`, `encrypted_value BYTEA`, updated_at |
 | `user_config` seeds | db/init.sql:43-53 | 6 seeded keys post-2026-05-02 cleanup (paper.max_daily and paper.auto_generate_cards seeds removed) |
 | `paper_sources` table + seeds | db/init.sql:71-88 | 3 sources seeded; arxiv enabled; semantic_scholar + local disabled |
 | `topics` table | db/init.sql:90-97 | name, query_terms, category, enabled |

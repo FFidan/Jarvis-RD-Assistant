@@ -14,7 +14,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
 from jarvis_common.auth import current_user_id_or_none
-from jarvis_common.db_helpers import assert_paper_ownership
+from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_ownership
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -355,17 +355,18 @@ async def get_extraction_table(
                     status_code=400,
                     detail="paper_ids must be comma-separated integers",
                 )
+            # Sprint B canonical-corpus: papers are global; extractions are
+            # the per-template artifact whose ownership lives elsewhere.
             try:
+                await assert_papers_ownership(conn, ids, user_id)
                 rows = await conn.fetch(
                     """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
                        FROM paper_extractions pe
                        JOIN papers p ON p.id = pe.paper_id
                        WHERE pe.template_id = $1 AND pe.paper_id = ANY($2)
-                         AND ($3::int IS NULL OR p.user_id IS NULL OR p.user_id = $3)
                        ORDER BY p.title""",
                     template_id,
                     ids,
-                    user_id,
                 )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
@@ -373,16 +374,26 @@ async def get_extraction_table(
                 )
         else:
             try:
-                rows = await conn.fetch(
-                    """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
-                       FROM paper_extractions pe
-                       JOIN papers p ON p.id = pe.paper_id
-                       WHERE pe.template_id = $1
-                         AND ($2::int IS NULL OR p.user_id IS NULL OR p.user_id = $2)
-                       ORDER BY p.title""",
-                    template_id,
-                    user_id,
-                )
+                if user_id is None:
+                    rows = await conn.fetch(
+                        """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
+                           FROM paper_extractions pe
+                           JOIN papers p ON p.id = pe.paper_id
+                           WHERE pe.template_id = $1
+                           ORDER BY p.title""",
+                        template_id,
+                    )
+                else:
+                    rows = await conn.fetch(
+                        """SELECT pe.paper_id, p.title AS paper_title, pe.extractions
+                           FROM paper_extractions pe
+                           JOIN papers p ON p.id = pe.paper_id
+                           JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
+                           WHERE pe.template_id = $1
+                           ORDER BY p.title""",
+                        template_id,
+                        user_id,
+                    )
             except asyncpg.exceptions.UndefinedTableError:
                 raise HTTPException(
                     503, "extraction_templates table not found (migration 011 not applied)"

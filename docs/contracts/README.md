@@ -53,6 +53,6 @@ Each contract follows the same skeleton:
 
 - [docs/ARCHITECTURE.md](../ARCHITECTURE.md) — service and runtime boundaries (high-level)
 - [docs/ENGINEERING_STANDARDS.md](../ENGINEERING_STANDARDS.md) — durable engineering rules
-- [docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](../specs/archive/2026-04-29-paper-lifecycle-redesign.md) — archived atomic-cutover spec; the lifecycle schema referenced by 01-settings.md
-- [docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](../specs/archive/2026-05-02-instructor-langfuse-integration.md) — archived B.1+B.2 implementation spec; transitional counterpart to 03-llm.md and 04-observability.md
-- [docs/plans/archive/2026-04-30-marathon-meta.md](../plans/archive/2026-04-30-marathon-meta.md) — archived multi-phase modernization roadmap
+- [docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](../archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) — archived atomic-cutover spec; the lifecycle schema referenced by 01-settings.md
+- [docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md) — archived B.1+B.2 implementation spec; transitional counterpart to 03-llm.md and 04-observability.md
+- [docs/archive/2026-05/old-plans/2026-04-30-marathon-meta.md](../archive/2026-05/old-plans/2026-04-30-marathon-meta.md) — archived multi-phase modernization roadmap

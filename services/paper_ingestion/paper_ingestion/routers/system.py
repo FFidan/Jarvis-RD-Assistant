@@ -167,7 +167,8 @@ async def _cloud_key_presence(pool: asyncpg.Pool) -> dict[str, bool]:
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT key, value, encrypted_value FROM user_config WHERE key = ANY($1::text[])",
+                """SELECT key, value, encrypted_value FROM user_config
+                   WHERE key = ANY($1::text[]) AND user_id IS NULL""",
                 list(keys.values()),
             )
     except Exception:
@@ -197,7 +198,7 @@ async def get_setup_status(
     """Return a point-in-time snapshot of setup wizard readiness signals."""
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT key, value FROM user_config WHERE key = ANY($1::text[])",
+            "SELECT key, value FROM user_config WHERE key = ANY($1::text[]) AND user_id IS NULL",
             ["setup.completed", "telegram.owner_chat_id"],
         )
         topics_row = await conn.fetchrow("SELECT COUNT(*) AS n FROM topics")
@@ -246,7 +247,8 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
     try:
         async with request.app.state.db_pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT key, value FROM user_config WHERE key = ANY($1::text[])",
+                "SELECT key, value FROM user_config "
+                "WHERE key = ANY($1::text[]) AND user_id IS NULL",
                 ["llm.smart_model", "llm.fast_model", "llm.embed_model"],
             )
         for r in rows:
@@ -307,7 +309,8 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
         try:
             async with request.app.state.db_pool.acquire() as conn:
                 num_ctx_rows = await conn.fetch(
-                    "SELECT key, value FROM user_config WHERE key = ANY($1::text[])",
+                    "SELECT key, value FROM user_config "
+                    "WHERE key = ANY($1::text[]) AND user_id IS NULL",
                     num_ctx_keys,
                 )
             for row in num_ctx_rows:

@@ -55,6 +55,9 @@ def _install_fake_app(monkeypatch, *, verifier, embedder) -> None:
 
     _state_mod.svc.verifier = verifier
     _state_mod.svc.embedder = embedder
+    paper_jobs_mod = sys.modules.get("paper_ingestion.paper_jobs")
+    if paper_jobs_mod is not None:
+        monkeypatch.setattr(paper_jobs_mod, "get_services", lambda: _state_mod.svc)
 
 
 def _install_fake_summarization(monkeypatch, mock_fn) -> None:

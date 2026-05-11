@@ -9,8 +9,8 @@ Related docs:
 - [ARCHITECTURE.md](ARCHITECTURE.md) - runtime and package boundaries.
 - [ENGINEERING_STANDARDS.md](ENGINEERING_STANDARDS.md) - coding and testing standards.
 - [known-residual-risks.md](known-residual-risks.md) - accepted risks to preserve or revisit.
-- [plans/2026-04-29-refreshed-desloppify-score-work.md](plans/2026-04-29-refreshed-desloppify-score-work.md) - current manual
-  Desloppify score-work plan.
+- [archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md](archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md) - archived manual
+  Desloppify score-work plan (PAUSED 2026-05-02).
 
 ## Evidence Rules
 
@@ -84,6 +84,22 @@ Forbidden in `AGENTS.md`:
 
 Run `python3 scripts/check_agent_docs.py` after editing harness docs.
 
+### Silent-Revert Guard
+
+Agents editing files through pre-commit hooks must verify the commit succeeded
+before reporting done. The `ruff-format` hook rewrites `.py` files on disk but
+marks itself `FAILED`; this leaves the git index diverged from the working tree.
+A subsequent `git add -u` in a new shell invocation may silently drop the edit.
+Root-cause analysis: [docs/agentic/format-watcher-rca.md](agentic/format-watcher-rca.md).
+Backstop: `scripts/verify-edits.sh` performs post-commit blob verification.
+
+Steps to avoid silent reverts:
+
+1. After any `Edit` that may be affected by a formatter, run `git diff --name-only HEAD`.
+2. After `git commit`, check the exit code and look for "1 changed" in the summary.
+3. If the commit was aborted by a hook, the index still has the old blob. Re-stage
+   the file with `git add <path>` (not `git add -u`) and recommit.
+
 ## Closeout
 
 Before claiming completion:
@@ -93,7 +109,7 @@ Before claiming completion:
 - summarize files changed and residual risks
 - keep stale-plan or tool-validation caveats explicit
 - if paper lifecycle or feed filtering was touched, verify against
-  [docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](specs/archive/2026-04-29-paper-lifecycle-redesign.md)
+  [docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md)
   (the authoritative spec post-2026-04-29; supersedes the legacy
   `paper-lifecycle-contract.md` + `feed-information-architecture.md` which
   are scheduled for deletion in Phase A implementation)

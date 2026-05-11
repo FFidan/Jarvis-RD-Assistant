@@ -237,7 +237,9 @@ async def _rehydrate_litellm_aliases(pool: Any) -> None:
 
     for config_key in ("llm.smart_model", "llm.fast_model", "llm.embed_model"):
         async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = $1", config_key)
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL", config_key
+            )
         if row is None:
             continue
         model_id: str = row["value"]
@@ -267,7 +269,8 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT value FROM user_config WHERE key = 'system.models_autoconfigured'"
+            "SELECT value FROM user_config "
+            "WHERE key = 'system.models_autoconfigured' AND user_id IS NULL"
         )
     if row is not None:
         return  # Already ran; rehydrate above is all we need
@@ -301,7 +304,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
         async with pool.acquire() as conn:
             await conn.execute(
                 "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
-                "ON CONFLICT (key) DO NOTHING",
+                "ON CONFLICT (user_id, key) DO NOTHING",
                 config_key,
                 json.dumps(model_id),
             )
@@ -311,7 +314,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
         await conn.execute(
             "INSERT INTO user_config (key, value) "
             "VALUES ('system.models_autoconfigured', 'true'::jsonb) "
-            "ON CONFLICT (key) DO NOTHING"
+            "ON CONFLICT (user_id, key) DO NOTHING"
         )
     await _rehydrate_litellm_aliases(pool)
 
@@ -569,7 +572,34 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
         logger.warning("Health check: LiteLLM unavailable", exc_info=True)
         checks["litellm"] = "unavailable"
 
-    status = "ok" if all(v == "ok" for v in checks.values()) else "degraded"
+    # Ollama
+    try:
+        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+        resp = await asyncio.wait_for(
+            request.app.state.http_client.get(f"{ollama_url}/api/tags"),
+            timeout=5.0,
+        )
+        checks["ollama"] = "ok" if resp.status_code == 200 else "unavailable"
+    except Exception:
+        logger.warning("Health check: Ollama unavailable", exc_info=True)
+        checks["ollama"] = "unavailable"
+
+    # Vector sidecar — probed via its internal API; API is disabled in production
+    # so we attempt the connection and report "unknown" on any failure rather than
+    # "unavailable" (which would drag overall status to "degraded").
+    try:
+        vector_url = os.environ.get("VECTOR_API_URL", "http://vector:8686")
+        resp = await asyncio.wait_for(
+            request.app.state.http_client.get(f"{vector_url}/health"),
+            timeout=3.0,
+        )
+        checks["vector"] = "ok" if resp.status_code == 200 else "unknown"
+    except Exception:
+        # Vector API is disabled by default; treat as unknown, not degraded
+        checks["vector"] = "unknown"
+
+    # "unknown" (e.g. vector with API disabled) does not trigger degraded status
+    status = "ok" if all(v in ("ok", "unknown") for v in checks.values()) else "degraded"
     return status, checks
 
 

@@ -93,16 +93,21 @@ PI_PUBLIC_JOB_KINDS: frozenset[str] = frozenset(
 )
 
 
-def _extract_paper_id(payload: dict) -> int | None:
-    """Return ``payload['paper_id']`` when it is a real ``int``, else ``None``.
+def _extract_paper_ids(payload: dict) -> int | list[int] | None:
+    """Return paper IDs from single-paper and batch paper-scoped payloads.
 
     WS-6B-α: scopes the factory's ownership check to single-paper kinds
-    (``paper.process``, ``paper.analyze``).  Batch kinds use ``paper_ids:
-    list[int]`` and skip per-paper authorisation here — the worker validates
-    each id when it processes the batch.
+    (``paper.process``, ``paper.analyze``) and batch kinds
+    (``papers.batch_process``, ``papers.batch_summarize``, ``extraction.batch``).
+    Workers still revalidate, but public enqueue is denied up front.
     """
     paper_id = payload.get("paper_id")
-    return paper_id if isinstance(paper_id, int) else None
+    if isinstance(paper_id, int):
+        return paper_id
+    paper_ids = payload.get("paper_ids")
+    if isinstance(paper_ids, list) and all(isinstance(pid, int) for pid in paper_ids):
+        return paper_ids
+    return None
 
 
 router = build_jobs_router(
@@ -111,7 +116,7 @@ router = build_jobs_router(
     get_db_pool=get_db_pool,
     limiter=limiter,
     payload_schemas=PI_PAYLOAD_SCHEMAS,  # discriminated mode → 422 on shape errors
-    paper_ownership_extractor=_extract_paper_id,
+    paper_ownership_extractor=_extract_paper_ids,
 )
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,991 @@
+# Changelog
+
+All notable changes to JARVIS RD Assistant are documented in this file.
+This project adheres to [Semantic Versioning](https://semver.org/).
+## [v0.1.0] - 2026-05-10
+
+
+### Bug Fixes
+- Wave-2 merge — ZoteroSection test ambiguous label query
+- Topic fan-out should be no-op until per-user topics ship
+- Remove user_id=None fallback from scheduler fan-out
+- Defensive user_id resolver + migrations 69/70 deferred (Phase 2 final integration)
+- Expose admin/auth/setup in routers package __all__ (Phase 2 hotfix)
+- WS-2D antagonistic-completion sweep — schemas, IDOR, schedulers, sources, recommender
+- Apply Wave-2 audit IDOR fixes to citations/notes/pdf/pulse/rag/zotero (Phase 2 WS-2D partial)
+- WS-2A antagonistic-review fixes (Phase 2)
+- Pyright cleanup in test_pulse_scoring_stage2 (Phase 1 followup)
+- Antagonistic-review fixes for multi-user rollout
+- Investigate and harden against agent silent-revert (Phase 1 WS-1)
+- Three real bugs surfaced during E2E smoke
+- Wire lookback_days, AdvisoryLock, and full-deck stale fallback
+- Makefile sources versions.env + fix body font-sans→font-serif
+- Update pulse training tests for Wave-4 HMAC signing
+- Add await_args is not None guard in pulse scheduler tests
+- Update probe-59 tests after W1-13 removal
+- IDOR — thread user_id through analytics/contradictions/analyze/pdf/zotero/pulse
+- Query key fix, errorMessage helper, a11y improvements, scheme guard, noopener
+- Nginx hardening, HSTS at Caddy, CORS http local, cloudflared pin, langfuse healthcheck, secrets
+- Daily_log user_id filter, generate_cards IDOR, deadline datetime types
+- Remove stale probe-59, add table_schema filter to probes 60/61, add user.timezone to probe-57
+- Add API-key headers to review_handler, rate-limit review_start, strengthen docstrings
+- Migration-062 guard, Confidence.NONE enum, ctx_shim docstring
+- Guard rehydrate against LiteLLM 'No DB Connected' + lock W4-2 marker
+- Repoint stale qwen3-embedding:4b assertions + filter noop.test
+- Recover W3-DRY-1 reranker work + repoint shim callers
+- Focus clamp + rate-limit guard + auth-before-ack + bidi-sanitise
+- Register noop.test task when JARVIS_ENABLE_TEST_JOBS=1
+- Align init.sql with post-migration schema for fresh installs
+- Null-value confidence guard + qwen3-embedding:4b dim
+- Drop inner TLS hop, run Caddy→nginx over HTTP
+- Mount LITELLM_MASTER_KEY + JARVIS_CONFIG_KEY + Langfuse via Docker Secrets
+- Align daily_intent.user_id with project INTEGER NULL convention
+- Re-check paper ownership at top of worker handlers
+- Widen migrations_runner conn type + system.py Role import
+- Log_focus_session SQL references dropped 'status' column
+- Rename teststrip_*->test_strip_* + export from jarvis_common
+- Disable Qwen thinking on smart/fast LiteLLM aliases
+- Drop future-annotations to resolve Pydantic v2 ForwardRef
+- Load PT Serif, IBM Plex Sans, IBM Plex Mono for type-pairing presets
+- Add --cta-warn-* tokens for Research Feed trash banner
+- Clean up diagnostics and test failures from parallel groups
+- Fix 3 test regressions from Group 1-3 changes
+- Apply marathon completion audit findings (waves A–D)
+- Harden analyze and pulse closeout
+- Close audit gaps and restore arxiv pulse
+- Harden pulse diagnostics and retrieval eval
+- Explain source-exhausted decks
+- Complete phase c and model lifecycle
+- Degrade badge now reflects latest run, not latest failed run
+- Use LITELLM_MASTER_KEY as api_key in instructor client
+- Remove double instructor-wrapping in call_llm_structured
+- Replace pgrep with python os.kill(1,0) for telegram_bot
+- Normalize :latest suffix in ModelSelector before calling onChange
+- Strip :latest suffix before model comparison to prevent spurious YAML write
+- Restore explicit bash for qdrant /dev/tcp check
+- Restore Ollama bash healthcheck + init-secrets bootstrap
+- Fix to init-secrets script
+- Bust COPY layer cache on make rebuild
+- Add Regenerate button when deck exists with 0 papers
+- ScoreStack signal aliases + Pomodoro quick wiring
+- Pairing entropy + global cooldown, prompt-safety doc, lifecycle xref, pulse stage2 canon
+- Honour 429 Retry-After once + defensive .get() chain
+- SecretStr core settings, plaintext-secret migration, internal-API doc
+- Mask trailing chars + key rotation via _OLD env
+- UTC streaks, request-ID sanitisation, audit metadata cap
+- Timeout passthrough, structured summarization, observe coverage
+- Doc drift, dead code, BIDI fix, scheduler procrastinate bypass
+- Tighten My Day frontend and clean up dead env vars
+- Close 7 IDOR gaps — Group B audit sweep
+- D1-D5 audit sweep — tx discipline, type drift, lint hardening
+- Unify route lookups + cutover POST /api/jobs to procrastinate (Bug 2)
+- IntentSection auto-collapses footer + toasts on reopen
+- Eliminate Appearance FOUC via inline pre-React script
+- Accent presets override shadcn tokens + serif headings + Legacy type preset
+- HeroPulse clamps/resets currentIndex on deck change
+- BulkToolbar responsive margins + flex-wrap
+- MyDayPage hash-scroll uses rAF retry loop
+- ScoreStack uses 4 distinct hues + tooltips + h-2 height
+- Wire Tailwind fontFamily to var(--font-*)
+- Add psycopg[binary] to satisfy procrastinate 3.x runtime
+- Use unambiguous submodule import in test_task_registry
+- Pyright cleanups for process_batch endpoint
+- Add explicit import importlib.util to satisfy pyright
+- Add instructor/langfuse/openai deps + fix Wave 2.A test compat
+- Fix InstructorRetryException import + type ignore for messages arg
+- Shell bg-paper continuity — eliminate sidebar/main seams
+- B4 — HeroPulse advances on rate + Pomodoro guard
+- B3 — All-reading button → /feed?surface=library (no 404)
+- B2 — Pomodoro chip scrolls to §Now section
+- B1+U7 — IntentSection completed-row reopen + chevron toggle
+- Add color: null to ProjectPulseItem mock — tracks contract type
+- Shell bg-paper continuity — eliminate sidebar/main seams
+- Mock window.matchMedia in jsdom setup for useThemeEffect
+- PulseRow display rank from list index, not gappy server rank
+- Allow Google Fonts under nginx CSP for v5 type stack
+- Post-review fixes — tooltip on disabled trigger + live clock
+- Sync PulseSection stage2_top_k fallback 50 → 40
+- Off→on transition guard in star_paper — no double zotero.push
+- Drop orphan zotero.enabled read in _get_zotero_poll_config
+- Post-deploy bug fixes + inbox source filter
+- Drop redundant inner txn in bulk hard_delete arm (W1.7-E review)
+- Pdf_workflow distinguishes torch OOM from embedding error (W1.7-G)
+- _trash_paper idempotent on re-trash + state preconditions on save/skip/reading (W1.7-B)
+- Pulse mutation hygiene — invalidate pulse-today + optimistic save (W1.7-C)
+- ActionItemsCard remove duplicate "Expand to triage" trigger (W1.7-D)
+- Row_to_feed_paper now emits state + state_before_trash (W1.7-A)
+- Stop button stays visible after navigating back to in-flight Ask stream (W1.6 review)
+- Preserve step+message in structured PDF error so Retry button works (W1.6 review)
+- UX-E Library chip tooltips + (i)→label-hover swap (W1.6-E)
+- UX-D Ask streaming preserved across navigation (W1.6-D)
+- UX-C PulseCard Save toggle race + optimistic update (W1.6-C)
+- UX-B FeedbackButtons untoggle no longer locks (W1.6-B)
+- UX-A FeedPaperRow polish — colored badge + tooltips on all action buttons (W1.6-A)
+- Production tsc errors in W1.5 — phaseRef narrowing + mock signature
+- UX-B.1 propagate user_state, UX-C.3 reset offset on switch (W1.5 review)
+- Profile.py SELECT DISTINCT + ORDER BY violation
+- W1.1 follow-up — drop stale litellm_master_key references
+- W1.1 follow-up — drop Bearer assertion in embed_error_handling
+- W1.1 drop master_key for transparent loopback proxy
+- W1.5 swap pulse_ratings -> recommendation_feedback + docstring
+- W1.4 swap pulse_ratings -> recommendation_feedback in signals
+- W1.3 swap pulse_ratings -> recommendation_feedback in training
+- W1.2 require state='trash' precondition for restore
+- WS-PA-W7 post-review polish (race fix + status doc accuracy)
+- WS-PA-W7-D Wave 7 build fix + smoke results update
+- WS-PA-W7-C.1 Settings tab URL sync
+- WS-PA-W6 replace dropped pus.status with pus.state/pus.starred
+- WS-PA-W2-followup fetchFeed maps LibraryFilter → backend view
+- WS-AH2-A8 app_factory equal-length init/teardown contract
+- WS-AH2-A7 HardDeleteModal mutation onError toast
+- WS-AH2-A6 bulk selection clears on URL-driven surface change
+- WS-AH2-A3 _simple_digest db_user_id parameter + scoping
+- WS-AH2-A2 deck INSERT user_id column + DRY-1 substitution
+- WS-AH2-A1 hard-delete reorder + title trim + DRY-1
+- App_factory order + crypto typing + dynamic_update whitelist + prompt_safety polish
+- Save/Dismiss double-answer + digest archived/dismissed guard + review delegation
+- Multi-tenant readiness — bind user_id in user-state filters
+- Hard-delete commit PG before Qdrant + predicate constants + restore docs
+- Focus-session ON CONFLICT (paper_id, user_id) + live-PG regression
+- WS8 build-time type errors — CountsBadge prop, FeedCountsResponse, EmptyState icon, Select narrowing, mock UserState
+- WS8-B1.1 BULK-TXN-001 wrap per-paper bulk action in nested savepoint
+- WS7 smoke — coalesce nullable user_state fields in response model
+- WS7 preference no-clobber + collapse profile dual-branch
+- WS6 boot blockers found during smoke test
+- WS6-A4a bookmark mutation onError toast (M4)
+- WS6-A2b weight upper-bound clamp + log warning (H3)
+- WS6-A3a strip control chars in escape mode (M2)
+- WS6-A1d migration 043 defensive constraint-name DROP (H5)
+- WS-5B dynamic_update guard + item_key encoding + cron validation + bookmark toggle
+- WS-5A weight clamping + list param caps
+- WS-4 TS build errors + bookmark UI wiring
+- WS-1E cursor protection on failure + decrypt logging
+- WS-1G BIDI strip in escape_llm_text + verification consolidation
+- WS-1F S2 graceful degradation + OpenAlex SSRF scheme + API key param
+- WS-1C remove private handler re-exports + _HANDLERS test fixture
+- WS-1A app_factory migration ordering + worker await + LE proxy fix
+- WS-1B card_generator brace escape + FSRS AttributeError
+- WS-1D paper_detail API key header + rate-limit callback feedback
+- WS-7 fixup — 4 Sprint 4 test contract drifts
+- WS-5A/1C residue from parallel-execution stash race
+- WS-1E source plugin defense (PI-EDGE-007/008/014)
+- WS-1F zotero_service hardening (PI-EDGE-009/011/013)
+- WS-1G settings rate limit + jobs SYM-002 (SEC-105 + SYM-002)
+- WS-1D embedder chunk offsets + hybrid pagination (PI-CORE-005/006)
+- WS-1A jarvis_common one-liners (DRY-003 + JC-005/006 + SEC-107/108)
+- WS-1C scoring + profile fixes (PI-CORE-008/010)
+- WS-1B learning_engine fixes (LE-002/003)
+- WS-B3 [JC-001 + PI-CORE-007 + WS-4 + WS-6 hygiene] reaper + extraction confidence + uvloop + tests
+- WS-B2 [PI-EDGE-001 + PI-EDGE-003 + PI-EDGE-005] pagination + cap + cross-ref pre-filter
+- WS-B1 [PI-CORE-001 + PI-CORE-009] savepoint per card + 0-deck warning
+- WS-A3 [PI-CORE-002 + Sprint 3 polarity] direct-equality dedup + word-boundary regex
+- P0 [SEC-102] pairing INSERT ON CONFLICT replaces no-op UPDATE
+- P0 [PYRIGHT-001] widen notify_job_update conn type to PoolConnectionProxy union
+- P0 [SEC-101 + SEC-103] enforce secret file chmod 600 + Makefile target
+- P0 [NGINX-001] add client_max_body_size 50m for PDF uploads
+- P0 [DB-002] add notify_jobs_update trigger to init.sql + reconcile script
+- P0 [DB-001] renumber duplicate migration versions 037/038 → 040/041 + collision detection
+- FE-001 ActionItems error branch + FE-002 hasChunks guard + TEST-001 mock URL
+- AH-001 escape field attrs + SEC-002 redact SourceResponse
+- JOB-001 heartbeat-based reaper + kind-scoped kill filter (migration 035)
+- JOB-002 cancel queued + JOB-003 error dict + API-001 response_model
+- SEC-003 header+ ING-001 assert + AH-002 clear on exception
+- WS-4.2 decrypt encrypted_value column in _get_zotero_config
+- Await async update_litellm_model + restore _config_lock
+- Expose refresh_api_key_cache() for test monkeypatching
+- PI-013 non-optional embedder; PI-015 atomic upload_pdf rollback; PI-016 drop BackgroundTasks import
+- TG-002 cancelled task guard; TG-003 drop dup handler; TG-004 unconditional rate GC
+- FE-001 isGenerating job-aware; FE-003 phase ref; FE-004 AbortSignal.any polyfill
+- ING-001 batch ceil; ING-002 DB/embed ordering; ING-003 page boundary; ING-004 urljoin guard
+- LE-005 response_model on focus/streak/my-day; LE-009 FOR UPDATE in log_focus_session
+- Remaining LE-004/LE-006/LE-007 files (jobs.py, card_generator, generation, tests)
+- LE-004 drop duplicate batch GET; LE-006 RuntimeError; LE-007 doc job_handler contract; LE-012 enqueue in txn
+- FE-002 zoteroPollNow returns {job_id,status}; track via job-store
+- PI-002 upsert_paper+enqueue with paper_id; PI-010 acquire() wrapper; PI-014 cron reschedule
+- JC-001 remove double json.dumps in dynamic_update (JSONB codec handles serialisation); remove compensating json.loads on readers
+- EXT-001 prompt injection via wrap_delimited; EXT-002 drop unverified fields
+- TG-001 escape nudge fields before HTML interpolation
+- JC-002 wrap secrets OSError; JC-004 progress: float | None
+- SEC-004 CORS default https://localhost:3001 matches paper_ingestion
+- LE-003 add response_model=BatchAcceptedResponse on single-generate
+- Push_paper_to_zotero uses project_papers table
+- Paper_jobs None guards + _xml_safe lxml import
+- Explicit float cast resolves Tensor/float return type mismatch
+- Scheduler refresh_recommendations import + routers __init__ relative import
+- Export zotero submodule from routers/__init__.py
+- Suppress PointIdsList arg-type error in pdf_workflow
+- __all__ for verification/decomposition, canonical Embedder imports
+- Add __all__ to canonical files, fix pyrightconfig.json paths
+- Canonical Embedder import + health type annotation
+- Shim __all__ re-exports, ingestion imports, type fixes
+- From-exc chaining, sanitized HTTP details, silent-swallow logging
+- Eval_retrieval imports — drop stale scripts._paper_ingestion_imports
+- G1 follow-up — restore needs_processing to onboarding_stage Literal
+- Wave I1 follow-up — update stale docstring in test_papers_router
+- Wave I2 — restore partial indexes dropped in earlier waves
+- Wave F3 — handle non-dict LLM response; promote swallowed debug log to warning
+- Wave H2 — propagate X-Forwarded-Proto; wire ProxyHeadersMiddleware
+- Wave F2 — log errors in silent except handlers
+- Round 11 Wave D — cron pre-validate + inline JARVIS_API_KEY read (B-M-04/D-07/H-04)
+- Round 11 Wave D — verification fallback + local_source signature (B-H-01/B-H-02)
+- Round 11 Wave D — pulse stats order + interval param + executive tz-date (C-M01/C-M02/E-04)
+- Round 11 Wave D — pdf redirect urljoin + entity chunk_id (B-M-02/B-M-03)
+- Round 11 Wave D — re-raise CancelledError after marking job cancelled (A-06)
+- Round 11 Wave C — pass ctx=None in batch loop (E-02)
+- Round 11 Wave B — strip BIDI isolates U+2066..U+2069 (A-04/A-10)
+- Round 11 Wave B — refuse unauth internal API in DEV_MODE (F-01)
+- Round 11 Wave B — widen _score_one except tuple (C-H01)
+- Round 11 Wave A — SSE reconnect self-abort (G-01) + [DONE] loop escape (G-02/G-04)
+- Round 11 Wave A — migration 026 idempotent (A-03 fresh-install crash)
+- Remove fsrs.CardDict import removed in fsrs 5.x
+- Wave D LOW fixes — import hoisting, cron default, tz validation, setup hardening
+- Use call_llm(system=...) kwarg for Stage-2 scoring
+- Strip BIDI overrides and zero-width chars in wrap_delimited
+- Pulse_ratings unique constraint + deck-membership guard
+- Enforce job ownership in get/list/cancel; remove user_id from request body
+- Validate pulse cron next_run_time is within 366 days after reschedule
+- Live nudge reload via internal HTTP endpoint + timezone-aware CronTrigger
+- Clamp per_source_cap to stage2_top_k*2 / num_sources
+- Replace asyncio.get_event_loop().time() with time.monotonic()
+- Rename counter to saved_by_full_text_verify
+- ActionItemsCard failedJobs selector returns stable memoized array
+- Tsc -b build errors in tests + LibraryFilters readonly array
+- Pyright optional-access guards and module-stub type ignores
+- DEV_MODE-gate noop.test, add stale-job reaper, register card handlers explicitly
+- Paper.process passes _SubCtx to run_process_pdf for sub-progress
+- ?action=process scroll awaits data load
+- Hydrate() also subscribes to queued jobs on page load
+- Generate_cards_core raises JobError instead of HTTPException
+- Reject empty source_types list (422 from Pydantic + disabled Search button)
+- Wire Generate-Pulse button to job-store with 429 handling
+- Scale JobsIndicator progress to 0-100 for Progress component
+- Friendly Timezone label + tooltips on notification rows
+- Proper source display names, human-readable notification labels, S2 key_env seed
+- Add retry button on upload error; add Continue button to API Keys wizard step
+- Remove duplicate processPdf export introduced by T7
+- Remove double-encoding of signals and stats JSONB fields
+- Migration 022 cleaner approach, fsrs pin, TS strictness fixes
+- Align page titles — Research Feed + Home
+- Correct empty state copy — no papers selected, not no templates
+- Remove (CoSE) jargon from Force-directed layout label
+- Tab overflow → horizontal scroll, Ingestion → Models & Notifications
+- Replace vacuous decomposition regression tests [T1-fixup]
+- W4.8 hardening gaps [M6,M27,M39,M41,M44]
+- Inject now, count real LLM calls, PubMed sort, deck batch fetch [W4.7, M12-M14,M16]
+- Fix Optional-access flood in telegram_bot handlers [M42]
+- SSE 401 triggers logout; apiFetch combines abort signals [H9,H10]
+- Extract security headers to snippet; add CSP additions [M32,M33]
+- Commit rate-limit source changes + fix query.data null check [H11,M5,M3]
+- Always start scheduler; /health returns 503 when degraded [H14,H15,H17]
+- Learning_engine /health returns 503 when degraded [H17]
+- Release DB connection before HTTP download; per-file conn in scan [H12,H13]
+- Learning_engine /health returns 503 when degraded [H17]
+- Guard aws CLI availability before S3 upload [H18]
+- Resolve Wave 2 diagnostic issues across test files
+- Wire QuoteVerifier strict-skip for all KG edges [C1]
+- Existing-owner check, SHA256 hash in logs, rate limit on PAIR_ branch [H3,H4]
+- Bounded pg_advisory_xact_lock with 60s timeout [H16]
+- XFF walk-left + CF-Connecting-IP support, TRUSTED_PROXY_CIDRS env [H7]
+- Move API key to sessionStorage, logout clears jarvis-ui [H8]
+- %d→%s for nullable chat_id, compose-aware cert vol reset, fresh limiter in rate-limit test
+- Suppress false-positive on limiter import + rename _app fixture to app_fixture
+- BotConfig.telegram_chat_id optional + resolve_owner_chat_id across 15 outbound sites
+- LAN port dedup via DASHBOARD_BIND_HOST, SAN cert propagation, tunnel CORS hostname
+- Wrap create_pairing in transaction + expire-only sweep + rate limit 10/min
+- Drop third-party QR + rebuild local services in update.sh
+- Use https scheme + propagate LAN IP to CORS_ORIGINS
+- Prevent apscheduler.triggers.cron stub pollution; fix resolver unused params
+- Pre-import apscheduler in conftest to prevent test_pulse_scheduler stub pollution
+- Use set[str] instead of frozenset for Pydantic model_dump include param
+- Scheduler always starts pulse job, live reschedule, pdf_resolutions NULLS NOT DISTINCT (F2.2)
+- Remove invalid type annotation on app.state.sources (F2.1 follow-up)
+- Source plugin rate-limits, error handling, discovery cache (F2.1)
+- Resolver Optional return type + lxml etree import annotation
+- Topic description max-length (1000 chars)
+- Rating mutation UX — no deck refetch, disable rated buttons
+- HTML-escape paper URLs in formatters
+- Register /pulse_now command handler
+- Stage1 author-bonus uses dual set (names + S2 IDs)
+- Stage2 LLM scoring — switch to smart model, bump max_tokens
+- Validate pulse.* config keys on PUT + frontend cron gate
+- Weekly_summary SQL column (status not user_state, starred not saved)
+- Persist_deck counts actual inserts, wrap in transaction
+- Harden PubMed XML parser against XXE (use defusedxml)
+- Layer 3 review fixes — cron UX, rating invalidation, Escape key
+- Stream G quality review — SQL interval, FK handling, stats logging
+- Register openalex + pubmed source plugins via package __init__
+- F0 review nits — FLOAT consistency, stream C fixtures, imports
+- Audit round 4 — security, correctness, schema sync
+- Audit fixes + executive function polish (Phase 1+2)
+- Remove duplicate lines and format MyDayPage
+- Code audit round 6 — 10 verified fixes across 9 files
+- Code audit rounds 3+4 — 35 fixes across 27 files
+- Allow KaTeX data: fonts in CSP header
+- Force-split oversized chunks exceeding embedding context window
+- GPU support for Marker + Docker infra hardening
+
+
+### Documentation
+- Commit 2026-05-09 full-codebase audit (3A triage decision: keep active)
+- Refresh for Phase 1+2 + Sprint A/B + Wave 2 (Bucket E1)
+- Format-watcher silent-revert investigation (Bucket E3)
+- Sprint A (Telegram pairing) + Sprint B (canonical corpus refactor) plan
+- Append WS-2E status to multiuser-rollout plan
+- Wave-2 multi-tenant audit results (Phase 1 WS-3)
+- Document auth-before-ratelimit ordering in paper_commands (W3-14)
+- Ratify 06-hardware-aware-settings (user gate cleared)
+- Add 06-hardware-aware-settings (Wave-4 contract design)
+- UI heading-rhythm audit (input for next deep-plan)
+- D6 reranker matrix complete + final promotion decision
+- D7 promoted — qwen3-embedding:4b nDCG@3 80.0% vs 64.1%
+- UI/UX gap report + Phase 1g fix plan
+- D8 comparison report — D7 infeasible, D6 deferred
+- Add OI-1 open issue — idempotent migrations / generate_series pre-seeding gap
+- Add second-machine setup, Tailscale iOS HTTPS, troubleshooting rows
+- Mark shipped items in phase-1f spec (2026-05-04 partial ship)
+- Add Pomodoro+ScoreStack+Intent design spec; update v5-sweep
+- Add contract 05 — model lifecycle
+- V5-sweep proposal placeholder
+- Save Marathon continuation plan to canonical in-repo path
+- Re-order CHANGELOG so [1.6.1] sits above [1.6.0]
+- Phase C embedding-model upgrade plan
+- B.3 reranker production note + NEW-H2 audit closure
+- Procrastinate job broker migration spec
+- Persist Phase 1b + 1c plans to docs/plans/
+- Add Phase 1a implementation plan for My Day redesign
+- Changelog [1.5.0] + plan-header SHIPPED flags for contract wave 1
+- A.5 rollup — 01-settings.md dispositions for Wave 1 Settings cleanup
+- Add evergreen contract layer for Settings/Pulse/LLM/Observability
+- Anti-drift coordination contract — My Day redesign + Marathon Phase B
+- Factual currency fixes for pre-META-handoff polish
+- Add CHANGELOG [1.4.3] entry + persist W1.7 plan to docs/plans/
+- WS-PA-W7 + Phase A MARATHON COMPLETE at ee1de7f
+- WS-PA-W7-E.1 status doc + CHANGELOG — Wave 7 closeout
+- WS-PA-W7-C.2/C.3 audit B6/B7 falsified at HEAD
+- WS-PA-W7-A contract restoration — spec amendment 7 + cutover doc fixes + archive
+- WS-PA-W6 live smoke results — 1 BLOCKING fixed, 2 NON-BLOCKING
+- WS-PA-W4+W5 DONE at 6cdaa15 + 1b46f6a — Next: Wave 6 verification + push + merge
+- WS-PA-W5 lifecycle redesign closeout — legacy contract docs deleted; CHANGELOG [1.3.0]; all referrers updated
+- WS-PA-W3 status doc — Wave 3 DONE at 25e8c17
+- Promote marathon META plan into repo
+- WS-PA-W2 status doc — Wave 2 DONE at ffba7a1
+- WS-PA-W1cd status doc — Wave 1cd DONE at b28c34d
+- WS-PA-W1ab status doc — backfill 4b60ca9 test repair + process lesson
+- WS-PA-W1ab commit SHA backfill in Phase A status doc
+- Phase A multi-session runbook + living status doc
+- WS-AH2 fix plan + 2026-04-30 verification audit report
+- WS-AH1 audit-hotfix-sprint plan + falsification record
+- WS7 closeout — audit reports, future-import analysis, residuals, changelog
+- 2026-04-29 test amendments for boot reliability
+- WS6-B4 fix drift in README + PaperHeader test
+- WS6-A3b ensure M1 entry covers pulse_ratings + paper_user_state writes
+- WS6-B1c CHANGELOG 1.2.5+1.2.6 + DEPLOYMENT (ZT Access + CF flag) + residuals
+- WS6-B1b truth-up PRD + REQUIREMENTS (counts + secrets + Sprint 5/6 entries)
+- WS6-B1d module READMEs (db migrations + secrets + n8n optional)
+- WS-7 Sprint 5 audit truth-up + residuals + H6 signature closeout
+- WS-7 Sprint 4 audit truth-up + residual risks
+- WS-D close out post-R14 plan + audit remediation status + deferral notes
+- WS-8 awscli graceful skip + header docs + env.example recipe
+- R14 search UX notes
+- Fix remaining stale app/ paths in AGENTS.md and README.md
+- Add Zotero integration to PRD.md and REQUIREMENTS.md
+- Sync R12 — package rename + canonical test commands
+- Wave 0 sync — CLAUDE.md migrations, archive R10 report, R11 memory, desloppify note
+- Add Round 9 audit reports; archive rounds 6-8 + UX audits 1-4
+- Add JARVIS_TRUST_CF_CONNECTING_IP to .env.example; fix XFF comment
+- Clarify jobs SSE endpoint serves both services via shared table
+- UX Round 4.5 walkthrough captures
+- Final UX Round 4 documentation pass (README, AGENTS, PRD, REQUIREMENTS, CHANGELOG, CLAUDE)
+- Add rule #11 — prompt-safety primitives are mandatory for untrusted LLM input [S-2.4]
+- Add combined code + security review report (2026-04-14)
+- Add KG entity extraction rule #10 [W2.1, C1]
+- Import audit reports + setup design spec; ignore .gemini and docs/personal
+- UX round 2 — webapp simplification + telegram T1
+- Rewrite quick-start around setup.sh + add troubleshooting (C2)
+- Add Claude behavior optimization design spec
+- Fix stale README gaps, add LAN/Telegram/troubleshooting sections
+- Add [1.2.1] post-audit hotfix + HIGH fixes entry
+- Add Discovery & Pulse design specification (working scratch)
+- Embed Discovery & Pulse subsystem design into persistent docs
+- Sync all documentation with codebase + move n8n to profile
+- Enforce dockerized dev workflow and document recommendation engine
+
+
+### Features
+- Extended sidebar health indicator + collapsed pill (Bucket D3)
+- Zotero group-library UI
+- Zotero group-library config keys
+- Library_type + group_id support in ZoteroClient
+- Progressive disclosure + spark-line + presets + search (Bucket D1)
+- Telegram pairing settings UI
+- /pair /unpair /whoami + 6 orchestrators user-scoped
+- /api/telegram/{pair-token,pairing} endpoints
+- X-Owner-User-Id helper with API-key + CIDR allowlist gate
+- Migration 071 — telegram pairings + tokens (Sprint A)
+- Topic-based fan-out into user_library
+- Migration 072 canonical corpus + jarvis_common.library helper
+- Bootstrap scripts + first-run web wizard + README rewrite (Phase 2 WS-2F)
+- First-login tour for new users (Phase 2 WS-2G)
+- Admin user management API + UI (Phase 2 WS-2B)
+- Admin-only access to /logs and /api/logs/* (Phase 2 WS-2E)
+- Migration 070 — user_id columns for cards/decks/tracked_authors/etc (Phase 2 WS-2D)
+- Magic-link auth foundation — users, sessions, magic-link tokens (Phase 2 WS-2A)
+- Make QuoteVerifier mandatory in Pulse scoring + Weekly digest (Phase 1 WS-2)
+- System Logs sidebar, dashboard port 3010, expanded roadmap
+- Restore HTTPS on localhost:3001 via Caddy + mkcert
+- Deferred-items punch list (post-sweep cleanup)
+- Pulse reliability + Logs admin UI + Caddy mkcert (3-workstream sweep)
+- Wave-4 — HMAC-sign pickle blobs in pulse classifier training
+- Wave-3C — activate user_id predicates in recommendations + dashboard_api
+- Wave-3B — user_id predicates in LE projects/tasks/milestones routers
+- Wave-3A — add user_id to paper_recommendations, projects, tasks, milestones
+- Wrap_delimited returns truncation flag; log in summarization
+- Add ESLint v9 flat config with TypeScript + a11y rules
+- Hardware readout + num_ctx slider + thinking toggle (T3-C)
+- Hardware-aware fit math + thinking-mode propagation (T3-B)
+- Add hardware-aware fields to model catalog (T3-A)
+- Font-sans override + § double-caption removal + a11y polish
+- Optional backup encryption + cert renewal check
+- Gate Qwen3Reranker behind RERANKER_BACKEND flag
+- Rate-limit /api at the edge (30 req/min per IP)
+- Audit-log every successful DELETE in LE routers
+- Defense-in-depth streaming <think> filter
+- Promote qwen3-embedding:4b to production embed alias
+- Promote qwen3-embedding:4b to assignable/default
+- Wire Today's Intent textarea to learning_engine backend
+- Wave 1 — UI/UX gap fixes + Today's Intent backend
+- Wave 0 — design tokens for timer, warn CTA/badge, project rotation
+- V5 sweep on Analytics (§ markers, Card flatten)
+- V5 sweep on Home page (§ markers, Card flatten, status tokens)
+- Add § markers, TabsList underline, Card flatten for SettingsPage+TopicSection+TimerSection
+- V5 sweep on Settings (§ markers, Card flatten, underline tabs, status tokens)
+- V5 sweep on Projects (§ markers, Card flatten, underline tabs)
+- V5 sweep on Research Feed (§ markers, custom pills→underlined tabs, Card flatten)
+- V5 sweep on Paper Detail (§ markers, Card flatten, underline tabs)
+- V5 sweep on Learning Cards (§ markers, Card flatten, underline tabs)
+- V5 sweep on Extraction Table (§ markers, Card flatten, status tokens)
+- V5 sweep on Citation Graph (§ markers, Card flatten)
+- V5 sweep on Knowledge Graph (§ markers, Card flatten, status tokens)
+- Add reranker stage to retrieval eval harness (D6-A)
+- Add Qwen3-Reranker generative adapter (D6-B)
+- Warmup probe + REEMBED_REQUEST_TIMEOUT env (D7-prep)
+- Group 3 — setup banner, fallback badge, FavoriteTopicsPanel, baseline eval
+- Group 2 — hardware auto-configure hook, RERANKER_MODEL env-var, REEMBED_COLLECTION
+- Group 1 — Ollama :ro fallback, Tier 4 catalog, fallbacks, eval set, feedback analytics
+- Migration 057 — seed default llm/fsrs config for existing installations
+- Last-mile bring-up sprint — docs, SecretStr, smoke-test fixes
+- Wire LITELLM_MASTER_KEY to gate LiteLLM admin endpoints
+- Join job_progress in procrastinate adapter
+- Wire update_progress to job_progress and is_cancelled to should_abort
+- Add migration 054 for job_progress table
+- Drop legacy jobs table, collapse to procrastinate-only
+- Delete legacy worker — _HANDLERS, job_handler, enqueue, worker_loop removed
+- Migrate 18 job kinds from legacy enqueue to procrastinate defer_async
+- Digest.weekly canary cutover to procrastinate (Step 3.1)
+- Procrastinate worker in service lifespans (Step 2 part 2)
+- SSE bridge for procrastinate-side job events (Step 2 part 3)
+- Task_registry with 19 procrastinate task stubs (Step 2 part 1)
+- POST /api/papers/process_batch endpoint
+- Procrastinate dep + migration 052 (Step 1 of cutover)
+- Langfuse dashboard link card (B.1+B.2 follow-up)
+- Migrations 050+051 + journal CRUD endpoints
+- Primitives — WhyChips, HashtagChips, GradientProgressBar
+- Delete call_llm + cutover decompose_query + docs
+- Extraction entities + core → call_llm_structured (Wave 2.B)
+- Card_generator.py → call_llm_structured + CardGenerationOutput model
+- Weekly_summary.py → call_llm_structured + WeeklyDigestOutput model
+- Contradictions.py → call_llm_structured + ContradictionClassification
+- Hide YesterdaySection + EndOfDaySection — no backend data yet
+- Instructor + Langfuse foundations + pulse scoring canary
+- DateMasthead — 36px date, 14px MiniStat, wider tracking, quote attribution
+- TopBar v5 restructure — brand + search + avatar + bg-paper
+- Swap reranker default to mxbai-rerank-base-v2
+- ScoreStack — ink-blue gradient + emb·llm·rec·g badge
+- Appearance panel — accent / type pairing / density presets
+- Journal section + resume reading hero + project color badges
+- IntentSection empty-state + PulseRow hashtag chips + tags type
+- Hide YesterdaySection + EndOfDaySection — no backend data yet
+- DateMasthead — 36px date, 14px MiniStat, wider tracking, quote attribution
+- ProjectsSection — gradient bars + status dot logic + milestone row
+- HeroNow — custom segmented control + remove Resume tab
+- HeroTask — project badge + priority + timer enrichment
+- HeroPulse — WHY chips + 26px title + ~6 min meta
+- Primitives — WhyChips, HashtagChips, GradientProgressBar
+- TopBar v5 restructure — brand + search + avatar + bg-paper
+- ScoreStack — ink-blue gradient + emb·llm·rec·g badge
+- Dark-mode sweep for top-of-page sections (4 files)
+- Dark-mode sweep for bottom sections + primitives (5 files)
+- Dark-mode sweep for mid-page sections (3 files)
+- Wire useThemeEffect in AppShell + dark sweep for layout shell + MyDayPage
+- Wire useThemeEffect in AppShell + dark sweep for layout shell + MyDayPage
+- ThemeToggle (Sun/Moon/Monitor) in TopBar
+- Migrate v5 tailwind tokens to CSS-var refs + add text/border utility colors
+- Pre-mount inline script applies stored theme before first paint
+- Add theme-store (Zustand persist) + useThemeEffect hook
+- Wave 3 — MyDayPage rewrite + delete obsolete components
+- Wave 2.8 — LearningFocusSection
+- Wave 2.7 — TriageSection
+- Wave 2.6 — TodaysPulseSection + PulseRow
+- Wave 2.9 — EndOfDaySection stub
+- Wave 2.4 — IntentSection + TaskRow
+- Wave 2.3 — Hero family (Now/Pulse/Task/ResumeReading)
+- Wave 2.5 — ProjectsSection
+- Wave 2.1 — DateMasthead section
+- Wave 2.2 — YesterdaySection placeholder
+- Wave 1.3 — HeaderPomodoro shows active task title
+- Wave 1.2 — SectionHeader + ScoreStack primitives
+- Wave 1.1 — type stack, design tokens, tailwind extensions
+- Delete 5 GHOST user_config keys + wire fsrs.learning_steps + drop fsrs cache
+- Split last_error vs degraded_reason badge + add conditional-signal tooltips
+- Wire zotero.auto_push_on_star — auto-enqueue Zotero push on star
+- Bulk Delete Forever + Select All + Reading List label fix (W1.7-E+F)
+- UX-I structured PDF errors + Stage 2 LLM scoring progress granularity (W1.6-I)
+- UX-H My Day tactical compact pass (W1.6-H)
+- UX-G Notes UI disambiguation — Quick Rating / Annotations (W1.6-G)
+- UX-F Analyze Paper smart-mode + structured error UI (W1.6-F)
+- UX-B per-card UX polish — untoggle, badges, tooltips, refresh feedback (W1.5)
+- UX-D RAG/Ask polish — single loader, AlertDialog clear, unmount abort, single-turn doc (W1.5)
+- UX-C bulk toolbar polish + pagination on Inbox/Library (W1.5)
+- UX-A add Pulse Deck + Ask sidebar entries (W1.5)
+- UX-E add DELETE /feedback + PUT /unsave for Pulse-card untoggle (W1.5)
+- WS-PA-W7-B contract gap closure — code
+- WS-PA-W3 callback rewrite + digest state ENUM + Pulse-aligned commands
+- WS-PA-W2.3 pages + RejectedTopicsPanel + l2_lambda + keyboard remap
+- WS-PA-W2.2 shared components — lifecycle buttons + FeedbackButtons
+- WS-PA-W2.1 types + API client for new lifecycle + feedback CRUD
+- WS-PA-W2.0 _upsert_recommendation_feedback populates topic_id
+- WS-PA-W1cd L1+L2+L3 backend learning + Zotero state='to_read' + discovery_origin stamping + feedback CRUD
+- WS-PA-W1ab lifecycle endpoints + state-based predicates + counts SQL
+- WS-PA-W0 schema gate — migrations 047 + 048 + 049 + init.sql mirror
+- WS-AH bulk + keyboard + onError + URL guards + feed invalidation
+- WS8-B2.9 PaperDetail action bar (Save/MarkRead/Archive/Dismiss/HardDelete)
+- WS8-B2.9 PaperDetail action bar (Save/MarkRead/Archive/Dismiss/HardDelete)
+- WS8-B2.4 FeedView component (replaces LibraryTab+NewTab) with surface-aware action callbacks
+- WS8-B2.11 App.tsx /pulse → /my-day redirect (Pulse tab removed from /feed)
+- WS8-B2.8 useFeedKeyboardShortcuts hook + KeyboardCheatSheet modal (j/k/s/S/e/d/r/o/Enter/?/Esc)
+- WS8-B2.6 TrashView + HardDeleteModal (2-step title-confirm + also-zotero coming-soon)
+- WS8-B2.10 CountsBadge component (reactive count next to surface chips)
+- WS8-B2.3 ResearchFeedPage surface chips (Inbox|Library|Search|Ask|Trash) + sub-chips + Pulse removal
+- WS8-B2.1 lib/api.ts paper-lifecycle mutation clients + useFeedCounts hook
+- WS8-B2.2 types — UserStateResponse adds saved/dismissed/updated_at + SurfaceView/BulkAction/FeedCountsResponse
+- WS8-B1.9+B1.10 digest filters + /inbox command + Save/Dismiss callbacks
+- WS8-B1.1+B1.2+B1.4 papers router /save /unsave /dismiss /restore DELETE /bulk /feed/counts + bookmark/archive lifecycle wiring
+- WS8-B1.5+B1.7 rate_card lifecycle semantics + generator excludes archived/dismissed candidates
+- WS8-B1.8 delete_paper_vectors helper for hard-delete vector cleanup
+- WS8-B1.3 feed_query view= predicate mapping for inbox/library/trash/etc
+- WS8-B1.6 recommender excludes dismissed (Trash) candidates
+- WS8-B0.1 migration 046 paper-lifecycle triage axes (saved/dismissed/updated_at + backfill)
+- WS7 FeedPaperRow + archive UX + ContradictionsPanel states
+- WS7 candidate-key preview + batched sources + ASCII normalization
+- WS7 per-user flags + status no-collapse + functional indexes
+- WS-3 migration 043 + ownership stubs doc + profile/RAG user_id threading
+- WS-6B-β ownership wiring for rag/extractions/search/feed/discovery
+- WS-6B-α ownership wiring for jobs/notes/papers (PI-EDGE-002/004)
+- WS-6A migration 042 + ownership helper foundation
+- WS-3 Docker Secrets full migration (DOCKER-001/002/005)
+- WS-2 bookmark endpoint + telegram callback hardening (TG-001/002/003)
+- WS-A2 [WS-2.1 + FE-004] inline sentence highlighting + open-redirect guard
+- WS-A1 [PI-EDGE-002 + PI-EDGE-004] discriminated-union job payloads + idempotency + 404 path
+- Add listen notify stream hygiene
+- Add semantic ranking signals
+- Promote verified annotation evidence
+- Polish provider and model controls
+- SEC-001 wire JARVIS_CONFIG_KEY through setup.sh + docker-compose
+- WS-2.3 Pulse reasoning verification badge
+- WS-6c ONNX backend for cross-encoder
+- WS-2.3 reasoning + weekly-summary verification
+- WS-2.2 PDF snapshot thumbnails in evidence UI
+- Sentence-level answer verification with confidence SSE event (WS-2.1)
+- RAG answer confidence badge on chat responses
+- Cloud-provider API key injection via /config/update
+- Providers Settings tab for cloud LLM API keys
+- Config_crypto module + migration 033 for at-rest secret encryption
+- PULSE-001 return source_counts per plugin; PULSE-002 stats.card_count from persisted rows
+- PI-007 migrate batch_fetch to @job_handler; PI-009 papers list positional params
+- PI-005 POST /api/zotero/poll; PI-011 BBT_BASE_URL env; PI-012 paginate collections
+- Zotero discoverability hints + paper detail polish + tests
+- Track external jobs + invalidate paper queries on zotero success
+- Wire preview results + research feed navigation + drawer
+- Search preview types + drawer + row components
+- Preview endpoint + library match + structured source errors
+- Phase E2 — APScheduler cron job for library sync
+- Phase E1 — incremental library poll service
+- E3 — un-gate sync toggle in Settings
+- Router + trigger wiring
+- Zotero frontend — Settings integrations tab + ZoteroPanel component
+- Zotero client + push service with job handlers
+- Wave L2 — structured audit log table + jarvis_common.audit helper
+- Wave J — make sentence-transformers optional behind RERANKER_ENABLED
+- Round 11 Wave C — document TELEGRAM_BOT_URL + skip reload when empty (H-01)
+- Round 11 Wave UI — timezone combobox + notifications.* DRY cleanup (UI-1, UI-2)
+- Exponential backoff on SSE stream reconnect (1s→8s ceiling)
+- UX fixes + Round 8 audit remediation (8 parallel groups)
+- Migrate extraction.batch to job handler
+- Migrate papers.batch_process + papers.batch_summarize to job handlers
+- Add user_id ownership filter to SSE stream endpoints (single-tenant no-op)
+- Surface degraded_reason as typed field on PulseDeckResponse
+- Migration 024 — partial index on jobs.user_id
+- Multi-source checkbox UI + backend fan-out + update Library SOURCE_OPTIONS
+- Tooltips on action buttons + expandable workspace note
+- Redesign as triage dashboard with DayHeader, PulsePreviewCard, ActionItems
+- Frontend job-store + TopNav JobsIndicator + toast notifications
+- Migrate generation to jobs + clickable action_link errors + PaperDetail ?action=process
+- Migrate paper.process + paper.analyze; fix local-paper analyze pdf_url bypass
+- Migrate generate to jobs + degraded vs fatal distinction + /api/pulse/debug
+- Multi-source fan-out with per-source error isolation + PubMed sort fix + S2 author filter
+- REST routers + service lifespan workers + unit tests
+- Drag-to-reorder sources + uniform card layout + info bubbles
+- Display_order backend + PATCH /api/sources/reorder
+- Migration 023 + jarvis_common jobs module foundation
+- Global Pomodoro in TopBar + sidebar Research Feed + My Day title
+- Add Source API Keys step to setup wizard (step 5 of 7)
+- Drag-drop PDF upload zone replaces manual file path instruction (F-03)
+- Add year/author/sort filters to search-preview (F-05)
+- Extract TimeSelect shared component; fix Automation labels (F-08, F-09)
+- Inline API key edit for all sources, remove env var blocks (F-07)
+- PulseDeck description text + ProjectPulse rename and deep-link (F-01, F-02)
+- Render StreamingChat directly in Ask tab, remove CrossPaperChat collapsible (F-06)
+- Rename jargon labels to user-friendly copy (F-04)
+- Restructure Research Feed into 5 isolated tabs (F-11 T2)
+- Workflow banner and tooltips on extraction table page (F-05)
+- Deadline edit popover with urgency color coding (F-10 T1)
+- Add template section description and format hint (F-04 T1)
+- Add sources description and priority tooltips (F-01)
+- Boolean toggles and constrained number inputs in ingestion config (F-02)
+- Remove cron disclosure, replace time inputs with 24h selects (F-03)
+- Add description and tooltips to Authors section (F-08)
+- Add task delete/reopen actions, project badge on completed, deep-link (F-09)
+- Add section labels, sort direction hints, library count (F-11 T1)
+- Add labels and tooltips to Topics edit form (F-07)
+- Add per-slider tooltips to Pulse weight sliders (F-06)
+- Promote Analyze Paper, collapse manual steps, expose step tracker, Max cards tooltip
+- Add InfoTooltip to graph depth, min-paper-count, retention trend, retention tile
+- Normalize to 1.0 button + Pulse context link
+- Pulse time picker, deck/top-k sliders, Background Paper Search rename
+- Remove Quick Navigation, add Batch Ops confirmation dialogs
+- Consolidate metric tiles to 5, Library subtitle, Nudges→Scheduled Jobs
+- Hide pulse/setup/telegram keys, add Paper Workflow group, FSRS tooltips
+- Rename Unscored→Not yet ranked badge, add Pulse tooltip
+- Close 22 audit findings — 1 CRIT + 19 HIGH + 2 MED
+- Add escape_llm_text/wrap_delimited + apply to 4 LLM call sites [S-2.4]
+- Migration 021 tracked_authors uniqueness + tombstone resolver.py [W4.7, M7,M15]
+- Batch_generate_cards returns 202 + background task [M19]
+- Add rate limits to recommendations, setup-status, telegram commands [H11,M5,M3]
+- First-run setup wizard + Integrations tab (B1)
+- ./setup.sh + ./update.sh one-shot installer (A4)
+- Setup-status + telegram pairing endpoints (A1)
+- Deep-link pairing + DB-fallback auth (A2)
+- Setup-status + pairing types/api (A5)
+- Pin 3rd-party images + cloudflare tunnel profile (A3)
+- Per-route error boundaries
+- Stream L complete — eval harness + Playwright E2E
+- Stream L — eval harness for scoring pipeline
+- Stream K complete — Telegram bot thin delivery + rating callbacks
+- Stream K — gut research_pulse to thin delivery layer
+- Stream J complete — settings extensions for Pulse
+- Stream J — SourceSection dynamic key_env display
+- Stream J — AutomationSection Pulse subsection
+- Stream J — TopicSection description field
+- Stream J — expose topic description in API and types
+- Stream I complete — PulseDeck widget + MyDay/Feed integration
+- Stream I — PulseDeck widget
+- Stream H — PulseCard and WhyPopover with tests
+- Stream H — InfoTooltip primitive with tests
+- Stream H — types and API client for Pulse deck endpoints
+- Stream G complete — scheduler wiring + smoke tests
+- Stream G — REST router with 6 endpoints and tests
+- Stream G — run_pulse 7-step orchestration with tests
+- Stream G — discover_candidates fan-out + dedupe
+- Stream D finalize — remove stale digest.py, wire rag router
+- Stream B — source plugins (arxiv/S2 extend, openalex/pubmed new)
+- Stream A — scoring core (profile, prompts, 3-stage pipeline, deck)
+- Stream C — PDF resolution chain (arxiv → unpaywall)
+- F0 foundation - migration 018 + PaperSource ABC extension
+- My Day redesign + Pomodoro timer rewrite + UX polish
+- Implement My Day unified checklist and focus buttons
+- Add /focus and /next commands for ADHD execution support
+- Add My Day and Focus APIs for executive function view
+- Recommendation engine Phase 1 — liked centroid + project context
+- Quality infrastructure — conftest fixtures, pyright, pre-commit, targeted tests
+- Wire model selectors to LiteLLM config + chat progress UX
+- Marker PDF parsing + KaTeX math rendering
+
+
+### Miscellaneous Tasks
+- Docker-compose image tags (JARVIS_VERSION variable)
+- Generate CHANGELOG for v0.1.0
+- Cliff.toml + CHANGELOG.md generation config
+- Stronger post-commit blob-content check (Bucket E3)
+- Unswallow frontend/src/components/logs/
+- Cleanup + audit/desloppify outputs from prior agent sessions
+- Wave-3D — annotate legitimate defer_async user_id=None sites
+- Enable noUnusedLocals + noUncheckedIndexedAccess
+- Ignore .codeboarding/ + commit deep-audit source doc
+- Telegram healthcheck + langfuse pin + caddy limits + env-driven entrypoints
+- Bump Ollama 0.17.7 -> 0.23.1 (D7-1)
+- Apply low-severity review findings
+- Drop accidentally-committed libs/jarvis_common/uv.lock
+- Cleanup post-marathon — archive shipped plans, fix drift, tighten graphifyignore
+- Archive shipped Phase A plans + consolidate plan dirs
+- Rename unused full_text to _full_text in pdf_workflow (W1.7-G followup)
+- Pre-Phase-A baseline (harness restructure + in-flight fixes + Phase-A planning artifacts)
+- WS-AH2-A9+A10 anchor migration lint + archived-predicate guard
+- Strip BEGIN/COMMIT from migration 046 + lint script (044+ scope)
+- WS8-B0 tighten UserStateUpsert.status to post-046 enum + drop dead Zotero-on-starred-status branch
+- Apply ruff-format to test_eval_retrieval_script.py
+- WS7 lockfiles + marker filter + subprocess timeouts
+- WS6 pyright warnings + README /review entry
+- WS6-A1c canonicalize Embedder import in discovery + search (H4)
+- WS-5C SYM-001 source error handling + DB-003 + DOCKER-003
+- WS-C [FE-001/007/008/009/011/012] polish bundle
+- OPS-001 enforce chmod 600 in docs + setup.sh
+- Drop unused imports + fixture params for LSP cleanliness
+- Remove dead _TELEGRAM_BOT_URL module-level constant
+- Round 11 Wave E — 6 LOW cleanup + pyright unused-var tidy
+- Prune stale screenshots + flip shipped statuses + fix migration counts
+- Ignore .gemini and docs/personal
+- Add CLAUDE.md, .graphifyignore, update behavior optimization spec
+- Phase 1 Discovery & Pulse shipped
+
+
+### Performance
+- Bump _LLM_CONCURRENCY 5→8, drop _DEFAULT_STAGE2_TOP_K 50→40
+- Rate_card early-return on rating='open'
+- Use vr.matched_span_start for O(1) quote position lookup
+
+
+### Refactoring
+- Assert_paper_ownership reads discovered_by + user_library
+- Replace papers.user_id predicate with user_library JOIN
+- Drop user_id from upsert_paper; canonical-corpus only
+- Promote paper_state helpers, funnel user_id resolvers, improve noop_task docs
+- Consolidate QuoteVerifier in jarvis_common
+- Consolidate migrations + record_terminal_outcome progress
+- Rename _strip_think_streaming -> strip_think_streaming
+- WS-AH2-A4+A5 archived predicate substitution
+- Extract sse_event helper + SSE_DONE constant
+- WS7 resolve_secret_row helper + cooldown branch test
+- WS6-A5 D1/D2/D6/D7 single-file consolidations
+- WS-5B split routers/search.py into discovery + feed (GOD-001)
+- WS-5A extraction + rag subpackage migration (ARCH-001/002 + COMPLIANCE-002)
+- WS-4B lifespan factory + verifier DI (DRY-002 + COMPLIANCE-001)
+- WS-4A jobs router factory (DRY-001)
+- WS-6b pydantic-settings for shared env vars
+- JC-003 bucket reset; JC-005 cache api key; JC-006 request_id in errors; JC-007 raise not assert; JC-008 validate wrap_delimited tag; JC-009 public keepalive constants
+- LE-010 explicit ProjectDetailResponse; LE-013 shared compute_streak; LE-014 acquire() sweep; LE-015 guard snapshot path
+- LE-008 replace $N counting with dynamic_update / explicit positional params
+- EXT-004 delete shadowed extraction.py; PULSE-003/004 dead code removal
+- Replace assert with RuntimeError in production code
+- Extract auto-pipeline, promote deferred imports (C7)
+- Paper_ingestion/ root reorg into extraction/ rag/ subpackages (C6)
+- ProgressContext Protocol, remove app back-channels, type fixes (C5)
+- Extract migrations runner, telegram bootstrap, system endpoint (C4)
+- Split 947-LOC Embedder into ingestion/ subpackage (C3)
+- Split models.py god-file into paper_ingestion/models/ subpackage
+- Prefix normalization, auth dedup, typed responses (C1)
+- Drop B1 backward-compat helper aliases
+- XML parser consolidation, rate-limiter naming, docstring trim
+- Drop underscore-prefix on public helpers, db_pool naming
+- Delete dead learning_engine/jobs.py + telegram command_handler barrel
+- Rename top-level package app → telegram_bot
+- Rename top-level package app → learning_engine
+- Rename top-level package app → paper_ingestion
+- Wave G4 + H3 — utc_now_iso helper; rate-limit batch_status SSE
+- Wave F7 — lift hardcoded URLs to module-level constants
+- Wave F5 — replace global keyword with class-based state holders and lru_cache
+- Wave G3 — annotation tightening in pulse router + rate_limit + card_store
+- Wave H1 — add TypedDict definitions for project/task/milestone payloads
+- Wave D4 — drop pdf_workflow backward-compat aliases; update tests
+- Wave G1+G2 — CardType enum in CardResponse; CrossPaperRagPrep dataclass
+- Wave D3 — drop _insert_card alias; use insert_card directly
+- Wave D2+D4+D5 — router-level verify_api_key; drop main.py re-export shim
+- Wave F6 — ScriptError instead of sys.exit in library code
+- Wave F9 — move duplicated router constants to jarvis_common
+- Wave D1d — state→Depends(get_db_pool) for analyze/papers/pdf/rag
+- Wave D1b — state→Depends(get_db_pool) for knowledge_graph/pulse/settings
+- Wave D1a — state→Depends(get_db_pool) for authors/citations/extractions
+- Wave D1c — state→Depends(get_db_pool) for jobs/telegram/topics
+- Complete command_handler stub — remove duplicates, update test imports [T4-fixup]
+- Split command_handler into handlers/commands/ package [CQ-6.1]
+- Learning_engine type-safety + drive pyright to 0 [W4.2, M22-M26]
+
+
+### Security
+- Wave L1 — run containers as non-root; Docker Secrets for credentials
+
+
+### Testing
+- Group library coverage (Bucket C)
+- Preset/expand/search/spark-line coverage (Bucket D1)
+- Mock new intent api in IntentSection.test, last orange holdout
+- Bring test_eval_retrieval_script.py in line with D6-A
+- Add Qwen3Reranker tests + EVAL_RERANKER factory branches (D6-C)
+- Guard mock_enqueue.await_args against Optional access
+- Update mocks for Group B IDOR/star/feedback rewrites (remaining files)
+- Update mocks for Group B IDOR/star/feedback rewrites
+- Update litellm + pulse-scheduler tests for Groups C and G changes
+- Thread user_id through training tests for Group B
+- Align mask_secret assertions with H.1
+- Align mask_secret assertions with H.1
+- Align telegram pairing + sprint4_1a tests with H.1/H.10 changes
+- Align fixture with UTC anchoring (post-H.5)
+- Cover update_progress UPSERT, is_cancelled bridge, and JOIN
+- Assert legacy enqueue not called when KIND_TO_TASK dispatches
+- IntentSection reopen toast/auto-collapse + AppearanceSection legacy preset
+- MyDayPage hash-scroll rAF + HeroPulse clamp/reset
+- ScoreStack 1-signal vs 4-signal rendering + tooltips
+- IntentSection reopen + HeroPulse triage advance
+- Update HeroNow + MyDayPage tests — button selectors, hidden sections
+- Playwright E2E for dark-mode toggle (cycle, persist, system pref)
+- TodaysPulseSection displays contiguous ranks #2-#5 even with gappy server ranks
+- ThemeToggle unit tests (icon swap + click cycles theme)
+- Theme-store unit tests (initial=system, setTheme persists, cycleTheme rotation)
+- Tighten TriageSection.test fixture types for build
+- Wave 4.1 — Vitest tests for new sections
+- Wave 4.2 — Playwright E2E smoke spec
+- Mock fetchval for new W1.7-B preconditions in stale tests
+- WS-PA-W6 repair Wave-6 quality-gate stragglers
+- WS-PA-W4 endpoint integration + L1 unit + frontend regression + feedback-loop E2E + dead-code cleanup
+- WS-PA-W1ab repair pre-existing tests broken by lifecycle-redesign deletions
+- WS8 fix existing test regressions from B2.3/B2.5/B2.9 component changes
+- WS8 update bookmark/archive tests for B1.2 behavior changes
+- WS8-B3.7 surface chips + FeedPaperRow booleans + TrashView + BulkToolbar + keyboard shortcuts
+- WS8-B3.4 pulse generator excludes archived/dismissed candidates
+- WS8-B3.5 digest excludes archived/dismissed; legacy 'starred' status rejected
+- WS8-B3.8 Playwright full-lifecycle smoke (Inbox→Save→Library→Star→Archive→Dismiss→Trash→Restore→HardDelete)
+- WS8-B3.2 pulse rate_card lifecycle semantics (save→starred+saved+up; dismiss→dismissed+down; open=noop)
+- WS8-B3.3 recommender excludes dismissed candidates
+- WS6-A4b add encrypted_value=None to FakeRecord fixtures (M5)
+- WS6-A4c job-store fixture payload field (L5)
+- Repair post-r14 mocked smoke coverage
+- Verification helper + confidence SSE event coverage (WS-2.1)
+- Use pytest.mark.usefixtures for side-effect-only fixtures
+- Search_preview can read for library matching
+- Router coverage — projects, tasks, milestones CRUD smoke tests
+- Orchestration coverage — author alerts, briefing, deadline warning, review reminder
+- Phase E4 — poll library unit tests
+- Client, service, and router unit tests
+- Characterization tests before ingestion/ split (C3 pre-step)
+- Remove sys.modules stubs and redundant sys.path blocks (Wave A1+A2)
+- Fix cross-test pollution — limiter / extraction / telegram state
+- Restore limiter.enabled in fixture teardown (12 files)
+- Fix CORS and snapshot_path expectations
+- Fix Wave E batch 2 — LE + misc PI assertion failures
+- Fix Wave E batch 1 — assertion/logic failures
+- Fix Wave E batch 3 — verification fuzz + telegram pulse delivery
+- Scope uvicorn+apscheduler stubs to fixture
+- Scope module-level sys.modules stubs to fixtures
+- Override verify_api_key in test fixtures (Wave C)
+- Scope sys.modules stubs to fixtures (Wave B)
+- Enable repo-root pytest — importlib mode + stale file cleanup (A3)
+- Lift fitz stub to service-level conftest
+- Silence remaining pyright attr-defined on stub-module assignments
+- Wave C4 — drop over-mocking in test_script_db + test_embedder
+- Fix 6 pyright errors in new Wave C tests
+- Wave C1 — ≥1 happy-path + ≥1 edge-case per module
+- Wave C3 — extraction_jobs + rate_limiter + eval_pulse smoke
+- Wave C2 — models + cards router + jobs router
+- Round 11 Wave C — internal_api + settings_internal_reload tests (H-03)
+- Add 6 new Playwright specs for jobs + upload + cards + sources + pomodoro + discovery
+- Update Playwright specs for My Day + Research Feed + Settings Pulse tab
+- Parameterised fatal-error tests for stage1/stage3/assemble/upsert paths
+- Integration test for SSE /stream endpoint (noop.test round-trip)
+- Update tests for UX Round 3 renames (ProjectPulse→Progress, wizard step renumber, Ask tab restructure)
+- Update ResearchFeedPage and ExtractionTemplateSection tests for tab restructure
+- Fix incomplete batchProcessPapers mock type
+- Update stale assertions for renamed tab + empty state copy
+- Scoring formula coverage [CQ-5.2]
+- Adversarial SSRF + size/page unit tests [CQ-5.1]
+- Setup wizard happy path + skip flow (C1)
+- Stream L — 30-paper labeled fixture for eval harness
+- Stream K — red tests for pulse rating callbacks
+- Stream K — red delivery tests for thin research_pulse
+- Stream I — red PulseDeck widget test
+- Stream G — graceful-degradation regression tests
+- Stream G — discovery fan-out + dedupe red tests
+
+
+### Db
+- Migration 031 — Zotero papers/projects columns + user_config seeds
+
+
+### Polish
+- U6 — dark-mode track contrast on progress bars
+- U3+U4 — PulseCard ScoreStack + PulseDeckPage v5 header
+- U1 — BulkToolbar floating rounded pill
+- Narrow except + safe-strip + async PDF write
+
+
+### Style
+- Ruff auto-fixes after Wave E batches
+
+
+### Ui
+- WS-7 contract + relocate SectionHeader to typography/MarkerCaption
+- WS-6 drop redundant CardTitle in Settings sub-components
+- WS-5 drop LearningCardsPage SectionHeader markers
+- WS-4 demote Projects sub-tab SectionHeader markers to inline meta
+- WS-3 drop Citation/Knowledge/Extraction SectionHeader markers
+- WS-2 drop PaperDetailPage SectionHeader markers
+- WS-1 drop redundant Home/Settings/Feed captions
+
+
+### Wave-0/0A
+- Refresh RUNTIME_REPLAY_VERSIONS to (33 52 53) and wire migration lint into pre-commit
+
+
+### Wave-0/0C
+- Align ci-smoke + setup banner + CORS to HTTP for direct dashboard access
+
+
+### Wave-0/0D
+- Replace inert eslint-disable suppressions with proper ref-pattern fixes
+
+
+### Wave-1/1A
+- Telegram bot 8 fixes (BIDI strip, ack-after-auth, truncate helper, rate-limit start, explicit X-API-Key, marker user_id, /inbox command, qualname rate-limit key)
+
+
+### Wave-1/1B
+- Frontend ~17 fixes (papers-feed invalidation, paper_url scheme guard, IntentSection sub-query isError, a11y labels/htmlFor, ModePicker tablist, drop YesterdaySection, navigate-bridge, SectionHeader shim removal, PartialGenJob, error narrowing, BookOpen dedup, heroMode persist, parseTemplateFields, focus-session aria)
+
+
+### Wave-1/1C
+- PI router/service ~13 fixes (qwen3 import guard, pdf 502 dev gate, noop guard, embed retry, system rate-limits, qwen3 MAX_PASSAGES, SSE helpers DRY, reranker private __all__, trusted proxies refresh, Confidence.NONE, discovery 3-tuple default, sklearn version pickle, pdf_processor dev allowlist)
+
+
+### Wave-1/1E
+- Migrations+DB (mig 061 daily_intent.created_at, fix mig-59 probe + add mig-60/61 probes, $$ state machine for _strip_outer_transaction_control, mig 057 add user.timezone, mig 060 comment header)
+
+
+### Wave-1/1F
+- Procrastinate cutover finishing (aborting->cancelled, BaseException catch, jobs filter strict, _ctx_shim is_error, classifier_job_id surface, InMemoryConnector test, task_registry docstring)
+
+
+### Wave-1/1G
+- Infra (langfuse/n8n/cloudflared _FILE secrets, drop dead OPENAI/ANTHROPIC env, Caddy fail-fast + body cap, CADDY_IMAGE in versions.env, BACKUP_ENCRYPT_KEYFILE, openssl iter 600000, entrypoint password lazy-read, hostname pinning)
+
+
+### Wave-1/cleanup
+- Fix 5 regression-collateral test failures (W1-10 milestone deadline; W1-20 ctx_shim SQL; W1-7 task_registry record_terminal_outcome shape)
+
+
+### Wave-2/2.1
+- Promote paper_user_state helpers to jarvis_common (W2-26: 5-variant on_conflict, repoint 4 call sites)
+
+
+### Wave-2/2.2
+- Invert task_registry dependency direction (W4-1: jarvis_common owns app factory + register_tasks API; services own kind->handler dicts)
+
+
+### Wave-2/2.3
+- App_factory lifespan AsyncExitStack (W1-23: partial startup -> partial teardown; eliminates double-execution bug)
+
+
+### Wave-3/3.2
+- Debug_pulse dev-mode gate (W1-5 reshape: 404 in prod; global queries documented)
+
+
+### Wave-3/3.3
+- Drop unreachable confidence=0.5 branch (W1-24 reshape: whitespace-only-quote -> 0.0)
+<!-- generated by git-cliff -->

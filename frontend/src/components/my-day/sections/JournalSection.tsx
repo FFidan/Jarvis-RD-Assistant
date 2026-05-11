@@ -8,9 +8,11 @@ export function JournalSection() {
   const [prompts, setPrompts] = useState<JournalPrompts>({});
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    setLoadError(null);
     getJournalEntry(today).then((entry) => {
       if (entry) {
         setPrompts(entry.prompts);
@@ -19,7 +21,10 @@ export function JournalSection() {
           setExpanded(true);
         }
       }
-    }).catch(console.error);
+    }).catch((err) => {
+      console.error('Journal load failed:', err);
+      setLoadError(err instanceof Error ? err.message : 'Journal could not be loaded');
+    });
   }, [today]);
 
   // Cleanup: clear any pending save timer on unmount to prevent state updates on
@@ -35,7 +40,8 @@ export function JournalSection() {
 
   const scheduleSave = useCallback(
     (next: JournalPrompts) => {
-      if (saveTimer.current) clearTimeout(saveTimer.current);
+    if (loadError) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
       setSaving(false);
       saveTimer.current = setTimeout(() => {
         setSaving(true);
@@ -47,7 +53,7 @@ export function JournalSection() {
           });
       }, 1500);
     },
-    [today],
+    [today, loadError],
   );
 
   const update = (key: keyof JournalPrompts, value: string) => {
@@ -73,6 +79,7 @@ export function JournalSection() {
             id="journal-first-move"
             value={prompts.first_move ?? ''}
             onChange={(e) => update('first_move', e.target.value)}
+            disabled={loadError != null}
             placeholder="What's the one thing you'll do first tomorrow?"
             rows={2}
             className="w-full resize-none rounded-md border border-hair bg-paper px-3 py-2 text-[13.5px] text-soft placeholder:text-zinc-300 dark:placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-[var(--ink-blue,#0b3a8a)]/40 transition-shadow"
@@ -80,6 +87,12 @@ export function JournalSection() {
         </div>
 
         {/* Expand toggle */}
+        {loadError && (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-700 dark:text-amber-300">
+            {loadError}
+          </div>
+        )}
+
         {!expanded && (
           <button
             type="button"
@@ -101,6 +114,7 @@ export function JournalSection() {
                 id="journal-worked"
                 value={prompts.worked ?? ''}
                 onChange={(e) => update('worked', e.target.value)}
+                disabled={loadError != null}
                 placeholder="What went well today?"
                 rows={2}
                 className="w-full resize-none rounded-md border border-hair bg-paper px-3 py-2 text-[13.5px] text-soft placeholder:text-zinc-300 dark:placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-[var(--ink-blue,#0b3a8a)]/40 transition-shadow"
@@ -115,6 +129,7 @@ export function JournalSection() {
                 id="journal-blocked"
                 value={prompts.blocked ?? ''}
                 onChange={(e) => update('blocked', e.target.value)}
+                disabled={loadError != null}
                 placeholder="Any blockers or friction worth noting?"
                 rows={2}
                 className="w-full resize-none rounded-md border border-hair bg-paper px-3 py-2 text-[13.5px] text-soft placeholder:text-zinc-300 dark:placeholder:text-zinc-600 focus:outline-none focus:ring-1 focus:ring-[var(--ink-blue,#0b3a8a)]/40 transition-shadow"

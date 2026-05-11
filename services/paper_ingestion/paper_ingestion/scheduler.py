@@ -35,7 +35,9 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
     """Read ``user_config['pulse.enabled']`` — defaults to False if missing."""
     try:
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.enabled'")
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = 'pulse.enabled' AND user_id IS NULL"
+            )
     except Exception:
         logger.exception("pulse: failed to read pulse.enabled config")
         return False
@@ -75,7 +77,9 @@ async def _get_pulse_cron(db_pool: Any) -> str:
     """Read ``user_config['pulse.cron']`` — defaults to ``'0 4 * * *'``."""
     try:
         async with db_pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT value FROM user_config WHERE key = 'pulse.cron'")
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config WHERE key = 'pulse.cron' AND user_id IS NULL"
+            )
     except Exception:
         logger.exception("pulse: failed to read pulse.cron config")
         return _DEFAULT_PULSE_CRON
@@ -105,7 +109,7 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT key, value FROM user_config WHERE key IN"
-                " ('zotero.poll_enabled', 'zotero.poll_cron')"
+                " ('zotero.poll_enabled', 'zotero.poll_cron') AND user_id IS NULL"
             )
     except Exception:
         logger.exception("zotero: failed to read zotero config")
@@ -140,9 +144,11 @@ async def _defer_per_user(
 ) -> int:
     """Iterate active users and defer one ``task_kind`` job per user.
 
-    Falls back to a single system-shared defer (``user_id=None``) if no users
-    table exists or the table is empty (single-tenant pre-multi-user
-    deployments). Returns the count of jobs deferred.
+    Sprint B: returns 0 (no-op) when no active users exist. The pre-Sprint-B
+    "fall back to a single system-shared defer with ``user_id=None``" path
+    has been removed — a multi-user system with zero users has nothing to
+    do, and ``user_id=None`` defers leak unattributable work into the job
+    table.
     """
     import uuid  # noqa: PLC0415
 
@@ -150,20 +156,12 @@ async def _defer_per_user(
 
     user_ids = await _list_active_users(db_pool)
     if not user_ids:
-        # Pre-multi-user fallback: single system run.
-        jarvis_job_id = str(uuid.uuid4())
-        await KIND_TO_TASK[task_kind].defer_async(
-            job_id=jarvis_job_id,
-            user_id=None,  # allow-user-id-none: pre-multi-user fallback
-            **task_kwargs,
-        )
         logger.info(
-            "%s: no active users — deferred system-wide %s job %s",
+            "%s: no active users — skipping %s deferral",
             log_label,
             task_kind,
-            jarvis_job_id,
         )
-        return 1
+        return 0
     deferred = 0
     for uid in user_ids:
         try:

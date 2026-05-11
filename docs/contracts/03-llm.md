@@ -8,7 +8,7 @@
 - The retry / fallback policy
 
 This contract is the **evergreen counterpart** to the implementation spec at
-[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](../specs/archive/2026-05-02-instructor-langfuse-integration.md). The spec describes the
+[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md). The spec describes the
 *transition* (Wave 1 canary → Wave 2 bulk → Wave 3 cleanup); this contract
 describes the *steady state* the transition produces.
 
@@ -38,7 +38,7 @@ violates the contract; the violations are the work items in the impl spec.
 
 ## 1. The choke point
 
-After B.1 ships ([spec §2](../specs/archive/2026-05-02-instructor-langfuse-integration.md)), `jarvis_common.llm_client` exports exactly four
+After B.1 ships ([spec §2](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)), `jarvis_common.llm_client` exports exactly four
 functions. No code outside this module may construct a chat-completions
 HTTP request directly.
 
@@ -131,7 +131,7 @@ message included; up to 2 retry round-trips are performed before
 **Retries cost up to 3× round-trip time.** Caller stage budgets must
 account for this. Pulse's 600 s Stage-2 cap is the tightest constraint —
 if Stage-2 retry rate measured during canary exceeds the budget, the
-implementation plan reduces `max_retries` to 1 (per [spec §6.3](../specs/archive/2026-05-02-instructor-langfuse-integration.md)).
+implementation plan reduces `max_retries` to 1 (per [spec §6.3](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)).
 
 ### 3.3 Fallback per site
 
@@ -394,7 +394,7 @@ The implementation MUST satisfy these. Testable.
 - **[02-pulse.md §5](02-pulse.md#5-timeout-concurrency-and-budget-policy)** — Pulse Stage-2 owns the 600 s wall-clock cap; per-call timeout is 120 s, owned here.
 - **[04-observability.md §3](04-observability.md)** — every site here gets a `@observe(as_type="generation")` wrap on the choke-point function; per-site spans live on the surrounding `@observe()` boundary.
 - **[docs/ENGINEERING_STANDARDS.md "Anti-Hallucination"](../ENGINEERING_STANDARDS.md#L73-L89)** — verifier requirements that this contract embeds in §5.
-- **[docs/specs/archive/2026-05-02-instructor-langfuse-integration.md](../specs/archive/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec; the
+- **[docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md](../archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md)** — archived implementation spec; the
   contract above describes its endpoint state.
 
 ---
@@ -428,4 +428,4 @@ Every cited identifier was Read in the session producing this contract.
 | Card-generator `_verify_quote` fuzzy match | services/learning_engine/learning_engine/card_generator.py:72-79 | Custom verifier; preserved |
 | Pulse `verify_pulse_reasoning` | services/paper_ingestion/paper_ingestion/pulse/verification.py | QuoteVerifier-backed reasoning check |
 | Anti-hallucination spec | docs/ENGINEERING_STANDARDS.md:73-89 | Mandates evidence-backed claims |
-| Existing impl spec | docs/specs/archive/2026-05-02-instructor-langfuse-integration.md | Drives the transition to the steady state described above |
+| Existing impl spec | docs/archive/2026-05/specs/2026-05-02-instructor-langfuse-integration.md | Drives the transition to the steady state described above |

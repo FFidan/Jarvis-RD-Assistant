@@ -9,6 +9,7 @@ from typing import Any
 import asyncpg
 import httpx
 from jarvis_common.jobs import JobContext
+from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -23,7 +24,10 @@ logger = logging.getLogger(__name__)
 MAX_ENQUEUE_PER_SYNC = 20
 
 
-async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
+async def _get_zotero_config(
+    db_pool: asyncpg.Pool,
+    user_id: int | None = None,
+) -> dict[str, Any]:
     """Read Zotero settings from user_config. Returns dict with short keys.
 
     Prefers encrypted_value (post-Sprint-1 UI saves) over plaintext value
@@ -37,7 +41,11 @@ async def _get_zotero_config(db_pool: asyncpg.Pool) -> dict[str, Any]:
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
-            "SELECT key, value, encrypted_value FROM user_config WHERE key LIKE 'zotero.%'"
+            """SELECT DISTINCT ON (key) key, value, encrypted_value, user_id
+               FROM user_config
+               WHERE key LIKE 'zotero.%' AND (user_id = $1 OR user_id IS NULL)
+               ORDER BY key, user_id IS NULL""",
+            user_id,
         )
     config: dict[str, Any] = {}
     for row in rows:
@@ -89,6 +97,8 @@ async def push_paper_to_zotero(
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
+    raw_group_id = cfg.get("group_id")
+    group_id = int(raw_group_id) if raw_group_id is not None else None
     if not api_key or not user_id:
         logger.warning(
             "Zotero API key or user_id not configured, skipping push for paper %d", paper_id
@@ -98,7 +108,8 @@ async def push_paper_to_zotero(
     client = ZoteroClient(
         api_key=str(api_key),
         user_id=str(user_id),
-        library_type=str(library_type),
+        library_type=str(library_type),  # type: ignore[arg-type]
+        group_id=group_id,
         http_client=http_client,
     )
 
@@ -302,22 +313,23 @@ async def sync_annotations_for_paper(
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
+    raw_group_id = cfg.get("group_id")
+    group_id = int(raw_group_id) if raw_group_id is not None else None
     if not api_key or not user_id:
         return {"paper_id": paper_id, "imported": 0, "status": "disabled"}
 
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
-            "SELECT id, zotero_item_key, user_id FROM papers WHERE id = $1",
+            "SELECT id, zotero_item_key, discovered_by FROM papers WHERE id = $1",
             paper_id,
         )
     if not paper:
         return {"paper_id": paper_id, "imported": 0, "status": "not_found"}
     zotero_item_key = paper["zotero_item_key"]
-    # WS-2D: attribute imported annotations to the paper's owner so per-user
-    # note queries don't drop them as system-shared. Tolerate fixtures that
-    # don't expose user_id (NULL = system path).
+    # Sprint B: attribute imported annotations to the paper's discoverer
+    # (audit-trail column). Tolerate fixtures missing the column (NULL = system).
     try:
-        paper_owner_user_id = paper["user_id"]
+        paper_owner_user_id = paper["discovered_by"]
     except (KeyError, IndexError):
         paper_owner_user_id = None
     if not zotero_item_key:
@@ -326,7 +338,8 @@ async def sync_annotations_for_paper(
     client = ZoteroClient(
         api_key=str(api_key),
         user_id=str(user_id),
-        library_type=str(library_type),
+        library_type=str(library_type),  # type: ignore[arg-type]
+        group_id=group_id,
         http_client=http_client,
     )
     annotations = await client.get_item_children(str(zotero_item_key), item_type="annotation")
@@ -426,6 +439,8 @@ async def poll_zotero_library(
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
     library_type = cfg.get("library_type", "user")
+    raw_group_id = cfg.get("group_id")
+    group_id = int(raw_group_id) if raw_group_id is not None else None
     if not api_key or not user_id:
         logger.warning("Zotero poll: api_key or user_id not configured")
         return {"status": "disabled"}
@@ -439,7 +454,8 @@ async def poll_zotero_library(
     client = ZoteroClient(
         api_key=str(api_key),
         user_id=str(user_id),
-        library_type=str(library_type),
+        library_type=str(library_type),  # type: ignore[arg-type]
+        group_id=group_id,
         http_client=http_client,
     )
 
@@ -475,7 +491,7 @@ async def poll_zotero_library(
             try:
                 async with db_pool.acquire() as conn:
                     row = await conn.fetchrow(
-                        "SELECT id, zotero_item_key, user_id FROM papers"
+                        "SELECT id, zotero_item_key, discovered_by FROM papers"
                         " WHERE metadata->>'doi' = $1",
                         doi,
                     )
@@ -490,9 +506,9 @@ async def poll_zotero_library(
                         try:
                             await KIND_TO_TASK["zotero.sync_annotations"].defer_async(
                                 job_id=str(uuid.uuid4()),
-                                # WS-2D: attribute to paper's owner so per-user
-                                # note queries don't drop these annotations.
-                                user_id=row["user_id"],
+                                # Sprint B: attribute to paper's discoverer
+                                # (audit-trail column).
+                                user_id=row["discovered_by"],
                                 paper_id=row["id"],
                             )
                         except Exception:
@@ -539,9 +555,19 @@ async def poll_zotero_library(
 
         try:
             async with db_pool.acquire() as conn:
-                # WS-2D: attribute Zotero-imported papers to the polling user.
-                row = await upsert_paper(conn, paper_create, user_id=polling_user_id)
+                # Sprint B canonical-corpus: insert canonical, then mirror
+                # into the polling user's library so the imported item
+                # appears in *their* feed. ``discovered_by`` keeps the audit
+                # trail.
+                row = await upsert_paper(conn, paper_create, discovered_by=polling_user_id)
                 paper_id = row["id"]
+                if polling_user_id is not None:
+                    await add_to_library(
+                        conn,
+                        user_id=polling_user_id,
+                        paper_id=paper_id,
+                        added_via="zotero_pull",
+                    )
                 # First-sync wins: INSERT to_read state but never overwrite
                 # existing user state (user may have trashed the paper).
                 await _upsert_paper_user_state(
@@ -596,11 +622,12 @@ async def poll_zotero_library(
             async with db_pool.acquire() as conn:
                 await conn.execute(
                     """
-                    INSERT INTO user_config (key, value)
-                    VALUES ('zotero.last_library_version', $1::jsonb)
-                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
+                    INSERT INTO user_config (user_id, key, value)
+                    VALUES ($2, 'zotero.last_library_version', $1::jsonb)
+                    ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
                     """,
                     new_version,
+                    polling_user_id,
                 )
         except Exception:
             logger.error("Zotero poll: failed to persist last_library_version", exc_info=True)

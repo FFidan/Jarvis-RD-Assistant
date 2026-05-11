@@ -9,8 +9,8 @@ Related docs:
 - [../AGENTS.md](../AGENTS.md) - when agents must consult this file.
 - [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md) - how residual risks affect planning and closeout.
 - [ARCHITECTURE.md](ARCHITECTURE.md) - runtime boundaries affected by residual risks.
-- [plans/2026-04-29-refreshed-desloppify-score-work.md](plans/2026-04-29-refreshed-desloppify-score-work.md) - current manual
-  score-work plan after the Desloppify refresh.
+- [archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md](archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md) - archived manual
+  score-work plan after the Desloppify refresh (PAUSED 2026-05-02).
 
 ## DESLOPPIFY-TRIAGE-001 — review issue IDs cannot pass observe confirmation
 
@@ -25,7 +25,7 @@ cannot be completed for the refreshed review queue without a Desloppify parser
 fix or a changed issue-ID format.
 
 **Mitigation:** keep the run artifacts under `.desloppify/triage_runs/` and use
-[docs/plans/2026-04-29-refreshed-desloppify-score-work.md](plans/2026-04-29-refreshed-desloppify-score-work.md) as the current
+[docs/archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md](archive/2026-05/2026-04-29-refreshed-desloppify-score-work.md) as the current
 manual score-work plan.
 
 **Reopen criteria:** before relying on Desloppify staged triage as an automated
@@ -84,7 +84,7 @@ ARCH-001/002, DRY-001/002/003, GOD-001, SYM-001, COMPLIANCE-001/002, DOCKER-003,
 
 **Current state:** not started. The build-vs-adopt decision (NousResearch Hermes fork vs LiteLLM native tool-calling) requires explicit human sign-off before the spike is worth running.
 
-**Deferral rationale and decision criteria:** see `docs/plans/2026-04-26-ws7-hermes-deferral.md`.
+**Deferral rationale and decision criteria:** see `docs/archive/2026-05/old-plans/2026-04-26-ws7-hermes-deferral.md`.
 
 **Reopen criteria:** human reviewer selects build vs adopt path from the decision criteria table in that doc.
 
@@ -219,7 +219,7 @@ All items below were raised in the 2026-04-29 deep audit and closed in commits
 | NI-6 | Migration-lint script anchors its `cwd` to the repo root, not the caller's shell cwd | 6b8b83e |
 **Still open from Sprint 6:** M1 (multi-tenant user resolver), zotero.remove handler, inbox auto-prune cron, trash auto-purge cron, bulk-dismiss-by-topic, saved-search alerts, and migration 046 transition guard retirement — all tracked in the Sprint 6 deferrals section above.
 
-**Phase A — Paper Lifecycle Redesign — LANDED (2026-05-01, version 1.3.0):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). [docs/specs/archive/2026-04-29-paper-lifecycle-redesign.md](specs/archive/2026-04-29-paper-lifecycle-redesign.md) collapsed that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). The legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` were **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5, NI-4, NI-5, NI-6) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow; see the META plan at [docs/plans/archive/2026-04-30-marathon-meta.md](plans/archive/2026-04-30-marathon-meta.md).
+**Phase A — Paper Lifecycle Redesign — LANDED (2026-05-01, version 1.3.0):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). [docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) collapsed that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). The legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` were **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5, NI-4, NI-5, NI-6) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow; see the META plan at [docs/archive/2026-05/old-plans/2026-04-30-marathon-meta.md](archive/2026-05/old-plans/2026-04-30-marathon-meta.md).
 
 ---
 

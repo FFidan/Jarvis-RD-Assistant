@@ -54,7 +54,7 @@ n8n/credentials/
 
 # Logs
 *.log
-logs/
+/logs/
 
 # Testing
 .pytest_cache/
@@ -88,6 +88,9 @@ inspection/
 
 # Knowledge graph outputs
 graphify-out/
+
+# Perf profile snapshots (reproducible via `make profile`)
+artifacts/
 
 # CodeBoarding scratch outputs
 .codeboarding/

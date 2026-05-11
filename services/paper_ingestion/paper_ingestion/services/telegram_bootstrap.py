@@ -29,7 +29,8 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
     try:
         async with db_pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT value FROM user_config WHERE key = 'telegram.bot_username'"
+                "SELECT value FROM user_config "
+                "WHERE key = 'telegram.bot_username' AND user_id IS NULL"
             )
     except Exception:
         logger.warning("telegram.bot_username lookup failed", exc_info=True)
@@ -84,8 +85,8 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
     try:
         async with db_pool.acquire() as conn:
             await conn.execute(
-                """INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb)
-                ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
+                """INSERT INTO user_config (user_id, key, value) VALUES (NULL, $1, $2::jsonb)
+                ON CONFLICT (user_id, key) DO UPDATE SET value = $2::jsonb, updated_at = NOW()""",
                 "telegram.bot_username",
                 cache_value,
             )

@@ -817,8 +817,8 @@ async def test_settings_round_trip_string_no_double_encode(_app):
     # so call_args may point to the log_event INSERT. The first call is always the UPSERT.
     _call_args = conn.execute.call_args_list[0]
     positional_args = _call_args.args if _call_args.args else _call_args[0]
-    # positional_args: (sql, key, value)
-    stored_value = positional_args[2]
+    # positional_args: (sql, user_id, key, value) for scoped config writes
+    stored_value = positional_args[3]
     assert stored_value == cron_expr, (
         f"asyncpg received {stored_value!r} instead of raw {cron_expr!r} — "
         "json.dumps double-encode bug is still present in set_config"

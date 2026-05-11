@@ -35,34 +35,63 @@ async def get_dashboard_metrics(
     """
     user_id = await current_user_id_or_none(request)
     async with pool.acquire() as conn:
-        row = await conn.fetchrow(
-            """
-            SELECT
-                (SELECT COUNT(*) FROM papers
-                 WHERE user_id IS NOT DISTINCT FROM $1) AS total_papers,
-                (SELECT COUNT(*) FROM papers p
-                   WHERE p.user_id IS NOT DISTINCT FROM $1
-                     AND NOT EXISTS (
-                       SELECT 1 FROM paper_user_state pus
-                        WHERE pus.paper_id = p.id
-                          AND pus.user_id IS NOT DISTINCT FROM $1
-                          AND COALESCE(pus.state, 'inbox') IN ('done','trash')
-                     )) AS unread_papers,
-                (SELECT COUNT(*) FROM papers p
-                 LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
-                 WHERE p.user_id IS NOT DISTINCT FROM $1
-                   AND ps.id IS NULL) AS pending_papers,
-                -- cards/topics/scheduled_nudges lack user_id columns; scoped globally for now
-                (SELECT COUNT(*) FROM cards
-                 WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
-                (SELECT COUNT(*) FROM projects
-                 WHERE status = 'active'
-                   AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
-                (SELECT COUNT(*) FROM topics) AS topic_count,
-                (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
-            """,
-            user_id,
-        )
+        # Sprint B canonical-corpus: paper-count metrics scope through
+        # ``user_library`` (the caller's library) instead of the legacy
+        # ``papers.user_id`` predicate. In single-user mode (user_id=None)
+        # the user_library JOIN matches nothing — so we keep the legacy
+        # SELECT shape (no library JOIN) for that path.
+        if user_id is not None:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM user_library
+                     WHERE user_id = $1) AS total_papers,
+                    (SELECT COUNT(*) FROM user_library ul
+                       WHERE ul.user_id = $1
+                         AND NOT EXISTS (
+                           SELECT 1 FROM paper_user_state pus
+                            WHERE pus.paper_id = ul.paper_id
+                              AND pus.user_id = $1
+                              AND COALESCE(pus.state, 'inbox') IN ('done','trash')
+                         )) AS unread_papers,
+                    (SELECT COUNT(*) FROM user_library ul
+                     LEFT JOIN paper_summaries ps ON ul.paper_id = ps.paper_id
+                     WHERE ul.user_id = $1
+                       AND ps.id IS NULL) AS pending_papers,
+                    (SELECT COUNT(*) FROM cards
+                     WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
+                    (SELECT COUNT(*) FROM projects
+                     WHERE status = 'active'
+                       AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
+                    (SELECT COUNT(*) FROM topics) AS topic_count,
+                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
+                """,
+                user_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM papers) AS total_papers,
+                    (SELECT COUNT(*) FROM papers p
+                       WHERE NOT EXISTS (
+                           SELECT 1 FROM paper_user_state pus
+                            WHERE pus.paper_id = p.id
+                              AND pus.user_id IS NULL
+                              AND COALESCE(pus.state, 'inbox') IN ('done','trash')
+                         )) AS unread_papers,
+                    (SELECT COUNT(*) FROM papers p
+                     LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
+                     WHERE ps.id IS NULL) AS pending_papers,
+                    (SELECT COUNT(*) FROM cards
+                     WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
+                    (SELECT COUNT(*) FROM projects
+                     WHERE status = 'active'
+                       AND user_id IS NULL) AS active_projects,
+                    (SELECT COUNT(*) FROM topics) AS topic_count,
+                    (SELECT COUNT(*) FROM scheduled_nudges) AS nudge_count
+                """,
+            )
 
     if not row:
         return DashboardMetrics(

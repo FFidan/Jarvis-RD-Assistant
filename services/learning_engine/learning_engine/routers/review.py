@@ -27,7 +27,7 @@ async def _build_fsrs_manager_from_db(conn: asyncpg.pool.PoolConnectionProxy) ->
     learning_steps: list[timedelta] | None = None
 
     rows = await conn.fetch(
-        "SELECT key, value FROM user_config WHERE key IN ($1, $2)",
+        "SELECT key, value FROM user_config WHERE key IN ($1, $2) AND user_id IS NULL",
         "fsrs.desired_retention",
         "fsrs.learning_steps",
     )

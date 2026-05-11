@@ -275,9 +275,9 @@ async def _persist_config(pool: Any, key: str, value: Any, *, encrypted: bool) -
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO user_config (key, value, encrypted_value)
-                VALUES ($1, NULL, $2)
-                ON CONFLICT (key) DO UPDATE
+                INSERT INTO user_config (user_id, key, value, encrypted_value)
+                VALUES (NULL, $1, NULL, $2)
+                ON CONFLICT (user_id, key) DO UPDATE
                     SET value = NULL, encrypted_value = $2, updated_at = NOW()
                 """,
                 key,
@@ -287,9 +287,9 @@ async def _persist_config(pool: Any, key: str, value: Any, *, encrypted: bool) -
         async with pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO user_config (key, value)
-                VALUES ($1, $2::jsonb)
-                ON CONFLICT (key) DO UPDATE
+                INSERT INTO user_config (user_id, key, value)
+                VALUES (NULL, $1, $2::jsonb)
+                ON CONFLICT (user_id, key) DO UPDATE
                     SET value = $2::jsonb, updated_at = NOW()
                 """,
                 key,

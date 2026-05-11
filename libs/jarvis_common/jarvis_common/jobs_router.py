@@ -51,6 +51,7 @@ from jarvis_common import (
     JobCreateResponse,
     JobStatusResponse,
     assert_paper_ownership,
+    assert_papers_ownership,
     current_user_id,
 )
 from jarvis_common import jobs as jobs_lib
@@ -104,7 +105,7 @@ def build_jobs_router(
     get_db_pool: Callable[..., asyncpg.Pool],
     limiter: Limiter,
     payload_schemas: dict[str, type[BaseModel]] | None = None,
-    paper_ownership_extractor: Callable[[dict[str, Any]], int | None] | None = None,
+    paper_ownership_extractor: Callable[[dict[str, Any]], int | list[int] | None] | None = None,
     task_lookup: Callable[[], Mapping[str, Any]] | None = None,
 ) -> APIRouter:
     """Build a ``/api/jobs`` router wired to the given service's deps.
@@ -169,7 +170,7 @@ def build_jobs_router(
     # ------------------------------------------------------------------
     # POST /api/jobs
     # ------------------------------------------------------------------
-    @router.post("", status_code=201, response_model=JobCreateResponse)
+    @router.post("", status_code=202, response_model=JobCreateResponse)
     @limiter.limit("30/minute")
     async def create_job(
         request: Request,
@@ -206,6 +207,9 @@ def build_jobs_router(
                     # PoolConnectionProxy delegates fetchrow → real Connection at
                     # runtime; the helper signature is asyncpg.Connection.
                     await assert_paper_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
+            elif isinstance(paper_id_for_check, list):
+                async with db_pool.acquire() as conn:
+                    await assert_papers_ownership(conn, paper_id_for_check, user_id)  # type: ignore[arg-type]
 
         # Dispatch via procrastinate task registry.
         tasks = task_lookup() if task_lookup is not None else KIND_TO_TASK

@@ -35,31 +35,31 @@ async def _rotate(*, apply: bool) -> None:
         async with conn.transaction():
             rows = await conn.fetch(
                 """
-                SELECT key, encrypted_value
+                SELECT id, key, encrypted_value
                 FROM user_config
                 WHERE encrypted_value IS NOT NULL
-                ORDER BY key
+                ORDER BY key, id
                 """
             )
-            updates: list[tuple[bytes, str]] = []
+            updates: list[tuple[bytes, int]] = []
             for row in rows:
                 encrypted_value = row["encrypted_value"]
                 if isinstance(encrypted_value, memoryview):
                     encrypted_value = encrypted_value.tobytes()
                 ciphertext = bytes(encrypted_value).decode("ascii")
                 plaintext = old_fernet.decrypt(ciphertext.encode("ascii"))
-                updates.append((new_fernet.encrypt(plaintext), row["key"]))
+                updates.append((new_fernet.encrypt(plaintext), row["id"]))
 
             if apply:
-                for ciphertext, key in updates:
+                for ciphertext, row_id in updates:
                     await conn.execute(
                         """
                         UPDATE user_config
                         SET encrypted_value = $1, updated_at = NOW()
-                        WHERE key = $2
+                        WHERE id = $2
                         """,
                         ciphertext,
-                        key,
+                        row_id,
                     )
 
             print(
