@@ -42,8 +42,8 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
     from paper_ingestion.routers.settings import migrate_plaintext_secrets
 
     rows = [
-        {"key": "zotero.api_key", "value": "legacy-plaintext"},
-        {"key": "llm.openai.api_key", "value": "sk-openai-legacy"},
+        {"id": 1, "key": "zotero.api_key", "value": "legacy-plaintext"},
+        {"id": 2, "key": "llm.openai.api_key", "value": "sk-openai-legacy"},
     ]
     pool, conn = _make_pool_with_rows(rows)
 
@@ -53,16 +53,16 @@ async def test_migrate_rewrites_plaintext_rows(fernet_key):
     # Two UPDATE calls — one per row
     assert conn.execute.await_count == 2
     # Each call's $2 (the ciphertext) must decrypt back to the original plaintext
-    plaintext_by_key = {row["key"]: row["value"] for row in rows}
+    plaintext_by_id = {row["id"]: row["value"] for row in rows}
     for call in conn.execute.await_args_list:
         sql = call.args[0]
         assert "UPDATE user_config" in sql
         assert "encrypted_value = $2" in sql
-        key_arg = call.args[1]
+        row_id = call.args[1]
         ciphertext_bytes = call.args[2]
         # ciphertext is bytes; decode to str then run decrypt_secret
         ct = ciphertext_bytes.decode("ascii")
-        assert decrypt_secret(ct) == plaintext_by_key[key_arg]
+        assert decrypt_secret(ct) == plaintext_by_id[row_id]
 
 
 @pytest.mark.asyncio

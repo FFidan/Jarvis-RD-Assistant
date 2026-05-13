@@ -73,11 +73,13 @@ async def push_paper_to_zotero(
     paper_id: int,
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
+    *,
+    owner_user_id: int | None = None,
 ) -> None:
     """Push a paper to Zotero. Only pushes papers that have at least one project link.
 
     Push flow:
-    1. Load config — skip if Zotero is disabled or credentials are missing.
+    1. Load config — skip if Zotero credentials are missing.
     2. Load paper + project links — skip if no projects linked.
     3. Deduplicate by DOI against existing Zotero items.
     4. Create Zotero item with collections per linked project.
@@ -89,10 +91,7 @@ async def push_paper_to_zotero(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool)
-    if not cfg.get("enabled"):
-        logger.debug("Zotero disabled, skipping push for paper %d", paper_id)
-        return
+    cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
 
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
@@ -114,7 +113,12 @@ async def push_paper_to_zotero(
     )
 
     async with db_pool.acquire() as conn:
-        await _push_paper_with_conn(paper_id, conn, client)
+        await _push_paper_with_conn(
+            paper_id,
+            conn,
+            client,
+            owner_user_id=owner_user_id,
+        )
 
     logger.info("Paper %d pushed to Zotero", paper_id)
 
@@ -123,20 +127,26 @@ async def _push_paper_with_conn(
     paper_id: int,
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     client: Any,
+    *,
+    owner_user_id: int | None = None,
 ) -> None:
     """Internal push implementation that operates on a single DB connection."""
     paper = await conn.fetchrow(
         """
         SELECT p.id, p.title, p.authors, p.metadata->>'doi' AS doi, p.url, p.abstract,
                p.pdf_local_path, p.zotero_item_key,
-               array_agg(DISTINCT pp.project_id)
-                   FILTER (WHERE pp.project_id IS NOT NULL) AS project_ids
+               array_agg(DISTINCT owner_project.id)
+                   FILTER (WHERE owner_project.id IS NOT NULL) AS project_ids
         FROM papers p
         LEFT JOIN project_papers pp ON pp.paper_id = p.id
+        LEFT JOIN projects owner_project
+          ON owner_project.id = pp.project_id
+         AND ($2::bigint IS NULL OR owner_project.user_id IS NOT DISTINCT FROM $2)
         WHERE p.id = $1
         GROUP BY p.id
         """,
         paper_id,
+        owner_user_id,
     )
 
     if not paper:
@@ -217,8 +227,14 @@ async def _push_paper_with_conn(
         for project_id in project_ids:
             try:
                 project = await conn.fetchrow(
-                    "SELECT id, name, zotero_collection_key FROM projects WHERE id = $1",
+                    """
+                    SELECT id, name, zotero_collection_key
+                    FROM projects
+                    WHERE id = $1
+                      AND ($2::bigint IS NULL OR user_id IS NOT DISTINCT FROM $2)
+                    """,
                     project_id,
+                    owner_user_id,
                 )
                 if not project:
                     continue
@@ -275,11 +291,18 @@ async def resync_paper_to_zotero(
     paper_id: int,
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
+    *,
+    owner_user_id: int | None = None,
 ) -> None:
     """Force re-push paper to Zotero (clears existing zotero_item_key first)."""
     async with db_pool.acquire() as conn:
         await conn.execute("UPDATE papers SET zotero_item_key = NULL WHERE id = $1", paper_id)
-    await push_paper_to_zotero(paper_id, db_pool, http_client)
+    await push_paper_to_zotero(
+        paper_id,
+        db_pool,
+        http_client,
+        owner_user_id=owner_user_id,
+    )
 
 
 def _annotation_page_number(value: Any) -> int | None:
@@ -297,6 +320,8 @@ async def sync_annotations_for_paper(
     paper_id: int,
     db_pool: asyncpg.Pool,
     http_client: httpx.AsyncClient,
+    *,
+    owner_user_id: int | None = None,
 ) -> dict[str, Any]:
     """Import Zotero PDF annotations into ``paper_notes`` for a linked paper.
 
@@ -306,9 +331,7 @@ async def sync_annotations_for_paper(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool)
-    if not cfg.get("enabled"):
-        return {"paper_id": paper_id, "imported": 0, "status": "disabled"}
+    cfg = await _get_zotero_config(db_pool, user_id=owner_user_id)
 
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
@@ -426,15 +449,7 @@ async def poll_zotero_library(
     """
     from paper_ingestion.integrations.zotero_client import ZoteroClient  # noqa: PLC0415
 
-    cfg = await _get_zotero_config(db_pool)
-
-    if not cfg.get("enabled"):
-        logger.debug("Zotero poll: integration disabled")
-        return {"status": "disabled"}
-
-    if not cfg.get("poll_enabled", False):
-        logger.debug("Zotero poll: poll_enabled is false")
-        return {"status": "poll_disabled"}
+    cfg = await _get_zotero_config(db_pool, user_id=polling_user_id)
 
     api_key = cfg.get("api_key", "")
     user_id = cfg.get("user_id", "")
@@ -444,6 +459,10 @@ async def poll_zotero_library(
     if not api_key or not user_id:
         logger.warning("Zotero poll: api_key or user_id not configured")
         return {"status": "disabled"}
+
+    if not cfg.get("poll_enabled", False):
+        logger.debug("Zotero poll: poll_enabled is false")
+        return {"status": "poll_disabled"}
 
     # Read last known library version (persisted as a JSON number in user_config).
     last_version: int = 0
@@ -677,7 +696,7 @@ async def _zotero_push_job(
         await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Starting Zotero push")
-    await push_paper_to_zotero(paper_id, pool, http_client)
+    await push_paper_to_zotero(paper_id, pool, http_client, owner_user_id=user_id)
     await ctx.update_progress(1.0, "Done")
     return {"paper_id": paper_id, "status": "pushed"}
 
@@ -704,7 +723,7 @@ async def _zotero_resync_job(
         await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Clearing existing Zotero key")
-    await resync_paper_to_zotero(paper_id, pool, http_client)
+    await resync_paper_to_zotero(paper_id, pool, http_client, owner_user_id=user_id)
     await ctx.update_progress(1.0, "Done")
     return {"paper_id": paper_id, "status": "resynced"}
 
@@ -751,6 +770,11 @@ async def _zotero_sync_annotations_job(
         await assert_paper_ownership(conn, paper_id, user_id)
 
     await ctx.update_progress(0.1, "Fetching Zotero annotations")
-    result = await sync_annotations_for_paper(paper_id, pool, http_client)
+    result = await sync_annotations_for_paper(
+        paper_id,
+        pool,
+        http_client,
+        owner_user_id=user_id,
+    )
     await ctx.update_progress(1.0, "Done")
     return result

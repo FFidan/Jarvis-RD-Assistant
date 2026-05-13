@@ -15,8 +15,8 @@ Environment variables (reads from .env or system environment):
     QDRANT_PORT         - Qdrant port (default: 6333)
     LITELLM_BASE_URL    - LiteLLM proxy URL (default: http://localhost:4000)
     EMBEDDING_MODEL     - LiteLLM model alias (default: embed)
-    EMBEDDING_MODEL_NAME- Actual model name for tracking (default: qwen3-embedding:0.6b)
-    EMBEDDING_DIMENSION - Vector dimension (default: 1024)
+    EMBEDDING_MODEL_NAME- Actual model name for tracking (default: qwen3-embedding:4b)
+    EMBEDDING_DIMENSION - Vector dimension (default: 2560)
     REEMBED_RECREATE_COLLECTION
                          - Set true to delete/recreate a wrong-dimension Qdrant collection
     REEMBED_BATCH_SIZE  - Papers per batch for progress logging (default: 5)
@@ -115,8 +115,8 @@ _WARMUP_WARNING_MS = 10_000
 LITELLM_CONFIG = get_litellm_config(base_url_default="http://localhost:4000")
 LITELLM_BASE_URL = LITELLM_CONFIG.base_url
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "embed")
-EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "qwen3-embedding:0.6b")
-EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))
+EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "qwen3-embedding:4b")
+EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "2560"))
 QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 QDRANT_API_KEY = os.environ.get("QDRANT_API_KEY") or None

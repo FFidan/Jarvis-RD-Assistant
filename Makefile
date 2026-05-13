@@ -1,8 +1,10 @@
 SERVICES = services/paper_ingestion services/learning_engine services/telegram_bot
-# Compose wrapper: pins image tags from versions.env and sets dummy letsencrypt vars for local dev
-COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose --env-file versions.env
+# Compose wrapper: load local .env first when present, then image pins from versions.env.
+COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.env
+COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
+COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -105,3 +107,7 @@ up-build:
 ## Output: artifacts/perf/<UTC-timestamp>/. See docs/perf/HOWTO.md for prerequisites.
 profile:
 	bash scripts/profile.sh
+
+## Boot the local stack with profiling-only Postgres/ptrace overrides.
+profile-stack-up:
+	$(COMPOSE_PERF) up -d postgres paper_ingestion dashboard

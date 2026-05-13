@@ -81,31 +81,51 @@ async def test_add_to_library_idempotent_second_call_is_no_op_at_db_level():
 
 
 @pytest.mark.asyncio
-async def test_list_users_with_topic_is_noop_until_per_user_topics_ship():
-    """Wave-1 reviewer fix: helper returns [] until per-user topic subscriptions exist.
-
-    Previous behaviour fanned out to *all* active users regardless of
-    topic_id, which spammed every user with every auto-fetched paper. The
-    helper is now a documented no-op; tests assert no DB call is issued.
-    """
+async def test_list_users_with_topic_returns_subscribers():
+    """Returns user_ids from user_topic_subscriptions for the given topic_id."""
     conn = _make_conn()
-    conn.fetch = AsyncMock()
+    conn.fetch = AsyncMock(return_value=[{"user_id": 3}, {"user_id": 7}])
 
     users = await list_users_with_topic(conn, topic_id=99)
-    assert users == []
-    # No DB call — the helper short-circuits without touching the connection.
-    conn.fetch.assert_not_awaited()
+
+    assert users == [3, 7]
+    conn.fetch.assert_awaited_once()
+    sql, arg = conn.fetch.await_args.args
+    assert "user_topic_subscriptions" in sql
+    assert arg == 99
 
 
 @pytest.mark.asyncio
-async def test_list_users_with_topic_noop_does_not_query_db():
-    """Even if the ``users`` table is missing, the no-op never queries — no error."""
+async def test_list_users_with_topic_returns_empty_when_no_subscribers():
+    """Empty result set maps to an empty list (no subscribers for topic)."""
     conn = _make_conn()
-    conn.fetch = AsyncMock(side_effect=asyncpg.exceptions.UndefinedTableError("users"))
+    conn.fetch = AsyncMock(return_value=[])
 
     users = await list_users_with_topic(conn, topic_id=1)
+
     assert users == []
-    conn.fetch.assert_not_awaited()
+    conn.fetch.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_users_subscribe_then_fan_out_inserts_library_row(monkeypatch):
+    """subscribe → fan_out_to_topic_users → user_library row exists (seam test)."""
+    conn = _make_conn()
+
+    # Simulate one subscriber (user 5) for topic 10.
+    conn.fetch = AsyncMock(return_value=[{"user_id": 5}])
+
+    count = await fan_out_to_topic_users(conn, paper_id=42, topic_ids=[10])
+
+    assert count == 1
+    conn.execute.assert_awaited_once()
+    sql = conn.execute.await_args.args[0]
+    assert "INSERT INTO user_library" in sql
+    assert "auto_fetch_topic_match" in sql
+    # Verify topic_id was passed to the subscription query.
+    sub_sql, topic_arg = conn.fetch.await_args.args
+    assert "user_topic_subscriptions" in sub_sql
+    assert topic_arg == 10
 
 
 @pytest.mark.asyncio
@@ -148,8 +168,9 @@ async def test_fan_out_to_topic_users_empty_topics_returns_zero():
 
 @pytest.mark.asyncio
 async def test_fan_out_to_topic_users_noop_when_list_users_empty():
-    """Default no-op state: ``list_users_with_topic`` returns ``[]`` → no INSERT."""
+    """No subscribers for any topic → no INSERT into user_library."""
     conn = _make_conn()
+    # _make_conn sets conn.fetch to return [] — no subscribers.
     count = await fan_out_to_topic_users(conn, paper_id=42, topic_ids=[1, 2])
     assert count == 0
     conn.execute.assert_not_awaited()

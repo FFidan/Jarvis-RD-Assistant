@@ -173,6 +173,15 @@ class TestListFeedPapers:
         assert body["total"] == 0
         assert body["papers"] == []
 
+    def test_feed_rejects_unknown_scope(self, client):
+        """Feed scope is an explicit library/corpus enum."""
+        test_client, _mock_pool = client
+
+        resp = test_client.get("/api/papers/feed", params={"scope": "everything"})
+
+        assert resp.status_code == 422
+        assert "Unknown scope" in resp.text
+
     def test_feed_search_can_include_zotero_notes_without_duplicate_rows(self, client):
         """include_zotero_notes searches notes through EXISTS and exposes note metadata."""
         test_client, mock_pool = client
@@ -196,5 +205,7 @@ class TestListFeedPapers:
         count_sql = conn.fetchval.call_args.args[0]
         assert "EXISTS (SELECT 1 FROM paper_notes pn" in sql
         assert "EXISTS (SELECT 1 FROM paper_notes pn" in count_sql
+        assert "pn.user_id IS NOT DISTINCT FROM $1" in sql
+        assert "pn.user_id IS NOT DISTINCT FROM $1" in count_sql
         assert "JOIN paper_notes" not in count_sql
         assert resp.json()["papers"][0]["note_match_count"] == 2

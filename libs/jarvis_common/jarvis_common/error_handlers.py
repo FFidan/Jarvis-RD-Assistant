@@ -1,7 +1,6 @@
 """Shared exception handlers for FastAPI services."""
 
 import logging
-import os
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -9,13 +8,14 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from jarvis_common.logging_config import request_id_ctx
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
 
 def _is_dev_mode() -> bool:
     """Return True when DEV_MODE=true (case-insensitive)."""
-    return os.environ.get("DEV_MODE", "false").lower() == "true"
+    return get_core_settings().dev_mode
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:

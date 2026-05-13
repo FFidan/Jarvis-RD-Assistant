@@ -133,6 +133,96 @@ def test_build_feed_queries_user_id_kwarg_threads_into_params():
     assert query_parts.count_params == [42]
 
 
+def test_build_feed_queries_corpus_scope_keeps_user_state_overlay_without_library_join():
+    """Authenticated users can browse the canonical corpus without leaving their own state overlay."""
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=10,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=42,
+        scope="corpus",
+    )
+
+    assert "JOIN user_library" not in query_parts.data_query
+    assert "pus.user_id IS NOT DISTINCT FROM $1" in query_parts.data_query
+    assert query_parts.params == [42, 10, 0]
+    assert query_parts.count_params == [42]
+
+
+def test_build_feed_queries_scopes_zotero_note_search_to_caller():
+    """Zotero note full-text search/snippets must not read another user's notes."""
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=10,
+        offset=0,
+        q="highlight",
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        include_zotero_notes=True,
+        user_id=42,
+    )
+
+    assert query_parts.data_query.count("pn.user_id IS NOT DISTINCT FROM $1") == 3
+    assert query_parts.count_query.count("pn.user_id IS NOT DISTINCT FROM $1") == 1
+    assert query_parts.params == [42, "highlight", 10, 0]
+
+
+def test_build_feed_queries_scopes_recommendations_to_caller():
+    """Recommendation labels/sorting are per-user state on shared canonical papers."""
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="recommendation",
+        limit=10,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        recommended=True,
+        user_id=42,
+    )
+
+    assert "pr.user_id IS NOT DISTINCT FROM $1" in query_parts.data_query
+    assert "pr.user_id IS NOT DISTINCT FROM $1" in query_parts.count_query
+    assert "pr.id IS NOT NULL" in query_parts.data_query
+
+
+def test_build_feed_queries_corpus_library_view_means_all_non_trash():
+    """All-discovered corpus view should not be limited to personal library states."""
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=10,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=42,
+        scope="corpus",
+        view="library",
+    )
+
+    assert "JOIN user_library" not in query_parts.data_query
+    assert "COALESCE(pus.state, 'inbox') != 'trash'" in query_parts.data_query
+    assert "IN ('to_read','reading','done')" not in query_parts.data_query
+
+
 def test_build_feed_queries_no_user_id_uses_canonical_corpus_fallback():
     """Sprint B: user_id=None bypasses the JOIN and returns the canonical corpus.
 

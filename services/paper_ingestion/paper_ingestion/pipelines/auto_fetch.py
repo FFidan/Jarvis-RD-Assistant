@@ -7,6 +7,7 @@ Called by the APScheduler job registered in ``scheduler.start_scheduler``.
 import asyncio
 import logging
 from pathlib import Path
+from typing import Any
 
 from jarvis_common.library import fan_out_to_topic_users
 
@@ -57,8 +58,9 @@ async def run_auto_pipeline(app) -> None:
             name = _row_get(row, "name")
             if not name:
                 continue
-            tid = _row_get(row, "id")
-            topic_pairs.append((int(tid) if tid is not None else None, str(name)))
+            tid: Any = _row_get(row, "id")
+            topic_id = int(tid) if isinstance(tid, int | str) else None
+            topic_pairs.append((topic_id, str(name)))
         if not topic_pairs:
             topic_pairs = [(None, "machine learning")]  # sensible default
 

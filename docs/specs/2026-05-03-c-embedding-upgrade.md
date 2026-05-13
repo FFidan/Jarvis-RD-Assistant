@@ -3,7 +3,7 @@
 **Status:** SHIPPED — live re-embed complete on the local stack
 **Date:** 2026-05-03
 **Scope:** Marathon Phase C — replace `nomic-embed-text` (768d) with Qwen3-Embedding-0.6B (1024d)
-**Part of:** [docs/plans/archive/2026-04-30-marathon-meta.md](../plans/archive/2026-04-30-marathon-meta.md)
+**Part of:** [docs/archive/2026-05/old-plans/2026-04-30-marathon-meta.md](../archive/2026-05/old-plans/2026-04-30-marathon-meta.md)
 
 ---
 

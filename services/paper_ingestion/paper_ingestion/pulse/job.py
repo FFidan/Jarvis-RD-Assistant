@@ -139,8 +139,7 @@ async def run_pulse(
         if await ctx.is_cancelled():
             raise asyncio.CancelledError()
     try:
-        # H20/WS-6C: pass user_id=None explicitly — system job, single-tenant mode.
-        profile = await load_profile(db_pool, embedder=embedder, user_id=None)
+        profile = await load_profile(db_pool, embedder=embedder, user_id=user_id)
     except Exception as exc:  # broad: touches DB + embedder; any failure is fatal for this run
         stats["last_error"] = f"load_profile: {exc}"
         logger.exception("pulse.load_profile failed")
@@ -300,7 +299,7 @@ async def run_pulse(
             classifier_values, classifier_meta = await classifier_scores(
                 db_pool,
                 [sc.signals for sc in enriched],
-                user_id=None,  # allow-user-id-none: pulse job — no user context at schedule time
+                user_id=user_id,
             )
         else:
             classifier_values = [0.0 for _ in enriched]
@@ -405,6 +404,7 @@ async def run_pulse(
                     stats=stats,
                     degraded_reason=degraded_reason,
                     conn=conn,
+                    user_id=user_id,
                 )
         stats["card_count"] = persisted
         logger.info("pulse.persisted", extra={"persisted": persisted, "cards": len(deck)})

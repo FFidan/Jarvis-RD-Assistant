@@ -104,16 +104,27 @@ class TestJarvisCommonSettings:
 
 
 class TestPaperIngestionSettings:
-    def test_defaults(self) -> None:
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from paper_ingestion.config import PaperIngestionSettings
 
+        for key in (
+            "QDRANT_URL",
+            "QDRANT_API_KEY",
+            "OLLAMA_BASE_URL",
+            "VECTOR_API_URL",
+            "EMBEDDING_MODEL",
+            "EMBEDDING_MODEL_NAME",
+            "EMBEDDING_DIMENSION",
+        ):
+            monkeypatch.delenv(key, raising=False)
         s = PaperIngestionSettings()
         assert s.qdrant_url == "http://qdrant:6333"
         assert s.qdrant_api_key is None
         assert s.ollama_base_url == "http://ollama:11434"
+        assert s.vector_api_url == "http://vector:8686"
         assert s.embedding_model == "embed"
-        assert s.embedding_model_name == "qwen3-embedding:0.6b"
-        assert s.embedding_dimension == 1024
+        assert s.embedding_model_name == "qwen3-embedding:4b"
+        assert s.embedding_dimension == 2560
         assert s.reranker_model == "mixedbread-ai/mxbai-rerank-base-v2"
         assert s.qwen3_reranker_model == "Qwen/Qwen3-Reranker-0.6B"
         assert s.pdf_storage_path == "/data/pdfs"

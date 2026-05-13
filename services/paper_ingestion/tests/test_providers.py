@@ -124,10 +124,10 @@ async def test_set_encrypted_key_writes_bytea(_app):
     sql = call_args.args[0]
     assert "encrypted_value" in sql
     # The ciphertext passed to the driver should be bytes
-    ciphertext_arg = call_args.args[2]
+    ciphertext_arg = call_args.args[3]
     assert isinstance(ciphertext_arg, bytes)
     # Sanity-check: value column is cleared (NULL passed as None)
-    assert call_args.args[1] == "llm.anthropic.api_key"
+    assert call_args.args[2] == "llm.anthropic.api_key"
 
 
 @pytest.mark.asyncio

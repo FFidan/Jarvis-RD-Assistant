@@ -156,7 +156,7 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen3:14b,qwen3:4b,qwen3-embedding:0.6b}
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen3:14b,qwen3:4b,qwen3-embedding:4b}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -255,7 +255,7 @@ services:
       - jarvis
 
   paper_ingestion:
-    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/paper_ingestion:${JARVIS_VERSION:-0.2.1}
     build:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
@@ -326,7 +326,7 @@ services:
       - jarvis
 
   learning_engine:
-    image: jarvis/learning_engine:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/learning_engine:${JARVIS_VERSION:-0.2.1}
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
@@ -365,7 +365,7 @@ services:
       - jarvis
 
   telegram_bot:
-    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/telegram_bot:${JARVIS_VERSION:-0.2.1}
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
@@ -406,7 +406,7 @@ services:
       - jarvis
 
   dashboard:
-    image: jarvis/dashboard:${JARVIS_VERSION:-0.1.0}
+    image: jarvis/dashboard:${JARVIS_VERSION:-0.2.1}
     build:
       context: ./frontend
       args:
@@ -571,7 +571,7 @@ services:
   # Activate with: `docker compose --profile caddy-local up -d`
   # Then access https://localhost:3001 (browsers trust the mkcert root CA).
   caddy_local:
-    image: ${CADDY_IMAGE:?CADDY_IMAGE is not set — source versions.env before running docker compose}
+    image: ${CADDY_IMAGE:-caddy:2.9-alpine}
     profiles: [caddy-local]
     container_name: jarvis_caddy_local
     restart: unless-stopped
@@ -584,7 +584,7 @@ services:
       dashboard:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:2019/config/"]
+      test: ["CMD", "wget", "-q", "--spider", "--no-check-certificate", "https://localhost:3001/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -599,18 +599,15 @@ services:
       - jarvis
 
   caddy:
-    image: ${CADDY_IMAGE:?CADDY_IMAGE is not set — source versions.env before running docker compose}
+    image: ${CADDY_IMAGE:-caddy:2.9-alpine}
     profiles: [letsencrypt]
     restart: unless-stopped
     ports:
       - "${LETSENCRYPT_HTTP_PORT:-80}:80"
       - "${LETSENCRYPT_HTTPS_PORT:-443}:443"
     environment:
-      # Fail-fast: compose errors immediately when either variable is unset or
-      # empty — prevents Caddy starting with no domain/email and silently
-      # failing ACME certificate acquisition.
-      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:?required for letsencrypt profile}
-      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:?required for letsencrypt profile}
+      LETSENCRYPT_DOMAIN: ${LETSENCRYPT_DOMAIN:-}
+      LETSENCRYPT_EMAIL: ${LETSENCRYPT_EMAIL:-}
     volumes:
       - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -634,7 +631,7 @@ services:
       - jarvis
 
   vector:
-    image: ${VECTOR_IMAGE:?VECTOR_IMAGE is not set — source versions.env before running docker compose}
+    image: ${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}
     container_name: jarvis_vector
     restart: unless-stopped
     volumes:

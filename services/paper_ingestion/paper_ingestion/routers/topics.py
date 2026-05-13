@@ -5,6 +5,7 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
+from jarvis_common.auth import current_user_id_or_none
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import TopicCreate, TopicResponse, TopicUpdate
@@ -24,6 +25,65 @@ async def list_topics(
     async with db_pool.acquire() as conn:
         rows = await conn.fetch("SELECT * FROM topics ORDER BY name")
     return [TopicResponse(**dict(r)) for r in rows]
+
+
+# Subscription routes declared BEFORE /{topic_id} to avoid shadowing by the
+# parameterised route.
+@router.get("/subscriptions", response_model=list[int])
+@limiter.limit("60/minute")
+async def list_my_subscriptions(
+    request: Request,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> list[int]:
+    user_id = await current_user_id_or_none(request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    async with db_pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT topic_id FROM user_topic_subscriptions WHERE user_id = $1 ORDER BY topic_id",
+            user_id,
+        )
+    return [int(r["topic_id"]) for r in rows]
+
+
+@router.put("/{topic_id}/subscribe", status_code=204)
+@limiter.limit("30/minute")
+async def subscribe_to_topic(
+    request: Request,
+    topic_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
+    user_id = await current_user_id_or_none(request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    async with db_pool.acquire() as conn:
+        exists = await conn.fetchval("SELECT 1 FROM topics WHERE id = $1", topic_id)
+        if not exists:
+            raise HTTPException(status_code=404, detail=f"Topic {topic_id} not found")
+        await conn.execute(
+            "INSERT INTO user_topic_subscriptions (user_id, topic_id) "
+            "VALUES ($1, $2) ON CONFLICT (user_id, topic_id) DO NOTHING",
+            user_id,
+            topic_id,
+        )
+
+
+@router.delete("/{topic_id}/subscribe", status_code=204)
+@limiter.limit("30/minute")
+async def unsubscribe_from_topic(
+    request: Request,
+    topic_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+) -> None:
+    user_id = await current_user_id_or_none(request)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    async with db_pool.acquire() as conn:
+        await conn.execute(
+            "DELETE FROM user_topic_subscriptions WHERE user_id = $1 AND topic_id = $2",
+            user_id,
+            topic_id,
+        )
 
 
 @router.post("", response_model=TopicResponse, status_code=201)

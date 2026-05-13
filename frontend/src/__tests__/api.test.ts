@@ -8,6 +8,7 @@ import {
   scanContradictions,
   scanPaperContradictions,
   searchPreview,
+  fetchFeed,
 } from '@/lib/api';
 
 describe('apiFetch', () => {
@@ -204,6 +205,42 @@ describe('apiFetch', () => {
     expect(globalThis.fetch).toHaveBeenLastCalledWith(
       '/api/notes/7/promote',
       expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
+  it('maps corpus library scope to all_non_trash feed view', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ papers: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchFeed({ view: 'library', scope: 'corpus', limit: 10, offset: 20 });
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/papers/feed?view=all_non_trash&scope=corpus&limit=10&offset=20&include_zotero_notes=true',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
+    );
+  });
+
+  it('preserves explicit library filters when corpus scope is selected', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ papers: [], total: 0 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+
+    await fetchFeed({ view: 'library', scope: 'corpus', filter: 'starred', limit: 5, offset: 0 });
+
+    expect(globalThis.fetch).toHaveBeenLastCalledWith(
+      '/api/papers/feed?view=starred&scope=corpus&limit=5&offset=0&include_zotero_notes=true',
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'Content-Type': 'application/json' }),
+      }),
     );
   });
 });

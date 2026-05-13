@@ -36,7 +36,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Annotated, Any
@@ -44,6 +43,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
+from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,7 @@ async def _admin_count(pool: Any) -> int:
 
 def _cookie_secure() -> bool:
     """Match Secure flag to runtime mode (mirrors auth.py)."""
-    return os.environ.get("DEV_MODE", "false").lower() != "true"
+    return not get_core_settings().dev_mode
 
 
 async def require_unconfigured_or_admin(request: Request) -> None:

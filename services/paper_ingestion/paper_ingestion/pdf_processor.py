@@ -9,13 +9,13 @@ import asyncio
 import functools
 import ipaddress
 import logging
-import os
 import socket
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import fitz  # fitz (PyMuPDF) retained for page snapshot generation only; text extraction uses Marker
 import httpx
+from jarvis_common.settings import get_core_settings
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 
@@ -137,7 +137,7 @@ async def _validate_pdf_url(url: str) -> None:
         If the URL fails validation.
     """
     parsed = urlparse(url)
-    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+    dev_mode = get_core_settings().dev_mode
 
     # Per-domain HTTP allowlist for development environments.
     # In dev mode, http:// is accepted for these local service hostnames

@@ -9,7 +9,13 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
 import type { ConfigEntry } from '@/types';
+import { toast } from 'sonner';
 
+const ZOTERO_LIBRARY_SCOPE_KEYS = new Set([
+  'zotero.library_type',
+  'zotero.user_id',
+  'zotero.group_id',
+]);
 
 function getConfigValue(configs: ConfigEntry[], key: string): string {
   const entry = configs.find((c) => c.key === key);
@@ -49,10 +55,14 @@ export function ZoteroSection() {
 
   // Sync now state
   const [isSyncing, setIsSyncing] = useState(false);
+  const [libraryScopeChanged, setLibraryScopeChanged] = useState(false);
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      if (ZOTERO_LIBRARY_SCOPE_KEYS.has(variables.key)) {
+        setLibraryScopeChanged(true);
+      }
       queryClient.invalidateQueries({ queryKey: ['config'] });
     },
   });
@@ -74,8 +84,8 @@ export function ZoteroSection() {
   const handleBlurGroupId = () => {
     const currentGroupId = groupIdRaw;
     if (draftGroupId !== null && draftGroupId !== currentGroupId) {
-      const parsed = draftGroupId === '' ? null : parseInt(draftGroupId, 10);
-      if (draftGroupId === '' || (!isNaN(parsed as number) && (parsed as number) > 0)) {
+      const parsed = draftGroupId === '' ? null : Number.parseInt(draftGroupId, 10);
+      if (draftGroupId === '' || (parsed !== null && Number.isInteger(parsed) && parsed > 0)) {
         setMut.mutate({ key: 'zotero.group_id', value: parsed });
       }
     }
@@ -118,14 +128,28 @@ export function ZoteroSection() {
     setIsSyncing(true);
     try {
       const response = await zoteroPollNow();
+      const status:
+        | 'queued'
+        | 'running'
+        | 'succeeded'
+        | 'failed'
+        | 'cancelled' =
+        response.status === 'running' ||
+        response.status === 'succeeded' ||
+        response.status === 'failed' ||
+        response.status === 'cancelled'
+          ? response.status
+          : 'queued';
       useJobStore.getState().trackExternalJob({
         jobId: response.job_id,
         kind: 'zotero.poll',
         payload: {},
-        status: response.status as 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled',
+        status,
       });
+      setLibraryScopeChanged(false);
+      toast.success('Zotero library sync queued.');
     } catch {
-      // silently ignore — job may have queued anyway
+      toast.error('Zotero sync failed to queue.');
     } finally {
       setIsSyncing(false);
     }
@@ -171,13 +195,11 @@ export function ZoteroSection() {
 
         {/* Library ID */}
         <div className="space-y-2">
-          <Label htmlFor="zotero-user-id">
-            {libraryType === 'group' ? 'Group ID' : 'User ID'}
-          </Label>
+          <Label htmlFor="zotero-user-id">User ID</Label>
           <Input
             id="zotero-user-id"
             type="text"
-            placeholder={libraryType === 'group' ? 'e.g. 987654' : 'e.g. 1234567'}
+            placeholder="e.g. 1234567"
             value={draftUserId ?? userId}
             onChange={(e) => setDraftUserId(e.target.value)}
             onBlur={handleBlurUserId}
@@ -192,9 +214,7 @@ export function ZoteroSection() {
             >
               zotero.org/settings/keys
             </a>
-            {libraryType === 'group'
-              ? ' next to the group library URL or API path.'
-              : ' next to "Your userID for use in API calls".'}
+            {' '}next to &quot;Your userID for use in API calls&quot;.
           </p>
         </div>
 
@@ -315,22 +335,30 @@ export function ZoteroSection() {
             />
           </div>
 
-          {pollEnabled && (
+          {(pollEnabled || libraryScopeChanged) && (
             <div className="space-y-4 pl-1 border-l-2 border-muted ml-1">
               {/* Poll cron schedule */}
-              <div className="space-y-1 pl-4">
-                <Label htmlFor="zotero-poll-cron" className="text-sm">Sync schedule (cron)</Label>
-                <Input
-                  id="zotero-poll-cron"
-                  type="text"
-                  placeholder="0 * * * *"
-                  value={draftPollCron ?? pollCron}
-                  onChange={(e) => setDraftPollCron(e.target.value)}
-                  onBlur={handleBlurPollCron}
-                  className="font-mono text-sm"
-                />
-                <p className="text-xs text-muted-foreground">Default: hourly (0 * * * *)</p>
-              </div>
+              {pollEnabled && (
+                <div className="space-y-1 pl-4">
+                  <Label htmlFor="zotero-poll-cron" className="text-sm">Sync schedule (cron)</Label>
+                  <Input
+                    id="zotero-poll-cron"
+                    type="text"
+                    placeholder="0 * * * *"
+                    value={draftPollCron ?? pollCron}
+                    onChange={(e) => setDraftPollCron(e.target.value)}
+                    onBlur={handleBlurPollCron}
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">Default: hourly (0 * * * *)</p>
+                </div>
+              )}
+
+              {libraryScopeChanged && (
+                <p className="pl-4 text-xs text-muted-foreground">
+                  Library identity changed. Queue a library sync now to import from the new Zotero scope.
+                </p>
+              )}
 
               {/* Sync now button */}
               <div className="pl-4">
@@ -343,7 +371,7 @@ export function ZoteroSection() {
                   {isSyncing ? (
                     <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                   ) : null}
-                  {isSyncing ? 'Syncing…' : 'Sync now'}
+                  {isSyncing ? 'Syncing…' : libraryScopeChanged ? 'Run library sync now' : 'Sync now'}
                 </Button>
               </div>
             </div>

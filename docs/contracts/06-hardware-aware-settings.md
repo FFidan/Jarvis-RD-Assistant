@@ -55,8 +55,9 @@ user-facing surface. This contract designs the user-facing surface.
 - **No auto-switching mid-session.** Slider/picker is informational; it does
   not redirect inflight requests. A change to `smart_num_ctx` takes effect on
   the next chat completion only.
-- **No multi-tenant concerns.** Single user per machine. Wave-2 (`user_id`
-  column sweep) is deferred separately per [project memory: Wave-2 multi-tenant prep DEFERRED 2026-05-07](../../CLAUDE.md).
+- **No new multi-tenant semantics.** The auth/user model exists, but this
+  contract only adds per-machine model-runtime controls. It must not redefine
+  ownership, sharing, or cross-user visibility.
 - **No hostname display.** Internal `machine_id` only — the user knows
   which machine they're on; they don't need their UI to tell them.
 - **No cloud VRAM accounting.** Cloud entries (Anthropic / OpenAI) render a

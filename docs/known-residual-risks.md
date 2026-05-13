@@ -122,11 +122,18 @@ Fixed in commits 72577e1 (DB-003: `BEGIN`/`COMMIT` added) and 0cff746 (DB-004: `
 
 ## Sprint 6 deferrals (2026-04-28)
 
-### M1 — `pulse_ratings` and `paper_user_state` null `user_id` backfill
+### M1 — legacy NULL `user_id` rows remain compatibility data
 
-**`pulse_ratings` and `paper_user_state` writes do not stamp `user_id`.** The `current_user_id_or_none` stub returns None today, so rows accumulate with `user_id=NULL`. Before enabling multi-tenant, a backfill migration must assign all NULL `user_id` rows to a sentinel system user. Tracked as M1 in 2026-04-28 audit.
+The authentication resolver and per-user ownership model now exist, and new
+browser-session writes carry real user IDs through the main paper, Pulse, and
+Zotero paths. Legacy single-user/API-key rows with `user_id=NULL` are still
+valid compatibility data and are intentionally matched via `NULLS NOT DISTINCT`
+or explicit fallback reads. Do not backfill them blindly: a future cleanup must
+first decide whether each table's NULL rows represent system defaults, legacy
+single-user ownership, or durable anonymous history.
 
-**Reopen criteria:** before `MULTITENANT_ENABLED=true` is enforced with a real auth resolver.
+**Reopen criteria:** before removing API-key/single-user compatibility or
+before enforcing `MULTITENANT_ENABLED=true` without NULL fallback reads.
 
 ### H5 — Migration 043 live-fixture test deferred
 

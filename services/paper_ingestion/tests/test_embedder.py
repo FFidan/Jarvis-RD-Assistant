@@ -57,10 +57,11 @@ async def test_chunk_text_with_page_boundaries():
 async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
     """Embedder should pick up the shared base URL (transparent proxy, no auth headers)."""
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    from paper_ingestion.ingestion.embedder import EMBEDDING_DIMENSION
 
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * 1024}]}
+    response.json.return_value = {"data": [{"index": 0, "embedding": [0.1] * EMBEDDING_DIMENSION}]}
     mock_http = AsyncMock()
     mock_http.post.return_value = response
     mock_qdrant = AsyncMock()
@@ -68,7 +69,7 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
 
     result = await embedder.embed_texts(["test text"])
 
-    assert result == [[0.1] * 1024]
+    assert result == [[0.1] * EMBEDDING_DIMENSION]
     mock_http.post.assert_awaited_once_with(
         "http://litellm.test:4000/v1/embeddings",
         json={"model": "embed", "input": ["test text"]},

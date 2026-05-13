@@ -77,14 +77,79 @@ async def test_zotero_wrapper_defers_one_job_per_user(task_registry_mocks):
     pool, _conn = _pool_with_users([7, 8])
     app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
 
-    with patch.object(
-        scheduler,
-        "_get_zotero_poll_config",
-        AsyncMock(return_value=(True, "0 * * * *")),
+    with (
+        patch.object(
+            scheduler,
+            "_get_zotero_poll_config",
+            AsyncMock(return_value=(True, "0 * * * *")),
+        ),
+        patch.object(
+            scheduler,
+            "_list_zotero_polling_users",
+            AsyncMock(return_value=[7, 8]),
+        ),
     ):
         await scheduler.run_zotero_sync_wrapper(app)
 
     assert task_registry_mocks["zotero.sync_from_zotero"].defer_async.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_zotero_wrapper_uses_per_user_readiness_without_global_poll_row(
+    task_registry_mocks,
+):
+    """A missing NULL-user poll_enabled row must not suppress ready personal configs."""
+    pool = MagicMock()
+    app = SimpleNamespace(state=SimpleNamespace(db_pool=pool))
+
+    with (
+        patch.object(
+            scheduler,
+            "_get_zotero_poll_config",
+            AsyncMock(return_value=(False, "0 * * * *")),
+        ),
+        patch.object(
+            scheduler,
+            "_list_zotero_polling_users",
+            AsyncMock(return_value=[42]),
+        ),
+    ):
+        await scheduler.run_zotero_sync_wrapper(app)
+
+    task_registry_mocks["zotero.sync_from_zotero"].defer_async.assert_awaited_once()
+    assert (
+        task_registry_mocks["zotero.sync_from_zotero"].defer_async.await_args.kwargs["user_id"]
+        == 42
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_zotero_polling_users_requires_user_credentials():
+    """Scheduled Zotero polling should only fan out to users with ready personal config."""
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": 1, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 1, "key": "zotero.api_key", "value": None, "encrypted_value": b"cipher"},
+        {"id": 1, "key": "zotero.user_id", "value": "123", "encrypted_value": None},
+        {"id": 2, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 2, "key": "zotero.user_id", "value": "456", "encrypted_value": None},
+        {"id": 3, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 3, "key": "zotero.api_key", "value": "key", "encrypted_value": None},
+        {"id": 3, "key": "zotero.user_id", "value": "789", "encrypted_value": None},
+        {"id": 3, "key": "zotero.library_type", "value": "group", "encrypted_value": None},
+        {"id": 4, "key": "zotero.poll_enabled", "value": True, "encrypted_value": None},
+        {"id": 4, "key": "zotero.api_key", "value": "key", "encrypted_value": None},
+        {"id": 4, "key": "zotero.user_id", "value": "789", "encrypted_value": None},
+        {"id": 4, "key": "zotero.library_type", "value": "group", "encrypted_value": None},
+        {"id": 4, "key": "zotero.group_id", "value": "999", "encrypted_value": None},
+    ]
+    pool = MagicMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    assert await scheduler._list_zotero_polling_users(pool) == [1, 4]
 
 
 @pytest.mark.asyncio

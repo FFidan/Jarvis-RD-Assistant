@@ -1,11 +1,20 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { fetchTopics, createTopic, updateTopic, deleteTopic } from '@/lib/api';
+import {
+  fetchTopics,
+  createTopic,
+  updateTopic,
+  deleteTopic,
+  fetchMySubscriptions,
+  subscribeToTopic,
+  unsubscribeFromTopic,
+} from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
@@ -36,6 +45,29 @@ export function TopicSection() {
     queryKey: ['topics'],
     queryFn: fetchTopics,
   });
+
+  const { data: subscriptions = [] } = useQuery({
+    queryKey: ['topic-subscriptions'],
+    queryFn: fetchMySubscriptions,
+  });
+
+  const subscribeMut = useMutation({
+    mutationFn: (topicId: number) => subscribeToTopic(topicId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topic-subscriptions'] }),
+  });
+
+  const unsubscribeMut = useMutation({
+    mutationFn: (topicId: number) => unsubscribeFromTopic(topicId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['topic-subscriptions'] }),
+  });
+
+  const handleSubscriptionToggle = (topic: Topic, checked: boolean) => {
+    if (checked) {
+      subscribeMut.mutate(topic.id);
+    } else {
+      unsubscribeMut.mutate(topic.id);
+    }
+  };
 
   const createMut = useMutation({
     mutationFn: (data: Partial<Topic>) => createTopic(data),
@@ -205,16 +237,33 @@ export function TopicSection() {
                         </p>
                       )}
                     </div>
-                    <div className="flex items-center gap-1">
-                      <Button size="sm" variant="ghost" onClick={() => handleToggle(topic)}>
-                        {topic.enabled ? 'Disable' : 'Enable'}
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => startEdit(topic)} aria-label="Edit topic">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button size="icon" variant="ghost" onClick={() => handleDelete(topic.id)} aria-label="Delete topic">
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2">
+                        <Switch
+                          id={`sub-${topic.id}`}
+                          checked={subscriptions.includes(topic.id)}
+                          onCheckedChange={(checked) => handleSubscriptionToggle(topic, checked)}
+                          aria-label="Auto-add matches to my library"
+                        />
+                        <label
+                          htmlFor={`sub-${topic.id}`}
+                          className="cursor-pointer text-xs text-muted-foreground"
+                          title="When enabled, papers matching this topic are automatically added to your library during auto-fetch."
+                        >
+                          Auto-add matches
+                        </label>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => handleToggle(topic)}>
+                          {topic.enabled ? 'Disable' : 'Enable'}
+                        </Button>
+                        <Button size="icon" variant="ghost" onClick={() => startEdit(topic)} aria-label="Edit topic">
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button size="icon" variant="ghost" onClick={() => handleDelete(topic.id)} aria-label="Delete topic">
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
                   </>
                 )}

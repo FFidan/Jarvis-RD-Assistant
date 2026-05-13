@@ -21,12 +21,14 @@ def _select_sql(*, note_query_param: int | None, include_tldr: bool) -> str:
         note_sql = (
             " (SELECT COUNT(*)::integer FROM paper_notes pn"
             " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+            " AND pn.user_id IS NOT DISTINCT FROM $1"
             " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
             " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
             f" ${note_query_param})) AS note_match_count,"
             " (SELECT NULLIF(left(coalesce(pn.highlight_text, pn.user_note), 240), '')"
             " FROM paper_notes pn"
             " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+            " AND pn.user_id IS NOT DISTINCT FROM $1"
             " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
             " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
             f" ${note_query_param})"
@@ -58,14 +60,27 @@ _BASE_FROM_USER = (
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
     " LEFT JOIN paper_user_state pus"
     " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
-    " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
+    " LEFT JOIN paper_recommendations pr"
+    " ON pr.paper_id = p.id AND pr.dismissed = FALSE"
+    " AND pr.user_id IS NOT DISTINCT FROM $1"
+)
+_BASE_FROM_CORPUS_USER = (
+    " FROM papers p"
+    " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
+    " LEFT JOIN paper_user_state pus"
+    " ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1"
+    " LEFT JOIN paper_recommendations pr"
+    " ON pr.paper_id = p.id AND pr.dismissed = FALSE"
+    " AND pr.user_id IS NOT DISTINCT FROM $1"
 )
 _BASE_FROM_NO_USER = (
     " FROM papers p"
     " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
     " LEFT JOIN paper_user_state pus"
     " ON p.id = pus.paper_id AND pus.user_id IS NULL"
-    " LEFT JOIN paper_recommendations pr ON pr.paper_id = p.id AND pr.dismissed = FALSE"
+    " LEFT JOIN paper_recommendations pr"
+    " ON pr.paper_id = p.id AND pr.dismissed = FALSE"
+    " AND pr.user_id IS NULL"
 )
 
 
@@ -103,6 +118,7 @@ def build_feed_queries(
     include_zotero_notes: bool = False,
     user_id: int | None = None,
     view: str | None = None,
+    scope: str = "library",
 ) -> FeedQueryParts:
     """Build the feed data and count queries for the requested filters.
 
@@ -125,6 +141,8 @@ def build_feed_queries(
     """
     if view is not None and view not in VIEW_PREDICATES:
         raise ValueError(f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}")
+    if scope not in {"library", "corpus"}:
+        raise ValueError(f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']")
 
     conditions: list[str] = []
     params: list[object] = []
@@ -135,7 +153,12 @@ def build_feed_queries(
     # always reserved for user_id so downstream parameter numbering matches
     # historical expectations (and the LEFT JOIN onto paper_user_state still
     # binds against $1).
-    base_from = _BASE_FROM_USER if user_id is not None else _BASE_FROM_NO_USER
+    if user_id is None:
+        base_from = _BASE_FROM_NO_USER
+    elif scope == "corpus":
+        base_from = _BASE_FROM_CORPUS_USER
+    else:
+        base_from = _BASE_FROM_USER
     params.append(user_id)
     param_idx += 1
 
@@ -151,6 +174,7 @@ def build_feed_queries(
                 f"p.search_vector @@ websearch_to_tsquery('english', ${param_idx})"
                 " OR EXISTS (SELECT 1 FROM paper_notes pn"
                 " WHERE pn.paper_id = p.id AND pn.source = 'zotero'"
+                " AND pn.user_id IS NOT DISTINCT FROM $1"
                 " AND to_tsvector('english', coalesce(pn.user_note, '') || ' '"
                 " || coalesce(pn.highlight_text, '')) @@ websearch_to_tsquery('english',"
                 f" ${param_idx}))"
@@ -161,9 +185,13 @@ def build_feed_queries(
         params.append(q)
         param_idx += 1
 
+    # In corpus scope, the Library tab means "all non-trash canonical papers";
+    # user library membership is only meaningful in library scope.
+    effective_view = "all_non_trash" if scope == "corpus" and view == "library" else view
+
     # view= takes precedence over the legacy statuses= filter
-    if view is not None:
-        conditions.append(f"({VIEW_PREDICATES[view]})")
+    if effective_view is not None:
+        conditions.append(f"({VIEW_PREDICATES[effective_view]})")
     else:
         status_list = split_csv_filter(statuses)
         if status_list:

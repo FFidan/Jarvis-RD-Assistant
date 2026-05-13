@@ -134,6 +134,41 @@ async def test_happy_path_end_to_end(patch_pipeline):
 
 
 @pytest.mark.asyncio
+async def test_run_pulse_threads_user_id_to_profile_and_persistence(patch_pipeline):
+    """Per-user Pulse jobs must not drop user_id inside the pipeline."""
+    from paper_ingestion.pulse.job import run_pulse
+
+    pool, _conn = _make_pool_and_conn()
+    now = datetime(2026, 5, 11, 4, 0, tzinfo=UTC)
+
+    await run_pulse(pool, MagicMock(), MagicMock(), now=now, user_id=42)
+
+    mocks = patch_pipeline["mocks"]
+    assert mocks["load_profile"].await_args.kwargs["user_id"] == 42
+    assert mocks["persist_deck"].await_args.kwargs["user_id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_run_pulse_threads_user_id_to_classifier_scores(patch_pipeline):
+    """Explicit classifier scoring must train and score against the requesting user."""
+    from paper_ingestion.pulse.job import run_pulse
+
+    patch_pipeline["profile"].weights["classifier"] = 0.2
+    classifier_scores = AsyncMock(
+        return_value=(
+            [0.1 for _ in patch_pipeline["stage2"]],
+            {"available": True, "feature_names": []},
+        )
+    )
+
+    pool, _conn = _make_pool_and_conn()
+    with patch("paper_ingestion.pulse.job.classifier_scores", classifier_scores):
+        await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC), user_id=42)
+
+    assert classifier_scores.await_args.kwargs["user_id"] == 42
+
+
+@pytest.mark.asyncio
 async def test_stage2_scores_all_survivors_in_one_call(patch_pipeline):
     """Progress reporting must not throttle Stage 2 into sequential batches of five."""
     from paper_ingestion.pulse.job import run_pulse

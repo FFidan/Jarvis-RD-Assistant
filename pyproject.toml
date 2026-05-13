@@ -1,6 +1,6 @@
 [project]
 name = "jarvis-rd-assistant"
-version = "0.1.0"
+version = "0.2.1"
 description = "Self-hosted AI-powered research assistant"
 requires-python = ">=3.12"
 license = "MIT"

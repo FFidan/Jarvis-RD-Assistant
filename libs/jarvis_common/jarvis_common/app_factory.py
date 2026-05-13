@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -42,6 +41,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from jarvis_common.auth import refresh_api_key_cache, validate_production_config
+from jarvis_common.config import get_jarvis_common_settings
 from jarvis_common.crypto import reload_fernet_on_sighup, validate_encrypted_config_rows
 from jarvis_common.db_helpers import init_pg_connection
 from jarvis_common.error_handlers import (
@@ -52,6 +52,7 @@ from jarvis_common.error_handlers import (
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
 from jarvis_common.request_id import RequestIDMiddleware
 from jarvis_common.secrets import read_secret
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
@@ -85,12 +86,13 @@ def build_database_url() -> str:
                 f"FATAL: {_POSTGRES_SECRET_PATH} exists but is empty — "
                 "cannot construct DATABASE_URL"
             )
-        user = os.environ.get("POSTGRES_USER", "jarvis")
-        db = os.environ.get("POSTGRES_DB", "jarvis")
+        settings = get_jarvis_common_settings()
+        user = settings.postgres_user
+        db = settings.postgres_db
         return f"postgresql://{user}:{password}@postgres:5432/{db}"
 
     # Fallback: tests and local dev set DATABASE_URL directly.
-    url = os.environ.get("DATABASE_URL", "")
+    url = get_jarvis_common_settings().database_url
     if url:
         return url
 
@@ -174,10 +176,13 @@ class ServiceLifespanConfig:
 def _resolve_db_pool_kwargs(overrides: dict[str, Any]) -> dict[str, Any]:
     """Merge defaults + env vars + per-service overrides for ``asyncpg.create_pool``."""
     merged: dict[str, Any] = {**_DB_POOL_DEFAULTS, **overrides}
-    min_env = os.environ.get("DB_POOL_MIN")
-    max_env = os.environ.get("DB_POOL_MAX")
-    merged["min_size"] = int(min_env) if min_env is not None else int(merged["min_size"])
-    merged["max_size"] = int(max_env) if max_env is not None else int(merged["max_size"])
+    settings = get_jarvis_common_settings()
+    merged["min_size"] = (
+        int(settings.db_pool_min) if settings.db_pool_min is not None else int(merged["min_size"])
+    )
+    merged["max_size"] = (
+        int(settings.db_pool_max) if settings.db_pool_max is not None else int(merged["max_size"])
+    )
     merged.setdefault("init", init_pg_connection)
     return merged
 
@@ -190,7 +195,7 @@ def _log_auth_status() -> None:
     takes effect without a service restart.
     """
     refresh_api_key_cache()
-    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+    dev_mode = get_core_settings().dev_mode
     api_key = read_secret("JARVIS_API_KEY")
     if api_key:
         logger.info("API key authentication enabled")
@@ -331,11 +336,7 @@ def configure_middleware_and_errors(
 
     # 3. CORSMiddleware
     if cors_origins is None:
-        cors_origins = [
-            o.strip()
-            for o in os.environ.get("CORS_ORIGINS", "https://localhost:3001").split(",")
-            if o.strip()
-        ]
+        cors_origins = get_jarvis_common_settings().cors_origins_list
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,

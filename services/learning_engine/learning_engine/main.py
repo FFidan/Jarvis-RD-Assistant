@@ -12,7 +12,6 @@ AnkiExporter) lives in ``custom_init_tasks`` hooks below.
 
 import asyncio
 import logging
-import os
 
 import asyncpg
 import httpx
@@ -38,7 +37,7 @@ from learning_engine.config import get_learning_engine_settings
 from learning_engine.deps import limiter
 from learning_engine.fsrs_manager import FSRSManager
 
-configure_logging("learning_engine", log_level=os.environ.get("LOG_LEVEL", "INFO"))
+configure_logging("learning_engine", log_level=get_core_settings().log_level)
 logger = logging.getLogger(__name__)
 
 try:

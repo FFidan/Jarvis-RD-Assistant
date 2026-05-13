@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -32,6 +31,7 @@ from typing import Annotated
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.email import send_magic_link
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
+from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def _cookie_secure() -> bool:
     DEV_MODE=true → Secure=False so localhost http://… still works.
     Anything else → Secure=True (HSTS-friendly, prevents downgrade leak).
     """
-    return os.environ.get("DEV_MODE", "false").lower() != "true"
+    return not get_core_settings().dev_mode
 
 
 @router.post(

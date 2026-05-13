@@ -54,6 +54,13 @@ vi.mock('@/stores/auth-store', () => ({
   },
 }));
 
+vi.mock('sonner', () => ({
+  toast: {
+    error: vi.fn(),
+    success: vi.fn(),
+  },
+}));
+
 const { fetchConfig, setConfig, zoteroPollNow, zoteroTest } = await import('@/lib/api');
 const { useJobStore } = await import('@/stores/job-store');
 
@@ -134,17 +141,42 @@ describe('ZoteroSection', () => {
     });
   });
 
-  it('does not throw when zoteroPollNow rejects (silently ignored)', async () => {
+  it('offers immediate library sync after changing Zotero library scope', async () => {
+    vi.mocked(fetchConfig).mockResolvedValue(
+      CONFIGURED_CONFIG.map((entry) =>
+        entry.key === 'zotero.poll_enabled' ? { ...entry, value: 'false' } : entry,
+      ),
+    );
+    vi.mocked(setConfig).mockResolvedValue({ key: 'zotero.library_type', value: 'group' });
+    vi.mocked(zoteroPollNow).mockResolvedValue({ job_id: 'jid-scope', status: 'queued' });
+    const user = userEvent.setup();
+    renderSection();
+
+    await user.click(await screen.findByLabelText('Group library'));
+
+    expect(await screen.findByText(/Library identity changed/i)).toBeInTheDocument();
+    const syncButton = screen.getByRole('button', { name: /run library sync now/i });
+    await user.click(syncButton);
+
+    await waitFor(() => {
+      expect(vi.mocked(zoteroPollNow)).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('does not throw when zoteroPollNow rejects and shows an error', async () => {
+    const { toast } = await import('sonner');
     vi.mocked(zoteroPollNow).mockRejectedValue(new Error('network error'));
     const user = userEvent.setup();
     renderSection();
 
     const btn = await screen.findByRole('button', { name: /sync now/i });
-    // Should not throw — error is swallowed
     await expect(user.click(btn)).resolves.toBeUndefined();
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith('Zotero sync failed to queue.');
+    });
   });
 
-  it('labels the identifier field as Group ID for group libraries', async () => {
+  it('keeps Zotero user ID and group ID as distinct fields for group libraries', async () => {
     vi.mocked(fetchConfig).mockResolvedValue(
       CONFIGURED_CONFIG.map((entry) =>
         entry.key === 'zotero.library_type' ? { ...entry, value: 'group' } : entry,
@@ -153,12 +185,8 @@ describe('ZoteroSection', () => {
 
     renderSection();
 
-    // When library_type="group" two elements are labelled "Group ID":
-    //  1. The existing identifier field (#zotero-user-id) relabelled from "User ID"
-    //  2. The new group-id field (#zotero-group-id)
-    // Both being present confirms the UX relabelling landed correctly.
-    const groupIdInputs = await screen.findAllByLabelText('Group ID');
-    expect(groupIdInputs.length).toBeGreaterThanOrEqual(2);
+    expect(await screen.findByLabelText('User ID')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Group ID')).toBeInTheDocument();
   });
 
   it('writes Zotero boolean settings as booleans, not strings', async () => {

@@ -1,13 +1,14 @@
 """Rate limiting shared across JARVIS services."""
 
 import ipaddress
-import os
 from collections.abc import Callable
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
+
+from jarvis_common.config import get_jarvis_common_settings
 
 # Trusted proxy CIDRs loaded once at import time.
 # Override / extend via TRUSTED_PROXY_CIDRS env var (comma-separated CIDRs).
@@ -23,9 +24,10 @@ _DEFAULT_PROXY_CIDRS = [
 
 def _build_trusted_proxies() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
     """Build the trusted proxy network list from env + defaults."""
+    settings = get_jarvis_common_settings()
     return [
         ipaddress.ip_network(c.strip())
-        for c in (os.environ.get("TRUSTED_PROXY_CIDRS", "").split(",") + _DEFAULT_PROXY_CIDRS)
+        for c in (settings.trusted_proxy_cidrs_list + _DEFAULT_PROXY_CIDRS)
         if c.strip()
     ]
 
@@ -64,7 +66,7 @@ def _real_ip(request: Request) -> str:
     4. If no XFF header, return request.client.host.
     """
     # SEC-006: CF-Connecting-IP only trusted when operator explicitly enables it.
-    if os.environ.get("JARVIS_TRUST_CF_CONNECTING_IP", "").lower() == "true":
+    if get_jarvis_common_settings().trust_cf_connecting_ip:
         cf_ip = request.headers.get("CF-Connecting-IP")
         if cf_ip:
             return cf_ip.strip()

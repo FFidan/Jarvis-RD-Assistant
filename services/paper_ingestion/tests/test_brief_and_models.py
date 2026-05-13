@@ -426,7 +426,7 @@ async def test_model_recommendations_endpoint_returns_role_catalog(_app):
 
     async def mock_get_side_effect(url, **kwargs):
         if "/api/tags" in str(url):
-            return MockResponse(200, {"models": [{"name": "qwen3-embedding:0.6b"}]})
+            return MockResponse(200, {"models": [{"name": "qwen3-embedding:4b"}]})
         if "/api/ps" in str(url):
             return MockResponse(200, {"models": []})
         return MockResponse(404)
@@ -436,7 +436,7 @@ async def test_model_recommendations_endpoint_returns_role_catalog(_app):
     body = await get_model_recommendations(request, role="embed")
 
     assert body["role"] == "embed"
-    assert body["recommendations"][0]["id"] == "qwen3-embedding:0.6b"
+    assert body["recommendations"][0]["id"] == "qwen3-embedding:4b"
     assert body["recommendations"][0]["status"] == "active"
 
 
@@ -486,11 +486,12 @@ async def test_delete_system_model_rejects_active_assignment(_app):
 
 
 @pytest.mark.asyncio
-async def test_delete_system_model_calls_ollama_delete_for_inactive_model(_app):
+async def test_delete_system_model_calls_ollama_delete_for_inactive_model(_app, monkeypatch):
     """DELETE /api/system/models/{tag} proxies inactive models to Ollama delete."""
     app, conn, mock_http = _app
     from paper_ingestion.routers.system import delete_system_model
 
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama:11434")
     request = _make_request(app.state.db_pool, mock_http)
     conn.fetch.return_value = [FakeRecord(key="llm.smart_model", value="qwen3:4b")]
 

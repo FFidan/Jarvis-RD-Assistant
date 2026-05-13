@@ -93,9 +93,14 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
         external_id="arxiv:1",
         source_type="arxiv",
         authors=["Ada"],
+        abstract="A paper",
+        published_date=None,
         url="https://arxiv.org/abs/1",
         pdf_url="https://arxiv.org/pdf/1.pdf",
         pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
         created_at="2026-03-11T00:00:00Z",
     )
     pool = _make_pool(conn)
@@ -115,6 +120,46 @@ async def test_download_pdf_maps_upstream_http_failure_to_502():
         )
 
     assert exc_info.value.status_code == 502
+
+
+@pytest.mark.asyncio
+async def test_download_pdf_rejects_unowned_paper(monkeypatch):
+    """download_pdf must enforce the same canonical-corpus ownership guard as other paper actions."""
+    conn = AsyncMock()
+    conn.fetchrow.return_value = FakeRecord(
+        id=1,
+        title="Paper",
+        external_id="arxiv:1",
+        source_type="arxiv",
+        authors=["Ada"],
+        abstract="A paper",
+        published_date=None,
+        url="https://arxiv.org/abs/1",
+        pdf_url="https://arxiv.org/pdf/1.pdf",
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at="2026-03-11T00:00:00Z",
+    )
+    pool = _make_pool(conn)
+    processor = AsyncMock()
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+    deny = HTTPException(status_code=403, detail="paper not owned by current user")
+    ownership = AsyncMock(side_effect=deny)
+    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pdf.download_pdf.__wrapped__(
+            MagicMock(),
+            paper_id=1,
+            db_pool=pool,
+            pdf_processor=processor,
+        )
+
+    assert exc_info.value.status_code == 403
+    ownership.assert_awaited_once_with(conn, 1, 99)
+    processor.download_pdf.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -149,6 +194,46 @@ async def test_process_pdf_rejects_paths_outside_storage(tmp_path, monkeypatch):
         )
 
     assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_process_pdf_sync_rejects_unowned_paper(tmp_path, monkeypatch):
+    """The synchronous backward-compat path must not bypass paper ownership."""
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    paper_path = storage_dir / "1.pdf"
+    paper_path.write_bytes(b"%PDF-1.7\ncontent")
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = FakeRecord(
+        id=1,
+        pdf_downloaded=True,
+        pdf_local_path=str(paper_path),
+    )
+    pool = _make_pool(conn)
+    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+    deny = HTTPException(status_code=403, detail="paper not owned by current user")
+    ownership = AsyncMock(side_effect=deny)
+    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
+    run_process_pdf = AsyncMock()
+    monkeypatch.setattr(pdf, "run_process_pdf", run_process_pdf)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pdf.process_pdf.__wrapped__(
+            request,
+            paper_id=1,
+            force=False,
+            sync=True,
+            db_pool=pool,
+            pdf_processor=MagicMock(),
+            embedder=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 403
+    ownership.assert_awaited_once_with(conn, 1, 99)
+    run_process_pdf.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -296,6 +381,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         result = await pdf.batch_process_papers.__wrapped__(
             request,
             limit=10,
+            force=False,
             db_pool=pool,
         )
 
@@ -305,7 +391,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         "skipped_missing_pdf": 2,
         "job_id": fake_uuid,
     }
-    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_ids=[10])
+    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_ids=[10], force=False)
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +427,7 @@ async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, mo
         title="Test Paper",
         authors=[],
         abstract=None,
+        published_date=None,
         url="local://abc123",
         pdf_url=None,
         pdf_downloaded=False,
@@ -371,6 +458,116 @@ async def test_upload_pdf_unlinks_renamed_file_on_db_update_failure(tmp_path, mo
     assert not (storage_dir / "99.pdf").exists(), (
         "Dangling file left on disk after DB UPDATE failure"
     )
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_authenticated_user_stamps_discoverer_and_library(tmp_path, monkeypatch):
+    """Authenticated uploads must be private library entries, not global system papers."""
+    import io
+
+    from fastapi import UploadFile
+
+    storage_dir = tmp_path / "pdfs"
+    storage_dir.mkdir()
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=42))
+    add_to_library = AsyncMock()
+    monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
+
+    pdf_content = b"%PDF-1.7\n" + b"x" * 100
+    upload_file = UploadFile(filename="paper.pdf", file=io.BytesIO(pdf_content))
+    inserted_row = FakeRecord(
+        id=101,
+        external_id="local:abc123",
+        source_type="local",
+        title="Private Upload",
+        authors=[],
+        abstract=None,
+        published_date=None,
+        url="local://abc123",
+        pdf_url=None,
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at=datetime(2026, 5, 12, tzinfo=UTC),
+        discovered_by=42,
+    )
+    updated_row = FakeRecord({**inserted_row, "pdf_downloaded": True, "pdf_local_path": "x"})
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, updated_row])
+    pool = _make_pool(conn)
+
+    await pdf.upload_pdf.__wrapped__(
+        MagicMock(),
+        file=upload_file,
+        title="Private Upload",
+        authors="",
+        abstract="",
+        db_pool=pool,
+    )
+
+    insert_sql = conn.fetchrow.await_args_list[1].args[0]
+    assert "discovered_by" in insert_sql
+    assert conn.fetchrow.await_args_list[1].args[-1] == 42
+    add_to_library.assert_awaited_once_with(
+        conn,
+        user_id=42,
+        paper_id=101,
+        added_via="manual_save",
+    )
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monkeypatch):
+    """API-key/single-user uploads keep the legacy NULL-user behavior."""
+    import io
+
+    from fastapi import UploadFile
+
+    storage_dir = tmp_path / "pdfs"
+    storage_dir.mkdir()
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=None))
+    add_to_library = AsyncMock()
+    monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
+
+    pdf_content = b"%PDF-1.7\n" + b"x" * 100
+    upload_file = UploadFile(filename="paper.pdf", file=io.BytesIO(pdf_content))
+    inserted_row = FakeRecord(
+        id=102,
+        external_id="local:abc123",
+        source_type="local",
+        title="Legacy Upload",
+        authors=[],
+        abstract=None,
+        published_date=None,
+        url="local://abc123",
+        pdf_url=None,
+        pdf_downloaded=False,
+        pdf_local_path=None,
+        citation_count=0,
+        metadata={},
+        created_at=datetime(2026, 5, 12, tzinfo=UTC),
+        discovered_by=None,
+    )
+    updated_row = FakeRecord({**inserted_row, "pdf_downloaded": True, "pdf_local_path": "x"})
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(side_effect=[None, inserted_row, updated_row])
+    pool = _make_pool(conn)
+
+    await pdf.upload_pdf.__wrapped__(
+        MagicMock(),
+        file=upload_file,
+        title="Legacy Upload",
+        authors="",
+        abstract="",
+        db_pool=pool,
+    )
+
+    add_to_library.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

@@ -107,36 +107,16 @@ async def list_users_with_topic(
 ) -> list[int]:
     """Return user_ids subscribed to ``topic_id``.
 
-    Topic-subscription matching is **not yet wired**: the ``topics`` table is
-    global (inherited from the single-tenant origin) and no
-    ``user_topic_subscriptions`` table exists in the current schema. Until a
-    future migration introduces per-user topics, this helper returns ``[]``
-    and the caller (``fan_out_to_topic_users``) becomes a no-op.
-
-    Auto-fetched papers are still added to the **canonical corpus** by
-    ``upsert_paper``; users acquire them on demand via search, manual save,
-    Zotero pull, or pulse acceptance. Fan-out into every user's library was
-    rejected by Wave-1 review as a regression vs. correct topic-scoped
-    behavior — better to deliver nothing than to spam every user with every
-    auto-fetched paper.
-
-    The ``topic_id`` parameter is preserved in the signature so call sites
-    don't need to change when the topic-user join lands.
-
-    Parameters
-    ----------
-    db:
-        Unused while the helper is a no-op; kept for signature stability.
-    topic_id:
-        Currently ignored (see docstring).
-
-    Returns
-    -------
-    list[int]
-        Always empty until per-user topic subscriptions ship.
+    Reads from ``user_topic_subscriptions`` (migration 074). Callers are
+    typically system pipelines (``run_auto_pipeline``) with no per-request
+    user context; subscriptions provide that pivot.
     """
-    _ = db, topic_id  # see docstring — intentional no-op
-    return []
+    rows = await _fetch(
+        db,
+        "SELECT user_id FROM user_topic_subscriptions WHERE topic_id = $1",
+        topic_id,
+    )
+    return [int(r["user_id"]) for r in rows]
 
 
 async def fan_out_to_topic_users(

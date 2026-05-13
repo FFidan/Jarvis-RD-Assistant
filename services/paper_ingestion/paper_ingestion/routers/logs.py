@@ -295,7 +295,7 @@ _STREAM_MAX_IDLE_SECONDS: float = 1800.0  # 30-minute idle timeout
 
 
 async def _get_associated_job_status(
-    conn: asyncpg.Connection,
+    conn: Any,
     correlation_id: uuid_mod.UUID,
 ) -> str | None:
     """Return the procrastinate job status for the job linked to this correlation_id.

@@ -2,14 +2,26 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { visualizer } from 'rollup-plugin-visualizer';
 
 const paperIngestionPort = process.env.PAPER_INGESTION_HOST_PORT || '8010';
 const learningEnginePort = process.env.LEARNING_ENGINE_HOST_PORT || '8011';
 const paperIngestionBase = `http://localhost:${paperIngestionPort}`;
 const learningEngineBase = `http://localhost:${learningEnginePort}`;
+const analyzeBundle = process.env.ANALYZE_BUNDLE === 'true';
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    analyzeBundle
+      ? visualizer({
+          filename: 'dist/bundle-stats.html',
+          template: 'treemap',
+          gzipSize: true,
+          brotliSize: true,
+        })
+      : null,
+  ],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

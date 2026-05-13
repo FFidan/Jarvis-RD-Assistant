@@ -2,7 +2,6 @@
 
 import hashlib
 import logging
-import os
 from pathlib import Path
 
 import asyncpg
@@ -17,6 +16,8 @@ from fastapi import (
     UploadFile,
 )
 from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_or_none
+from jarvis_common.library import add_to_library
+from jarvis_common.settings import get_core_settings
 
 from paper_ingestion.converters import row_to_paper_response
 from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor, limiter
@@ -33,7 +34,7 @@ router = APIRouter(prefix="/api", tags=["pdf"])
 
 def _is_dev_mode() -> bool:
     """Return True when DEV_MODE=true (case-insensitive)."""
-    return os.environ.get("DEV_MODE", "false").lower() == "true"
+    return get_core_settings().dev_mode
 
 
 # ---------------------------------------------------------------------------
@@ -63,9 +64,12 @@ async def download_pdf(
     """
     import httpx
 
+    user_id = await current_user_id_or_none(request)
+
     # Phase 1: load and validate (short transaction — no lock held during I/O)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+        await assert_paper_ownership(conn, paper_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found")
     if not row["pdf_url"]:
@@ -158,8 +162,10 @@ async def process_pdf(
         return {"job_id": jarvis_job_id, "status": "queued"}
 
     # Synchronous path (sync=True) — original blocking behaviour
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+        await assert_paper_ownership(conn, paper_id, user_id)
     if not row:
         raise HTTPException(status_code=404, detail="Paper not found")
     if not row["pdf_downloaded"] or not row["pdf_local_path"]:
@@ -265,6 +271,7 @@ async def upload_pdf(
 
         file_hash = hasher.hexdigest()
         external_id = f"local:{file_hash[:16]}"
+        user_id = await current_user_id_or_none(request)
 
         # Check for duplicate
         async with db_pool.acquire() as conn:
@@ -282,8 +289,8 @@ async def upload_pdf(
                 row = await conn.fetchrow(
                     """
                     INSERT INTO papers (external_id, source_type, title, authors, abstract,
-                                        url, metadata, discovery_origin)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, 'user_initiated')
+                                        url, metadata, discovered_by, discovery_origin)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'user_initiated')
                     RETURNING *
                     """,
                     external_id,
@@ -293,8 +300,16 @@ async def upload_pdf(
                     abstract or None,
                     f"local://{file_hash}",
                     {},
+                    user_id,
                 )
                 paper_id = row["id"]
+                if user_id is not None:
+                    await add_to_library(
+                        conn,
+                        user_id=user_id,
+                        paper_id=paper_id,
+                        added_via="manual_save",
+                    )
 
                 # Rename to final path using paper_id (atomic on Linux same filesystem)
                 pdf_path = storage_path / f"{paper_id}.pdf"

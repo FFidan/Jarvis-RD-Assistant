@@ -2,6 +2,20 @@
 
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
+
+## [v0.2.1] - 2026-05-12
+
+### Changed
+
+- Completed the deferred roadmap closeout for Zotero group-library sync UX, docs indexing, profiling tooling, and settings migration.
+- Added an opt-in profiling compose override plus bundle treemap support via `ANALYZE_BUNDLE=true`.
+- Routed more runtime configuration through typed settings while preserving secret-file and test-toggle behavior.
+
+### Documentation
+
+- Added the current docs index and Bucket H library-wishlist decision record.
+- Updated the post-v0.2.0 roadmap to distinguish completed closeout work from measured/deferred follow-ups.
+
 ## [v0.1.0] - 2026-05-10
 
 

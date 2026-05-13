@@ -93,14 +93,14 @@ The bootstrap script:
 4. Waits for the dashboard to come up.
 5. Prints the dashboard URL.
 
-Open **https://localhost:3001** in your browser. The first-run web wizard walks you through:
+Open **http://localhost:3001** in your browser. The first-run web wizard walks you through:
 
 - A system check (Postgres, Qdrant, Ollama, LiteLLM reachability).
 - SMTP relay (skippable — magic-link emails will fall back to stdout in dev mode).
 - Your **admin email** — creates your account and signs you in immediately, no email round-trip.
 - Optional cloud LLM keys (OpenAI, Anthropic, Gemini).
 
-That's it. First boot pulls ~12 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:0.6b`) in the background; you can use the dashboard while they download. **Upgrading later:** `git pull && ./update.sh`.
+That's it. First boot pulls ~14 GB of Ollama models (`qwen3:14b`, `qwen3:4b`, `qwen3-embedding:4b`) in the background; you can use the dashboard while they download. **Upgrading later:** `git pull && ./update.sh`.
 
 > The legacy interactive `./setup.sh` (which asks you about LAN access mode and Telegram) is still supported. Use it instead of `./scripts/jarvis-setup.sh` if you prefer being prompted up-front rather than configuring through the web wizard.
 
@@ -180,7 +180,7 @@ source versions.env    # optional — docker-compose.yml has fallbacks
 docker compose up -d
 ```
 
-Open **https://localhost:3001** and the first-run web wizard will pick up from there.
+Open **http://localhost:3001** and the first-run web wizard will pick up from there.
 
 ## Database upgrade notes
 
@@ -232,10 +232,10 @@ For reaching JARVIS from outside your LAN, see [docs/DEPLOYMENT.md — Remote ac
 | `ANTHROPIC_API_KEY` | _(empty)_ | Enable Anthropic models via LiteLLM |
 | `TELEGRAM_BOT_TOKEN` | _(empty)_ | Telegram bot (requires `--profile telegram`) |
 | `TELEGRAM_CHAT_ID` | _(empty)_ | Your Telegram chat ID |
-| `OLLAMA_MODELS` | `qwen3:14b,qwen3:4b,qwen3-embedding:0.6b` | Models to pull on first start |
+| `OLLAMA_MODELS` | `qwen3:14b,qwen3:4b,qwen3-embedding:4b` | Models to pull on first start |
 | `EMBEDDING_MODEL` | `embed` | LiteLLM alias for embedding model |
-| `EMBEDDING_MODEL_NAME` | `qwen3-embedding:0.6b` | Human-readable embedding model stored on chunk metadata |
-| `EMBEDDING_DIMENSION` | `1024` | Must match the embedding model |
+| `EMBEDDING_MODEL_NAME` | `qwen3-embedding:4b` | Human-readable embedding model stored on chunk metadata |
+| `EMBEDDING_DIMENSION` | `2560` | Must match the embedding model |
 | `DASHBOARD_PASSWORD` | _(empty)_ | **Deprecated.** Magic-link auth replaced the password gate in Phase 2 (2026-05-10). This variable is ignored; use `JARVIS_API_KEY` + the `/first-run` wizard instead. |
 | `DEV_MODE` | `false` | **⚠️ Bypasses ALL authentication on every endpoint when `true`.** Only for local development. The service refuses to start with `DEV_MODE=true` if `ENVIRONMENT=production`. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL` |
@@ -439,7 +439,7 @@ JARVIS integrates with Zotero to sync papers between your research workspace and
 | **Frontend** | React 19, TypeScript, Vite, Shadcn/ui, TanStack Query v5, Zustand, React Router v7, Recharts, Cytoscape.js |
 | **Backend** | FastAPI, Python 3.12, asyncpg, Pydantic v2 |
 | **LLM Gateway** | LiteLLM (routes to Ollama, OpenAI, Anthropic, etc.) |
-| **Local LLM** | Ollama (qwen3:14b, qwen3:4b, qwen3-embedding:0.6b) |
+| **Local LLM** | Ollama (qwen3:14b, qwen3:4b, qwen3-embedding:4b) |
 | **Database** | PostgreSQL 16 |
 | **Vector DB** | Qdrant |
 | **Spaced Repetition** | py-fsrs (FSRS algorithm) |
@@ -466,7 +466,7 @@ These projects are credited for the ideas and patterns that informed JARVIS's de
 
 ## Troubleshooting
 
-**Ollama first-boot is slow.** On first start, Ollama pulls `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:0.6b`. Expect 5–15 minutes on a decent connection. Watch progress with `docker compose logs -f ollama`.
+**Ollama first-boot is slow.** On first start, Ollama pulls `qwen3:14b`, `qwen3:4b`, and `qwen3-embedding:4b`. Expect 5–20 minutes on a decent connection. Watch progress with `docker compose logs -f ollama`.
 
 **`paper_ingestion` exits with "JARVIS_API_KEY not set" in production.** Set `JARVIS_API_KEY` to at least 32 chars in `.env`, or set `ENVIRONMENT=development` for local-only use.
 

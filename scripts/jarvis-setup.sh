@@ -147,8 +147,9 @@ fi
 # Bring stack up
 # ---------------------------------------------------------------------------
 COMPOSE="docker compose"
+COMPOSE="${COMPOSE} --env-file .env"
 if [ -f versions.env ]; then
-  COMPOSE="docker compose --env-file versions.env"
+  COMPOSE="${COMPOSE} --env-file versions.env"
 fi
 
 # Detect already-running containers so we don't churn them.
@@ -163,17 +164,19 @@ ${COMPOSE} up -d
 # ---------------------------------------------------------------------------
 # Wait for the dashboard to come up
 # ---------------------------------------------------------------------------
-HEALTH_URL="https://localhost:3001/healthz"
-HTTP_FALLBACK_URL="http://localhost:3001/"
+DASHBOARD_HOST_PORT="$(
+  awk -F= '/^DASHBOARD_HOST_PORT=/{gsub(/["'\'']/, "", $2); print $2; exit}' .env 2>/dev/null || true
+)"
+DASHBOARD_HOST_PORT="${DASHBOARD_HOST_PORT:-3001}"
+DASHBOARD_URL="http://localhost:${DASHBOARD_HOST_PORT}/"
 TIMEOUT_SECONDS=60
 INTERVAL=3
 
-info "Waiting up to ${TIMEOUT_SECONDS}s for the dashboard to respond at ${HEALTH_URL}"
+info "Waiting up to ${TIMEOUT_SECONDS}s for the dashboard to respond at ${DASHBOARD_URL}"
 elapsed=0
 ready=false
 while [ "${elapsed}" -lt "${TIMEOUT_SECONDS}" ]; do
-  if curl -fsk --max-time 3 "${HEALTH_URL}" >/dev/null 2>&1 \
-     || curl -fs --max-time 3 "${HTTP_FALLBACK_URL}" >/dev/null 2>&1; then
+  if curl -fs --max-time 3 "${DASHBOARD_URL}" >/dev/null 2>&1; then
     ready=true
     break
   fi
@@ -194,8 +197,8 @@ fi
 printf '\n'
 printf '%s================================================================%s\n' \
   "$C_GREEN" "$C_RESET"
-printf '%sJARVIS is starting.%s Open %shttps://localhost:3001%s to finish setup.\n' \
-  "${C_BOLD}" "${C_RESET}" "${C_BOLD}" "${C_RESET}"
+printf '%sJARVIS is starting.%s Open %s%s%s to finish setup.\n' \
+  "${C_BOLD}" "${C_RESET}" "${C_BOLD}" "${DASHBOARD_URL}" "${C_RESET}"
 printf 'The first-run web wizard will walk you through SMTP, the admin email,\n'
 printf 'and (optionally) cloud LLM provider keys.\n'
 printf '%s================================================================%s\n' \

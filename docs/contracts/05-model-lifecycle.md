@@ -8,7 +8,7 @@
 
 ---
 
-## Implementation Status — 2026-05-06
+## Implementation Status — 2026-05-11
 
 Backend and Settings v1 are complete for the local single-user stack:
 
@@ -38,6 +38,12 @@ Live proof on 2026-05-06:
 - Phase C completed against the same stack: Qdrant `paper_chunks` is 1024d with
   4,888 points, and PostgreSQL has 4,888/4,888 chunks marked with
   `qwen3-embedding:0.6b`.
+
+Runtime default update on 2026-05-11:
+- The active LiteLLM embed alias, Docker preload list, Paper Ingestion settings,
+  and re-embedding script now default to `qwen3-embedding:4b` at 2560
+  dimensions. The 0.6B model remains catalogued as an explicit smaller-machine
+  fallback, not the preferred default.
 
 ---
 
@@ -138,7 +144,10 @@ Cloud entries omit `ollama_tag`, set `vram_gb=0`, `disk_gb=0`, `tier=0`.
 **Why these and not others:**
 - Gemma 4 / Qwen 3.6-Plus / DeepSeek V4 omitted — Ollama tags unconfirmed at time of writing. Add via `last_reviewed` update when tags stabilize.
 - `mistral-nemo:12b` — excluded (hard path; nomic-embed-text likewise excluded).
-- `qwen3-embedding:4b` — tracked as an advanced Phase D candidate for notation-heavy scientific retrieval. It is not assignable in Phase C because its output dimension/rebuild policy is separate from the 1024d Qwen3-Embedding-0.6B collection.
+- `qwen3-embedding:4b` — promoted to the local default for notation-heavy
+  scientific retrieval on Tier-1+ hardware. Its 2560-dimensional output requires
+  a matching Qdrant collection and re-embed checkpoint when upgrading an
+  existing 1024d collection.
 - `mxbai-embed-large` — kept as a future embed fallback but not assignable by default because its embedding dimension differs from Qwen3 and requires matching runtime/Qdrant config.
 - `llama4:scout` — included for 10M-token context window (long paper chains). Llama 4 Community license allows commercial with attribution.
 - Cloud embed (`openai/text-embedding-3-small`) — listed as a future option only. It is not assignable in Phase C because cloud embeddings require an explicit dimension and rebuild policy.
@@ -384,9 +393,14 @@ Models
 - `cloud_active` / `cloud_required` entries show "cloud" in VRAM column.
 - Status badges use color: `active` = green, `pulled` = blue, `downloadable` = grey, `unfit` = orange, `cloud_active` = purple, `cloud_required` = purple outline.
 
-### 6.2 GHOST Surface Fix
+### 6.2 Cloud Model Surface
 
-Current state: `llm.anthropic.api_key`, `llm.openai.api_key`, `llm.google.api_key` are fully wired in `user_config` (encrypted BYTEA), `POST /api/providers/{provider}/test` exists, `get_provider_api_key()` + `update_litellm_model()` handle cloud paths — **but there is no dropdown in Settings to select a cloud model as smart/fast**. The API keys are useful today only for test-ping. This sprint adds the model-select dropdown so cloud entries become selectable.
+`llm.anthropic.api_key`, `llm.openai.api_key`, and `llm.google.api_key` are
+stored encrypted in `user_config`; `POST /api/providers/{provider}/test`
+validates connectivity; `get_provider_api_key()` and
+`update_litellm_model()` handle cloud paths. The Settings model selectors now
+show catalogued cloud entries with provider/setup status, so API keys are no
+longer test-ping-only configuration.
 
 Implementation: when the user picks a cloud entry in the smart/fast dropdown, `update_litellm_model("smart", "anthropic/claude-sonnet-4-6", db_pool)` runs the existing cloud path (`_post_config_update_for_cloud` which calls `get_provider_api_key` + writes key to LiteLLM). No new backend code; only frontend state wiring.
 
@@ -464,10 +478,11 @@ The catalog is static in the package. If Ollama renames `qwen3:14b` → `qwen3:1
 
 | Step | Action |
 |---|---|
-| Phase C | Pull `qwen3-embedding:0.6b`, rebuild `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, update `litellm/config.yaml` embed alias, and leave `kg_entities` as a separately checkpointed/rebuildable optional collection. Full spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
-| Shipped | Remove `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
-| This sprint | Set new defaults: `smart=qwen3:14b`, `fast=qwen3:4b`, `embed=qwen3-embedding:0.6b`. |
-| This sprint | Pull new smart/fast defaults on first boot if not already present — this is the ONE exception to "no auto-pull": the initial default models are pulled silently during stack startup (analogous to current behavior where `docker compose up` downloads Ollama models). Not a background job; Ollama's own `OLLAMA_PRELOAD` or startup script. |
+| Phase C | Pulled `qwen3-embedding:0.6b`, rebuilt `paper_chunks` with 1024d, set `EMBEDDING_DIMENSION=1024`, updated `litellm/config.yaml` embed alias, and left `kg_entities` as a separately checkpointed/rebuildable optional collection. Full historical spec at `docs/specs/2026-05-03-c-embedding-upgrade.md`. |
+| Shipped | Removed `nomic-embed-text` and `mistral-nemo:12b` from active `litellm/config.yaml` defaults. |
+| Shipped | Set smart/fast defaults: `smart=qwen3:14b`, `fast=qwen3:4b`. |
+| 2026-05-11 closeout | Promoted `embed=qwen3-embedding:4b` and `EMBEDDING_DIMENSION=2560` for local scientific retrieval, keeping `qwen3-embedding:0.6b` as the explicit 1024d fallback. |
+| This sprint | Pull new smart/fast/embed defaults on first boot if not already present — this is the ONE exception to "no auto-pull": the initial default models are pulled silently during stack startup (analogous to current behavior where `docker compose up` downloads Ollama models). Not a background job; Ollama's own `OLLAMA_PRELOAD` or startup script. |
 
 ---
 
@@ -524,7 +539,8 @@ evidence for a future implementation pass.
 | `llm.google.api_key` | `services/paper_ingestion/paper_ingestion/routers/settings.py:_ALLOWED_CONFIG_KEYS` | Same |
 | `POST /api/providers/{provider}/test` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | Existing endpoint; provider test-ping only; no model-select today |
 | `_SUPPORTED_PROVIDERS` | `services/paper_ingestion/paper_ingestion/routers/settings.py` | `frozenset({"anthropic", "openai", "google"})` |
-| Runtime defaults | `litellm/config.yaml` | Active defaults are `ollama/qwen3:14b` (smart), `ollama/qwen3:4b` (fast), and `ollama/qwen3-embedding:0.6b` (embed). Cloud examples remain commented out/non-default. |
-| `EMBEDDING_DIMENSION = int(os.environ.get("EMBEDDING_DIMENSION", "1024"))` | `services/paper_ingestion/paper_ingestion/ingestion/embedder.py` | Module-level constant; drives Qdrant collection size and existing-collection dimension checks. |
+| Runtime defaults | `litellm/config.yaml` | Active defaults are `ollama/qwen3:14b` (smart), `ollama/qwen3:4b` (fast), and `ollama/qwen3-embedding:4b` (embed). Cloud examples remain commented out/non-default. |
+| `PaperIngestionSettings.embedding_model_name` / `embedding_dimension` | `services/paper_ingestion/paper_ingestion/config.py` | Defaults are `qwen3-embedding:4b` and `2560`; services pass them to ingestion/embedder runtime. |
+| `scripts/reembed.py` defaults | `scripts/reembed.py` | Defaults to `qwen3-embedding:4b`/`2560`; collection recreation stays gated by explicit snapshot confirmation flags. |
 | `embed_dim_expected = EMBEDDING_DIMENSION` | `services/paper_ingestion/paper_ingestion/routers/pulse.py` | Pulse debug validates topic embedding dimensions against the runtime embedding dimension. |
 | `task_registry.py` task count | `libs/jarvis_common/jarvis_common/task_registry.py` | Job kinds are registry-driven; `model.pull` is the paper-ingestion owner for pull jobs. |

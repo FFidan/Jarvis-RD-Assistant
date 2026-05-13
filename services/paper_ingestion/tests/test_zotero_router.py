@@ -74,6 +74,62 @@ def test_zotero_service_functions_exist():
     assert inspect.iscoroutinefunction(resync_paper_to_zotero)
 
 
+@pytest.mark.asyncio
+async def test_test_zotero_connection_reads_current_user_config(monkeypatch):
+    """Credential tests should prefer the browser user's Zotero config row."""
+    from paper_ingestion.routers import zotero
+
+    monkeypatch.setattr(zotero, "current_user_id_or_none", AsyncMock(return_value=42))
+    get_config = AsyncMock(
+        return_value={"api_key": "key", "user_id": "123", "library_type": "user"}
+    )
+    monkeypatch.setattr(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        get_config,
+    )
+    mock_client = MagicMock()
+    mock_client.return_value.test_connection = AsyncMock(return_value=True)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient", mock_client):
+        pool = MagicMock()
+        result = await zotero.test_zotero_connection.__wrapped__(
+            MagicMock(),
+            db_pool=pool,
+            http_client=AsyncMock(spec=httpx.AsyncClient),
+        )
+
+    assert result == {"ok": True}
+    get_config.assert_awaited_once_with(pool, user_id=42)
+
+
+@pytest.mark.asyncio
+async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
+    """Zotero state reads expose paper-specific metadata and must enforce ownership."""
+    from fastapi import HTTPException
+    from paper_ingestion.routers import zotero
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = {
+        "zotero_item_key": "ITEM",
+        "zotero_citation_key": "Smith2026",
+        "zotero_last_pushed_at": None,
+    }
+    monkeypatch.setattr(zotero, "current_user_id_or_none", AsyncMock(return_value=42))
+    deny = HTTPException(status_code=403, detail="paper not owned by current user")
+    ownership = AsyncMock(side_effect=deny)
+    monkeypatch.setattr(zotero, "assert_paper_ownership", ownership)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await zotero.get_paper_zotero_state.__wrapped__(
+            MagicMock(),
+            paper_id=7,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 403
+    ownership.assert_awaited_once_with(conn, 7, 42)
+
+
 # ---------------------------------------------------------------------------
 # PI-005: POST /api/zotero/poll
 # ---------------------------------------------------------------------------

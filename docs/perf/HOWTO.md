@@ -46,8 +46,15 @@ Ollama warm-up plus a logged-in user session.
 ## Running it
 
 ```bash
+# Optional: restart local services with profiling-only compose overrides.
+# This preloads pg_stat_statements and grants SYS_PTRACE to paper_ingestion.
+make profile-stack-up
+
 # Default: full snapshot
 make profile
+
+# Frontend bundle treemap (writes frontend/dist/bundle-stats.html):
+ANALYZE_BUNDLE=true npm --prefix frontend run build
 
 # Skip Lighthouse (often fails on CI without Chrome):
 SKIP_LIGHTHOUSE=1 make profile
@@ -59,10 +66,17 @@ PAPER_INGESTION_HOST_PORT=8010 make profile
 Outputs:
 
 - `frontend-bundle-sizes.txt` — `ls -lh dist/assets/*.js | sort -k5 -h`
+- `frontend/dist/bundle-stats.html` — optional Vite/Rollup treemap when
+  `ANALYZE_BUNDLE=true`
 - `backend-timings.csv` — per-endpoint wall-clock (3 runs)
 - `flamegraph.svg` — py-spy 30s record (when granted ptrace)
 - `pg-stat-statements-top20.csv` — when extension is preloaded
 - `lighthouse.html` — when Chrome is available
+
+The profiling override lives in `docker-compose.perf.yml` and is intentionally
+not loaded by normal `make up`, `make up-build`, or production compose usage.
+It changes local developer observability only; it must not become part of the
+default runtime security posture.
 
 ## What "good" looks like
 

@@ -68,9 +68,7 @@ if not os.environ.get("PYTEST_CURRENT_TEST"):
     except ImportError:
         pass
 
-configure_logging(
-    "paper_ingestion", log_level=os.environ.get("LOG_LEVEL", "INFO")
-)  # LOG_LEVEL not in Settings — intentionally left as-is (startup-only env read)
+configure_logging("paper_ingestion", log_level=get_core_settings().log_level)
 logger = logging.getLogger(__name__)
 
 try:
@@ -574,7 +572,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
 
     # Ollama
     try:
-        ollama_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")
+        ollama_url = get_paper_ingestion_settings().ollama_base_url
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{ollama_url}/api/tags"),
             timeout=5.0,
@@ -588,7 +586,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
     # so we attempt the connection and report "unknown" on any failure rather than
     # "unavailable" (which would drag overall status to "degraded").
     try:
-        vector_url = os.environ.get("VECTOR_API_URL", "http://vector:8686")
+        vector_url = get_paper_ingestion_settings().vector_api_url
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{vector_url}/health"),
             timeout=3.0,

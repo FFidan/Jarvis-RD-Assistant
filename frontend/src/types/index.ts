@@ -781,6 +781,9 @@ export type BulkAction =
 /** Library sub-chip filter per spec §5.4. */
 export type LibraryFilter = 'starred' | 'reading' | 'to_read' | 'done';
 
+/** Library feed corpus scope. */
+export type FeedScope = 'library' | 'corpus';
+
 /** Inbox source-type sub-chip filter — null means "all sources". */
 export type InboxSourceFilter = 'arxiv' | 'semantic_scholar' | 'openalex' | 'pubmed';
 

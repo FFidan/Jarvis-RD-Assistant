@@ -209,6 +209,10 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
 # They cannot be listed here as literals since they contain the machine hostname.
 # _classify_config_key() handles them via regex match.
 
+_ZOTERO_LIBRARY_SCOPE_KEYS: frozenset[str] = frozenset(
+    {"zotero.library_type", "zotero.user_id", "zotero.group_id"}
+)
+
 
 def _classify_config_key(key: str) -> str:
     """Return 'personal', 'system', or 'unknown' for a config key."""
@@ -584,7 +588,7 @@ async def _validate_model_assignment(
         )
 
 
-def _resolve_config_value(key: str, row: dict) -> Any:
+def _resolve_config_value(key: str, row: Any) -> Any:
     """Return the display value for a config row, applying masking / decryption."""
     if key in _ENCRYPTED_KEYS:
         enc = row.get("encrypted_value")
@@ -608,7 +612,7 @@ def _has_browser_session(request: Request) -> bool:
 
 
 async def _fetch_effective_config_row(
-    conn: asyncpg.Connection,
+    conn: Any,
     key: str,
     user_id: int | None,
 ) -> asyncpg.Record | None:
@@ -633,7 +637,7 @@ async def _fetch_effective_config_row(
 
 
 async def _write_config_row(
-    conn: asyncpg.Connection,
+    conn: Any,
     *,
     user_id: int | None,
     key: str,
@@ -883,6 +887,13 @@ async def set_config(
                 "zotero_library_sync live reschedule failed (job may not exist yet)",
                 exc_info=True,
             )
+    if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
+        async with db_pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM user_config WHERE user_id IS NOT DISTINCT FROM $1"
+                " AND key = 'zotero.last_library_version'",
+                row_user_id,
+            )
     if key == "user.timezone":
         # Best-effort: notify telegram_bot to reload nudge jobs with the new timezone
         await _reload_telegram_nudges()
@@ -1041,11 +1052,25 @@ async def papers_by_source(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return paper counts grouped by source type."""
+    user_id = await current_user_id_or_none(request)
+    is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT source_type, COUNT(*) AS count"
-            " FROM papers GROUP BY source_type ORDER BY count DESC"
-        )
+        if user_id is None or is_admin:
+            rows = await conn.fetch(
+                "SELECT source_type, COUNT(*) AS count"
+                " FROM papers GROUP BY source_type ORDER BY count DESC"
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT p.source_type, COUNT(*) AS count
+                FROM papers p
+                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+                GROUP BY p.source_type
+                ORDER BY count DESC
+                """,
+                user_id,
+            )
     return [{"source_type": r["source_type"], "count": r["count"]} for r in rows]
 
 
@@ -1056,16 +1081,32 @@ async def papers_by_status(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return paper counts grouped by user-state status."""
+    user_id = await current_user_id_or_none(request)
+    is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            """
-            SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
-            FROM papers p
-            LEFT JOIN paper_user_state pus ON p.id = pus.paper_id
-            GROUP BY COALESCE(pus.state::TEXT, 'inbox')
-            ORDER BY count DESC
-            """
-        )
+        if user_id is None or is_admin:
+            rows = await conn.fetch(
+                """
+                SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
+                FROM papers p
+                LEFT JOIN paper_user_state pus ON p.id = pus.paper_id
+                GROUP BY COALESCE(pus.state::TEXT, 'inbox')
+                ORDER BY count DESC
+                """
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT COALESCE(pus.state::TEXT, 'inbox') AS status, COUNT(*) AS count
+                FROM papers p
+                JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+                LEFT JOIN paper_user_state pus
+                  ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1
+                GROUP BY COALESCE(pus.state::TEXT, 'inbox')
+                ORDER BY count DESC
+                """,
+                user_id,
+            )
     return [{"status": r["status"], "count": r["count"]} for r in rows]
 
 

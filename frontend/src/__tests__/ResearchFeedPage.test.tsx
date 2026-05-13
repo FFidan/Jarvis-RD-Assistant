@@ -307,7 +307,7 @@ describe('ResearchFeedPage', () => {
     renderPage();
     await user.click(screen.getByRole('tab', { name: 'Ask' }));
     expect(screen.getByText(/Get answers synthesised from your entire library/i)).toBeInTheDocument();
-    expect(screen.getByTestId('streaming-chat')).toBeInTheDocument();
+    expect(await screen.findByTestId('streaming-chat')).toBeInTheDocument();
   });
 
   it('renders the search input with updated placeholder', async () => {

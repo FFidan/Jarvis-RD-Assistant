@@ -1,0 +1,22 @@
+# Optional profiling override.
+#
+# Use only for local performance captures:
+#   make profile-stack-up
+#   make profile
+#
+# This file intentionally is not part of the default compose path. It enables
+# Postgres pg_stat_statements preloading and grants ptrace capability to the
+# paper_ingestion container for profiler experiments.
+
+services:
+  postgres:
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+
+  paper_ingestion:
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor:unconfined

@@ -49,6 +49,7 @@ async def list_feed_papers(
     recommended: bool = False,
     include_zotero_notes: bool = Query(default=False),
     view: str | None = Query(default=None, max_length=64),
+    scope: str = Query(default="library", max_length=16),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FeedResponse:
     """Return papers for the What's New feed.
@@ -95,6 +96,11 @@ async def list_feed_papers(
             status_code=422,
             detail=f"Unknown view {view!r}. Valid values: {sorted(VIEW_PREDICATES)}",
         )
+    if scope not in {"library", "corpus"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']",
+        )
     user_id = await current_user_id_or_none(request)
     query_parts = build_feed_queries(
         unread_only=unread_only,
@@ -111,6 +117,7 @@ async def list_feed_papers(
         include_zotero_notes=include_zotero_notes,
         user_id=user_id,
         view=view,
+        scope=scope,
     )
 
     # Note: pool.acquire() without an explicit transaction uses auto-commit mode.

@@ -11,12 +11,12 @@ message='magic_link_dev_mode') so the Logs Live tab catches it.
 from __future__ import annotations
 
 import logging
-import os
 
 import asyncpg
 
 from jarvis_common.event_log import log_event
 from jarvis_common.secrets import read_secret
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def _smtp_configured() -> bool:
 
 
 def _dev_mode() -> bool:
-    return os.environ.get("DEV_MODE", "false").lower() == "true"
+    return get_core_settings().dev_mode
 
 
 _PLAIN_BODY_TEMPLATE = (

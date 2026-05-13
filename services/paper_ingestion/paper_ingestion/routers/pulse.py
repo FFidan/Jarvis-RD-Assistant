@@ -13,7 +13,6 @@ preserved as the contract-test gate.
 """
 
 import logging
-import os
 import uuid
 from datetime import date
 
@@ -22,6 +21,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
+from jarvis_common.settings import get_core_settings
 from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -59,7 +59,7 @@ router = APIRouter(
 
 def _is_dev_mode() -> bool:
     """Return True when DEV_MODE=true (case-insensitive)."""
-    return os.environ.get("DEV_MODE", "false").lower() == "true"
+    return get_core_settings().dev_mode
 
 
 # ---------------------------------------------------------------------------

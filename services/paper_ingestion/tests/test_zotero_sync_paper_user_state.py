@@ -73,13 +73,11 @@ def _cfg_rows(
     api_key: str = "zotero_api_key_abc",
     user_id: str = "12345",
     library_type: str = "user",
-    enabled: bool = True,
     poll_enabled: bool = True,
     last_version: int = 0,
 ) -> list[dict[str, Any]]:
     """Return asyncpg-style rows for _get_zotero_config."""
     return [
-        {"key": "zotero.enabled", "value": enabled, "encrypted_value": None},
         {"key": "zotero.poll_enabled", "value": poll_enabled, "encrypted_value": None},
         {"key": "zotero.api_key", "value": api_key, "encrypted_value": None},
         {"key": "zotero.user_id", "value": user_id, "encrypted_value": None},

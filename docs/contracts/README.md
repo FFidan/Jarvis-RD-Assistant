@@ -25,6 +25,8 @@ contract-bound surface MUST update the contract in the same commit.
 | 02 | [Pulse](02-pulse.md) | The Pulse pipeline — stages, signals, weights, timeouts, fallback semantics |
 | 03 | [LLM](03-llm.md) | LLM call choke point — the public surface, per-site contracts, retry/fallback policy |
 | 04 | [Observability](04-observability.md) | Trace boundary policy, span types, privacy, sampling (forward-looking; B.2 not yet integrated) |
+| 05 | [Model Lifecycle](05-model-lifecycle.md) | Curated model catalog, hardware-aware recommendations, pull/delete lifecycle, and active model defaults |
+| 06 | [Hardware-Aware Settings](06-hardware-aware-settings.md) | Per-machine VRAM fit indicators, context-size controls, and model runtime safety UX |
 
 ## How to read a contract
 

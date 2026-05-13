@@ -6,8 +6,9 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from jarvis_common import log_audit
+from jarvis_common import assert_paper_ownership, log_audit
 from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.library import add_to_library
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ProjectPaperItem, ProjectPaperLinkResponse
@@ -75,15 +76,14 @@ async def link_paper(
             )
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
-            # Paper visibility: NULL-owned (system) papers OR caller-owned papers.
-            paper = await conn.fetchrow(
-                "SELECT id FROM papers WHERE id = $1 "
-                "AND (user_id IS NULL OR user_id IS NOT DISTINCT FROM $2)",
-                paper_id,
-                user_id,
-            )
-            if not paper:
-                raise HTTPException(status_code=404, detail="Paper not found")
+            await assert_paper_ownership(conn, paper_id, user_id)
+            if user_id is not None:
+                await add_to_library(
+                    conn,
+                    user_id=user_id,
+                    paper_id=paper_id,
+                    added_via="manual_save",
+                )
             result = await conn.execute(
                 "INSERT INTO project_papers (project_id, paper_id) "
                 "VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -103,18 +103,20 @@ async def link_paper(
                 )
 
             # Trigger Zotero push when a paper is linked to a project if it is starred
-            # or was previously pushed to Zotero.  The job handler checks config at runtime
-            # and returns early if Zotero is disabled.
+            # or was previously pushed to Zotero.  The job handler checks credentials at
+            # runtime and returns early if Zotero is not configured for the user.
             # LE-012: capture push intent inside the transaction; defer_async is called
             # after commit (procrastinate uses its own pool and cannot join this txn).
             row = await conn.fetchrow(
                 """
                 SELECT pus.starred, p.zotero_item_key
                 FROM papers p
-                LEFT JOIN paper_user_state pus ON pus.paper_id = p.id
+                LEFT JOIN paper_user_state pus
+                  ON pus.paper_id = p.id AND pus.user_id IS NOT DISTINCT FROM $2
                 WHERE p.id = $1
                 """,
                 paper_id,
+                user_id,
             )
             if row and (row["starred"] or row["zotero_item_key"]):
                 should_push_zotero = True
@@ -128,8 +130,7 @@ async def link_paper(
         try:
             await KIND_TO_TASK["zotero.push"].defer_async(
                 job_id=str(uuid.uuid4()),
-                # allow-user-id-none: single-tenant mode — no per-user auth context
-                user_id=None,
+                user_id=user_id,
                 paper_id=paper_id,
             )
             logger.debug(

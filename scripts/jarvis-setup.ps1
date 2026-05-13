@@ -7,9 +7,9 @@
     * Verifies Docker is available.
     * Generates a strong random .env from .env.example (only when .env is
       absent — never clobbers).
-    * Skips mkcert by default (rare on Windows); HTTPS uses self-signed.
+    * Skips mkcert by default (rare on Windows); local TLS remains optional.
     * Runs `docker compose up -d`.
-    * Polls https://localhost:3001/healthz with a 60s budget.
+    * Polls the direct dashboard HTTP URL with a 60s budget.
     * Prints the wizard URL.
 
   All user-facing config (SMTP, admin email, cloud LLM keys) lives in the
@@ -165,9 +165,9 @@ if (-not $SkipMkcert -and (Get-Command mkcert -ErrorAction SilentlyContinue)) {
 # ---------------------------------------------------------------------------
 # Bring stack up
 # ---------------------------------------------------------------------------
-$composeArgs = @('compose')
+$composeArgs = @('compose', '--env-file', '.env')
 if (Test-Path (Join-Path $RepoRoot 'versions.env')) {
-    $composeArgs = @('compose', '--env-file', 'versions.env')
+    $composeArgs += @('--env-file', 'versions.env')
 }
 
 # Detect already-running containers
@@ -184,27 +184,25 @@ docker @composeArgs up -d
 # ---------------------------------------------------------------------------
 # Wait for the dashboard to come up
 # ---------------------------------------------------------------------------
-$healthUrl     = 'https://localhost:3001/healthz'
-$fallbackUrl   = 'http://localhost:3001/'
+$dashboardPort = '3001'
+$envLine = Get-Content -Path (Join-Path $RepoRoot '.env') -ErrorAction SilentlyContinue |
+    Where-Object { $_ -match '^DASHBOARD_HOST_PORT=' } |
+    Select-Object -First 1
+if ($envLine) {
+    $dashboardPort = ($envLine -replace '^DASHBOARD_HOST_PORT=', '').Trim('"').Trim("'")
+}
+$dashboardUrl  = "http://localhost:$dashboardPort/"
 $timeoutSecs   = 60
 $intervalSecs  = 3
 $elapsed       = 0
 $ready         = $false
 
-# Allow self-signed certs for the health probe.
-[System.Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
-
-Write-Info "Waiting up to ${timeoutSecs}s for the dashboard to respond at $healthUrl"
+Write-Info "Waiting up to ${timeoutSecs}s for the dashboard to respond at $dashboardUrl"
 while ($elapsed -lt $timeoutSecs) {
     try {
-        $resp = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-        if ($resp.StatusCode -eq 200) { $ready = $true; break }
-    } catch {
-        try {
-            $resp = Invoke-WebRequest -Uri $fallbackUrl -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
-            if ($resp.StatusCode -lt 500) { $ready = $true; break }
-        } catch {}
-    }
+        $resp = Invoke-WebRequest -Uri $dashboardUrl -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+        if ($resp.StatusCode -lt 500) { $ready = $true; break }
+    } catch {}
     Start-Sleep -Seconds $intervalSecs
     $elapsed += $intervalSecs
 }
@@ -221,7 +219,7 @@ if ($ready) {
 # ---------------------------------------------------------------------------
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "JARVIS is starting. Open https://localhost:3001 to finish setup." -ForegroundColor Green
+Write-Host "JARVIS is starting. Open $dashboardUrl to finish setup." -ForegroundColor Green
 Write-Host "The first-run web wizard will walk you through SMTP, the admin email,"
 Write-Host "and (optionally) cloud LLM provider keys."
 Write-Host "================================================================" -ForegroundColor Green

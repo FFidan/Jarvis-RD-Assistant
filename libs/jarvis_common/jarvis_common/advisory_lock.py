@@ -14,6 +14,8 @@ Usage::
 
 from __future__ import annotations
 
+from typing import Any
+
 import asyncpg
 
 
@@ -37,7 +39,7 @@ class AdvisoryLock:
         self._pool = pool
         self._key1 = key1
         self._key2 = key2
-        self._conn: asyncpg.Connection | None = None
+        self._conn: Any | None = None
         self._locked = False
 
     async def __aenter__(self) -> bool:
@@ -57,12 +59,15 @@ class AdvisoryLock:
         """
         self._conn = await self._pool.acquire()
         try:
-            row = await self._conn.fetchrow(
+            conn = self._conn
+            if conn is None:
+                raise RuntimeError("advisory lock connection was not acquired")
+            row = await conn.fetchrow(
                 "SELECT pg_try_advisory_lock($1, $2) AS got",
                 self._key1,
                 self._key2,
             )
-            self._locked = bool(row["got"])
+            self._locked = bool(row["got"]) if row is not None else False
             if not self._locked:
                 # Lock not obtained — release the connection straight away.
                 await self._pool.release(self._conn)

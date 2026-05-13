@@ -347,6 +347,28 @@ async def test_personal_zotero_api_key_accessible_to_non_admin(monkeypatch):
         app.state.limiter.enabled = True
 
 
+@pytest.mark.asyncio
+async def test_zotero_library_scope_change_resets_user_cursor(monkeypatch):
+    """Changing Zotero library identity must force the next poll to read the new scope."""
+    from paper_ingestion.routers import settings
+
+    pool, conn = _make_pool_and_conn()
+    monkeypatch.setattr(settings, "current_user_id_or_none", AsyncMock(return_value=42))
+
+    await settings.set_config.__wrapped__(
+        MagicMock(),
+        key="zotero.library_type",
+        body=settings.ConfigEntry(key="zotero.library_type", value="group"),
+        db_pool=pool,
+        scheduler=None,
+    )
+
+    assert any(
+        "zotero.last_library_version" in str(call.args[0]) and call.args[1] == 42
+        for call in conn.execute.await_args_list
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tests: fallback-to-system-default (GET read)
 #

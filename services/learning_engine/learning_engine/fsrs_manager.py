@@ -6,6 +6,7 @@ our JSONB database storage and the fsrs library's Card objects.
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any, cast
 
 from fsrs import Card, Rating, Scheduler
 
@@ -56,7 +57,7 @@ class FSRSManager:
             (new_fsrs_state, review_log_dict, next_due_at).
         """
         try:
-            card = Card.from_dict(fsrs_state)
+            card = Card.from_dict(cast(Any, fsrs_state))
         except (KeyError, TypeError, ValueError, AttributeError):
             logger.warning(
                 "Invalid FSRS state %s for card %s, resetting", repr(fsrs_state), card_id

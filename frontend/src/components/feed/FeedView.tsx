@@ -14,7 +14,7 @@ import {
   starPaper,
   unstarPaper,
 } from '@/lib/api';
-import type { FeedPaper, SurfaceView } from '@/types';
+import type { FeedPaper, FeedScope, SurfaceView } from '@/types';
 import { FeedPaperRow } from './FeedPaperRow';
 import { BulkToolbar } from './BulkToolbar';
 import { HardDeleteModal } from './HardDeleteModal';
@@ -36,6 +36,7 @@ interface FeedViewProps {
   surface: SurfaceView;
   /** Library sub-chip filter. 'pulse-this-week' is passed through to the backend as-is. */
   filter?: 'starred' | 'reading' | 'to_read' | 'done' | 'pulse-this-week' | null;
+  scope?: FeedScope;
   /** Inbox source-type chip filter — null/undefined means all sources. */
   sourceTypes?: string | null;
 }
@@ -79,7 +80,7 @@ function getEmptyState(surface: SurfaceView): EmptyStateCopy {
 
 const DEFAULT_LIMIT: PageSize = 30;
 
-export function FeedView({ surface, filter, sourceTypes }: FeedViewProps) {
+export function FeedView({ surface, filter, scope = 'library', sourceTypes }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -106,14 +107,14 @@ export function FeedView({ surface, filter, sourceTypes }: FeedViewProps) {
     [setSearchParams],
   );
 
-  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}`);
+  const lastSurfaceFilterRef = useRef<string>(`${surface}|${filter ?? ''}|${scope}`);
   useEffect(() => {
-    const key = `${surface}|${filter ?? ''}`;
+    const key = `${surface}|${filter ?? ''}|${scope}`;
     if (lastSurfaceFilterRef.current !== key) {
       lastSurfaceFilterRef.current = key;
       if (offset !== 0) setPagination(0, limit);
     }
-  }, [surface, filter, offset, limit, setPagination]);
+  }, [surface, filter, scope, offset, limit, setPagination]);
 
   // Keyboard-navigation focused row index (j/k)
   const [focusedIdx, setFocusedIdx] = useState<number>(0);
@@ -125,9 +126,9 @@ export function FeedView({ surface, filter, sourceTypes }: FeedViewProps) {
   const selectedIds = useBulkSelection((s) => s.selectedIds);
 
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['papers-feed', surface, filter, limit, offset, sourceTypes ?? null],
+    queryKey: ['papers-feed', surface, filter, scope, limit, offset, sourceTypes ?? null],
     // fetchFeed accepts SurfaceView string
-    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, limit, offset, sourceTypes }),
+    queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes }),
   });
 
   // Cast to FeedPaper[] — backend (Wave 1ab) already returns the Phase-A shape

@@ -83,7 +83,7 @@ Scope is part of the contract:
 | `zotero.api_key` | (none) | `_validate_nonempty_str` | [zotero_service.py:38, 87](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L38) (encrypted; decrypted on read) | Encrypted: stored in `encrypted_value` BYTEA, plaintext NULL'd |
 | `zotero.user_id` | (none) | `_validate_nonempty_str` | [zotero_service.py:88](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L88) | |
 | `zotero.library_type` | `"user"` (implicit on push) | `_validate_library_type` (`"user"` / `"group"`) | [zotero_service.py:89](../../services/paper_ingestion/paper_ingestion/integrations/zotero_service.py#L89) | |
-| `zotero.poll_enabled` | `False` | `_validate_bool` | [scheduler.py:97](../../services/paper_ingestion/paper_ingestion/scheduler.py#L97) | Sole gate on `zotero_library_sync` cron job (post-2026-05-02 cleanup) |
+| `zotero.poll_enabled` | `False` | `_validate_bool` | `scheduler.py` per-user polling readiness | Per-user gate for scheduled Zotero polling. The scheduler job itself always runs; per-run fan-out only includes users with `poll_enabled=true` and usable Zotero credentials. |
 | `zotero.poll_cron` | (no default; cron string when set) | `_validate_zotero_cron` | [scheduler.py:103](../../services/paper_ingestion/paper_ingestion/scheduler.py#L103) | On write, [settings.py:419-431](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L419-L431) reschedules `zotero_library_sync` job |
 | `zotero.auto_push_on_star` | `False` (key absent → off) | `_validate_bool` | star handler in [routers/papers.py](../../services/paper_ingestion/paper_ingestion/routers/papers.py) — on `starred=False→True` transition AND key truthy AND project link present, enqueues existing `zotero.push` job | Wired 2026-05-02. Default-off; idempotent on already-starred state. |
 | `fsrs.desired_retention` | `0.9` ([init.sql:49](../../db/init.sql#L49)) | `_validate_desired_retention` (range `(0, 1)`) | Per-review fetch in `_build_fsrs_manager_from_db` ([learning_engine/routers/review.py](../../services/learning_engine/learning_engine/routers/review.py)) — fresh `FSRSManager` built inside the review transaction | Promoted PARTIAL→LIVE 2026-05-02; live-edit reactive |
@@ -272,7 +272,7 @@ The implementation MUST satisfy these. Testable.
 | `ui.page_size` | DELETED 2026-05-02 (UI-local React state) |
 | `ingestion.max_papers_per_run` | DELETED 2026-05-02 (subsumed by per-source plugin defaults) |
 | `ingestion.chunk_size` | DELETED 2026-05-02 (chunker is non-trivial; not user-tunable) |
-| `zotero.enabled` | DELETED 2026-05-02 (orphan read in `scheduler.py:97` removed; `zotero.poll_enabled` is the legitimate gate) |
+| `zotero.enabled` | DELETED 2026-05-02; remaining service/router reads removed in the 2026-05-12 audit closeout. Credentials gate push/test/annotation sync, and `zotero.poll_enabled` gates scheduled polling. |
 
 ---
 
@@ -292,7 +292,7 @@ Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](.
 | `ingestion.chunk_size` | DELETE-IT | Removed from `_ALLOWED_CONFIG_KEYS`. Chunker is non-trivial; not user-tunable. |
 | `zotero.auto_push_on_star` | WIRE-IT | Star handler in `routers/papers.py` now reads the key on `starred=False→True` transition AND project-link present, enqueues existing `zotero.push` job. Default-off; idempotent. |
 | `fsrs.desired_retention` (PARTIAL → LIVE) | Promote | Dropped `app.state._fsrs_desired_retention` startup cache in `learning_engine/main.py`. Per-review DB read in `_build_fsrs_manager_from_db`. Live-edit reactive. |
-| `zotero.enabled` (ANOMALY) | DELETE consumer | Deleted orphan read at `scheduler.py:97`. Polling now gated solely on `zotero.poll_enabled`. The wildcard `LIKE 'zotero.%'` consumer in `zotero_service.py:86` is unaffected. |
+| `zotero.enabled` (ANOMALY) | DELETE consumer | Deleted orphan reads in scheduler, router test, push, annotation sync, and polling. Polling is now gated by per-user `zotero.poll_enabled` plus configured credentials. The wildcard `LIKE 'zotero.%'` consumer in `zotero_service.py` is unaffected. |
 
 **No new migrations.** GHOST removal achieved by allow-list pruning + seed UPSERT removal in `db/init.sql` (idempotent). Stale rows in existing DBs become orphan reads on no remaining call site → harmless.
 
@@ -338,7 +338,7 @@ Future agents who edit this file MUST re-Read before re-citing.
 | Zotero push consumer reads | services/paper_ingestion/paper_ingestion/integrations/zotero_service.py:82-94 | Consumes `enabled`, `api_key`, `user_id`, `library_type` from the dict |
 | `pulse.weights` load + clamp | services/paper_ingestion/paper_ingestion/pulse/profile.py:166-194 | Loads from user_config, merges with `_DEFAULT_WEIGHTS`, clamps to [0,1] |
 | `_read_weights` (recommendation.*) | services/paper_ingestion/paper_ingestion/ingestion/recommender.py:126-143 | Reads liked/project weights + enabled flag |
-| `_get_zotero_poll_config` (poll_enabled + poll_cron) | services/paper_ingestion/paper_ingestion/scheduler.py:77-113 | Reads two keys; gates Zotero job registration on `poll_enabled` (post-2026-05-02 cleanup; orphan `zotero.enabled` removed) |
+| `_get_zotero_poll_config` / `_list_zotero_polling_users` | services/paper_ingestion/paper_ingestion/scheduler.py | Reads the system cron for job registration; per-run fan-out only includes users with `zotero.poll_enabled=true` and required Zotero credentials |
 | `_build_fsrs_manager_from_db` | services/learning_engine/learning_engine/routers/review.py | Per-review fetch of `fsrs.desired_retention` + `fsrs.learning_steps`; constructs fresh `FSRSManager` inside the review transaction. Replaces the dropped startup cache. |
 | `FSRSManager.__init__` | services/learning_engine/learning_engine/fsrs_manager.py | Accepts `desired_retention: float` and `learning_steps: list[timedelta] \| None`; passes both to py-fsrs `Scheduler(...)` |
 | Star handler auto-push gating | services/paper_ingestion/paper_ingestion/routers/papers.py (`star_paper`) | Reads `zotero.auto_push_on_star`; on `starred=True` transition + project link + key truthy, enqueues `zotero.push` job |

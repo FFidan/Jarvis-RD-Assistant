@@ -6,11 +6,11 @@ task management, and paper interactions via inline keyboards.
 
 import asyncio
 import logging
-import os
 import sys
 
 import httpx
 from jarvis_common.logging_config import configure_logging
+from jarvis_common.settings import get_core_settings
 from telegram import BotCommand
 from telegram.ext import Application
 
@@ -23,7 +23,7 @@ from telegram_bot.handlers import (
 from telegram_bot.internal_api import start_internal_server
 from telegram_bot.scheduler import JarvisScheduler
 
-configure_logging("telegram_bot", log_level=os.environ.get("LOG_LEVEL", "INFO"))
+configure_logging("telegram_bot", log_level=get_core_settings().log_level)
 logger = logging.getLogger(__name__)
 
 

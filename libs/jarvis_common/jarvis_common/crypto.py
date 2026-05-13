@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import logging
-import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -12,6 +11,7 @@ import asyncpg
 from cryptography.fernet import Fernet, MultiFernet
 
 from jarvis_common.secrets import read_secret
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +165,7 @@ async def validate_encrypted_config_rows(
         Number of encrypted rows checked.
     """
     if dev_mode is None:
-        dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+        dev_mode = get_core_settings().dev_mode
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(

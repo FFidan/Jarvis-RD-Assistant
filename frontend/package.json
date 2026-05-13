@@ -1,7 +1,7 @@
 {
   "name": "jarvis-frontend",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -80,6 +80,7 @@
     "jsdom": "^25.0.1",
     "openapi-typescript": "^7.0.0",
     "postcss": "^8.4.49",
+    "rollup-plugin-visualizer": "^7.0.1",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",

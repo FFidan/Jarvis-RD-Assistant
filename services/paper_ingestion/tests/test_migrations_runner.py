@@ -106,7 +106,8 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      runtime runner on existing installs (new tables only, no column changes).
     # 72: Sprint B canonical-corpus refactor (user_library, papers.discovered_by rename) —
     #      applied at runtime on existing installs; init.sql bake-in is a separate pass.
-    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72}
+    # 73: user_config per-user scope — applied at runtime with Phase 2 auth state.
+    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (

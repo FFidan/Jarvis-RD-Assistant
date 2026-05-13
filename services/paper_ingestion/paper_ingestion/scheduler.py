@@ -73,6 +73,69 @@ async def _list_active_users(db_pool: Any) -> list[int]:
         return []
 
 
+def _has_config_value(cfg: dict[str, Any], key: str) -> bool:
+    value = cfg.get(key)
+    return value is not None and str(value).strip() != ""
+
+
+def _coerce_config_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+async def _list_zotero_polling_users(db_pool: Any) -> list[int]:
+    """List users whose personal Zotero config is ready for scheduled polling."""
+    try:
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT u.id, c.key, c.value, c.encrypted_value
+                FROM users u
+                JOIN user_config c ON c.user_id = u.id
+                WHERE u.deleted_at IS NULL
+                  AND c.key = ANY($1::text[])
+                ORDER BY u.id ASC
+                """,
+                [
+                    "zotero.poll_enabled",
+                    "zotero.api_key",
+                    "zotero.user_id",
+                    "zotero.library_type",
+                    "zotero.group_id",
+                ],
+            )
+    except Exception:
+        logger.debug("scheduler: Zotero user_config unreadable; skipping scheduled poll")
+        return []
+
+    by_user: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        user_id = int(row["id"])
+        cfg = by_user.setdefault(user_id, {})
+        if row["encrypted_value"] is not None:
+            cfg[row["key"]] = "<encrypted>"
+        else:
+            cfg[row["key"]] = row["value"]
+
+    ready: list[int] = []
+    for user_id, cfg in by_user.items():
+        if not _coerce_config_bool(cfg.get("zotero.poll_enabled")):
+            continue
+        if not _has_config_value(cfg, "zotero.api_key"):
+            continue
+        if not _has_config_value(cfg, "zotero.user_id"):
+            continue
+        if cfg.get("zotero.library_type") == "group" and not _has_config_value(
+            cfg, "zotero.group_id"
+        ):
+            continue
+        ready.append(user_id)
+    return ready
+
+
 async def _get_pulse_cron(db_pool: Any) -> str:
     """Read ``user_config['pulse.cron']`` — defaults to ``'0 4 * * *'``."""
     try:
@@ -101,28 +164,24 @@ async def _get_pulse_cron(db_pool: Any) -> str:
 
 
 async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
-    """Return (poll_enabled, cron_expr) from user_config.
+    """Return scheduler registration readiness and cron_expr from user_config.
 
-    Defaults: poll_enabled=False, cron='0 * * * *' (hourly).
+    The scheduler itself is always allowed to run. Per-user polling is gated by
+    each user's ``zotero.poll_enabled`` row in ``_list_zotero_polling_users``.
     """
     try:
         async with db_pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT key, value FROM user_config WHERE key IN"
-                " ('zotero.poll_enabled', 'zotero.poll_cron') AND user_id IS NULL"
+                " ('zotero.poll_cron') AND user_id IS NULL"
             )
     except Exception:
         logger.exception("zotero: failed to read zotero config")
-        return False, _DEFAULT_ZOTERO_CRON
+        return True, _DEFAULT_ZOTERO_CRON
 
     cfg: dict[str, Any] = {}
     for row in rows:
         cfg[row["key"]] = row["value"]
-
-    # Poll is gated solely on zotero.poll_enabled.
-    poll_enabled = bool(cfg.get("zotero.poll_enabled", False))
-    if not poll_enabled:
-        return False, _DEFAULT_ZOTERO_CRON
 
     # Validate cron expression.
     raw_cron = cfg.get("zotero.poll_cron")
@@ -140,7 +199,12 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
 
 
 async def _defer_per_user(
-    *, task_kind: str, db_pool: Any, log_label: str, **task_kwargs: Any
+    *,
+    task_kind: str,
+    db_pool: Any,
+    log_label: str,
+    user_ids: list[int] | None = None,
+    **task_kwargs: Any,
 ) -> int:
     """Iterate active users and defer one ``task_kind`` job per user.
 
@@ -154,7 +218,7 @@ async def _defer_per_user(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    user_ids = await _list_active_users(db_pool)
+    user_ids = user_ids if user_ids is not None else await _list_active_users(db_pool)
     if not user_ids:
         logger.info(
             "%s: no active users — skipping %s deferral",
@@ -183,17 +247,13 @@ async def _defer_per_user(
 async def run_zotero_sync_wrapper(app: Any) -> None:
     """APScheduler entrypoint for Zotero library sync — defers via procrastinate."""
     db_pool = app.state.db_pool
-    poll_enabled, _ = await _get_zotero_poll_config(db_pool)
-    if not poll_enabled:
-        logger.info("zotero: poll disabled via user_config, skipping scheduled sync")
-        return
     try:
-        # WS-2D: per-user fan-out so each Zotero-paired user's poll attributes
-        # to them. With user_config still global, this currently iterates ALL
-        # active users — once Zotero credentials become per-user, narrow this
-        # helper to "users with zotero.poll_enabled=true" specifically.
+        user_ids = await _list_zotero_polling_users(db_pool)
         await _defer_per_user(
-            task_kind="zotero.sync_from_zotero", db_pool=db_pool, log_label="zotero"
+            task_kind="zotero.sync_from_zotero",
+            db_pool=db_pool,
+            log_label="zotero",
+            user_ids=user_ids,
         )
     except Exception:
         logger.exception("zotero: failed to defer sync job")

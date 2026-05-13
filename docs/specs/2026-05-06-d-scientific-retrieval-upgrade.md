@@ -1,24 +1,26 @@
 # Phase D — Scientific Retrieval Upgrade
 
-**Status:** Evaluation harness shipped; model promotion pending
+**Status:** Evaluation harness shipped; Qwen3-Embedding-4B default promoted
 **Date:** 2026-05-06
 **Depends on:** Phase C embedding migration completion (satisfied locally on 2026-05-06)
 
 ## Purpose
 
 Phase D tracks retrieval quality improvements for math-heavy and notation-heavy
-scientific papers after the Qwen3-Embedding-0.6B migration.
-It is not a blocker for Phase C and does not change runtime defaults until an
-evaluation proves a better local path.
+scientific papers after the Qwen3-Embedding-0.6B migration. The 2026-05-11
+closeout promoted Qwen3-Embedding-4B as the local default because the repo now
+treats scientific/notation-heavy papers as the primary workload. The remaining
+Phase D work is evaluation quality, reranker comparison, and live parity proof
+on each machine before claiming retrieval quality gains.
 
 ## Decisions
 
-- Keep `qwen3-embedding:0.6b` as the Phase C production embedding model at
-  1024 dimensions.
-- Track `qwen3-embedding:4b` as an advanced local candidate for Tier 2+ machines,
-  but keep it non-assignable until there is an explicit dimension policy:
-  either a deliberate 2560d collection rebuild or a verified MRL/custom-dimension
-  path that preserves the current 1024d operational contract.
+- Keep `qwen3-embedding:0.6b` as the explicit smaller-machine fallback at 1024
+  dimensions.
+- Use `qwen3-embedding:4b` as the local default at 2560 dimensions for
+  notation-heavy scientific retrieval. Existing 1024d installs must take a
+  Qdrant snapshot and run the guarded re-embed path before serving mixed-model
+  vectors.
 - Evaluate Qwen3 rerankers against the current production reranker,
   `mixedbread-ai/mxbai-rerank-base-v2`. The older claim that production still
   used `cross-encoder/ms-marco-MiniLM-L-6-v2` is stale for this checkout.
@@ -32,9 +34,10 @@ evaluation proves a better local path.
 
 ## Evaluation Plan
 
-1. Phase C live re-embedding and PG/Qdrant parity are complete locally:
-   4,888 PostgreSQL chunks and 4,888 Qdrant vectors at 1024d, all marked with
-   `qwen3-embedding:0.6b`.
+1. Phase C live re-embedding and PG/Qdrant parity were completed locally at
+   1024d/`qwen3-embedding:0.6b`. The current default is now
+   2560d/`qwen3-embedding:4b`; each machine must re-run the parity proof after
+   its guarded re-embed.
 2. `scripts/eval_retrieval.py` can now run either from verified DB findings or
    a fixed JSONL eval set via `EVAL_RETRIEVAL_SET=/path/to/eval.jsonl`.
    The fixed-set schema accepts:
@@ -47,9 +50,8 @@ evaluation proves a better local path.
    yet.
 5. Compare candidate rerankers against `mixedbread-ai/mxbai-rerank-base-v2` on
    recall@k, nDCG@k, latency, memory use, and failure modes.
-6. Evaluate `qwen3-embedding:4b` only in a separate Qdrant collection or
-   checkpointed rebuild. Do not reuse the Phase C collection unless dimensions
-   are deliberately matched.
+6. Validate `qwen3-embedding:4b` through the checkpointed rebuild path. Do not
+   reuse a Phase C 1024d collection with 2560d runtime settings.
 7. Promote a candidate only if quality improves without making PDF processing,
    Pulse, or RAG noticeably less reliable on the local hardware tier.
 

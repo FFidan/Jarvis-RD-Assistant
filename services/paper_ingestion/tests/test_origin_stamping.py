@@ -735,9 +735,8 @@ async def test_zotero_sync_stamps_user_initiated() -> None:
             }
         )
 
-    # Config rows for an enabled Zotero poll
+    # Config rows for a credentialed Zotero poll
     cfg_rows = [
-        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
         FakeRecord({"key": "zotero.poll_enabled", "value": True, "encrypted_value": None}),
         FakeRecord({"key": "zotero.api_key", "value": "test_key", "encrypted_value": None}),
         FakeRecord({"key": "zotero.user_id", "value": "99999", "encrypted_value": None}),

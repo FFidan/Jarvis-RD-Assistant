@@ -8,6 +8,7 @@ Covers:
 """
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx  # noqa: E402
@@ -579,6 +580,42 @@ async def test_papers_by_status(_app):
     assert len(body) == 2
     assert body[0]["status"] == "new"
     assert body[0]["count"] == 30
+
+
+@pytest.mark.asyncio
+async def test_papers_by_source_scopes_non_admin_browser_user(_app):
+    """Non-admin analytics should not expose other users' corpus size."""
+    from paper_ingestion.routers import settings
+
+    _app_obj, conn, _ = _app
+    conn.fetch.return_value = [FakeRecord(source_type="arxiv", count=2)]
+    request = SimpleNamespace(state=SimpleNamespace(user_id=42, user_role="member"))
+
+    rows = await settings.papers_by_source.__wrapped__(request, db_pool=_app_obj.state.db_pool)
+
+    assert rows == [{"source_type": "arxiv", "count": 2}]
+    sql = conn.fetch.await_args.args[0]
+    assert "JOIN user_library ul" in sql
+    assert "ul.user_id = $1" in sql
+    assert conn.fetch.await_args.args[1] == 42
+
+
+@pytest.mark.asyncio
+async def test_papers_by_status_scopes_non_admin_browser_user(_app):
+    """Per-state counts for browser users should be derived only from their library."""
+    from paper_ingestion.routers import settings
+
+    _app_obj, conn, _ = _app
+    conn.fetch.return_value = [FakeRecord(status="inbox", count=1)]
+    request = SimpleNamespace(state=SimpleNamespace(user_id=42, user_role="member"))
+
+    rows = await settings.papers_by_status.__wrapped__(request, db_pool=_app_obj.state.db_pool)
+
+    assert rows == [{"status": "inbox", "count": 1}]
+    sql = conn.fetch.await_args.args[0]
+    assert "JOIN user_library ul" in sql
+    assert "pus.user_id IS NOT DISTINCT FROM $1" in sql
+    assert conn.fetch.await_args.args[1] == 42
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,10 @@ ARG NGINX_RUNTIME_IMAGE=nginx:1.27-alpine3.21
 FROM ${NODE_BUILD_IMAGE} AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+# react-joyride 2.9.3 still declares a React 15-18 peer range while this app
+# runs React 19. Keep the lockfile authoritative and tolerate that stale peer
+# range in reproducible Docker builds.
+RUN npm ci --legacy-peer-deps
 ARG CACHE_BUST=unknown
 COPY . .
 RUN npm run build

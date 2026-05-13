@@ -65,9 +65,8 @@ def _make_conn(**kwargs):
 
 
 def _zotero_enabled_config_rows():
-    """Simulate user_config rows for an enabled Zotero config."""
+    """Simulate user_config rows for a usable Zotero config."""
     return [
-        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
         FakeRecord({"key": "zotero.api_key", "value": "test_api_key", "encrypted_value": None}),
         FakeRecord({"key": "zotero.user_id", "value": "123456", "encrypted_value": None}),
         FakeRecord({"key": "zotero.library_type", "value": "user", "encrypted_value": None}),
@@ -85,7 +84,7 @@ def _zotero_enabled_with_annotations_rows():
 
 
 def _zotero_disabled_config_rows():
-    return [FakeRecord({"key": "zotero.enabled", "value": False, "encrypted_value": None})]
+    return []
 
 
 def _paper_row(
@@ -131,12 +130,12 @@ def _cm(conn):
 
 
 # ---------------------------------------------------------------------------
-# Test: disabled
+# Test: not configured
 # ---------------------------------------------------------------------------
 
 
 async def test_push_paper_not_configured():
-    """push_paper_to_zotero returns early when Zotero is disabled."""
+    """push_paper_to_zotero returns early when Zotero credentials are absent."""
     # PI-010: _get_zotero_config now uses acquire() — config conn is first acquire().
     config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
     pool = MagicMock()
@@ -148,6 +147,81 @@ async def test_push_paper_not_configured():
         await push_paper_to_zotero(paper_id=1, db_pool=pool, http_client=http)
         # ZoteroClient should never be instantiated
         mock_client.assert_not_called()
+
+
+async def test_push_paper_reads_zotero_config_for_owner_user():
+    """Zotero workers must use the queued user's personal credentials."""
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(return_value={"enabled": False}),
+    ) as get_config:
+        await push_paper_to_zotero(
+            paper_id=1,
+            db_pool=pool,
+            http_client=http,
+            owner_user_id=42,
+        )
+
+    get_config.assert_awaited_once_with(pool, user_id=42)
+
+
+async def test_push_paper_filters_project_collections_by_owner_user():
+    """A shared canonical paper should only push the caller's project collections."""
+    paper = _paper_row(project_ids=[10])
+    owner_project = _project_row(project_id=10, name="Owner Project", col_key=None)
+    config_conn = _make_conn(fetch=_zotero_enabled_config_rows())
+
+    push_conn = AsyncMock()
+    push_conn.fetchrow = AsyncMock(side_effect=[paper, owner_project])
+    push_conn.fetch = AsyncMock(return_value=[])
+    push_conn.execute = AsyncMock(return_value=None)
+
+    pool = MagicMock()
+    pool.acquire = MagicMock(side_effect=[_cm(config_conn), _cm(push_conn)])
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch("paper_ingestion.integrations.zotero_client.ZoteroClient") as mock_client:
+        mock_zotero = mock_client.return_value
+        mock_zotero.search_by_doi = AsyncMock(return_value=None)
+        mock_zotero.ensure_collection = AsyncMock(return_value="OWNER")
+        mock_zotero.create_item = AsyncMock(
+            return_value={"successful": {"0": {"key": "ITEM42"}}, "unchanged": {}, "failed": {}}
+        )
+        mock_zotero.fetch_bbt_citation_key = AsyncMock(return_value=None)
+
+        await push_paper_to_zotero(
+            paper_id=1,
+            db_pool=pool,
+            http_client=http,
+            owner_user_id=42,
+        )
+
+    paper_sql = push_conn.fetchrow.await_args_list[0].args[0]
+    project_sql = push_conn.fetchrow.await_args_list[1].args[0]
+    assert "projects owner_project" in paper_sql
+    assert "owner_project.user_id IS NOT DISTINCT FROM $2" in paper_sql
+    assert push_conn.fetchrow.await_args_list[0].args[1:] == (1, 42)
+    assert "user_id IS NOT DISTINCT FROM $2" in project_sql
+    assert push_conn.fetchrow.await_args_list[1].args[1:] == (10, 42)
+    mock_zotero.ensure_collection.assert_awaited_once_with("Owner Project")
+
+
+async def test_poll_zotero_library_reads_config_for_polling_user():
+    """Manual and scheduled polls must read the polling user's Zotero config."""
+    pool = MagicMock()
+    http = AsyncMock(spec=httpx.AsyncClient)
+
+    with patch(
+        "paper_ingestion.integrations.zotero_service._get_zotero_config",
+        AsyncMock(return_value={"enabled": False}),
+    ) as get_config:
+        result = await poll_zotero_library(pool, http, polling_user_id=42)
+
+    assert result["status"] == "disabled"
+    get_config.assert_awaited_once_with(pool, user_id=42)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +422,7 @@ async def test_resync_clears_and_repushes():
         assert 42 in sql_call[0]
 
         # push must be called afterwards
-        mock_push.assert_called_once_with(42, pool, http)
+        mock_push.assert_called_once_with(42, pool, http, owner_user_id=None)
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +433,6 @@ async def test_resync_clears_and_repushes():
 def _zotero_poll_enabled_config_rows():
     """user_config rows for an enabled Zotero config with polling on."""
     return [
-        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
         FakeRecord({"key": "zotero.api_key", "value": "test_api_key", "encrypted_value": None}),
         FakeRecord({"key": "zotero.user_id", "value": "123456", "encrypted_value": None}),
         FakeRecord({"key": "zotero.library_type", "value": "user", "encrypted_value": None}),
@@ -420,7 +493,7 @@ def _make_poll_pool(*conn_returns, config_rows=None):
 
 
 async def test_poll_library_disabled():
-    """Returns disabled status when zotero.enabled is false."""
+    """Returns disabled status when Zotero credentials are absent."""
     config_conn = _make_conn(fetch=_zotero_disabled_config_rows())
     pool = MagicMock()
     pool.acquire = MagicMock(return_value=_cm(config_conn))
@@ -434,7 +507,6 @@ async def test_poll_library_disabled():
 async def test_poll_library_poll_disabled():
     """Returns poll_disabled status when zotero.poll_enabled is false."""
     config_rows = [
-        FakeRecord({"key": "zotero.enabled", "value": True, "encrypted_value": None}),
         FakeRecord({"key": "zotero.api_key", "value": "key", "encrypted_value": None}),
         FakeRecord({"key": "zotero.user_id", "value": "123", "encrypted_value": None}),
         FakeRecord({"key": "zotero.poll_enabled", "value": False, "encrypted_value": None}),
@@ -722,13 +794,6 @@ async def test_get_zotero_config_legacy_plaintext_fallback():
     rows = [
         FakeRecord(
             {
-                "key": "zotero.enabled",
-                "value": True,
-                "encrypted_value": None,
-            }
-        ),
-        FakeRecord(
-            {
                 "key": "zotero.api_key",
                 "value": "legacy-plaintext-key",
                 "encrypted_value": None,
@@ -756,7 +821,6 @@ async def test_get_zotero_config_legacy_plaintext_fallback():
     config = await _get_zotero_config(pool)
 
     assert config["api_key"] == "legacy-plaintext-key"
-    assert config["enabled"] is True
     assert config["user_id"] == "123456"
     assert config["library_type"] == "user"
 

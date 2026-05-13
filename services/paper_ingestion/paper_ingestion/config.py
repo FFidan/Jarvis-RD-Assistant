@@ -36,6 +36,7 @@ OPENALEX_EMAIL              openalex_email              sources/openalex_source.
 INFRA_INGEST_KEY            infra_ingest_key            routers/infra_events.py
 INFRA_INGEST_KEY_FILE       infra_ingest_key_file       routers/infra_events.py
 TELEGRAM_BOT_TOKEN          telegram_bot_token          routers/system.py
+VECTOR_API_URL              vector_api_url              main.py health check
 """
 
 from __future__ import annotations
@@ -71,6 +72,10 @@ class PaperIngestionSettings(JarvisCommonSettings):
         default="http://ollama:11434",
         description="Ollama server base URL (OLLAMA_BASE_URL).",
     )
+    vector_api_url: str = Field(
+        default="http://vector:8686",
+        description="Vector sidecar API URL for best-effort health checks (VECTOR_API_URL).",
+    )
 
     # --- Embedding ------------------------------------------------------
     embedding_model: str = Field(
@@ -82,11 +87,11 @@ class PaperIngestionSettings(JarvisCommonSettings):
         ),
     )
     embedding_model_name: str = Field(
-        default="qwen3-embedding:0.6b",
+        default="qwen3-embedding:4b",
         description="Ollama model name for direct embedding calls (EMBEDDING_MODEL_NAME).",
     )
     embedding_dimension: int = Field(
-        default=1024,
+        default=2560,
         description="Dimensionality of the embedding vectors (EMBEDDING_DIMENSION).",
     )
 

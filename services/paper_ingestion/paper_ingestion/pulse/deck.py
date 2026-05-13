@@ -138,9 +138,9 @@ async def _persist_deck_inner(
             inserted_id = await conn.fetchval(
                 f"""
             INSERT INTO pulse_cards
-                (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
+                (deck_id, user_id, paper_id, rank, score, llm_relevance, llm_novelty,
                  reasoning, signals, reasoning_verified, reasoning_confidence)
-            SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
+            SELECT $1, $11, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
             FROM papers p
             LEFT JOIN paper_user_state pus
                    ON pus.paper_id = p.id
@@ -175,9 +175,9 @@ async def _persist_deck_inner(
             inserted_id = await conn.fetchval(
                 f"""
             INSERT INTO pulse_cards
-                (deck_id, paper_id, rank, score, llm_relevance, llm_novelty,
+                (deck_id, user_id, paper_id, rank, score, llm_relevance, llm_novelty,
                  reasoning, signals, reasoning_verified, reasoning_confidence)
-            SELECT $1, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
+            SELECT $1, $11, p.id, $3, $4, $5, $6, $7, $8::jsonb, $9, $10
             FROM papers p
             LEFT JOIN paper_user_state pus
                    ON pus.paper_id = p.id

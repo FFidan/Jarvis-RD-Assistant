@@ -231,6 +231,28 @@ async def test_persist_deck_inner_uses_pulse_candidate_exclude_sql():
     )
 
 
+@pytest.mark.asyncio
+async def test_persist_deck_inner_threads_user_id_to_card_insert():
+    """pulse_cards rows must be attributable to the deck owner."""
+    pool, conn = _make_pool_and_conn()
+    deck_date = date(2026, 5, 11)
+    conn.fetchval.side_effect = [55, 25, 1]
+
+    await _persist_deck_inner(
+        conn,
+        deck_date,
+        cards=[_make_scored(_make_paper(0))],
+        stats={},
+        user_id=42,
+    )
+
+    card_call = conn.fetchval.call_args_list[2]
+    sql = card_call.args[0]
+    assert "INSERT INTO pulse_cards" in sql
+    assert "user_id" in sql
+    assert card_call.args[-1] == 42
+
+
 # ---------------------------------------------------------------------------
 # load_today
 # ---------------------------------------------------------------------------

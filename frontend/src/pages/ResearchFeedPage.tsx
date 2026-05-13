@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -14,10 +14,9 @@ import type {
   SearchPreviewSourceError,
   SourceConfig,
 } from '@/types';
-import type { SurfaceView, LibraryFilter, FeedCountsResponse, InboxSourceFilter } from '@/types';
+import type { SurfaceView, LibraryFilter, FeedCountsResponse, InboxSourceFilter, FeedScope } from '@/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { StreamingChat } from '@/components/chat/StreamingChat';
 import { SearchBar } from '@/components/feed/SearchBar';
 import { PreviewResults } from '@/components/feed/PreviewResults';
 import { SearchSourceErrors } from '@/components/feed/SearchSourceErrors';
@@ -41,6 +40,17 @@ const SURFACES: { value: SurfaceView; label: string; countsKey?: keyof FeedCount
   { value: 'search', label: 'Search' },
   { value: 'ask', label: 'Ask' },
   { value: 'trash', label: 'Trash', countsKey: 'trash' },
+];
+
+const StreamingChat = lazy(() =>
+  import('@/components/chat/StreamingChat').then((module) => ({
+    default: module.StreamingChat,
+  })),
+);
+
+const FEED_SCOPES: { value: FeedScope; label: string }[] = [
+  { value: 'library', label: 'My library' },
+  { value: 'corpus', label: 'All discovered' },
 ];
 
 // URL-param guards (M16) — reject unexpected ?surface= / ?filter= values
@@ -127,6 +137,7 @@ export function ResearchFeedPage() {
 
   const rawSurface = searchParams.get('surface');
   const rawFilter = searchParams.get('filter');
+  const rawScope = searchParams.get('scope');
 
   // M16: unknown surface → 'inbox' fallback
   const surface: SurfaceView =
@@ -138,13 +149,14 @@ export function ResearchFeedPage() {
     rawFilter && VALID_FILTERS.has(rawFilter as LibraryFilter)
       ? (rawFilter as LibraryFilter)
       : null;
+  const feedScope: FeedScope = rawScope === 'corpus' ? 'corpus' : 'library';
 
   // Clear bulk selection on any surface change — handles URL-driven changes
   // (browser back/forward, programmatic setSearchParams, deep-links) that
   // imperative click handlers can't intercept.
   useEffect(() => {
     useBulkSelection.getState().clear();
-  }, [surface]);
+  }, [surface, feedScope]);
 
   // Cheat sheet — moved to global AppShell mount in Wave 7 (B.6).
   // The ? keypress is bound by useFeedKeyboardShortcuts in FeedView, which
@@ -286,6 +298,7 @@ export function ResearchFeedPage() {
       const next = new URLSearchParams(prev);
       next.set('surface', s);
       next.delete('filter');
+      if (s !== 'library') next.delete('scope');
       return next;
     });
   }
@@ -300,6 +313,18 @@ export function ResearchFeedPage() {
       }
       return next;
     });
+  }
+
+  function setFeedScope(scope: FeedScope) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('surface', 'library');
+      if (scope === 'library') next.delete('scope');
+      else next.set('scope', scope);
+      next.delete('offset');
+      return next;
+    });
+    useBulkSelection.getState().clear();
   }
 
   const inboxSource = (searchParams.get('source') ?? undefined) as InboxSourceFilter | undefined;
@@ -385,6 +410,24 @@ export function ResearchFeedPage() {
               );
             })}
           </div>
+          <div className="mt-3 inline-flex rounded-md border border-hair p-0.5" role="tablist" aria-label="Library corpus scope">
+            {FEED_SCOPES.map(({ value, label }) => (
+              <button
+                key={value}
+                role="tab"
+                aria-selected={feedScope === value}
+                onClick={() => setFeedScope(value)}
+                className={cn(
+                  'h-8 rounded px-3 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  feedScope === value
+                    ? 'bg-muted text-strong'
+                    : 'text-muted-foreground hover:text-strong',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </TooltipProvider>
       )}
 
@@ -424,7 +467,7 @@ export function ResearchFeedPage() {
       {surface === 'library' && (
         <div>
           <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
-          <FeedView surface="library" filter={filter} />
+          <FeedView surface="library" filter={filter} scope={feedScope} />
         </div>
       )}
 
@@ -520,7 +563,9 @@ export function ResearchFeedPage() {
             </p>
           </div>
           <div className="min-h-[400px]">
-            <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />
+            <Suspense fallback={<div className="text-sm text-muted-foreground">Loading chat…</div>}>
+              <StreamingChat chatId="cross-paper-rag" scope="cross-paper" />
+            </Suspense>
           </div>
         </div>
       )}

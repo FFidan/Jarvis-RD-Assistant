@@ -133,49 +133,48 @@ multi-user auth system. The current state:
 
 ### Telegram Pairing
 
-Telegram chat-to-user pairing is deferred to Sprint A (see
-`docs/plans/2026-05-10-multiuser-followup-sprints.md`). Until Sprint A ships:
-
-- The bot authenticates via `TELEGRAM_BOT_TOKEN` and sends notifications to
-  `TELEGRAM_CHAT_ID` (global, not per-user).
-- When Sprint A lands: `db/migrations/071_telegram_pairings.sql` adds
-  `telegram_user_pairings`; all six orchestrators iterate paired users instead
-  of broadcasting globally.
+Telegram chat-to-user pairing shipped in migration 071. The dashboard issues
+short-lived pairing tokens in `telegram_pairing_tokens`; the bot stores durable
+chat ownership in `telegram_user_pairings`. Telegram orchestrators now iterate
+paired users where the workflow has a per-user delivery surface. The legacy
+`TELEGRAM_CHAT_ID` path remains a compatibility fallback for installs that have
+not paired a chat yet.
 
 ### Canonical Corpus And user_library
 
-The `papers.user_id` column currently serves double duty (creator vs
-library-owner). Sprint B (`db/migrations/072_canonical_corpus.sql`) will:
+The canonical corpus refactor shipped in migration 072:
 
-- Introduce the `user_library` join table (user_id, paper_id, added_via).
-- Rename `papers.user_id` → `papers.discovered_by`.
-- Refactor feed queries to JOIN on `user_library` rather than the ambiguous
-  `user_id` predicate.
-
-Until Sprint B ships, the feed query in `feed_query.py` uses the legacy
-`WHERE p.user_id IS NULL OR p.user_id = $N` predicate.
+- `papers.discovered_by` records who first introduced a canonical paper.
+- `user_library(user_id, paper_id, added_via)` records personal library
+  membership.
+- Feed queries default to `user_library` membership for "My library" and expose
+  a deliberate `scope=corpus` mode for "All discovered" while keeping
+  `paper_user_state` overlays scoped to the caller.
+- User-initiated uploads and manual project links add the paper to the caller's
+  `user_library` in the same transaction. API-key-only single-user calls keep
+  the legacy `user_id=NULL` behavior.
+- In corpus scope, the Library surface maps to the `all_non_trash` predicate:
+  it means "all canonical papers except trash", not caller library membership.
 
 ### Residual Risks
 
 Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
 
-- Pulse `generate_pulse` and Zotero `poll_now` still pass `user_id=None` to
-  `defer_async`; scheduled-cron wrappers in `scheduler.py` do not yet iterate
-  per-user (bundled into Sprint B scope).
-- `pulse_cards` INSERT omits `user_id`; classifier training returns zero rows in
-  multi-tenant mode (B-PULSE-2 in the 2026-05-09 audit).
-- IDOR regression test suite is not yet comprehensive; live multi-tenant tests
-  are in progress.
+- Per-user topic subscriptions are still not implemented; auto-fetched papers
+  enter only the canonical corpus until users explicitly acquire them.
+- `paper_digest.py` still has a single-tenant fallback when no Telegram pairing
+  exists. Remove it after production telemetry proves pairings are universal.
+- IDOR regression coverage is broader than the original Phase-2 pass but is not
+  yet a full live multi-user browser suite.
 
 ## Persistence
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
-`paper_ingestion` startup. As of 2026-05-10 there are 70 migrations (001–070).
-Migrations 071 (Telegram pairings) and 072 (canonical corpus) are pending
-Sprint A and Sprint B respectively. Fresh-install validation must replay
-`db/init.sql` and migrations against live Docker Postgres when schema
-duplication risk is in scope.
+`paper_ingestion` startup. As of 2026-05-11 there are 73 migrations (001–073),
+including Telegram pairings, canonical corpus, and scoped `user_config` rows.
+Fresh-install validation must replay `db/init.sql` and migrations against live
+Docker Postgres when schema duplication risk is in scope.
 
 ## Specs
 

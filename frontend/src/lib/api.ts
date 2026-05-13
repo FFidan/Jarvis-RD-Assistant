@@ -355,6 +355,12 @@ export const updateTopic = (id: number, data: Partial<Topic>) =>
   apiFetch<Topic>(`/api/topics/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteTopic = (id: number) =>
   apiFetch<void>(`/api/topics/${id}`, { method: 'DELETE' });
+export const fetchMySubscriptions = () =>
+  apiFetch<number[]>('/api/topics/subscriptions');
+export const subscribeToTopic = (topicId: number) =>
+  apiFetch<void>(`/api/topics/${topicId}/subscribe`, { method: 'PUT' });
+export const unsubscribeFromTopic = (topicId: number) =>
+  apiFetch<void>(`/api/topics/${topicId}/subscribe`, { method: 'DELETE' });
 
 // --- Sources ---
 export const fetchSources = () => apiFetch<SourceConfig[]>('/api/sources');
@@ -922,17 +928,20 @@ const LIBRARY_FILTER_TO_BACKEND_VIEW: Record<
 export async function fetchFeed(params: {
   view?: import('@/types').SurfaceView;
   filter?: string | null;
+  scope?: import('@/types').FeedScope;
   limit?: number;
   offset?: number;
   sourceTypes?: string | null;
 }): Promise<FeedResponse> {
-  const { view, filter, limit = 30, offset = 0, sourceTypes } = params;
+  const { view, filter, scope, limit = 30, offset = 0, sourceTypes } = params;
 
   // Map (surface=library, filter=X) → backend view name. Otherwise the surface
   // value itself is already a valid backend view (inbox/library/trash overlap).
   let resolvedView: BackendView | undefined;
   if (view === 'library' && filter && filter in LIBRARY_FILTER_TO_BACKEND_VIEW) {
     resolvedView = LIBRARY_FILTER_TO_BACKEND_VIEW[filter as import('@/types').LibraryFilter];
+  } else if (view === 'library' && scope === 'corpus') {
+    resolvedView = 'all_non_trash';
   } else if (view === 'inbox' || view === 'library' || view === 'trash') {
     resolvedView = view;
   }
@@ -940,6 +949,9 @@ export async function fetchFeed(params: {
   const searchParams = new URLSearchParams();
   if (resolvedView) {
     searchParams.set('view', resolvedView);
+  }
+  if (scope) {
+    searchParams.set('scope', scope);
   }
   searchParams.set('limit', String(limit));
   searchParams.set('offset', String(offset));
