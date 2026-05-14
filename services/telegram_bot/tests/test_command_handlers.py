@@ -73,6 +73,10 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
 
     context = MagicMock()
     context.args = args or []
+    # auth_required decorator stashes the resolved user_id here; default to an
+    # empty dict so tests not exercising per-user scoping behave as the env-var
+    # owner path (jarvis_user_id absent => None).
+    context.user_data = {}
 
     config = _make_config()
     mock_db = AsyncMock()
@@ -86,6 +90,29 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
     }
 
     return update, context, mock_db, mock_http
+
+
+def _make_paired_update_and_context(jarvis_user_id, args=None):
+    """Build an Update/Context for a paired multi-tenant chat.
+
+    The chat_id does NOT match the env-var config, so the auth_required
+    decorator would normally consult the pairing table.  Callers patch
+    ``telegram_bot.handlers.commands._auth.auth_check`` to short-circuit DB
+    lookups (the per-command tests in this module exercise the SQL the
+    decorator's stashed ``jarvis_user_id`` enables, not auth itself).
+    """
+    update, context, mock_db, mock_http = _make_update_and_context(args=args, chat_id=99999)
+    context.user_data = {}
+    return update, context, mock_db, mock_http
+
+
+def _paired_auth_patch(jarvis_user_id):
+    """Patch the decorator's auth_check to grant access as the given user."""
+    return patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, jarvis_user_id),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -609,3 +636,148 @@ async def test_papers_search_strips_zero_width_space():
     sent_query = call_kwargs["json"]["query"]
     assert "​" not in sent_query, "Zero-width space must be stripped before forwarding"
     assert sent_query == clean_query
+
+
+# ---------------------------------------------------------------------------
+# Wave-0 C1/C2: per-user scoping of interactive commands
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_briefing_scopes_papers_to_user_library_when_paired():
+    """/briefing run by a paired user counts papers via user_library JOIN."""
+    update, context, mock_db, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    mock_db.fetchrow.return_value = {"cnt": 0}
+    mock_db.fetch.side_effect = [[], []]
+    stats_resp = MagicMock()
+    stats_resp.raise_for_status = MagicMock()
+    stats_resp.json.return_value = {"due_now": 0}
+    mock_http.get.return_value = stats_resp
+
+    with _paired_auth_patch(7):
+        await briefing_command(update, context)
+
+    papers_sql = mock_db.fetchrow.await_args.args[0]
+    assert "user_library" in papers_sql
+    assert "ul.user_id = $1" in papers_sql
+    assert mock_db.fetchrow.await_args.args[1] == 7
+
+    fetch_calls = mock_db.fetch.await_args_list
+    tasks_sql = fetch_calls[0].args[0]
+    milestones_sql = fetch_calls[1].args[0]
+    assert "t.user_id IS NOT DISTINCT FROM" in tasks_sql
+    assert "m.user_id IS NOT DISTINCT FROM" in milestones_sql
+
+
+@pytest.mark.asyncio
+async def test_briefing_owner_path_remains_unscoped():
+    """/briefing run by the env-var owner (jarvis_user_id=None) keeps legacy SQL."""
+    update, context, mock_db, mock_http = _make_update_and_context()
+    mock_db.fetchrow.return_value = {"cnt": 0}
+    mock_db.fetch.side_effect = [[], []]
+    stats_resp = MagicMock()
+    stats_resp.raise_for_status = MagicMock()
+    stats_resp.json.return_value = {"due_now": 0}
+    mock_http.get.return_value = stats_resp
+
+    await briefing_command(update, context)
+
+    papers_sql = mock_db.fetchrow.await_args.args[0]
+    assert "user_library" not in papers_sql
+    fetch_calls = mock_db.fetch.await_args_list
+    assert "user_id" not in fetch_calls[0].args[0]
+    assert "user_id" not in fetch_calls[1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_tasks_scopes_query_to_paired_user():
+    """/tasks run by a paired user adds an `t.user_id IS NOT DISTINCT FROM` filter."""
+    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=[])
+    mock_db.fetch.return_value = []
+
+    with _paired_auth_patch(7):
+        await tasks_command(update, context)
+
+    sql, *params = mock_db.fetch.await_args.args
+    assert "t.user_id IS NOT DISTINCT FROM $1" in sql
+    assert params == [7]
+
+
+@pytest.mark.asyncio
+async def test_tasks_scopes_query_with_project_filter():
+    """/tasks <project_id> from a paired user scopes by BOTH user_id and project_id."""
+    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["3"])
+    mock_db.fetch.return_value = []
+
+    with _paired_auth_patch(7):
+        await tasks_command(update, context)
+
+    sql, *params = mock_db.fetch.await_args.args
+    assert "t.user_id IS NOT DISTINCT FROM $1" in sql
+    assert "t.project_id = $2" in sql
+    assert params == [7, 3]
+
+
+@pytest.mark.asyncio
+async def test_done_passes_user_id_to_complete_task():
+    """/done from a paired user forwards jarvis_user_id to ProjectManager."""
+    update, context, _mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["5"])
+
+    with (
+        _paired_auth_patch(7),
+        patch("telegram_bot.handlers.commands.task_commands.ProjectManager") as mock_pm,
+    ):
+        pm_instance = AsyncMock()
+        pm_instance.complete_task.return_value = {}
+        mock_pm.return_value = pm_instance
+
+        await done_command(update, context)
+
+    # Task wasn't owned -> reply says "not found"
+    text = update.message.reply_text.call_args[0][0]
+    assert "not found" in text.lower() or "5" in text
+    pm_instance.complete_task.assert_awaited_once_with(5, user_id=7)
+
+
+@pytest.mark.asyncio
+async def test_projects_scopes_listing_to_paired_user():
+    """/projects from a paired user filters by `user_id IS NOT DISTINCT FROM`."""
+    update, context, mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7)
+    mock_db.fetch.return_value = []
+
+    with _paired_auth_patch(7):
+        await projects_command(update, context)
+
+    sql, *params = mock_db.fetch.await_args.args
+    assert "user_id IS NOT DISTINCT FROM $1" in sql
+    assert params == [7]
+
+
+@pytest.mark.asyncio
+async def test_projects_owner_path_remains_unscoped():
+    """/projects from the env-var owner keeps legacy unscoped SQL."""
+    update, context, mock_db, _ = _make_update_and_context()
+    mock_db.fetch.return_value = []
+
+    await projects_command(update, context)
+
+    sql = mock_db.fetch.await_args.args[0]
+    assert "user_id" not in sql
+
+
+@pytest.mark.asyncio
+async def test_newproject_passes_user_id_to_create_project():
+    """/newproject from a paired user forwards jarvis_user_id to ProjectManager."""
+    update, context, _mock_db, _ = _make_paired_update_and_context(jarvis_user_id=7, args=["Alpha"])
+
+    with (
+        _paired_auth_patch(7),
+        patch("telegram_bot.handlers.commands.project_commands.ProjectManager") as mock_pm,
+    ):
+        pm_instance = AsyncMock()
+        pm_instance.create_project.return_value = {"id": 42}
+        mock_pm.return_value = pm_instance
+
+        await newproject_command(update, context)
+
+    pm_instance.create_project.assert_awaited_once_with("Alpha", user_id=7)

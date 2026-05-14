@@ -35,10 +35,21 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if update.message is None:
         return
     db = get_db(context)
-    rows = await db.fetch(
-        "SELECT id, name, status, description, deadline "
-        "FROM projects WHERE status = 'active' ORDER BY created_at DESC"
+    user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
     )
+    if user_id is not None:
+        rows = await db.fetch(
+            "SELECT id, name, status, description, deadline "
+            "FROM projects WHERE status = 'active' "
+            "AND user_id IS NOT DISTINCT FROM $1 ORDER BY created_at DESC",
+            user_id,
+        )
+    else:
+        rows = await db.fetch(
+            "SELECT id, name, status, description, deadline "
+            "FROM projects WHERE status = 'active' ORDER BY created_at DESC"
+        )
 
     if not rows:
         await update.message.reply_text("No active projects.", parse_mode="HTML")
@@ -79,9 +90,12 @@ async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     name = _BIDI_ZW_RE.sub("", " ".join(context.args)[:200])
     db = get_db(context)
+    user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     try:
         pm = ProjectManager(db)
-        result = await pm.create_project(name)
+        result = await pm.create_project(name, user_id=user_id)
         project_id = result["id"]
         await update.message.reply_text(
             f"✅ Project <b>{escape(name)}</b> created (ID: {project_id}).",

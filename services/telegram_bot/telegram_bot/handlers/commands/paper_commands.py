@@ -170,13 +170,25 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     db = get_db(context)
     http = get_http(context)
     config = get_config(context)
+    user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
 
-    # New papers in last 24 hours
+    # New papers in last 24 hours — scoped to the user's library when paired.
     since = datetime.now(UTC) - timedelta(hours=24)
-    row = await db.fetchrow("SELECT COUNT(*) AS cnt FROM papers WHERE created_at >= $1", since)
+    if user_id is not None:
+        row = await db.fetchrow(
+            "SELECT COUNT(*) AS cnt FROM papers p "
+            "JOIN user_library ul ON ul.paper_id = p.id "
+            "WHERE ul.user_id = $1 AND p.created_at >= $2",
+            user_id,
+            since,
+        )
+    else:
+        row = await db.fetchrow("SELECT COUNT(*) AS cnt FROM papers WHERE created_at >= $1", since)
     new_papers_count = row["cnt"] if row else 0
 
     # Due cards from learning engine
@@ -193,24 +205,44 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     except Exception:
         logger.exception("Failed to fetch stats for briefing")
 
-    # In-progress tasks
-    task_rows = await db.fetch(
-        "SELECT t.title, p.name AS project_name "
-        "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
-        "WHERE t.status = 'in_progress' "
-        "ORDER BY t.created_at DESC LIMIT 10"
-    )
+    # In-progress tasks — scoped by user_id when paired.
+    if user_id is not None:
+        task_rows = await db.fetch(
+            "SELECT t.title, p.name AS project_name "
+            "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
+            "WHERE t.status = 'in_progress' AND t.user_id IS NOT DISTINCT FROM $1 "
+            "ORDER BY t.created_at DESC LIMIT 10",
+            user_id,
+        )
+    else:
+        task_rows = await db.fetch(
+            "SELECT t.title, p.name AS project_name "
+            "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
+            "WHERE t.status = 'in_progress' "
+            "ORDER BY t.created_at DESC LIMIT 10"
+        )
     tasks = [dict(r) for r in task_rows]
 
-    # Upcoming milestones (next 7 days)
+    # Upcoming milestones (next 7 days) — scoped by user_id when paired.
     deadline_cutoff = datetime.now(UTC) + timedelta(days=7)
-    milestone_rows = await db.fetch(
-        "SELECT m.name, m.deadline, p.name AS project_name "
-        "FROM milestones m LEFT JOIN projects p ON m.project_id = p.id "
-        "WHERE m.completed = false AND m.deadline <= $1 "
-        "ORDER BY m.deadline ASC LIMIT 10",
-        deadline_cutoff,
-    )
+    if user_id is not None:
+        milestone_rows = await db.fetch(
+            "SELECT m.name, m.deadline, p.name AS project_name "
+            "FROM milestones m LEFT JOIN projects p ON m.project_id = p.id "
+            "WHERE m.completed = false AND m.deadline <= $1 "
+            "AND m.user_id IS NOT DISTINCT FROM $2 "
+            "ORDER BY m.deadline ASC LIMIT 10",
+            deadline_cutoff,
+            user_id,
+        )
+    else:
+        milestone_rows = await db.fetch(
+            "SELECT m.name, m.deadline, p.name AS project_name "
+            "FROM milestones m LEFT JOIN projects p ON m.project_id = p.id "
+            "WHERE m.completed = false AND m.deadline <= $1 "
+            "ORDER BY m.deadline ASC LIMIT 10",
+            deadline_cutoff,
+        )
     milestones = [dict(r) for r in milestone_rows]
 
     text = format_morning_briefing(new_papers_count, due_cards, tasks, milestones)

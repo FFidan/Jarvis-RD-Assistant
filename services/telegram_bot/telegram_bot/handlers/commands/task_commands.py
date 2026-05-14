@@ -24,6 +24,9 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message is None:
         return
     db = get_db(context)
+    user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     project_id = None
     if context.args:
         try:
@@ -37,13 +40,14 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "FROM tasks t LEFT JOIN projects p ON t.project_id = p.id "
         "WHERE t.status = 'in_progress'"
     )
+    params: list[object] = []
+    if user_id is not None:
+        base_sql += f" AND t.user_id IS NOT DISTINCT FROM ${len(params) + 1}"
+        params.append(user_id)
     if project_id is not None:
-        rows = await db.fetch(
-            base_sql + " AND t.project_id = $1 ORDER BY t.created_at DESC LIMIT 20",
-            project_id,
-        )
-    else:
-        rows = await db.fetch(base_sql + " ORDER BY t.created_at DESC LIMIT 20")
+        base_sql += f" AND t.project_id = ${len(params) + 1}"
+        params.append(project_id)
+    rows = await db.fetch(base_sql + " ORDER BY t.created_at DESC LIMIT 20", *params)
 
     if not rows:
         await update.message.reply_text("No in-progress tasks.", parse_mode="HTML")
@@ -85,8 +89,11 @@ async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     db = get_db(context)
+    user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     pm = ProjectManager(db)
-    result = await pm.complete_task(task_id)
+    result = await pm.complete_task(task_id, user_id=user_id)
 
     if not result:
         await update.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")
