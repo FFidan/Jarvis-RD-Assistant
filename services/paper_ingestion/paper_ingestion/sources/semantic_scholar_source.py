@@ -10,6 +10,7 @@ import time as _time
 from datetime import UTC, date, datetime
 from typing import Any
 from urllib.parse import quote as _url_quote
+from urllib.parse import urlparse as _urlparse
 
 import httpx
 from jarvis_common.event_log import log_event
@@ -17,6 +18,7 @@ from jarvis_common.source_rate_limiter import PersistentSourceRateLimiter, Sourc
 from jarvis_common.text_utils import author_matches
 
 from paper_ingestion.models import PaperCreate, PaperSourceConfig, SourceType, TopicRef
+from paper_ingestion.pdf_processor import ALLOWED_PDF_DOMAINS
 from paper_ingestion.sources.base import PaperSource, SourceQuery, _enforce_startup_grace
 from paper_ingestion.sources.registry import register_source
 
@@ -151,6 +153,22 @@ class SemanticScholarSource(PaperSource):
             pdf_url = open_access.get("url")
         if pdf_url is not None and not pdf_url.strip():
             pdf_url = None  # Treat empty/whitespace-only as missing
+
+        # DOM-B-09: Validate pdf_url scheme + hostname against the SSRF allowlist
+        # before storing it — S2 openAccessPdf can return arbitrary third-party URLs.
+        if pdf_url is not None:
+            _parsed = _urlparse(pdf_url)
+            _hostname = _parsed.hostname or ""
+            if _parsed.scheme not in ("http", "https") or _hostname not in ALLOWED_PDF_DOMAINS:
+                logger.info(
+                    "S2: pdf_url %r for paper %s rejected "
+                    "(scheme=%r, hostname=%r not in ALLOWED_PDF_DOMAINS); discarding pdf_url",
+                    pdf_url,
+                    paper_id,
+                    _parsed.scheme,
+                    _parsed.hostname,
+                )
+                pdf_url = None
 
         url = data.get("url") or f"https://www.semanticscholar.org/paper/{paper_id}"
 

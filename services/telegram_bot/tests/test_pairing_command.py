@@ -19,6 +19,7 @@ import pytest
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.handlers.commands import start_command  # noqa: E402
+from telegram_bot.handlers.commands.pairing_commands import pair_command  # noqa: E402
 from telegram_bot.handlers.helpers import auth_check as _auth_check  # noqa: E402
 
 _OWNER_CHAT_ID = 777
@@ -328,3 +329,46 @@ async def test_pairing_stores_chat_id_as_native_int_not_json_string():
         f"After JSONB codec round-trip, value should decode as int, got {type(decoded)}"
     )
     assert decoded == 123456789
+
+
+# ---------------------------------------------------------------------------
+# DOM-D-02: /pair rate limit (5/minute per chat)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pair_command_rate_limited_after_five_calls() -> None:
+    """DOM-D-02: pair_command is decorated with @rate_limit(max_calls=5, window_seconds=60).
+
+    Rapid-fire calls from the same chat_id must be silently dropped (return
+    None) after the 5th call.  The DB pool is configured to always return a
+    valid unexpired token so the handler would succeed without the rate limit.
+    """
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    conn = _make_conn(fetchrow_return={"user_id": 1, "expires_at": future, "consumed_at": None})
+    pool = _make_pool(conn)
+    config = _make_config(telegram_chat_id=None)
+
+    chat_id = 555_001
+    results: list = []
+    for _ in range(6):
+        update = _make_update("/pair abc123", chat_id=chat_id)
+        context = _make_context(pool, config)
+        context.args = ["abc123"]
+        result = await pair_command(update, context)
+        results.append(result)
+
+    # First 5 calls must NOT be rate-limited (they reach the handler and either
+    # succeed or fail for DB reasons, but do not return None due to rate limiting).
+    # The 6th call must be rate-limited (return None without reaching the DB).
+    assert results[5] is None, f"Expected 6th call to be rate-limited (None) but got {results[5]!r}"
+    # The 6th call must NOT have triggered a DB transaction (rate-limiter fires before DB).
+    # Each successful pairing attempt acquires the pool once.  After 5 calls, the
+    # 6th is stopped before acquire(), so total acquire count must be exactly 5.
+    assert pool.acquire.call_count == 5, (
+        f"Expected 5 DB acquires (one per non-rate-limited call), got {pool.acquire.call_count}"
+    )

@@ -9,6 +9,7 @@ import uuid
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from jarvis_common import assert_paper_ownership, current_user_id_or_none
 
 from paper_ingestion.deps import (
     get_db_pool,
@@ -50,6 +51,9 @@ async def extract_entities(
     qdrant=Depends(get_optional_qdrant),
 ) -> EntityExtractionResponse:
     """Trigger entity extraction for a single paper."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
     try:
         return await extract_entities_for_paper(
             http_client,

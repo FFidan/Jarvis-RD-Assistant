@@ -109,7 +109,9 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     # 73: user_config per-user scope — applied at runtime with Phase 2 auth state.
     # 74: user_topic_subscriptions — new table, idempotent CREATE-IF-NOT-EXISTS;
     #      mirrored in init.sql but also applied by the runtime runner.
-    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73, 74}
+    # 75: JSONB double-encode backfill — idempotent UPDATE only, no schema; runtime-applied.
+    # 76: llm_usage_log.user_id column add — runtime-applied on existing installs.
+    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73, 74, 75, 76}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (

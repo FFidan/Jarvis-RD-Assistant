@@ -225,6 +225,39 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
 
 
 @pytest.mark.asyncio
+async def test_daily_briefing_stats_call_includes_api_key_header():
+    """DOM-D-04: _run_briefing_for_chat passes X-API-Key header on /api/stats GET."""
+    bot = AsyncMock()
+    config = _make_config()
+
+    conn = AsyncMock()
+    count_row = MagicMock()
+    count_row.__getitem__ = lambda _self, k: {"count": 0}[k]
+    conn.fetchrow.return_value = count_row
+    conn.fetch.side_effect = [[], []]  # tasks, milestones
+
+    pool = _make_pool(conn)
+
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    stats_resp = MagicMock()
+    stats_resp.raise_for_status.return_value = None
+    stats_resp.json.return_value = {"due_now": 1}
+    http_client.get.return_value = stats_resp
+
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
+        await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
+
+    http_client.get.assert_awaited_once()
+    _, call_kwargs = http_client.get.await_args
+    assert call_kwargs["headers"].get("X-API-Key") == "secret"
+
+
+@pytest.mark.asyncio
 async def test_daily_briefing_skips_when_no_owner():
     """run_daily_briefing returns early and sends nothing when owner is not paired."""
     bot = AsyncMock()

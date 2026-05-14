@@ -76,8 +76,14 @@ async def _run_briefing_for_chat(
 
     # Due cards from learning engine
     due_cards = 0
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
-        resp = await http_client.get(f"{config.learning_engine_url}/api/stats")
+        resp = await http_client.get(
+            f"{config.learning_engine_url}/api/stats",
+            headers=headers,
+        )
         resp.raise_for_status()
         stats = resp.json()
         due_cards = stats.get("due_now", 0)

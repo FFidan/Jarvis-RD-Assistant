@@ -719,3 +719,48 @@ async def test_query_knowledge_graph_returns_empty_on_missing_tables():
     rows = await query_knowledge_graph(mock_conn, "What outperforms BM25?")
 
     assert rows == []
+
+
+# ---------------------------------------------------------------------------
+# Ownership guard tests (IDOR fix — Wave 1 closeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_extract_entities_rejects_unowned_paper(monkeypatch):
+    """User B cannot trigger entity extraction for a paper they do not own.
+
+    The endpoint must call assert_paper_ownership before delegating to
+    extract_entities_for_paper, so an unowned paper raises 403.
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+    from fastapi import HTTPException
+
+    conn = AsyncMock()
+    pool = _make_pool(conn)
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+    deny = HTTPException(status_code=403, detail="paper not owned by current user")
+    ownership_mock = AsyncMock(side_effect=deny)
+    monkeypatch.setattr(kg_router, "assert_paper_ownership", ownership_mock)
+
+    extract_mock = AsyncMock()
+    monkeypatch.setattr(kg_router, "extract_entities_for_paper", extract_mock)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await kg_router.extract_entities.__wrapped__(
+            MagicMock(),  # request
+            paper_id=1,
+            db_pool=pool,
+            http_client=AsyncMock(),
+            embedder=None,
+            qdrant=None,
+        )
+
+    assert exc_info.value.status_code == 403
+    ownership_mock.assert_awaited_once_with(conn, 1, 2)
+    extract_mock.assert_not_awaited()

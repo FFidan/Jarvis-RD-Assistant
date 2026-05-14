@@ -15,6 +15,7 @@ from telegram_bot.handlers.rate_limit import rate_limit
 logger = logging.getLogger(__name__)
 
 
+@rate_limit(max_calls=5, window_seconds=60)
 async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/pair <token>`` — complete per-user Telegram pairing.
 

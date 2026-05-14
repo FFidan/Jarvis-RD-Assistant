@@ -11,9 +11,35 @@ import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import paper_ingestion.routers.setup as setup_router
 import pytest
 from fastapi import HTTPException, Response
+from httpx import ASGITransport
+
+# ---------------------------------------------------------------------------
+# Module-wide: disable the SlowAPI limiter so direct-call (non-ASGI) tests
+# that pass SimpleNamespace request objects are not rejected by the decorator.
+# The ASGI rate-limit tests re-enable it inside their own fixture.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _disable_limiter_for_direct_call_tests():
+    """Disable the rate limiter for all direct-call tests in this module.
+
+    Direct-call tests (calling handler functions directly with SimpleNamespace
+    mock requests) cannot satisfy SlowAPI's isinstance(request, Request) check.
+    The ASGI rate-limit tests override this by re-enabling the limiter inside
+    their own fixture.
+    """
+    from paper_ingestion.deps import limiter
+
+    original = limiter.enabled
+    limiter.enabled = False
+    yield
+    limiter.enabled = original
+
 
 # ---------------------------------------------------------------------------
 # Pool / request fixtures
@@ -386,3 +412,134 @@ async def test_persist_config_passes_value_directly_not_json_string() -> None:
         "json.dumps double-encodes and corrupts user_config.value"
     )
     assert passed_value == dict_value
+
+
+# ---------------------------------------------------------------------------
+# H16: per-endpoint rate limits on setup router
+#
+# Two complementary strategies:
+# 1. Structural: verify each handler is registered in limiter._route_limits.
+#    Used for body-bearing endpoints where SlowAPI's __globals__ issue prevents
+#    FastAPI from resolving Pydantic annotations via the ASGI stack
+#    (setup.py uses ``from __future__ import annotations``).
+# 2. ASGI live 429: used only for system_check (no body param).
+# ---------------------------------------------------------------------------
+
+
+def _make_setup_pool_conn() -> tuple[MagicMock, AsyncMock]:
+    """Return a (pool, conn) pair wired up for setup router calls."""
+    conn: AsyncMock = AsyncMock()
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=txn_cm)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool, conn
+
+
+@pytest.fixture()
+def setup_app_fixture():
+    """ASGI app fixture for setup-router rate-limit tests.
+
+    Re-enables the limiter (the autouse _disable_limiter_for_direct_call_tests
+    fixture disables it module-wide; we need it on for ASGI rate-limit tests).
+    Bypasses API-key auth and wires a mock DB pool.
+    """
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.main import app
+
+    mock_pool, conn = _make_setup_pool_conn()
+    app.state.db_pool = mock_pool
+    app.state.http_client = AsyncMock()
+    app.state.qdrant_client = None
+
+    app.dependency_overrides[get_db_pool] = lambda: mock_pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    # Re-enable so rate-limit decorators are exercised through the ASGI stack.
+    limiter.enabled = True
+
+    yield app, conn
+
+    limiter.enabled = False  # autouse fixture restores to original on teardown
+    app.dependency_overrides.clear()
+
+
+def _unique_ip() -> str:
+    """Generate a unique 10.x.x.x IP for per-test SlowAPI bucket isolation."""
+    raw = uuid.uuid4().int & 0xFFFFFF  # 24 bits
+    a = (raw >> 16) & 0xFF
+    b = (raw >> 8) & 0xFF
+    c = raw & 0xFF
+    return f"10.{a}.{b}.{c}"
+
+
+@pytest.mark.parametrize(
+    "handler_name,expected_limit",
+    [
+        ("system_check", "10 per 1 minute"),
+        ("configure_smtp", "10 per 1 minute"),
+        ("create_first_admin", "3 per 1 minute"),
+        ("configure_cloud_llm_keys", "10 per 1 minute"),
+    ],
+)
+def test_setup_handlers_registered_in_limiter(handler_name: str, expected_limit: str) -> None:
+    """H16 (structural): each setup handler is registered in limiter._route_limits.
+
+    setup.py uses ``from __future__ import annotations`` which stringifies all
+    type annotations.  SlowAPI's ``@functools.wraps`` wrapper copies
+    ``__globals__`` from slowapi.extension, not from setup.py, so FastAPI
+    cannot resolve Pydantic body types via ASGI for body-bearing endpoints.
+    The structural check verifies the decorator is present and registered.
+    """
+    from paper_ingestion.deps import limiter
+    from paper_ingestion.routers import setup as setup_mod
+
+    handler_func = getattr(setup_mod, handler_name)
+    route_key = f"{handler_func.__module__}.{handler_func.__name__}"
+    assert route_key in limiter._route_limits, (
+        f"Handler {handler_name!r} (key {route_key!r}) not found in "
+        "limiter._route_limits. The @limiter.limit decorator may be missing."
+    )
+    registered_limits = [str(lim.limit) for lim in limiter._route_limits[route_key]]
+    assert any(expected_limit in lim for lim in registered_limits), (
+        f"Expected limit {expected_limit!r} not found for {handler_name!r}. "
+        f"Registered limit strings: {registered_limits}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_check_returns_429_after_threshold(setup_app_fixture) -> None:
+    """H16 (ASGI): system_check fires 429 after 10 requests from the same IP.
+
+    system_check has no Pydantic body parameter so FastAPI can resolve its
+    annotations correctly through the ASGI stack.  One live end-to-end 429
+    test for the setup router.
+    """
+    app, conn = setup_app_fixture
+    conn.execute = AsyncMock()
+    http_resp_mock = AsyncMock()
+    http_resp_mock.status_code = 200
+    app.state.http_client.get = AsyncMock(return_value=http_resp_mock)
+
+    ip = _unique_ip()
+    headers = {"X-Forwarded-For": ip}
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for i in range(10):
+            resp = await client.post("/api/setup/system-check", headers=headers)
+            assert resp.status_code != 429, (
+                f"system_check was unexpectedly rate-limited on call {i + 1}/10"
+            )
+
+        resp = await client.post("/api/setup/system-check", headers=headers)
+        assert resp.status_code == 429, (
+            f"Expected 429 on call 11 to /api/setup/system-check, got {resp.status_code}"
+        )

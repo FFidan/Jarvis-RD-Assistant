@@ -204,6 +204,6 @@ async def test_drain_loop_passes_native_dict_not_json_string():
     jsonb_param = rows[0][4]
     assert isinstance(jsonb_param, dict), (
         f"Expected dict for $5::jsonb but got {type(jsonb_param).__name__!r}: {jsonb_param!r}. "
-        "json.dumps() must not be called on the context value — asyncpg encodes natively."
+        "Codec must encode natively — caller must not pre-encode."  # nolint:jsonb-double-encode
     )
     assert jsonb_param == ctx

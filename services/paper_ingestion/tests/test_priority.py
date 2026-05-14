@@ -1,7 +1,9 @@
-"""Tests for priority scoring logic."""
+"""Tests for priority scoring logic and the compute_paper_priority endpoint."""
 
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from fastapi import HTTPException
 from paper_ingestion.models import compute_priority, priority_level
 
 # ---------------------------------------------------------------------------
@@ -132,3 +134,186 @@ def test_priority_level_boundary_0_4():
     """Boundary at 0.4 is background, not recommended."""
     assert priority_level(0.4) == "background"
     assert priority_level(0.4001) == "recommended"
+
+
+# ---------------------------------------------------------------------------
+# compute_paper_priority endpoint — ownership (IDOR) tests
+# ---------------------------------------------------------------------------
+
+
+def _make_priority_client(user_id_override=None):
+    """Return (TestClient, pool, conn, app) with the priority router mounted.
+
+    Parameters
+    ----------
+    user_id_override:
+        Value that ``current_user_id_or_none`` will return.
+        None means single-user mode.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from jarvis_common import current_user_id_or_none, verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.routers import priority as priority_router
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    app.state.db_pool = pool
+
+    app.include_router(priority_router.router)
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_or_none] = lambda: user_id_override
+
+    tc = TestClient(app, raise_server_exceptions=False)
+    return tc, pool, conn, app
+
+
+def test_compute_paper_priority_rejects_unowned_paper():
+    """POST /api/papers/{id}/priority returns 403 when user B tries a paper owned by user A.
+
+    Wave-1 IDOR fix: assert_paper_ownership must be called before any DB read/write.
+    When it raises HTTPException(403) the endpoint must propagate that status unchanged.
+    """
+    tc, pool, conn, app = _make_priority_client(user_id_override=None)
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.priority.current_user_id_or_none",
+                new=AsyncMock(return_value=2),
+            ),
+            patch(
+                "paper_ingestion.routers.priority.assert_paper_ownership",
+                new=AsyncMock(
+                    side_effect=HTTPException(
+                        status_code=403, detail="paper not owned by current user"
+                    )
+                ),
+            ) as mock_ownership,
+        ):
+            resp = tc.post("/api/papers/99/priority")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 403, (
+        f"Expected 403 (IDOR guard), got {resp.status_code}: {resp.text}"
+    )
+    # Ownership check must have been called with the paper_id from the URL
+    mock_ownership.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg = mock_ownership.await_args.args
+    assert paper_id_arg == 99
+    assert user_id_arg == 2
+    # No DB read/write should occur after the ownership rejection
+    conn.fetchrow.assert_not_called()
+    conn.execute.assert_not_called()
+
+
+def test_compute_paper_priority_passes_for_owner():
+    """POST /api/papers/{id}/priority returns 200 when ownership check passes.
+
+    Verifies that assert_paper_ownership is called and that successful
+    ownership verification allows the endpoint to complete normally.
+    """
+    from tests.conftest import FakeRecord
+
+    tc, pool, conn, app = _make_priority_client(user_id_override=None)
+
+    now = datetime.now(UTC)
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "id": 42,
+            "discovered_at": now,
+            "citation_count": 10,
+        }
+    )
+    conn.fetch.return_value = [FakeRecord({"relevance_score": 0.8})]
+    conn.execute.return_value = "UPDATE 1"
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.priority.current_user_id_or_none",
+                new=AsyncMock(return_value=1),
+            ),
+            patch(
+                "paper_ingestion.routers.priority.assert_paper_ownership",
+                new=AsyncMock(return_value=None),
+            ) as mock_ownership,
+        ):
+            resp = tc.post("/api/papers/42/priority")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body["paper_id"] == 42
+    assert "priority_score" in body
+    assert "priority_level" in body
+    # assert_paper_ownership was called with the correct paper_id and user_id
+    mock_ownership.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg = mock_ownership.await_args.args
+    assert paper_id_arg == 42
+    assert user_id_arg == 1
+
+
+def test_compute_paper_priority_single_user_mode_skips_ownership():
+    """POST /api/papers/{id}/priority succeeds with user_id=None (single-user mode).
+
+    assert_paper_ownership short-circuits when user_id is None — ownership
+    check is bypassed but still called.
+    """
+    from tests.conftest import FakeRecord
+
+    tc, pool, conn, app = _make_priority_client(user_id_override=None)
+
+    now = datetime.now(UTC)
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "id": 7,
+            "discovered_at": now,
+            "citation_count": 0,
+        }
+    )
+    conn.fetch.return_value = []
+    conn.execute.return_value = "UPDATE 1"
+
+    try:
+        with (
+            patch(
+                "paper_ingestion.routers.priority.current_user_id_or_none",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "paper_ingestion.routers.priority.assert_paper_ownership",
+                new=AsyncMock(return_value=None),
+            ) as mock_ownership,
+        ):
+            resp = tc.post("/api/papers/7/priority")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    # Ownership called with user_id=None
+    mock_ownership.assert_awaited_once()
+    _conn_arg, paper_id_arg, user_id_arg = mock_ownership.await_args.args
+    assert paper_id_arg == 7
+    assert user_id_arg is None

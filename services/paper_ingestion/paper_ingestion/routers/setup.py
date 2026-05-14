@@ -32,8 +32,6 @@ This router lives at ``/api/setup/*``. The pre-existing
 admin is logged in. Both can coexist.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -44,6 +42,8 @@ from jarvis_common.crypto import encrypt_secret
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
+
+from paper_ingestion.deps import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +197,7 @@ async def get_status(request: Request) -> SetupStatusResponse:
     response_model=SystemCheckResponse,
     dependencies=[],
 )
+@limiter.limit("10/minute")
 async def system_check(request: Request) -> SystemCheckResponse:
     """Run a synchronous reachability probe against every required dependency.
 
@@ -336,6 +337,7 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
     response_model=SmtpResponse,
     dependencies=[],
 )
+@limiter.limit("10/minute")
 async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
     """Persist SMTP config and optionally fire a test email."""
     await require_unconfigured_or_admin(request)
@@ -365,6 +367,7 @@ async def configure_smtp(body: SmtpBody, request: Request) -> SmtpResponse:
     response_model=AdminResponse,
     dependencies=[],
 )
+@limiter.limit("3/minute")
 async def create_first_admin(
     body: AdminBody, request: Request, response: Response
 ) -> AdminResponse:
@@ -451,6 +454,7 @@ async def create_first_admin(
     response_model=CloudLlmKeysResponse,
     dependencies=[],
 )
+@limiter.limit("10/minute")
 async def configure_cloud_llm_keys(
     body: CloudLlmKeysBody, request: Request
 ) -> CloudLlmKeysResponse:
