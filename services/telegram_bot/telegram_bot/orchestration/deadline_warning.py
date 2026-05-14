@@ -59,6 +59,50 @@ async def _send_deadline_warning(
         logger.exception("Failed to send deadline warning to chat_id=%d", chat_id)
 
 
+async def _fetch_milestones_for_user(
+    db_pool: asyncpg.Pool,
+    user_id: int | None,
+) -> list:
+    """Fetch milestones due in the next 3 days, scoped to *user_id*.
+
+    When *user_id* is ``None`` (legacy single-tenant mode), returns all
+    upcoming milestones regardless of ownership.
+
+    Parameters
+    ----------
+    db_pool : asyncpg.Pool
+        Database connection pool.
+    user_id : int or None
+        DB user PK to scope the query; ``None`` = unscoped legacy mode.
+
+    Returns
+    -------
+    list
+        asyncpg records with name, deadline, project_name.
+    """
+    if user_id is not None:
+        return await db_pool.fetch(
+            """SELECT m.name, m.deadline, p.name as project_name
+            FROM milestones m
+            JOIN projects p ON m.project_id = p.id
+            WHERE m.completed = FALSE
+              AND m.deadline <= NOW() + INTERVAL '3 days'
+              AND m.deadline > NOW()
+              AND m.user_id IS NOT DISTINCT FROM $1
+            ORDER BY m.deadline""",
+            user_id,
+        )
+    return await db_pool.fetch(
+        """SELECT m.name, m.deadline, p.name as project_name
+        FROM milestones m
+        JOIN projects p ON m.project_id = p.id
+        WHERE m.completed = FALSE
+          AND m.deadline <= NOW() + INTERVAL '3 days'
+          AND m.deadline > NOW()
+        ORDER BY m.deadline"""
+    )
+
+
 async def run_deadline_warning(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,
@@ -68,7 +112,8 @@ async def run_deadline_warning(
     """Send warnings for milestones due in the next 3 days.
 
     Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    warnings.  Skips with a warning when no pairings exist.
+    warnings scoped to each user's own milestones.  Skips with a warning
+    when no pairings exist.
 
     Parameters
     ----------
@@ -83,20 +128,6 @@ async def run_deadline_warning(
     """
     from telegram_bot.owner import list_user_pairings
 
-    milestones = await db_pool.fetch(
-        """SELECT m.name, m.deadline, p.name as project_name
-        FROM milestones m
-        JOIN projects p ON m.project_id = p.id
-        WHERE m.completed = FALSE
-          AND m.deadline <= NOW() + INTERVAL '3 days'
-          AND m.deadline > NOW()
-        ORDER BY m.deadline"""
-    )
-
-    if not milestones:
-        logger.info("No upcoming deadlines in next 3 days")
-        return
-
     pairings = await list_user_pairings(db_pool)
     if not pairings:
         logger.warning(
@@ -105,4 +136,12 @@ async def run_deadline_warning(
         return
 
     for pairing in pairings:
+        milestones = await _fetch_milestones_for_user(db_pool, pairing.user_id)
+        if not milestones:
+            logger.info(
+                "No upcoming deadlines for user_id=%s (chat_id=%d)",
+                pairing.user_id,
+                pairing.chat_id,
+            )
+            continue
         await _send_deadline_warning(bot, pairing.chat_id, milestones)

@@ -228,7 +228,7 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -240,11 +240,20 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     project_id = int(match.group(1))
 
     db = get_db(context)
+    user_id: int | None = jarvis_user_id
 
-    project_row = await db.fetchrow(
-        "SELECT id, name, status, description, deadline FROM projects WHERE id = $1",
-        project_id,
-    )
+    if user_id is not None:
+        project_row = await db.fetchrow(
+            "SELECT id, name, status, description, deadline FROM projects "
+            "WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            project_id,
+            user_id,
+        )
+    else:
+        project_row = await db.fetchrow(
+            "SELECT id, name, status, description, deadline FROM projects WHERE id = $1",
+            project_id,
+        )
     if not project_row:
         await query.message.reply_text("Project not found.", parse_mode="HTML")
         return

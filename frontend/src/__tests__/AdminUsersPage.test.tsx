@@ -343,6 +343,111 @@ describe('per-row delete button isolation (DOM-F-07 delete)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// H2 — mutation lifecycle: onMutate / onSettled wiring
+// ---------------------------------------------------------------------------
+
+describe('AdminUsersPage — role mutation lifecycle (H2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+    _roleSelectCallbacks.clear();
+  });
+
+  it('pendingRoleUserId is set during mutation and cleared on success', async () => {
+    let resolveRole!: () => void;
+    updateUserRoleMock.mockReturnValue(new Promise<void>((res) => { resolveRole = res; }));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const aliceCb = () => {
+      const cb = _roleSelectCallbacks.get('Role for alice@example.com');
+      expect(cb).toBeDefined();
+      act(() => { cb!('admin'); });
+    };
+    aliceCb();
+
+    const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
+
+    // onMutate fires synchronously before mutationFn resolves → select disabled
+    await waitFor(() => expect(aliceTrigger).toBeDisabled());
+
+    // Resolve → onSettled fires → select re-enabled
+    resolveRole();
+    await waitFor(() => expect(aliceTrigger).not.toBeDisabled());
+  });
+
+  it('pendingRoleUserId is cleared on mutation error via onSettled', async () => {
+    let rejectRole!: (e: Error) => void;
+    updateUserRoleMock.mockReturnValue(new Promise<void>((_res, rej) => { rejectRole = rej; }));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const cb = _roleSelectCallbacks.get('Role for alice@example.com');
+    expect(cb).toBeDefined();
+    act(() => { cb!('admin'); });
+
+    const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
+    await waitFor(() => expect(aliceTrigger).toBeDisabled());
+
+    rejectRole(new Error('network failure'));
+    await waitFor(() => expect(aliceTrigger).not.toBeDisabled());
+  });
+});
+
+describe('AdminUsersPage — delete mutation lifecycle (H2)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  it('pendingDeleteUserId is set during mutation and cleared on success', async () => {
+    let resolveDelete!: () => void;
+    deleteUserMock.mockReturnValue(new Promise<void>((res) => { resolveDelete = res; }));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const aliceDeleteBtn = screen.getByRole('button', { name: /remove alice@example\.com/i });
+    await userEvent.click(aliceDeleteBtn);
+    const confirmBtn = screen.getByRole('button', { name: /^remove$/i });
+    await userEvent.click(confirmBtn);
+
+    // onMutate fires → button disabled
+    await waitFor(() => expect(aliceDeleteBtn).toBeDisabled());
+
+    // Resolve → onSettled fires → button re-enabled
+    resolveDelete();
+    await waitFor(() => expect(aliceDeleteBtn).not.toBeDisabled());
+  });
+
+  it('pendingDeleteUserId is cleared on mutation error via onSettled', async () => {
+    let rejectDelete!: (e: Error) => void;
+    deleteUserMock.mockReturnValue(new Promise<void>((_res, rej) => { rejectDelete = rej; }));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const aliceDeleteBtn = screen.getByRole('button', { name: /remove alice@example\.com/i });
+    await userEvent.click(aliceDeleteBtn);
+    const confirmBtn = screen.getByRole('button', { name: /^remove$/i });
+    await userEvent.click(confirmBtn);
+
+    await waitFor(() => expect(aliceDeleteBtn).toBeDisabled());
+
+    rejectDelete(new Error('server error'));
+    await waitFor(() => expect(aliceDeleteBtn).not.toBeDisabled());
+  });
+});
+
 describe('AdminOnlyRoute guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();

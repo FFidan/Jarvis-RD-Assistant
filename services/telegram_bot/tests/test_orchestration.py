@@ -103,14 +103,15 @@ async def test_author_alerts_sends_message_when_new_paper_found():
         "metadata": {},
     }.get(k, d)
 
-    # First acquire: fetch authors + recent papers
-    conn_read = AsyncMock()
-    conn_read.fetch.side_effect = [
-        [author_row],  # tracked_authors query
-        [paper_row],  # recent papers query
-    ]
+    # First acquire: fetch recent papers (shared across all users)
+    conn_papers = AsyncMock()
+    conn_papers.fetch.return_value = [paper_row]
 
-    # Second acquire: per-author dedup insert + update
+    # Second acquire (per-pairing): fetch tracked authors scoped to user_id
+    conn_authors = AsyncMock()
+    conn_authors.fetch.return_value = [author_row]
+
+    # Third acquire (per-author): dedup insert + last_checked_at update
     conn_write = AsyncMock()
     # INSERT … ON CONFLICT … RETURNING → returns a row (new alert)
     insert_row = MagicMock()
@@ -125,7 +126,9 @@ async def test_author_alerts_sends_message_when_new_paper_found():
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return _async_cm(conn_read)
+            return _async_cm(conn_papers)
+        if call_count == 2:
+            return _async_cm(conn_authors)
         return _async_cm(conn_write)
 
     pool.acquire.side_effect = _acquire

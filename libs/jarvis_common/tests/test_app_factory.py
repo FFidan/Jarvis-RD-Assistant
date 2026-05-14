@@ -6,6 +6,7 @@ Covers :func:`jarvis_common.configure_middleware_and_errors` and
 
 from __future__ import annotations
 
+import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -15,6 +16,7 @@ from jarvis_common.app_factory import (
     ServiceLifespanConfig,
     configure_lifespan,
     configure_middleware_and_errors,
+    warn_multitenant_stub,
 )
 from jarvis_common.http_rate_limiter import create_limiter
 from jarvis_common.request_id import RequestIDMiddleware
@@ -215,3 +217,53 @@ class TestConfigureLifespan:
         # Both resources must be closed despite the init task raising.
         fake_pool.close.assert_awaited_once()
         fake_http_client.aclose.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# warn_multitenant_stub — M-08 log message (post WS-2A)
+# ---------------------------------------------------------------------------
+
+
+class TestWarnMultitenantStub:
+    async def test_logs_warning_with_session_middleware_message_when_enabled(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """When MULTITENANT_ENABLED=true, emits WARNING with updated post-WS-2A text."""
+        app = FastAPI()
+        mock_settings = MagicMock()
+        mock_settings.multitenant_enabled = True
+
+        with (
+            patch(
+                "jarvis_common.app_factory.get_jarvis_common_settings",
+                return_value=mock_settings,
+            ),
+            caplog.at_level(logging.WARNING, logger="jarvis_common.app_factory"),
+        ):
+            await warn_multitenant_stub(app)
+
+        assert any(
+            "SessionMiddleware" in record.message and "per-user scoping" in record.message
+            for record in caplog.records
+        ), (
+            f"Expected SessionMiddleware+per-user scoping in log; got: {[r.message for r in caplog.records]}"
+        )
+        # Must be WARNING, not CRITICAL — situation is not broken post WS-2A
+        assert all(record.levelno == logging.WARNING for record in caplog.records)
+
+    async def test_no_log_when_multitenant_disabled(self, caplog: pytest.LogCaptureFixture) -> None:
+        """When MULTITENANT_ENABLED=false, nothing is logged."""
+        app = FastAPI()
+        mock_settings = MagicMock()
+        mock_settings.multitenant_enabled = False
+
+        with (
+            patch(
+                "jarvis_common.app_factory.get_jarvis_common_settings",
+                return_value=mock_settings,
+            ),
+            caplog.at_level(logging.WARNING, logger="jarvis_common.app_factory"),
+        ):
+            await warn_multitenant_stub(app)
+
+        assert caplog.records == []

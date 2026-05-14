@@ -213,14 +213,13 @@ export function AdminUsersPage() {
   });
 
   const roleMutation = useMutation({
-    mutationFn: ({ userId, role }: { userId: number; role: 'user' | 'admin' }) => {
-      setPendingRoleUserId(userId);
-      return updateUserRole(userId, role);
-    },
+    mutationFn: ({ userId, role }: { userId: number; role: 'user' | 'admin' }) =>
+      updateUserRole(userId, role),
+    onMutate: ({ userId }) => setPendingRoleUserId(userId),
+    onSettled: () => setPendingRoleUserId(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       setRoleError(null);
-      setPendingRoleUserId(null);
     },
     onError: (err) => {
       if (err instanceof ApiError) {
@@ -228,23 +227,19 @@ export function AdminUsersPage() {
       } else {
         setRoleError('Failed to update role.');
       }
-      setPendingRoleUserId(null);
     },
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (userId: number) => {
-      setPendingDeleteUserId(userId);
-      return deleteUser(userId);
-    },
+    mutationFn: (userId: number) => deleteUser(userId),
+    onMutate: (userId) => setPendingDeleteUserId(userId),
+    onSettled: () => setPendingDeleteUserId(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       setPendingDelete(null);
-      setPendingDeleteUserId(null);
     },
     onError: () => {
       setPendingDelete(null);
-      setPendingDeleteUserId(null);
     },
   });
 

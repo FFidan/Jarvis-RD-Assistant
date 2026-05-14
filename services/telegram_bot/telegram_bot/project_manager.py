@@ -51,15 +51,19 @@ class ProjectManager:
     async def create_project(
         self,
         name: str,
+        *,
+        user_id: int | None = None,
         description: str | None = None,
         deadline: datetime | None = None,
     ) -> dict:
-        """Create a new project.
+        """Create a new project owned by ``user_id`` (NULL for single-tenant owner).
 
         Parameters
         ----------
         name : str
             Project name.
+        user_id : int or None
+            Owning user. ``None`` writes a NULL user_id (legacy owner mode).
         description : str or None
             Project description.
         deadline : datetime or None
@@ -71,14 +75,15 @@ class ProjectManager:
             Created project record.
         """
         row = await self.db_pool.fetchrow(
-            """INSERT INTO projects (name, description, deadline)
-            VALUES ($1, $2, $3)
+            """INSERT INTO projects (name, description, deadline, user_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING *""",
             name,
             description,
             deadline,
+            user_id,
         )
-        logger.info("Created project: %s (id=%d)", name, row["id"])
+        logger.info("Created project: %s (id=%d, user_id=%s)", name, row["id"], user_id)
         return dict(row)
 
     VALID_PROJECT_STATUSES = {"active", "paused", "completed", "archived"}
@@ -198,40 +203,63 @@ class ProjectManager:
         logger.info("Created task: %s (id=%d)", title, row["id"])
         return dict(row)
 
-    async def complete_task(self, task_id: int) -> dict:
-        """Mark a task as done and update daily log atomically.
+    async def complete_task(self, task_id: int, *, user_id: int | None = None) -> dict:
+        """Mark a task as done and update the per-user daily log atomically.
+
+        When ``user_id`` is provided, the UPDATE additionally requires the task
+        row's ``user_id`` to match (NULL-safe via ``IS NOT DISTINCT FROM``), so
+        a user cannot complete another user's task. ``user_id=None`` preserves
+        legacy single-tenant owner semantics (any task is completable).
 
         Parameters
         ----------
         task_id : int
             Task ID to complete.
+        user_id : int or None
+            DB user PK to scope ownership; ``None`` = legacy owner mode.
 
         Returns
         -------
         dict
-            Updated task record, or empty dict if not found.
+            Updated task record, or empty dict if not found / not owned.
         """
         async with self.db_pool.acquire() as conn:
             async with conn.transaction():
-                row = await conn.fetchrow(
-                    """UPDATE tasks
-                    SET status = 'done', completed_at = NOW(), updated_at = NOW()
-                    WHERE id = $1 AND status != 'done'
-                    RETURNING *""",
-                    task_id,
-                )
+                if user_id is not None:
+                    row = await conn.fetchrow(
+                        """UPDATE tasks
+                        SET status = 'done', completed_at = NOW(), updated_at = NOW()
+                        WHERE id = $1 AND status != 'done'
+                          AND user_id IS NOT DISTINCT FROM $2
+                        RETURNING *""",
+                        task_id,
+                        user_id,
+                    )
+                else:
+                    row = await conn.fetchrow(
+                        """UPDATE tasks
+                        SET status = 'done', completed_at = NOW(), updated_at = NOW()
+                        WHERE id = $1 AND status != 'done'
+                        RETURNING *""",
+                        task_id,
+                    )
                 if row:
                     today = datetime.now(UTC).date()
+                    # daily_log PK is (user_id, log_date) with UNIQUE NULLS NOT
+                    # DISTINCT (migration 062) — scope the upsert and increment
+                    # so per-user counts don't collide.
                     await conn.execute(
-                        "INSERT INTO daily_log (log_date) VALUES ($1)"
-                        " ON CONFLICT (log_date) DO NOTHING",
+                        "INSERT INTO daily_log (log_date, user_id) VALUES ($1, $2)"
+                        " ON CONFLICT (user_id, log_date) DO NOTHING",
                         today,
+                        user_id,
                     )
                     await conn.execute(
                         "UPDATE daily_log"
                         " SET tasks_completed = tasks_completed + 1"
-                        " WHERE log_date = $1",
+                        " WHERE log_date = $1 AND user_id IS NOT DISTINCT FROM $2",
                         today,
+                        user_id,
                     )
         return dict(row) if row else {}
 
@@ -354,11 +382,22 @@ class ProjectManager:
 
     # ----- Daily Log -----
 
-    async def update_daily_log(self, **increments: int) -> dict:
+    async def update_daily_log(
+        self,
+        *,
+        user_id: int | None = None,
+        **increments: int,
+    ) -> dict:
         """Upsert today's daily log entry with incremental updates.
+
+        The UNIQUE constraint on ``daily_log`` is ``(user_id, log_date)``
+        (migration 062 — NULLS NOT DISTINCT), so both the INSERT and the UPDATE
+        must carry ``user_id`` to stay within the caller's scope.
 
         Parameters
         ----------
+        user_id : int or None
+            Owning user. ``None`` uses legacy single-tenant NULL semantics.
         **increments : int
             Fields to increment (``tasks_completed``, ``cards_reviewed``,
             ``papers_read``).
@@ -378,11 +417,12 @@ class ProjectManager:
 
         async with self.db_pool.acquire() as conn:
             async with conn.transaction():
-                # Ensure row exists
+                # Ensure row exists — conflict target matches migration 062 PK.
                 await conn.execute(
-                    "INSERT INTO daily_log (log_date) VALUES ($1)"
-                    " ON CONFLICT (log_date) DO NOTHING",
+                    "INSERT INTO daily_log (log_date, user_id) VALUES ($1, $2)"
+                    " ON CONFLICT (user_id, log_date) DO NOTHING",
                     today,
+                    user_id,
                 )
 
                 # Apply increments (field names are from a hardcoded allowlist, never user input)
@@ -390,10 +430,17 @@ class ProjectManager:
                     if value:
                         qf = quote_ident(field)
                         await conn.execute(
-                            f"UPDATE daily_log SET {qf} = {qf} + $1 WHERE log_date = $2",  # nosec B608 - field is selected from an allowlist and values stay parameterized
+                            f"UPDATE daily_log SET {qf} = {qf} + $1"  # nosec B608 - field is selected from an allowlist and values stay parameterized
+                            " WHERE log_date = $2 AND user_id IS NOT DISTINCT FROM $3",
                             value,
                             today,
+                            user_id,
                         )
 
-                row = await conn.fetchrow("SELECT * FROM daily_log WHERE log_date = $1", today)
+                row = await conn.fetchrow(
+                    "SELECT * FROM daily_log"
+                    " WHERE log_date = $1 AND user_id IS NOT DISTINCT FROM $2",
+                    today,
+                    user_id,
+                )
         return dict(row) if row else {}
