@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import hmac
 import pickle
 import sys
 from types import ModuleType
@@ -10,6 +12,7 @@ from types import ModuleType
 import pytest
 from paper_ingestion.pulse.training import (
     FEATURE_NAMES,
+    _hmac_key,
     _sign_blob,
     _verify_and_unpickle,
     classifier_scores,
@@ -17,6 +20,19 @@ from paper_ingestion.pulse.training import (
     train_classifier_model,
 )
 from tests.conftest import FakeRecord, _make_pool_and_conn
+
+
+@pytest.fixture(autouse=True)
+def _pulse_hmac_key(monkeypatch: pytest.MonkeyPatch):
+    """Provide a deterministic HMAC key so sign/verify works under tests.
+
+    Audit H14 removed the public-literal fallback in ``_hmac_key``; calls now
+    raise ``RuntimeError`` unless ``JARVIS_MODEL_HMAC_KEY`` or
+    ``JARVIS_API_KEY`` is set. Individual tests that need to assert the
+    raising/fallback behaviour can ``monkeypatch.delenv`` these vars to opt
+    out of the fixture.
+    """
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "test-pulse-hmac-key-deadbeef")
 
 
 class FakeLogisticRegression:
@@ -413,3 +429,103 @@ async def test_train_classifier_deactivates_only_requested_user_model(
     deactivate_call = conn.execute.await_args_list[0]
     assert "user_id IS NOT DISTINCT FROM $1" in deactivate_call.args[0]
     assert deactivate_call.args[1:] == (55,)
+
+
+# ---------------------------------------------------------------------------
+# H14: HMAC key derivation + sign/verify cycle
+# ---------------------------------------------------------------------------
+
+
+def test_hmac_key_raises_when_unset(monkeypatch: pytest.MonkeyPatch):
+    """Neither JARVIS_MODEL_HMAC_KEY nor JARVIS_API_KEY → RuntimeError.
+
+    Audit H14: the previous public-literal fallback let any attacker with DB
+    write access forge a signed pickle blob and trigger RCE via pickle.loads.
+    """
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_API_KEY", raising=False)
+    with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
+        _hmac_key()
+
+
+def test_hmac_key_uses_dedicated_key_when_set(monkeypatch: pytest.MonkeyPatch):
+    """JARVIS_MODEL_HMAC_KEY wins over JARVIS_API_KEY when both are set."""
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "dedicated-secret")
+    monkeypatch.setenv("JARVIS_API_KEY", "bearer-token")
+    assert _hmac_key() == b"dedicated-secret"
+
+
+def test_hmac_key_derives_from_api_key(monkeypatch: pytest.MonkeyPatch):
+    """When only JARVIS_API_KEY is set, derive via sha256(b'model-signing:' + key).
+
+    The domain-separation prefix prevents the derived key from colliding with
+    any direct use of the bearer (e.g. raw-key signing of unrelated artifacts).
+    """
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY", "foo")
+    expected = hashlib.sha256(b"model-signing:foo").digest()
+    assert _hmac_key() == expected
+
+
+def test_sign_then_verify_roundtrip(monkeypatch: pytest.MonkeyPatch):
+    """A blob signed with the new key derivation must verify and round-trip."""
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY", "roundtrip-key")
+    payload = {"model": "stand-in", "trained_at": "2026-05-14"}
+    signed = _sign_blob(pickle.dumps(payload))
+    recovered = _verify_and_unpickle(signed)
+    assert recovered == payload
+
+
+def test_legacy_signed_model_rejected_under_new_key(monkeypatch: pytest.MonkeyPatch):
+    """A blob signed with the old public-literal key must fail HMAC verify.
+
+    Defense-in-depth: pulse_models rows persisted before H14 will not load
+    under the new derivation, forcing graceful fallback (zeros) plus
+    automatic re-train on the next nightly pulse.train_classifier run.
+    """
+    legacy_literal = b"jarvis-dev-unsafe-hmac-key"
+    payload = pickle.dumps({"model": "legacy"})
+    legacy_signed = hmac.digest(legacy_literal, payload, "sha256") + payload
+
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY", "post-h14-key")
+    with pytest.raises(ValueError, match="HMAC mismatch"):
+        _verify_and_unpickle(legacy_signed)
+
+
+@pytest.mark.asyncio
+async def test_load_active_classifier_handles_hmac_mismatch_gracefully(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Legacy-signed rows in pulse_models should degrade, not crash, on load.
+
+    Migration choice (b) — re-train automatically. ``load_active_classifier``
+    catches the HMAC mismatch and returns the standard ``no active model``
+    degradation sentinel; the next ``pulse.train_classifier`` cron tick
+    persists a freshly signed model.
+    """
+    _install_fake_sklearn(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+
+    # Build a blob signed with the old public-literal key.
+    legacy_literal = b"jarvis-dev-unsafe-hmac-key"
+    payload = pickle.dumps({"model": FakeLogisticRegression(), "sklearn_version": "0.0.0"})
+    legacy_signed = hmac.digest(legacy_literal, payload, "sha256") + payload
+
+    conn.fetchrow.return_value = FakeRecord(
+        {
+            "model_blob": legacy_signed,
+            "feature_names": FEATURE_NAMES,
+            "metrics": {},
+            "trained_at": None,
+        }
+    )
+
+    # Switch to the new derivation. _hmac_key() will return a different key,
+    # so HMAC verify must fail and the load must degrade — not crash.
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "new-key")
+    model, meta = await load_active_classifier(pool)
+    assert model is None
+    assert meta["available"] is False
+    assert "could not be loaded" in meta["degradation_reason"]

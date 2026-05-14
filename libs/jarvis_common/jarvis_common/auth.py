@@ -362,3 +362,21 @@ def validate_production_config() -> None:
             raise RuntimeError(
                 f"JARVIS_API_KEY must be at least 32 characters (got {len(api_key)})"
             )
+
+    # H14 — Pulse model HMAC key gate. The pulse classifier signs pickle blobs
+    # with HMAC-SHA256; without a real key, an attacker with DB write access
+    # could forge a signed blob and trigger RCE via pickle.loads. The dedicated
+    # JARVIS_MODEL_HMAC_KEY is preferred to avoid dual-use compromise with the
+    # HTTP bearer; otherwise the key is derived from JARVIS_API_KEY with a
+    # domain-separated SHA-256. In production, refuse to start unless at least
+    # one path is configured.
+    if env == "production":
+        import os as _os  # noqa: PLC0415
+
+        model_hmac_key = _os.environ.get("JARVIS_MODEL_HMAC_KEY", "")
+        if not model_hmac_key and not api_key:
+            raise RuntimeError(
+                "Pulse model HMAC key required in production: set "
+                "JARVIS_MODEL_HMAC_KEY (preferred) or JARVIS_API_KEY. "
+                "See docs/SECURITY.md#pulse-model-signing."
+            )

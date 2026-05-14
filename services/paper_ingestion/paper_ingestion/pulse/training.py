@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import os
@@ -15,8 +16,33 @@ _HMAC_DIGEST_LEN = 32  # SHA-256 digest length in bytes
 
 
 def _hmac_key() -> bytes:
-    """Return the HMAC signing key for model blobs (read at call time, not import time)."""
-    return os.environ.get("JARVIS_API_KEY", "jarvis-dev-unsafe-hmac-key").encode()
+    """Return the HMAC signing key for model blobs (read at call time, not import time).
+
+    Resolution order (audit H14 — public-literal fallback removed):
+
+    1. ``JARVIS_MODEL_HMAC_KEY`` — dedicated env var, preferred. Use this so
+       compromise of the HTTP bearer (``JARVIS_API_KEY``) does not also let an
+       attacker forge model blobs.
+    2. ``sha256(b"model-signing:" + JARVIS_API_KEY)`` — backward-compatible
+       derivation. Domain-separated so the derived key cannot collide with any
+       direct use of the bearer.
+
+    Raises ``RuntimeError`` if neither is set. The previous public-literal
+    fallback (``"jarvis-dev-unsafe-hmac-key"``) was removed because any
+    attacker with DB write access could forge pickle blobs signed with it,
+    achieving RCE through ``_verify_and_unpickle`` → ``pickle.loads``.
+    """
+    model_key = os.environ.get("JARVIS_MODEL_HMAC_KEY")
+    if model_key:
+        return model_key.encode()
+    api_key = os.environ.get("JARVIS_API_KEY")
+    if api_key:
+        return hashlib.sha256(b"model-signing:" + api_key.encode()).digest()
+    raise RuntimeError(
+        "Pulse model HMAC key required: set JARVIS_MODEL_HMAC_KEY (preferred) "
+        "or JARVIS_API_KEY. The previous public-literal fallback was removed "
+        "by audit H14 — see docs/SECURITY.md#pulse-model-signing."
+    )
 
 
 def _sign_blob(blob: bytes) -> bytes:

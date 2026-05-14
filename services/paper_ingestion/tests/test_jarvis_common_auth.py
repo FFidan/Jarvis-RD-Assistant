@@ -111,3 +111,17 @@ def test_validate_production_config_accepts_long_key(monkeypatch):
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
 
     validate_production_config()
+
+
+def test_validate_production_config_accepts_dedicated_model_hmac_key(monkeypatch):
+    """In production, ``JARVIS_MODEL_HMAC_KEY`` satisfies the H14 gate.
+
+    Even when set, ``JARVIS_API_KEY`` is still required (HTTP auth) — so this
+    test ensures both gates are independently satisfied.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 32)
+
+    validate_production_config()
