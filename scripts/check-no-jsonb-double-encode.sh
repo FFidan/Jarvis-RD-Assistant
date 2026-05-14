@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Fail if json.dumps( appears within 5 lines of ::jsonb in any .py file.
+# Fail if json.dumps( appears within 20 lines of ::jsonb in any .py file.
 # asyncpg auto-encodes JSONB via init_pg_connection's set_type_codec; calling
 # json.dumps() too is a double-encode bug (see audit H1-H4).
+# Window widened from ±5 to ±20 to catch executemany-style multi-line patterns.
 set -euo pipefail
 
-matches=$(grep -rn -B 5 -A 5 '::jsonb' services/ libs/ 2>/dev/null \
+matches=$(grep -rn -B 20 -A 20 '::jsonb' services/ libs/ 2>/dev/null \
   | grep -E 'json\.dumps\(' \
   | grep -v '# nolint:jsonb-double-encode' \
   || true)

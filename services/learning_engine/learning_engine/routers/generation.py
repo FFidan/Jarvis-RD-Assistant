@@ -90,7 +90,11 @@ async def generate_cards_core(
         await ctx.update_progress(0.1, "Validating deck and paper")
 
     async with pool.acquire() as conn:
-        deck = await conn.fetchval("SELECT id FROM decks WHERE id = $1", deck_id)
+        deck = await conn.fetchval(
+            "SELECT id FROM decks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            deck_id,
+            user_id,
+        )
         if not deck:
             raise JobError("Deck not found")
 
@@ -297,9 +301,17 @@ async def generate_cards(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> BatchAcceptedResponse:
     """Enqueue card generation for a single paper; returns 202 with *job_id*."""
+    # WS-2D: validate deck ownership before enqueuing (mirrors batch_generate_cards).
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, body.paper_id, user_id)
+        deck = await conn.fetchval(
+            "SELECT id FROM decks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            body.deck_id,
+            user_id,
+        )
+        if not deck:
+            raise HTTPException(status_code=404, detail="Deck not found")
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["card.generate"].defer_async(
         job_id=jarvis_job_id,

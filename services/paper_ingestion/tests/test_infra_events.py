@@ -124,11 +124,11 @@ def test_unknown_level_falls_back_to_info(app_and_pool):
 
 
 def test_context_is_dict_not_string(app_and_pool):
-    """Regression: bulk_ingest must pass e.context as a dict, not json.dumps(e.context).
+    """Regression: bulk_ingest must pass e.context as a native dict, not a pre-serialised string.
 
     The asyncpg JSONB codec (registered via init_pg_connection) handles encoding;
-    double-wrapping with json.dumps() would store a JSON-string-of-JSON instead of
-    an object, causing jsonb_typeof() to return 'string' rather than 'object'.
+    double-wrapping the value with json.dumps would store a JSON-string-of-JSON  # nolint:jsonb-double-encode
+    instead of an object, causing jsonb_typeof() to return 'string' rather than 'object'.
     """
     app, _pool, conn = app_and_pool
     client = TestClient(app)

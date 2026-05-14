@@ -247,6 +247,38 @@ async def test_generate_cards_endpoint_returns_job_id():
     assert call_kwargs.kwargs["user_id"] is None
 
 
+@pytest.mark.asyncio
+async def test_generate_cards_rejects_other_users_deck():
+    """POST /api/generate with another user's deck_id returns 404 (not enqueued)."""
+    from fastapi import HTTPException
+
+    pool, conn = _make_pool_and_conn()
+    # fetchval returns None → deck not found for this user
+    conn.fetchval.return_value = None
+
+    import jarvis_common.task_registry as task_registry
+
+    mock_card_generate_task = MagicMock()
+    mock_defer = AsyncMock()
+    mock_card_generate_task.defer_async = mock_defer
+    # user_id=42; deck_id=99 belongs to a different user
+    req = SimpleNamespace(state=SimpleNamespace(user_id=42))
+    with (
+        patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}),
+        patch.object(generation, "assert_paper_ownership", AsyncMock(return_value=None)),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await generation.generate_cards.__wrapped__(
+                req,
+                body=GenerateCardsRequest(paper_id=101, deck_id=99),
+                db_pool=pool,
+            )
+
+    assert exc_info.value.status_code == 404
+    assert "Deck not found" in exc_info.value.detail
+    mock_defer.assert_not_awaited()
+
+
 # ---------------------------------------------------------------------------
 # batch_generate_cards endpoint
 # ---------------------------------------------------------------------------

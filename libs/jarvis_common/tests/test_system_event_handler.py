@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sys
 import uuid
@@ -160,3 +161,49 @@ async def test_handler_falls_back_to_stderr_when_postgres_unreachable():
         for line in stderr_lines
     ), f"Expected stderr fallback output, got: {stderr_lines}"
     assert handler._was_in_outage is True
+
+
+@pytest.mark.asyncio
+async def test_drain_loop_passes_native_dict_not_json_string():
+    """_drain_loop must pass e['context'] as a native dict to executemany, not json.dumps().
+
+    asyncpg's JSONB codec (registered via init_pg_connection) handles serialisation;
+    pre-serialising with json.dumps would double-encode the value and store a
+    JSON-string-of-JSON rather than an object.
+    """
+    pool = _make_pool()
+    conn = pool.acquire.return_value.__aenter__.return_value
+    handler = SystemEventHandler(pool=pool, flush_interval_s=0.001)
+
+    ctx = {"key": "value", "count": 42}
+    record = _make_record(logging.WARNING, "test dict context")
+    record.__dict__["context"] = ctx
+    handler.emit(record)
+
+    # Run one drain cycle by patching asyncio.sleep to not actually wait.
+    sleep_call_count = 0
+
+    async def _immediate_sleep(_delay: float) -> None:
+        nonlocal sleep_call_count
+        sleep_call_count += 1
+        if sleep_call_count > 1:
+            # Cancel after second sleep so _drain_loop exits cleanly.
+            raise asyncio.CancelledError
+
+    with patch.object(asyncio, "sleep", _immediate_sleep):
+        try:
+            await handler._drain_loop()
+        except asyncio.CancelledError:
+            pass
+
+    assert conn.executemany.called, "executemany should have been called"
+    call_args = conn.executemany.call_args
+    rows = call_args[0][1]  # second positional arg is the list of tuples
+    assert len(rows) == 1
+    # Index 4 is $5::jsonb — must be a dict, NOT a str
+    jsonb_param = rows[0][4]
+    assert isinstance(jsonb_param, dict), (
+        f"Expected dict for $5::jsonb but got {type(jsonb_param).__name__!r}: {jsonb_param!r}. "
+        "json.dumps() must not be called on the context value — asyncpg encodes natively."
+    )
+    assert jsonb_param == ctx

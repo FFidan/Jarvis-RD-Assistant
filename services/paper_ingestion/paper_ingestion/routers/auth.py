@@ -19,8 +19,6 @@ These endpoints are exempt from ``verify_api_key`` (registered without auth
 dependency) since they ARE the auth bootstrap.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 import secrets
@@ -33,6 +31,8 @@ from jarvis_common.email import send_magic_link
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
 from pydantic import BaseModel, EmailStr, Field
+
+from paper_ingestion.deps import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,7 @@ def _cookie_secure() -> bool:
     response_model=RequestLinkResponse,
     dependencies=[],  # exempt from verify_api_key
 )
+@limiter.limit("5/minute")
 async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkResponse:
     """Issue a magic-link for ``body.email`` if the email matches a known user.
 
@@ -151,6 +152,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     response_model=UserResponse,
     dependencies=[],
 )
+@limiter.limit("10/minute")
 async def verify(
     body: VerifyBody,
     request: Request,

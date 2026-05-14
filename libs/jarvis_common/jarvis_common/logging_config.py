@@ -134,7 +134,7 @@ class SystemEventHandler(logging.Handler):
                                 e["category"],
                                 e["source"],
                                 e["message"][:65535],
-                                json.dumps(e["context"]),
+                                e["context"],
                                 e["correlation_id"],
                             )
                             for e in batch

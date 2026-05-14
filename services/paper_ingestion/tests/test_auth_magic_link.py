@@ -74,7 +74,7 @@ async def test_request_link_unknown_email_returns_sent_true(monkeypatch) -> None
     pool = _build_mock_pool(conn)
     request = _build_request(pool)
 
-    result = await auth_router.request_link(
+    result = await auth_router.request_link.__wrapped__(
         auth_router.RequestLinkBody(email="ghost@example.com"),
         request,
     )
@@ -102,7 +102,7 @@ async def test_request_link_known_email_inserts_token_and_logs(monkeypatch) -> N
 
     monkeypatch.setattr(auth_router, "send_magic_link", fake_send_magic_link)
 
-    result = await auth_router.request_link(
+    result = await auth_router.request_link.__wrapped__(
         auth_router.RequestLinkBody(email="ferhat@example.com"),
         request,
     )
@@ -130,7 +130,7 @@ async def test_verify_unknown_token_rejected(monkeypatch) -> None:
     request = _build_request(pool)
 
     with pytest.raises(HTTPException) as exc:
-        await auth_router.verify(
+        await auth_router.verify.__wrapped__(
             auth_router.VerifyBody(token="A" * 32),
             request,
             Response(),
@@ -155,7 +155,7 @@ async def test_verify_expired_token_rejected(monkeypatch) -> None:
     request = _build_request(pool)
 
     with pytest.raises(HTTPException) as exc:
-        await auth_router.verify(
+        await auth_router.verify.__wrapped__(
             auth_router.VerifyBody(token="A" * 32),
             request,
             Response(),
@@ -178,7 +178,7 @@ async def test_verify_reused_token_rejected(monkeypatch) -> None:
     request = _build_request(pool)
 
     with pytest.raises(HTTPException) as exc:
-        await auth_router.verify(
+        await auth_router.verify.__wrapped__(
             auth_router.VerifyBody(token="A" * 32),
             request,
             Response(),
@@ -208,7 +208,7 @@ async def test_verify_happy_path_sets_cookie_and_returns_user(monkeypatch) -> No
     request = _build_request(pool)
     response = Response()
 
-    user = await auth_router.verify(
+    user = await auth_router.verify.__wrapped__(
         auth_router.VerifyBody(token="A" * 32),
         request,
         response,
@@ -249,7 +249,7 @@ async def test_verify_secure_cookie_in_prod_mode(monkeypatch) -> None:
     request = _build_request(pool)
     response = Response()
 
-    await auth_router.verify(
+    await auth_router.verify.__wrapped__(
         auth_router.VerifyBody(token="A" * 32),
         request,
         response,
@@ -444,3 +444,59 @@ def test_token_hash_is_sha256_hex() -> None:
     raw = "test-token"
     assert auth_router._hash_token(raw) == _hash(raw)
     assert len(auth_router._hash_token(raw)) == 64  # 32 bytes hex
+
+
+# ---------------------------------------------------------------------------
+# Per-endpoint rate limits (H15)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def _rate_limit_client(monkeypatch):
+    """TestClient with rate limiter *enabled* and in-memory storage reset each test."""
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("QDRANT_URL", "http://localhost:6333")
+
+    from fastapi.testclient import TestClient
+    from jarvis_common import verify_api_key
+    from paper_ingestion.main import app
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    # Enable the limiter and reset any counters left by previous tests
+    app.state.limiter.enabled = True
+    app.state.limiter._storage.reset()
+
+    client = TestClient(app, raise_server_exceptions=False)
+
+    yield client
+
+    app.state.limiter._storage.reset()
+    app.state.limiter.enabled = False
+    app.dependency_overrides.clear()
+
+
+def test_request_link_rate_limited(_rate_limit_client) -> None:
+    """6th POST /api/auth/request-link from the same IP returns 429."""
+    client = _rate_limit_client
+    payload = {"email": "ratelimit@example.com"}
+
+    for i in range(5):
+        resp = client.post("/api/auth/request-link", json=payload)
+        assert resp.status_code != 429, f"Unexpectedly rate-limited on call {i + 1}"
+
+    resp = client.post("/api/auth/request-link", json=payload)
+    assert resp.status_code == 429, f"Expected 429 on 6th call, got {resp.status_code}"
+
+
+def test_verify_rate_limited(_rate_limit_client) -> None:
+    """11th POST /api/auth/verify from the same IP returns 429."""
+    client = _rate_limit_client
+    payload = {"token": "A" * 32}
+
+    for i in range(10):
+        resp = client.post("/api/auth/verify", json=payload)
+        assert resp.status_code != 429, f"Unexpectedly rate-limited on call {i + 1}"
+
+    resp = client.post("/api/auth/verify", json=payload)
+    assert resp.status_code == 429, f"Expected 429 on 11th call, got {resp.status_code}"
