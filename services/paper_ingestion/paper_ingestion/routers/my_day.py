@@ -9,7 +9,6 @@ PydanticUserError trace.  Body annotations on Pydantic models must remain as
 concrete types.
 """
 
-import json
 import logging
 
 import asyncpg
@@ -86,7 +85,7 @@ async def upsert_journal_entry(
             """,
             user_id,
             str(body.date),
-            json.dumps(prompts_dict),
+            prompts_dict,
         )
     return JournalEntryResponse(
         id=row["id"],

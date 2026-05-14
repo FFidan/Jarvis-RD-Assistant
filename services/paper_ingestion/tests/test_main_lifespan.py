@@ -253,6 +253,73 @@ async def test_autoconfigure_models_hook_sets_flag_and_writes_user_config() -> N
 
 
 @pytest.mark.asyncio
+async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded() -> None:
+    """Regression: value stored for llm.* keys must be a bare Python str, not json.dumps(str).
+
+    asyncpg's JSONB codec (registered in init_pg_connection) already calls
+    json.dumps on the value before sending it to Postgres.  Wrapping the model_id
+    in json.dumps() a second time would produce ``'"mistral-nemo"'`` in the DB
+    (a JSON-encoded JSON string) instead of the bare string ``"mistral-nemo"``.
+    """
+    from unittest.mock import AsyncMock, MagicMock, call
+
+    from fastapi import FastAPI
+    from paper_ingestion.main import _autoconfigure_models_hook
+    from paper_ingestion.services.model_lifecycle import HardwareInfo
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    conn.fetchrow.return_value = None  # first boot
+
+    tier1_hw = HardwareInfo(
+        vram_gb=8.0, vram_source="nvidia-smi", tier=1, detected_at="2026-05-14T00:00:00+00:00"
+    )
+
+    app = FastAPI()
+    app.state.db_pool = pool
+
+    with (
+        patch(
+            "paper_ingestion.services.model_lifecycle.detect_hardware",
+            return_value=tier1_hw,
+        ),
+        patch(
+            "paper_ingestion.services.model_lifecycle.recommendations_for_role",
+            return_value=[{"id": "mistral-nemo", "status": "downloadable", "tier": 1}],
+        ),
+        patch(
+            "paper_ingestion.services.litellm_config.update_litellm_model",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        await _autoconfigure_models_hook(app)
+
+    # Collect every INSERT INTO user_config call that sets an llm.* key.
+    llm_inserts: list[call] = [
+        c
+        for c in conn.execute.await_args_list
+        if len(c.args) >= 3 and isinstance(c.args[1], str) and c.args[1].startswith("llm.")
+    ]
+    assert llm_inserts, "Expected at least one INSERT for llm.* keys"
+
+    for c in llm_inserts:
+        # args[2] is the value parameter ($2::jsonb).
+        value_arg = c.args[2]
+        # Must be a plain Python str — NOT the result of json.dumps(str)
+        # which would look like '"mistral-nemo"' (starts and ends with a quote).
+        assert isinstance(value_arg, str), f"Expected str, got {type(value_arg)}"
+        assert not (value_arg.startswith('"') and value_arg.endswith('"')), (
+            f"Value {value_arg!r} looks double-encoded (json.dumps was applied "
+            "before passing to asyncpg). Pass model_id directly."
+        )
+
+
+@pytest.mark.asyncio
 async def test_autoconfigure_models_hook_is_idempotent() -> None:
     """When flag is already set, the hook returns early without writing anything."""
     from unittest.mock import AsyncMock, MagicMock

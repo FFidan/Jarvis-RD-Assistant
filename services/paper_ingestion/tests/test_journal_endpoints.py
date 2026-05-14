@@ -7,6 +7,8 @@ slowapi rate-limiter decorator.
 
 from __future__ import annotations
 
+import json
+import os
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -159,3 +161,159 @@ async def test_upsert_journal_entry_empty_prompts():
     assert result.prompts.first_move is None
     assert result.prompts.worked is None
     assert result.prompts.blocked is None
+
+
+# ---------------------------------------------------------------------------
+# H2 regression: no double json.dumps in upsert_journal_entry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upsert_journal_entry_passes_raw_dict_not_json_string():
+    """H2 regression: upsert_journal_entry must NOT call json.dumps on prompts.
+
+    Before the fix, line 89 called json.dumps(prompts_dict) before passing to
+    asyncpg. Because init_pg_connection registers json.dumps as the JSONB
+    encoder, the value was serialised twice: once manually, once by the codec.
+    The DB would store a JSON string '"{...}"' instead of a JSONB object '{...}'.
+
+    This test verifies the raw dict is bound to $3, not a pre-serialised string.
+    """
+    from paper_ingestion.models.journal import JournalEntryCreate, JournalPrompts
+
+    pool, conn = _make_pool_and_conn()
+    today = date.today()
+    now = datetime.now()
+    conn.fetchrow.return_value = {
+        "id": 3,
+        "date": today,
+        "prompts": {"first_move": "Regression guard"},
+        "created_at": now,
+        "updated_at": now,
+    }
+    body = JournalEntryCreate(date=today, prompts=JournalPrompts(first_move="Regression guard"))
+    with patch(
+        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        new_callable=AsyncMock,
+        return_value=None,
+    ):
+        await my_day.upsert_journal_entry.__wrapped__(_mock_request(), body=body, db_pool=pool)
+
+    _sql, *bound_params = conn.fetchrow.await_args.args
+    # $3 is index 2 in bound_params (0-based: $1=user_id, $2=date, $3=prompts)
+    prompts_param = bound_params[2]
+
+    assert isinstance(prompts_param, dict), (
+        f"H2 regression: expected dict bound for $3::jsonb, "
+        f"got {type(prompts_param).__name__!r}: {prompts_param!r}"
+    )
+    assert prompts_param == {"first_move": "Regression guard"}
+    assert prompts_param != json.dumps({"first_move": "Regression guard"}), (
+        "H2 regression: upsert_journal_entry is double-encoding the JSONB value"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Live round-trip test (requires TEST_DATABASE_URL)
+# ---------------------------------------------------------------------------
+
+_DB_URL = os.environ.get("TEST_DATABASE_URL", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    not _DB_URL,
+    reason="TEST_DATABASE_URL not set — skipping live DB round-trip test",
+)
+async def test_upsert_journal_entry_jsonb_round_trip_live_db():
+    """H2 live round-trip: prompts stored as JSONB object, not double-encoded string.
+
+    Requires TEST_DATABASE_URL pointing to a Postgres instance.
+    Asserts:
+    - jsonb_typeof(prompts) == 'object'  (not 'string')
+    - prompts dict matches the input
+    - JournalPrompts(**prompts) succeeds without TypeError
+    """
+    import asyncpg
+    from jarvis_common import init_pg_connection
+    from paper_ingestion.models.journal import JournalPrompts
+
+    try:
+        pool = await asyncpg.create_pool(
+            _DB_URL,
+            min_size=1,
+            max_size=2,
+            init=init_pg_connection,
+        )
+    except Exception as exc:
+        pytest.skip(f"Cannot connect to test DB: {exc}")
+        return
+
+    test_date = "2099-01-01"  # far-future date avoids collision with real data
+    try:
+        async with pool.acquire() as conn:
+            # Ensure table exists (idempotent)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS journal_entries (
+                    id         SERIAL PRIMARY KEY,
+                    user_id    INTEGER,
+                    date       DATE NOT NULL DEFAULT CURRENT_DATE,
+                    prompts    JSONB NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE NULLS NOT DISTINCT (user_id, date)
+                )
+            """)
+            # Remove any stale row from a previous run
+            await conn.execute(
+                "DELETE FROM journal_entries WHERE user_id IS NULL AND date = $1",
+                test_date,
+            )
+
+        # Call the endpoint with a real asyncpg pool
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from paper_ingestion.deps import get_db_pool
+        from paper_ingestion.routers.my_day import router
+
+        app = FastAPI()
+        app.include_router(router)
+        app.dependency_overrides[get_db_pool] = lambda: pool
+
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.post(
+                "/api/my-day/journal",
+                json={"date": test_date, "prompts": {"first_move": "live test"}},
+            )
+            assert resp.status_code == 200, resp.text
+            payload = resp.json()
+            assert payload["prompts"]["first_move"] == "live test"
+
+        # Verify DB directly: jsonb_typeof must be 'object'
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT jsonb_typeof(prompts) AS jtype, prompts "
+                "FROM journal_entries WHERE user_id IS NULL AND date = $1",
+                test_date,
+            )
+
+        assert row is not None, "Row not found after upsert"
+        assert row["jtype"] == "object", (
+            f"H2 regression: expected jsonb_typeof='object', got {row['jtype']!r}. "
+            "The value was double-encoded as a JSON string."
+        )
+        assert row["prompts"] == {"first_move": "live test"}, (
+            f"prompts mismatch: {row['prompts']!r}"
+        )
+
+        # Also verify JournalPrompts(**prompts) does not raise TypeError
+        jp = JournalPrompts(**(row["prompts"] or {}))
+        assert jp.first_move == "live test"
+
+    finally:
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM journal_entries WHERE user_id IS NULL AND date = $1",
+                test_date,
+            )
+        await pool.close()

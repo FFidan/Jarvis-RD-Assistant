@@ -12,7 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
@@ -123,7 +122,10 @@ async def test_start_with_valid_pair_code_stores_chat_id():
     assert conn.execute.await_count == 2
     upsert_call = conn.execute.await_args_list[0]
     assert "user_config" in upsert_call.args[0]
-    assert upsert_call.args[1] == json.dumps(42)
+    # Fix H4: chat.id is passed directly (int), not json.dumps(int) — asyncpg
+    # JSONB codec applies json.dumps internally, so the stored value is a JSON
+    # number, not a JSON string.
+    assert upsert_call.args[1] == 42
     delete_call = conn.execute.await_args_list[1]
     assert "DELETE FROM telegram_pairing" in delete_call.args[0]
     assert delete_call.args[1] == "ABC123"
@@ -274,9 +276,55 @@ async def test_telegram_pairing_inserts_on_fresh_install():
         f"Expected INSERT INTO user_config upsert but got: {sql!r}"
     )
     assert "ON CONFLICT" in sql, f"Expected ON CONFLICT clause but got: {sql!r}"
-    # The chat_id must be serialised as a JSON value
-    assert upsert_call.args[1] == json.dumps(99)
+    # Fix H4: chat.id is passed as a native int; asyncpg codec serialises it.
+    assert upsert_call.args[1] == 99
     # Success reply must be sent
     update.message.reply_text.assert_awaited_once()
     reply_text = update.message.reply_text.call_args[0][0]
     assert "Paired" in reply_text
+
+
+# ---------------------------------------------------------------------------
+# Regression H4: chat.id must reach asyncpg as a native int (no double-encode)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pairing_stores_chat_id_as_native_int_not_json_string():
+    """H4 regression: _handle_pairing passes chat.id directly, not json.dumps(chat.id).
+
+    asyncpg's JSONB codec (encoder=json.dumps) serialises the value itself.
+    Wrapping in json.dumps first produces a JSON *string* ("42") instead of a
+    JSON *number* (42) — i.e. jsonb_typeof would return 'string', not 'number'.
+
+    This test verifies via a codec round-trip that the value received by
+    conn.execute is a native Python int, not a pre-serialised string.
+    """
+    import json as _json
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    conn = _make_conn(fetchrow_return={"expires_at": future})
+    pool = _make_pool(conn)
+    update = _make_update("/start PAIR_H4TEST", chat_id=123456789)
+    context = _make_context(pool, _make_config(telegram_chat_id=None))
+
+    await start_command(update, context)
+
+    upsert_call = conn.execute.await_args_list[0]
+    raw_value = upsert_call.args[1]
+
+    # The value passed must be a native int, not a pre-serialised string.
+    assert isinstance(raw_value, int), (
+        f"Expected int but got {type(raw_value).__name__!r}: {raw_value!r}. "
+        "Pass chat.id directly — asyncpg's JSONB codec serialises it."
+    )
+    assert raw_value == 123456789
+
+    # Codec round-trip: json.dumps(int) → '123456789' → json.loads → int
+    # This is what Postgres stores; jsonb_typeof would be 'number', not 'string'.
+    encoded = _json.dumps(raw_value)
+    decoded = _json.loads(encoded)
+    assert isinstance(decoded, int), (
+        f"After JSONB codec round-trip, value should decode as int, got {type(decoded)}"
+    )
+    assert decoded == 123456789

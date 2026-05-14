@@ -49,6 +49,8 @@ async def generate_cards_core(
     fsrs_manager: FSRSManager | None = None,
     card_generator: CardGenerator | None = None,
     ctx: JobContext | None = None,
+    *,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Fetch chunks, call LLM, verify and insert cards.
 
@@ -62,6 +64,7 @@ async def generate_cards_core(
     fsrs_manager:   injected via FastAPI dep or created fresh inside job
     card_generator: injected via FastAPI dep or created fresh inside job
     ctx:            optional JobContext for progress reporting
+    user_id:        per-user identity written to cards.user_id (None = single-tenant)
 
     Returns
     -------
@@ -164,6 +167,7 @@ async def generate_cards_core(
                         card_data["evidence"],
                         fsrs_state,
                         due_at,
+                        user_id=user_id,
                     )
                 except asyncpg.ForeignKeyViolationError as exc:
                     raise JobError("Deck or paper not found") from exc
@@ -198,6 +202,7 @@ async def _card_generate_job(
         deck_id=payload["deck_id"],
         max_cards=payload.get("max_cards", 5),
         ctx=ctx,
+        user_id=payload.get("user_id"),
     )
 
 
@@ -210,17 +215,34 @@ async def _card_generate_batch_job(
     """Job handler for batch card generation across all unprocessed papers in a deck."""
     deck_id: int = payload["deck_id"]
     max_per_paper: int = payload.get("max_per_paper", 5)
+    user_id: int | None = payload.get("user_id")
 
     async with pool.acquire() as conn:
-        paper_rows = await conn.fetch(
-            """
-            SELECT p.id FROM papers p
-            WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
-              AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
-            LIMIT 50
-            """,
-            deck_id,
-        )
+        if user_id is not None:
+            paper_rows = await conn.fetch(
+                """
+                SELECT p.id FROM papers p
+                WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
+                  AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
+                  AND EXISTS (
+                    SELECT 1 FROM user_library ul
+                    WHERE ul.paper_id = p.id AND ul.user_id IS NOT DISTINCT FROM $2
+                  )
+                LIMIT 50
+                """,
+                deck_id,
+                user_id,
+            )
+        else:
+            paper_rows = await conn.fetch(
+                """
+                SELECT p.id FROM papers p
+                WHERE EXISTS (SELECT 1 FROM paper_chunks WHERE paper_id = p.id)
+                  AND NOT EXISTS (SELECT 1 FROM cards WHERE paper_id = p.id AND deck_id = $1)
+                LIMIT 50
+                """,
+                deck_id,
+            )
 
     total = len(paper_rows)
     papers_processed = 0
@@ -242,6 +264,7 @@ async def _card_generate_batch_job(
                 deck_id=deck_id,
                 max_cards=max_per_paper,
                 ctx=None,
+                user_id=user_id,
             )
             papers_processed += 1
             cards_created += result["cards_created"]

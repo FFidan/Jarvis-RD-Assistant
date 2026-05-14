@@ -34,7 +34,6 @@ admin is logged in. Both can coexist.
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -293,7 +292,7 @@ async def _persist_config(pool: Any, key: str, value: Any, *, encrypted: bool) -
                     SET value = $2::jsonb, updated_at = NOW()
                 """,
                 key,
-                json.dumps(value),
+                value,  # asyncpg JSONB codec handles encoding—no json.dumps
             )
 
 

@@ -1,0 +1,208 @@
+/* ─────────────────────────────────────────────────────────────────
+   Jarvis Design Tokens — Bold direction
+   Drop into your tailwind.config or import as CSS variables.
+   Pairs with the layout patterns in IMPLEMENTATION.md.
+   ───────────────────────────────────────────────────────────────── */
+
+:root {
+  /* surfaces (editorial cream paper) */
+  --jv-paper:       #faf8f3;   /* primary canvas */
+  --jv-paper-dim:   #f3efe5;   /* rails, sub-headers */
+  --jv-paper-lo:    #ecead9;   /* tertiary fill, hover */
+  --jv-surface:     #ffffff;   /* cards, focus surface */
+
+  /* ink */
+  --jv-ink:         #1a1714;   /* h1, primary text */
+  --jv-ink-2:       #3b3631;   /* body */
+  --jv-muted:       #6f685e;   /* secondary text */
+  --jv-faint:       #a39c8e;   /* tertiary text, captions */
+
+  /* lines */
+  --jv-hair:        #e3ddc9;   /* primary divider */
+  --jv-hair-lo:     #ede7d4;   /* faint divider */
+
+  /* brand */
+  --jv-violet:      #6b5be8;   /* primary accent, hero */
+  --jv-violet-lo:   #ece9ff;
+  --jv-rust:        #c4633a;   /* streaks, warmth */
+  --jv-rust-lo:     #f4dccb;
+
+  /* semantic */
+  --jv-ok:          #3f7d54;
+  --jv-warn:        #b2841a;
+  --jv-danger:      #a8412c;
+
+  /* gradient hero — used in My Day intent card, signature glow */
+  --jv-hero-a:      #6b5be8;
+  --jv-hero-b:      #b39bff;
+  --jv-hero-c:      #ffd9b8;
+
+  /* type stacks */
+  --jv-serif: 'Source Serif 4', 'Source Serif Pro', 'Iowan Old Style',
+              'Georgia', serif;
+  --jv-sans:  'Inter', 'IBM Plex Sans', -apple-system, system-ui, sans-serif;
+  --jv-mono:  'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace;
+
+  /* type scale (UI minimums respected — no body text below 13px) */
+  --jv-text-h1:     34px;   /* page titles, serif */
+  --jv-text-h2:     24px;
+  --jv-text-h3:     18px;
+  --jv-text-body:   15px;   /* serif body in readable content */
+  --jv-text-ui:     14px;   /* sans-serif UI default */
+  --jv-text-meta:   13px;
+  --jv-text-caption:12px;
+  --jv-text-marker: 11px;   /* § marker captions, uppercase tracked */
+
+  /* radii */
+  --jv-r-card:      10px;
+  --jv-r-button:    6px;
+  --jv-r-input:     6px;
+  --jv-r-pill:      999px;
+
+  /* spacing scale (4-pt) */
+  --jv-s-1: 4px;
+  --jv-s-2: 8px;
+  --jv-s-3: 12px;
+  --jv-s-4: 16px;
+  --jv-s-5: 20px;
+  --jv-s-6: 24px;
+  --jv-s-7: 32px;
+  --jv-s-8: 40px;
+  --jv-s-9: 56px;
+
+  /* elevation — very restrained, paper aesthetic */
+  --jv-shadow-1: 0 1px 0 rgba(0, 0, 0, 0.04);
+  --jv-shadow-2: 0 4px 16px rgba(26, 23, 20, 0.06);
+}
+
+/* ─── Marker caption: § ALL-CAPS small, tracked ─────────────────── */
+.jv-marker {
+  font-family: var(--jv-mono);
+  font-size: var(--jv-text-marker);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--jv-muted);
+}
+.jv-marker--faint { color: var(--jv-faint); }
+.jv-marker--violet { color: var(--jv-violet); }
+.jv-marker--warn { color: var(--jv-warn); }
+
+/* ─── Editorial H1: serif, tight tracking, large ────────────────── */
+.jv-h1 {
+  font-family: var(--jv-serif);
+  font-size: var(--jv-text-h1);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--jv-ink);
+}
+/* Subtitle pattern: italic serif, muted */
+.jv-subtitle {
+  font-family: var(--jv-serif);
+  font-style: italic;
+  font-size: 16px;
+  color: var(--jv-muted);
+  line-height: 1.55;
+}
+
+/* ─── Body copy: serif inside reading regions ───────────────────── */
+.jv-body {
+  font-family: var(--jv-serif);
+  font-size: 16px;
+  line-height: 1.65;
+  color: var(--jv-ink-2);
+  text-wrap: pretty;
+  max-width: 64ch;
+}
+
+/* ─── Score chip: mono number + 3-tone bar ──────────────────────── */
+.jv-score {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--jv-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--jv-ink);
+}
+.jv-score__bar {
+  display: flex; gap: 1.5px; height: 9px;
+}
+.jv-score__bar > i {
+  width: 4px; border-radius: 1px;
+}
+.jv-score__bar > i:nth-child(1) { background: var(--jv-violet); }
+.jv-score__bar > i:nth-child(2) { background: var(--jv-rust); }
+.jv-score__bar > i:nth-child(3) { background: var(--jv-ok); }
+
+/* ─── Pill / chip ───────────────────────────────────────────────── */
+.jv-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: var(--jv-r-pill);
+  background: var(--jv-paper-lo);
+  color: var(--jv-ink-2);
+  border: 1px solid var(--jv-hair);
+}
+.jv-pill--violet { background: var(--jv-violet-lo); color: var(--jv-violet); border-color: #d8d2ff; }
+.jv-pill--ghost  { background: transparent; color: var(--jv-muted); }
+.jv-pill--ok     { background: #e1efd9; color: var(--jv-ok); border-color: #cfe2c2; }
+.jv-pill--warn   { background: #fbeed1; color: var(--jv-warn); border-color: #eddbab; }
+.jv-pill--danger { background: #f5d8cd; color: var(--jv-danger); border-color: #ecb9a7; }
+
+/* ─── Button ─────────────────────────────────────────────────────── */
+.jv-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 9px 14px; font-size: 14px; font-weight: 500;
+  border-radius: var(--jv-r-button); cursor: pointer;
+  border: 1px solid var(--jv-ink); background: var(--jv-ink); color: #fff;
+  font-family: var(--jv-sans); line-height: 1.2;
+}
+.jv-btn--secondary { background: #fff; color: var(--jv-ink); border-color: var(--jv-hair); }
+.jv-btn--ghost     { background: transparent; color: var(--jv-ink-2); border-color: transparent; }
+.jv-btn--violet    { background: var(--jv-violet); border-color: var(--jv-violet); }
+.jv-btn--sm { padding: 6px 10px; font-size: 13px; }
+.jv-btn--lg { padding: 12px 18px; font-size: 15px; }
+
+/* ─── Hair divider ──────────────────────────────────────────────── */
+.jv-hair { background: var(--jv-hair); height: 1px; width: 100%; }
+
+/* ─── Three-pane app layout (Feed / Paper / Projects) ───────────── */
+.jv-3pane {
+  display: grid;
+  grid-template-columns: 200px 1fr 320px;
+  height: 100%;
+}
+.jv-3pane > .jv-3pane__rail-l { border-right: 1px solid var(--jv-hair); }
+.jv-3pane > .jv-3pane__rail-r { border-left:  1px solid var(--jv-hair); background: var(--jv-surface); }
+@media (max-width: 1100px) {
+  .jv-3pane { grid-template-columns: 1fr; }
+  .jv-3pane > .jv-3pane__rail-l,
+  .jv-3pane > .jv-3pane__rail-r { display: none; }
+}
+
+/* ─── Slim topbar with ⌘K search ────────────────────────────────── */
+.jv-topbar {
+  display: flex; align-items: center; gap: 14px;
+  padding: 12px 24px;
+  background: var(--jv-surface);
+  border-bottom: 1px solid var(--jv-hair);
+}
+.jv-topbar__search {
+  flex: 1; max-width: 520px;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px;
+  background: var(--jv-paper);
+  border: 1px solid var(--jv-hair);
+  border-radius: 8px;
+}
+.jv-topbar__kbd {
+  font-family: var(--jv-mono); font-size: 11px; color: var(--jv-faint);
+  border: 1px solid var(--jv-hair); border-radius: 3px;
+  padding: 1px 5px; background: #fff;
+}

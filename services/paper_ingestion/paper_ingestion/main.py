@@ -19,7 +19,6 @@ while letting paper_ingestion express its rich init pipeline as
 """
 
 import asyncio
-import json
 import logging
 import os
 from typing import Any
@@ -305,7 +304,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
                 "INSERT INTO user_config (key, value) VALUES ($1, $2::jsonb) "
                 "ON CONFLICT (user_id, key) DO NOTHING",
                 config_key,
-                json.dumps(model_id),
+                model_id,
             )
         logger.info("Auto-configured %s → %s (tier %d)", config_key, model_id, best["tier"])
 

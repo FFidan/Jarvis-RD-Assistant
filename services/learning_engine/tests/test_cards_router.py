@@ -11,6 +11,10 @@ from fastapi import HTTPException
 from learning_engine.models import CardCreate, CardType, CardUpdate, Evidence  # noqa: E402
 from learning_engine.routers import cards  # noqa: E402
 
+# ---------------------------------------------------------------------------
+# DOM-C-06: create_card asserts paper ownership before FK insert
+# ---------------------------------------------------------------------------
+
 
 class FakeRecord(dict):
     """Dict-like asyncpg.Record substitute."""
@@ -271,3 +275,69 @@ async def test_list_cards_no_filters_includes_user_predicate_only():
     # No deck_id / due_at clauses.
     assert "deck_id" not in sql
     assert "due_at <=" not in sql
+
+
+# ---------------------------------------------------------------------------
+# DOM-C-06: create_card calls assert_paper_ownership before FK insert
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_card_asserts_paper_ownership():
+    """create_card raises 403 when paper_id belongs to a different user.
+
+    DOM-C-06: assert_paper_ownership must be called *before* insert_card so
+    that user B cannot anchor a card to user A's paper.
+    """
+    pool, conn = _make_pool_and_conn()
+    fsrs_manager = MagicMock()
+    fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
+
+    forbidden = HTTPException(status_code=403, detail="paper not owned by current user")
+
+    with patch.object(
+        cards, "assert_paper_ownership", AsyncMock(side_effect=forbidden)
+    ) as mock_ownership:
+        with pytest.raises(HTTPException) as exc_info:
+            await cards.create_card.__wrapped__(
+                SimpleNamespace(state=SimpleNamespace(user_id=2)),
+                body=CardCreate(
+                    deck_id=1,
+                    paper_id=99,
+                    card_type=CardType.CONCEPT,
+                    front="Q?",
+                    back="A.",
+                ),
+                db_pool=pool,
+                fsrs_manager=fsrs_manager,
+            )
+
+    assert exc_info.value.status_code == 403
+    mock_ownership.assert_awaited_once_with(conn, 99, 2)
+
+
+@pytest.mark.asyncio
+async def test_create_card_skips_ownership_check_when_no_paper():
+    """create_card does NOT call assert_paper_ownership when paper_id is None."""
+    pool, conn = _make_pool_and_conn()
+    fsrs_manager = MagicMock()
+    fsrs_manager.create_new_card.return_value = ({"state": "new"}, _now())
+
+    with (
+        patch.object(cards, "assert_paper_ownership", AsyncMock()) as mock_ownership,
+        patch.object(cards, "insert_card", AsyncMock(return_value=_make_card_row())),
+    ):
+        await cards.create_card.__wrapped__(
+            SimpleNamespace(state=SimpleNamespace(user_id=1)),
+            body=CardCreate(
+                deck_id=1,
+                paper_id=None,
+                card_type=CardType.CONCEPT,
+                front="Q?",
+                back="A.",
+            ),
+            db_pool=pool,
+            fsrs_manager=fsrs_manager,
+        )
+
+    mock_ownership.assert_not_awaited()

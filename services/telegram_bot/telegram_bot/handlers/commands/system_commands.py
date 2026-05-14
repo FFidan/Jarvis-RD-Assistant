@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from datetime import UTC, datetime
 
@@ -97,7 +96,7 @@ async def _handle_pairing(
                     "VALUES (NULL, 'telegram.owner_chat_id', $1::jsonb) "
                     "ON CONFLICT (user_id, key) DO UPDATE "
                     "SET value = EXCLUDED.value, updated_at = NOW()",
-                    json.dumps(chat.id),
+                    chat.id,
                 )
                 await conn.execute("DELETE FROM telegram_pairing WHERE code = $1", code)
         await log_event(

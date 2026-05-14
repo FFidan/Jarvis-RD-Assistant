@@ -351,3 +351,38 @@ async def test_cloud_llm_keys_rejected_for_non_admin_when_configured() -> None:
     with pytest.raises(HTTPException) as exc_info:
         await setup_router.configure_cloud_llm_keys(body, request)
     assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# _persist_config — H3 regression: no json.dumps double-encode
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_persist_config_passes_value_directly_not_json_string() -> None:
+    """asyncpg's JSONB codec (registered via init_pg_connection) serialises values
+    automatically.  _persist_config MUST pass the raw Python object, not a
+    json.dumps()-encoded string.  Wrapping with json.dumps would double-encode,
+    storing '"{\"k\": 1}"' instead of '{"k": 1}' in the JSONB column.
+
+    Regression guard for H3 (audit closeout 2026-05-14).
+    """
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool(conn)
+
+    dict_value = {"smtp_host": "mail.example.com", "port": 587}
+
+    await setup_router._persist_config(pool, "smtp.config", dict_value, encrypted=False)
+
+    assert conn.execute.await_count == 1
+    call_args = conn.execute.call_args
+    # The value passed as the second positional parameter ($2) must be the
+    # original dict, NOT a JSON-encoded string.
+    positional_args = call_args.args
+    passed_value = positional_args[2]  # $1=key, $2=value
+    assert isinstance(passed_value, dict), (
+        f"_persist_config must pass the raw dict to asyncpg (got {type(passed_value).__name__!r}); "
+        "json.dumps double-encodes and corrupts user_config.value"
+    )
+    assert passed_value == dict_value

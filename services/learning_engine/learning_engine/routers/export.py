@@ -6,6 +6,7 @@ import re
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
+from jarvis_common.auth import current_user_id_or_none
 
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.deps import get_anki_exporter, get_db_pool, limiter
@@ -22,8 +23,15 @@ async def export_anki(
     anki_exporter: AnkiExporter = Depends(get_anki_exporter),
 ) -> StreamingResponse:
     """Export a deck as an Anki .apkg file."""
+    # H6: scope deck lookup to the requesting user — returns 404 (not 403) to
+    # avoid existence disclosure for decks owned by other users.
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        deck = await conn.fetchrow("SELECT * FROM decks WHERE id = $1", deck_id)
+        deck = await conn.fetchrow(
+            "SELECT * FROM decks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            deck_id,
+            user_id,
+        )
         if not deck:
             raise HTTPException(status_code=404, detail="Deck not found")
 
