@@ -8,8 +8,9 @@
  * - Error state shown when listUsers fails.
  */
 
+import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -25,6 +26,65 @@ const listUsersMock = vi.fn();
 const inviteUserMock = vi.fn();
 const updateUserRoleMock = vi.fn();
 const deleteUserMock = vi.fn();
+
+// Map of aria-label → onValueChange callback, populated as rows mount.
+// Used by the per-row isolation test to trigger mutations without Radix portals.
+const _roleSelectCallbacks: Map<string, (v: string) => void> = new Map();
+
+// Radix Select portals do not work in jsdom — replace with simple HTML.
+// Select injects its `disabled` state into SelectTrigger via context-free clone.
+vi.mock('@/components/ui/select', () => ({
+  Select: ({
+    children,
+    onValueChange,
+    disabled,
+  }: {
+    children: React.ReactNode;
+    value?: string;
+    onValueChange?: (v: string) => void;
+    disabled?: boolean;
+  }) =>
+    React.createElement(
+      'div',
+      { 'data-select-disabled': disabled ? 'true' : 'false' },
+      React.Children.map(children, (child) => {
+        if (!React.isValidElement(child)) return child;
+        // Inject disabled + onValueChange into SelectTrigger children.
+        return React.cloneElement(child as React.ReactElement<Record<string, unknown>>, {
+          _selectDisabled: disabled,
+          _selectOnValueChange: onValueChange,
+        });
+      }),
+    ),
+  SelectTrigger: ({
+    children,
+    'aria-label': ariaLabel,
+    className,
+    _selectDisabled,
+    _selectOnValueChange,
+  }: {
+    children: React.ReactNode;
+    className?: string;
+    'aria-label'?: string;
+    _selectDisabled?: boolean;
+    _selectOnValueChange?: (v: string) => void;
+  }) => {
+    // Store callback keyed by aria-label for test access.
+    if (ariaLabel && _selectOnValueChange) {
+      _roleSelectCallbacks.set(ariaLabel, _selectOnValueChange);
+    }
+    return React.createElement(
+      'button',
+      { role: 'combobox', 'aria-label': ariaLabel, className, disabled: _selectDisabled },
+      children,
+    );
+  },
+  SelectValue: () => null,
+  SelectContent: ({ children }: { children: React.ReactNode }) =>
+    React.createElement('div', null, children),
+  SelectItem: ({ children, value }: { children: React.ReactNode; value: string }) =>
+    React.createElement('div', { role: 'option', 'data-value': value }, children),
+}));
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
@@ -207,6 +267,7 @@ describe('per-row role select isolation (DOM-F-07)', () => {
     vi.clearAllMocks();
     _mockRole = 'admin';
     _mockUserId = 1;
+    _roleSelectCallbacks.clear();
   });
 
   it('only disables the mutating row select; other rows remain enabled', async () => {
@@ -220,14 +281,17 @@ describe('per-row role select isolation (DOM-F-07)', () => {
     const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
     const adminTrigger = screen.getByRole('combobox', { name: /role for admin@example\.com/i });
 
-    // Trigger mutation on alice's row.
-    await userEvent.click(aliceTrigger);
-    // Select an item from the open listbox.
-    const adminOption = screen.getByRole('option', { name: /admin/i });
-    await userEvent.click(adminOption);
+    // Both selects are enabled before any mutation.
+    expect(aliceTrigger).not.toBeDisabled();
+    expect(adminTrigger).not.toBeDisabled();
+
+    // Directly invoke the onValueChange callback stored for alice's row.
+    const aliceCb = _roleSelectCallbacks.get('Role for alice@example.com');
+    expect(aliceCb).toBeDefined();
+    act(() => { aliceCb!('admin'); });
 
     await waitFor(() => {
-      expect(updateUserRoleMock).toHaveBeenCalled();
+      expect(updateUserRoleMock).toHaveBeenCalledWith(2, 'admin');
     });
 
     // alice's trigger must now be disabled; admin's trigger must still be enabled.

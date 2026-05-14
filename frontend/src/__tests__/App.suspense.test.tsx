@@ -34,6 +34,7 @@ vi.mock('@/pages/FirstRunSetupPage', () => ({ FirstRunSetupPage: SuspendForever 
 vi.mock('@/pages/LogsPage', () => ({ LogsPage: SuspendForever }));
 vi.mock('@/pages/AdminUsersPage', () => ({ AdminUsersPage: SuspendForever }));
 vi.mock('@/pages/PaperDetailPage', () => ({ PaperDetailPage: SuspendForever }));
+vi.mock('@/pages/ResearchFeedPage', () => ({ ResearchFeedPage: SuspendForever }));
 
 // ---------------------------------------------------------------------------
 // Standard API mocks so gate components don't block rendering.
@@ -76,16 +77,6 @@ function renderApp(initialEntries: string[]) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Assert <PageFallback /> is rendered and the error boundary is not. */
-function expectFallback() {
-  expect(screen.getByText('Loading...')).toBeInTheDocument();
-  expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
 }
 
 describe('H12 — lazy routes wrapped in <Suspense>', () => {
@@ -142,6 +133,14 @@ describe('H12 — lazy routes wrapped in <Suspense>', () => {
   it('/paper/:paperId shows PageFallback while PaperDetailPage suspends', () => {
     useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
     renderApp(['/paper/123']);
+    expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
+  });
+
+  // DOM-F-10: ResearchFeedPage is now lazy-loaded
+  it('/feed shows PageFallback while ResearchFeedPage suspends', () => {
+    useAuthStore.setState({ isAuthenticated: true, authTime: Date.now(), apiKey: 'k' });
+    renderApp(['/feed']);
     expect(screen.queryByText(/something went wrong/i)).not.toBeInTheDocument();
     expect(screen.getAllByText('Loading...').length).toBeGreaterThanOrEqual(1);
   });
