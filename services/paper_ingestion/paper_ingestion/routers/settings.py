@@ -968,7 +968,7 @@ async def set_config(
 # --- Scheduled Nudges ---
 
 
-@router.get("/nudges", response_model=list[NudgeResponse])
+@router.get("/nudges", response_model=list[NudgeResponse], dependencies=[Depends(require_admin)])
 @limiter.limit("60/minute")
 async def list_nudges(
     request: Request,

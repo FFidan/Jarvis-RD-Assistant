@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402
+from fastapi import Request
 from httpx import ASGITransport  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -355,6 +356,33 @@ async def test_list_nudges(_app):
     body = resp.json()
     assert len(body) == 1
     assert body[0]["nudge_type"] == "review_reminder"
+
+
+class _RoleMiddleware:
+    """Minimal ASGI middleware that injects request.state.user_role before routing."""
+
+    def __init__(self, app, role: str | None) -> None:
+        self._app = app
+        self._role = role
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and self._role is not None:
+            request = Request(scope)
+            request.state.user_role = self._role
+        await self._app(scope, receive, send)
+
+
+@pytest.mark.asyncio
+async def test_list_nudges_non_admin_returns_403(_app):
+    """GET /api/nudges returns 403 for non-admin browser sessions (L-12)."""
+    app, _conn, _ = _app
+    wrapped = _RoleMiddleware(app, "member")
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=wrapped), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/nudges")
+    assert resp.status_code == 403
+    assert "Admin" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

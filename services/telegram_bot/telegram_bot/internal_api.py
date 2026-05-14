@@ -110,4 +110,6 @@ async def start_internal_server(scheduler: object, port: int = 8002) -> None:
         _server_state.task.add_done_callback(_on_done)
 
     # serve() blocks until the server shuts down
+    if _server_state.server is None:
+        return
     await _server_state.server.serve()

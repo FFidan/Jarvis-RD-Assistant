@@ -32,6 +32,13 @@ def _make_pool(row=None, raise_exc=None):
         conn.fetchrow = AsyncMock(return_value=row)
         conn.execute = AsyncMock(return_value=None)
 
+    # conn.transaction() must return an async context manager (not a coroutine).
+    # AsyncMock auto-creates it as a coroutine, which breaks `async with`.
+    txn_cm = MagicMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=None)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+
     pool = MagicMock()
     # pool.acquire() used as async context manager
     acquire_cm = AsyncMock()

@@ -174,3 +174,36 @@ async def test_live_edit_learning_steps_reflected_on_next_review() -> None:
     conn_after = _make_fake_conn([{"key": "fsrs.learning_steps", "value": "[5, 25]"}])
     mgr_after = await _build_fsrs_manager_from_db(conn_after)
     assert list(mgr_after.scheduler.learning_steps) == [timedelta(minutes=5), timedelta(minutes=25)]
+
+
+# ---------------------------------------------------------------------------
+# Per-user FSRS config (L-13)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_fsrs_manager_user_row_preferred_over_null_row() -> None:
+    """user_id path: user-specific row is preferred over system-default NULL row."""
+    conn = _make_fake_conn([{"key": "fsrs.desired_retention", "value": "0.75"}])
+    mgr = await _build_fsrs_manager_from_db(conn, user_id=42)
+    assert abs(mgr.scheduler.desired_retention - 0.75) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_build_fsrs_manager_falls_back_to_null_row_when_no_user_row() -> None:
+    """user_id path: falls back to NULL-row value when no user-specific row exists."""
+    conn = _make_fake_conn([{"key": "fsrs.desired_retention", "value": "0.85"}])
+    mgr = await _build_fsrs_manager_from_db(conn, user_id=99)
+    assert abs(mgr.scheduler.desired_retention - 0.85) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_build_fsrs_manager_without_user_id_uses_null_path() -> None:
+    """user_id=None path: issues WHERE user_id IS NULL query."""
+    conn = _make_fake_conn([{"key": "fsrs.desired_retention", "value": "0.88"}])
+    mgr = await _build_fsrs_manager_from_db(conn, user_id=None)
+    assert abs(mgr.scheduler.desired_retention - 0.88) < 1e-9
+    call_args = conn.fetch.await_args
+    assert call_args is not None
+    sql_issued = call_args.args[0]
+    assert "user_id IS NULL" in sql_issued

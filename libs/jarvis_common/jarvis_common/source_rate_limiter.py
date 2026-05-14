@@ -122,17 +122,18 @@ class PersistentSourceRateLimiter:
         """
         try:
             async with self._pool.acquire() as conn:
-                row = await conn.fetchrow(
-                    """
-                    SELECT last_request_at, cooldown_until
-                      FROM source_health
-                     WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
-                       AND source_type = $2
-                     FOR UPDATE
-                    """,
-                    self._user_id,
-                    self._source_type,
-                )
+                async with conn.transaction():
+                    row = await conn.fetchrow(
+                        """
+                        SELECT last_request_at, cooldown_until
+                          FROM source_health
+                         WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                           AND source_type = $2
+                         FOR UPDATE
+                        """,
+                        self._user_id,
+                        self._source_type,
+                    )
             if row is not None:
                 cooldown_until: datetime | None = row["cooldown_until"]
                 if cooldown_until is not None:

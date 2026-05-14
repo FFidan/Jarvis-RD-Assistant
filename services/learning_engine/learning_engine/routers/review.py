@@ -17,20 +17,39 @@ from learning_engine.models import CardResponse, RetentionStats, ReviewRequest, 
 logger = logging.getLogger(__name__)
 
 
-async def _build_fsrs_manager_from_db(conn: asyncpg.pool.PoolConnectionProxy) -> FSRSManager:
+async def _build_fsrs_manager_from_db(
+    conn: asyncpg.pool.PoolConnectionProxy,
+    user_id: int | None = None,
+) -> FSRSManager:
     """Read live fsrs.desired_retention and fsrs.learning_steps from user_config.
 
+    When *user_id* is provided, user-specific rows take precedence over the
+    NULL-row system defaults (DISTINCT ON keeps the user row first).
     Both keys are read per-review so that live edits take effect immediately
     without a service restart.
     """
     desired_retention = 0.9
     learning_steps: list[timedelta] | None = None
 
-    rows = await conn.fetch(
-        "SELECT key, value FROM user_config WHERE key IN ($1, $2) AND user_id IS NULL",
-        "fsrs.desired_retention",
-        "fsrs.learning_steps",
-    )
+    if user_id is not None:
+        rows = await conn.fetch(
+            """
+            SELECT DISTINCT ON (key) key, value
+              FROM user_config
+             WHERE key IN ($1, $2)
+               AND (user_id = $3 OR user_id IS NULL)
+             ORDER BY key, (user_id IS NULL) ASC
+            """,
+            "fsrs.desired_retention",
+            "fsrs.learning_steps",
+            user_id,
+        )
+    else:
+        rows = await conn.fetch(
+            "SELECT key, value FROM user_config WHERE key IN ($1, $2) AND user_id IS NULL",
+            "fsrs.desired_retention",
+            "fsrs.learning_steps",
+        )
     for row in rows:
         try:
             if row["key"] == "fsrs.desired_retention":
@@ -106,7 +125,7 @@ async def submit_review(
             if not row:
                 raise HTTPException(status_code=404, detail="Card not found")
 
-            fsrs_manager = await _build_fsrs_manager_from_db(conn)
+            fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
             new_state, log_dict, next_due = fsrs_manager.schedule_review(
                 row["fsrs_state"], body.rating.value
             )
