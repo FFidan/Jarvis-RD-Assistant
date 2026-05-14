@@ -6,12 +6,16 @@ HTTP client, and authorisation checks.
 
 from __future__ import annotations
 
+import logging
+
 import asyncpg
 import httpx
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from telegram_bot.config import BotConfig
+
+logger = logging.getLogger(__name__)
 
 
 def get_config(context: ContextTypes.DEFAULT_TYPE) -> BotConfig:
@@ -68,6 +72,7 @@ async def auth_check(
             "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
         )
     except Exception:
+        logger.warning("auth_check: DB error reading owner_chat_id; denying request", exc_info=True)
         return False
     if row is not None:
         try:
@@ -80,5 +85,8 @@ async def auth_check(
             chat.id,
         )
     except Exception:
+        logger.warning(
+            "auth_check: DB error reading telegram_user_pairings; denying request", exc_info=True
+        )
         return False
     return pairing_row is not None

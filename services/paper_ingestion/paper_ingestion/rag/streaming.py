@@ -21,10 +21,10 @@ from jarvis_common.llm_client import (
     strip_think_streaming,
 )
 from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
+from jarvis_common.sse import SSE_DONE, sse_event
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
 from paper_ingestion.rag.decomposition import decompose_query
-from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 if TYPE_CHECKING:
     from jarvis_common.verify import QuoteVerifier
@@ -173,7 +173,7 @@ async def prepare_cross_paper_rag(
     # 1. Search all chunks — optionally via query decomposition
     if body.decompose:
         fast_model = get_fast_model()
-        sub_queries = await decompose_query(body.question, http_client, model=fast_model)
+        sub_queries = await decompose_query(body.question, model=fast_model)
         per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
 
         results = await asyncio.gather(
@@ -397,5 +397,5 @@ async def stream_rag_events(
             }
             yield sse_event(payload)
         except Exception as exc:  # noqa: BLE001 — don't break the stream if verification errors
-            logger.warning("RAG verification failed: %s", exc)
+            logger.warning("RAG verification failed: %s", exc, exc_info=True)
     yield SSE_DONE

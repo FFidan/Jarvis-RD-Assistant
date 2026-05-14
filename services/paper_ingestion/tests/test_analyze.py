@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
-from paper_ingestion.routers._sse import SSE_DONE, sse_event
+from jarvis_common.sse import SSE_DONE, sse_event
 from paper_ingestion.routers.analyze import _analyze_stream, analyze_paper
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,7 @@ async def _get_zotero_config(
                 logger.warning(
                     "Zotero config decrypt failed for key %r; treating Zotero config as missing",
                     short_key,
+                    exc_info=True,
                 )
                 return {"_decrypt_error": True}
         else:
@@ -284,7 +285,9 @@ async def _push_paper_with_conn(
                 paper_id,
             )
     except Exception:
-        logger.debug("BBT citation key fetch failed for paper %d (non-fatal)", paper_id)
+        logger.debug(
+            "BBT citation key fetch failed for paper %d (non-fatal)", paper_id, exc_info=True
+        )
 
 
 async def resync_paper_to_zotero(

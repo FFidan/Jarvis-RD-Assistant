@@ -314,7 +314,7 @@ def _langfuse_lifespan_hook() -> None:
         )
         logger.info("Langfuse configured, tracing to %s", host)
     except Exception as exc:
-        logger.warning("Langfuse init failed (non-fatal): %s", exc)
+        logger.warning("Langfuse init failed (non-fatal): %s", exc, exc_info=True)
 
 
 @observe(as_type="generation")

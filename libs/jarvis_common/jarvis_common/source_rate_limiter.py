@@ -163,6 +163,7 @@ class PersistentSourceRateLimiter:
                 "PersistentSourceRateLimiter[%s] DB acquire failed (%s); using fallback",
                 self._source_type,
                 exc,
+                exc_info=True,
             )
             if self._fallback is not None:
                 await self._fallback.acquire()
@@ -253,6 +254,7 @@ class PersistentSourceRateLimiter:
                 "PersistentSourceRateLimiter[%s] DB update_last_request failed: %s",
                 self._source_type,
                 exc,
+                exc_info=True,
             )
 
     async def is_in_cooldown(self) -> tuple[bool, datetime | None]:
@@ -288,5 +290,6 @@ class PersistentSourceRateLimiter:
                 "PersistentSourceRateLimiter[%s] DB is_in_cooldown failed: %s",
                 self._source_type,
                 exc,
+                exc_info=True,
             )
             return False, None

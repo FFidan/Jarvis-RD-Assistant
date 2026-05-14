@@ -44,7 +44,9 @@ async def _build_fsrs_manager_from_db(conn: asyncpg.pool.PoolConnectionProxy) ->
                 if isinstance(steps_raw, list) and len(steps_raw) == 2:
                     learning_steps = [timedelta(minutes=int(s)) for s in steps_raw]
         except Exception:
-            logger.warning("Could not parse fsrs config key %s, using default", row["key"])
+            logger.warning(
+                "Could not parse fsrs config key %s, using default", row["key"], exc_info=True
+            )
 
     return FSRSManager(desired_retention=desired_retention, learning_steps=learning_steps)
 

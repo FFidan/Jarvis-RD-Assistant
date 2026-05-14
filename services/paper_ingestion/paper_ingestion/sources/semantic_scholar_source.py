@@ -374,7 +374,7 @@ class SemanticScholarSource(PaperSource):
             try:
                 data = await self._fetch_json("/paper/search", params=params)
             except Exception as _exc:
-                logger.warning("S2 fetch_new_since failed for query %r", query)
+                logger.warning("S2 fetch_new_since failed for query %r", query, exc_info=True)
                 if p_limiter is not None:
                     await p_limiter.update_last_request("error")
                 await self._insert_run_history(
@@ -527,7 +527,7 @@ class SemanticScholarSource(PaperSource):
                     "{}",
                 )
         except Exception as exc:
-            logger.warning("S2: failed to insert source_run_history: %s", exc)
+            logger.warning("S2: failed to insert source_run_history: %s", exc, exc_info=True)
 
     async def fetch_citations(self, paper_id: str, limit: int = 100) -> list[dict]:
         """Fetch papers that cite the given paper.

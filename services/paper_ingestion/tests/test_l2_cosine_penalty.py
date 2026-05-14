@@ -55,9 +55,7 @@ def _make_profile(
         "author_bonus": 0.0,
         "recency": 0.0,
     }
-    if l2_lambda is not None:
-        weights["l2_lambda"] = l2_lambda
-    return UserProfile(
+    profile = UserProfile(
         topics=[],
         tracked_author_names=set(),
         tracked_author_s2_ids=set(),
@@ -69,6 +67,9 @@ def _make_profile(
         recent_positive_titles=[],
         recent_negative_titles=[],
     )
+    if l2_lambda is not None:
+        profile.l2_lambda = l2_lambda
+    return profile
 
 
 def _make_embedder(cand_vecs: list[list[float]]) -> AsyncMock:

@@ -2,7 +2,6 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from paper_ingestion.models import CrossPaperAskRequest
 from pydantic import RootModel
@@ -38,7 +37,6 @@ async def test_decompose_query_happy_path():
     ):
         result = await decompose_query(
             "Explain attention in transformers",
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -63,7 +61,6 @@ async def test_decompose_query_garbage_fallback():
     ):
         result = await decompose_query(
             question,
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -88,7 +85,6 @@ async def test_decompose_query_empty_array_fallback():
     ):
         result = await decompose_query(
             question,
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -113,7 +109,6 @@ async def test_decompose_query_validation_error_fallback():
     ):
         result = await decompose_query(
             question,
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -138,7 +133,6 @@ async def test_decompose_query_exception_fallback():
     ):
         result = await decompose_query(
             question,
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -162,7 +156,6 @@ async def test_decompose_query_filters_empty_strings():
     ):
         result = await decompose_query(
             "complex question",
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -181,7 +174,6 @@ async def test_decompose_query_dedupes_and_caps_results():
     ):
         result = await decompose_query(
             "complex question",
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 
@@ -203,7 +195,6 @@ async def test_decompose_query_none_openai_client_falls_back():
         mock_svc.openai_client = None
         result = await decompose_query(
             question,
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=None,
         )
 
@@ -259,7 +250,6 @@ async def test_concurrent_search_per_sub_query():
     ):
         result = await decompose_query(
             "complex question",
-            AsyncMock(spec=httpx.AsyncClient),
             openai_client=_mock_openai_client(),
         )
 

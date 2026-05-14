@@ -199,7 +199,12 @@ async def validate_encrypted_config_rows(
             "Set the original Fernet key or rotate the key before starting services."
         )
         if dev_mode:
-            logger.warning("%s Continuing because DEV_MODE=true. Cause: %s", message, exc)
+            logger.warning(
+                "%s Continuing because DEV_MODE=true. Cause: %s",
+                message,
+                exc,
+                exc_info=True,
+            )
             return len(rows)
         raise RuntimeError(message) from exc
 

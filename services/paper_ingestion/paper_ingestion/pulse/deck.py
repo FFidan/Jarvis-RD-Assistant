@@ -10,7 +10,7 @@ from typing import Any
 
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
 from paper_ingestion.pulse.scoring import ScoredCandidate
-from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL
+from paper_ingestion.queries.predicates import PULSE_CANDIDATE_EXCLUDE_SQL, VIEW_PREDICATES
 
 logger = logging.getLogger(__name__)
 
@@ -345,7 +345,7 @@ async def load_today(
             return None
 
         card_rows = await conn.fetch(
-            """
+            f"""
             SELECT
                 pc.id,
                 pc.deck_id,
@@ -368,7 +368,7 @@ async def load_today(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
-              AND COALESCE(pus.state, 'inbox') != 'trash'
+              AND {VIEW_PREDICATES["all_non_trash"]}
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],
@@ -486,7 +486,7 @@ async def load_last_nonempty_deck(
             return None
 
         card_rows = await conn.fetch(
-            """
+            f"""
             SELECT
                 pc.id,
                 pc.deck_id,
@@ -509,7 +509,7 @@ async def load_last_nonempty_deck(
                    ON pus.paper_id = p.id
                   AND pus.user_id IS NOT DISTINCT FROM $2
             WHERE pc.deck_id = $1
-              AND COALESCE(pus.state, 'inbox') != 'trash'
+              AND {VIEW_PREDICATES["all_non_trash"]}
             ORDER BY pc.rank ASC
             """,
             deck_row["id"],

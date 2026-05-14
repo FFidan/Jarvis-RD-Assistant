@@ -142,7 +142,7 @@ async def extract_fields_for_paper(
                     selected_chunks.add(fc.get("chunk_index", 0))
             except Exception:
                 chunk_search_failed = True
-                logger.debug("Chunk search failed for field %s", field.get("name"))
+                logger.debug("Chunk search failed for field %s", field.get("name"), exc_info=True)
                 break
 
         if selected_chunks:
@@ -218,7 +218,9 @@ async def extract_fields_for_paper(
                     # Mirror entity_extractor policy: unverified extractions are
                     # dropped rather than persisted with uncertain values.
                     logger.debug(
-                        "Quote verification failed for field %s — discarding value", field_name
+                        "Quote verification failed for field %s — discarding value",
+                        field_name,
+                        exc_info=True,
                     )
                     value = None
             except Exception:

@@ -665,4 +665,4 @@ class OpenAlexSource(PaperSource):
                     "{}",
                 )
         except Exception as exc:
-            logger.warning("OpenAlex: failed to insert source_run_history: %s", exc)
+            logger.warning("OpenAlex: failed to insert source_run_history: %s", exc, exc_info=True)

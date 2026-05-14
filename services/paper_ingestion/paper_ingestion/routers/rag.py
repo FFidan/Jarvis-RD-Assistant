@@ -18,6 +18,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
     request_chat_completion_content,
 )
+from jarvis_common.sse import SSE_DONE, sse_event
 from jarvis_common.verify import QuoteVerifier
 from starlette.responses import StreamingResponse
 
@@ -41,7 +42,6 @@ from paper_ingestion.rag.streaming import (
     sse_error_stream,
     stream_rag_events,
 )
-from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter(
@@ -218,7 +218,7 @@ async def ask_paper(
         verified_fraction = report.pass_rate
         per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("RAG verification failed for paper %d: %s", paper_id, exc)
+        logger.warning("RAG verification failed for paper %d: %s", paper_id, exc, exc_info=True)
 
     return {
         "answer": answer,
@@ -373,7 +373,7 @@ async def ask_cross_paper(
         verified_fraction = report.pass_rate
         per_sentence = [{"text": s.text, "verified": s.verified} for s in report.per_sentence]
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Cross-paper RAG verification failed: %s", exc)
+        logger.warning("Cross-paper RAG verification failed: %s", exc, exc_info=True)
 
     return {
         "answer": answer,

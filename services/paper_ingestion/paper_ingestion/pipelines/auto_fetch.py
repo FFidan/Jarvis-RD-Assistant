@@ -110,15 +110,21 @@ async def run_auto_pipeline(app) -> None:
                                                     row["id"],
                                                     topic_id,
                                                     fan_exc,
+                                                    exc_info=True,
                                                 )
                                     except Exception as e:
-                                        logger.warning("auto_pipeline: failed to save paper: %s", e)
+                                        logger.warning(
+                                            "auto_pipeline: failed to save paper: %s",
+                                            e,
+                                            exc_info=True,
+                                        )
                     except Exception as e:
                         logger.warning(
                             "auto_pipeline: source %s topic '%s' failed: %s",
                             source_type,
                             topic_name,
                             e,
+                            exc_info=True,
                         )
             except Exception as e:
                 logger.error("auto_pipeline: source %s failed: %s", source_type, e, exc_info=True)
@@ -157,6 +163,7 @@ async def run_auto_pipeline(app) -> None:
                         "auto_pipeline: failed to download PDF for paper %d: %s",
                         paper_id,
                         exc,
+                        exc_info=True,
                     )
 
         download_tasks = [
@@ -193,7 +200,12 @@ async def run_auto_pipeline(app) -> None:
                     )
                     logger.info("auto_pipeline: processed paper %d", paper_id)
                 except Exception as exc:
-                    logger.warning("auto_pipeline: failed to process paper %d: %s", paper_id, exc)
+                    logger.warning(
+                        "auto_pipeline: failed to process paper %d: %s",
+                        paper_id,
+                        exc,
+                        exc_info=True,
+                    )
 
         storage_resolved = Path(PDF_STORAGE_PATH).resolve()
         process_tasks = []

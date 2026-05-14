@@ -39,7 +39,7 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
                 "SELECT value FROM user_config WHERE key = 'pulse.enabled' AND user_id IS NULL"
             )
     except Exception:
-        logger.exception("pulse: failed to read pulse.enabled config")
+        logger.exception("pulse: failed to read pulse.enabled config", exc_info=True)
         return False
     if row is None:
         return False
@@ -69,7 +69,7 @@ async def _list_active_users(db_pool: Any) -> list[int]:
             rows = await conn.fetch("SELECT id FROM users WHERE deleted_at IS NULL ORDER BY id ASC")
         return [int(r["id"]) for r in rows]
     except Exception:
-        logger.debug("scheduler: users table unreadable; falling back to system run")
+        logger.debug("scheduler: users table unreadable; falling back to system run", exc_info=True)
         return []
 
 
@@ -157,6 +157,7 @@ async def _get_pulse_cron(db_pool: Any) -> str:
             logger.warning(
                 "pulse.cron value %r is not a valid cron expression; falling back to default",
                 expr,
+                exc_info=True,
             )
             return _DEFAULT_PULSE_CRON
         return expr
@@ -193,7 +194,9 @@ async def _get_zotero_poll_config(db_pool: Any) -> tuple[bool, str]:
             cron_expr = expr
         except Exception:
             logger.warning(
-                "zotero.poll_cron value %r is not a valid cron expression; using default", expr
+                "zotero.poll_cron value %r is not a valid cron expression; using default",
+                expr,
+                exc_info=True,
             )
     return True, cron_expr
 

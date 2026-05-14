@@ -41,46 +41,6 @@ router = APIRouter(prefix="/api", tags=["knowledge-graph"])
 VALID_ENTITY_TYPES = {"method", "dataset", "metric", "author", "institution", "concept"}
 
 
-@router.post("/extract-entities/{paper_id}", response_model=EntityExtractionResponse)
-@limiter.limit("5/minute")
-async def extract_entities(
-    request: Request,
-    paper_id: int,
-    db_pool: asyncpg.Pool = Depends(get_db_pool),
-    http_client: httpx.AsyncClient = Depends(get_http_client),
-    embedder=Depends(get_optional_embedder),
-    qdrant=Depends(get_optional_qdrant),
-) -> EntityExtractionResponse:
-    """Trigger entity extraction for a single paper."""
-    user_id = await current_user_id_or_none(request)
-    async with db_pool.acquire() as conn:
-        await assert_paper_ownership(conn, paper_id, user_id)
-    try:
-        return await extract_entities_for_paper(
-            http_client,
-            db_pool,
-            paper_id,
-            embedder=embedder,
-            qdrant_client=qdrant,
-        )
-    except ValueError as e:
-        msg = str(e)
-        # "Paper X not found" is a genuine 404; other ValueErrors (e.g.
-        # "no chunks found") indicate bad input → 400.
-        status = 404 if "not found" in msg.lower() else 400
-        request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
-        logger.exception(
-            "Entity extraction failed for paper %d", paper_id, extra={"request_id": request_id}
-        )
-        raise HTTPException(
-            status,
-            detail=(
-                f"Entity extraction failed (request_id={request_id})."
-                " Please retry or contact support."
-            ),
-        ) from e
-
-
 @router.post(
     "/extract-entities/batch",
     response_model=BatchEntityExtractResponse,
@@ -122,6 +82,46 @@ async def batch_extract_entities(
             failed += 1
 
     return {"extracted": extracted, "failed": failed, "total": len(rows)}
+
+
+@router.post("/extract-entities/{paper_id}", response_model=EntityExtractionResponse)
+@limiter.limit("5/minute")
+async def extract_entities(
+    request: Request,
+    paper_id: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    http_client: httpx.AsyncClient = Depends(get_http_client),
+    embedder=Depends(get_optional_embedder),
+    qdrant=Depends(get_optional_qdrant),
+) -> EntityExtractionResponse:
+    """Trigger entity extraction for a single paper."""
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+    try:
+        return await extract_entities_for_paper(
+            http_client,
+            db_pool,
+            paper_id,
+            embedder=embedder,
+            qdrant_client=qdrant,
+        )
+    except ValueError as e:
+        msg = str(e)
+        # "Paper X not found" is a genuine 404; other ValueErrors (e.g.
+        # "no chunks found") indicate bad input → 400.
+        status = 404 if "not found" in msg.lower() else 400
+        request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+        logger.exception(
+            "Entity extraction failed for paper %d", paper_id, extra={"request_id": request_id}
+        )
+        raise HTTPException(
+            status,
+            detail=(
+                f"Entity extraction failed (request_id={request_id})."
+                " Please retry or contact support."
+            ),
+        ) from e
 
 
 @router.get("/knowledge-graph", response_model=KnowledgeGraphResponse)

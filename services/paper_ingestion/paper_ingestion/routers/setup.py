@@ -327,7 +327,7 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
             timeout=SMTP_TEST_TIMEOUT_SECONDS,
         )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("setup smtp test_send failed: %s", exc)
+        logger.warning("setup smtp test_send failed: %s", exc, exc_info=True)
         return str(exc)[:300]
     return None
 

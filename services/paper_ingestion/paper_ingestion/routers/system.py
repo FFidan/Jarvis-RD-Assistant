@@ -11,6 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import JobCreateResponse, current_user_id
 from jarvis_common.model_catalog import Role
+from jarvis_common.serialization import _coerce_bool
 from pydantic import BaseModel
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -78,21 +79,6 @@ class SetupStatus(BaseModel):
     topics_count: int
     telegram_configured: bool
     telegram_paired: bool
-
-
-def _coerce_bool(value: Any, default: bool = False) -> bool:
-    """Interpret user_config JSONB values as booleans."""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lowered = value.lower()
-        if lowered in ("true", "1", "yes"):
-            return True
-        if lowered in ("false", "0", "no", "null", ""):
-            return False
-    return bool(value)
 
 
 def _is_owner_chat_paired(value: Any) -> bool:

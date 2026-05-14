@@ -286,7 +286,7 @@ async def run_process_pdf(
                 points_selector=PointIdsList(points=point_ids_to_delete),  # type: ignore[arg-type]
             )
         except Exception as e:
-            logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e)
+            logger.error("Qdrant cleanup failed for paper %d: %s", paper_id, e, exc_info=True)
 
     # Report embedding progress (single batch for now since executemany is atomic)
     await _maybe_progress(0.7 + 0.3 * (1 / total_batches), f"Embedding batch 1/{total_batches}")

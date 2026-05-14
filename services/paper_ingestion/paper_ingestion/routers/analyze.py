@@ -7,6 +7,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common.sse import SSE_DONE, sse_event
 from starlette.responses import StreamingResponse
 
 from paper_ingestion.deps import (
@@ -17,7 +18,6 @@ from paper_ingestion.deps import (
     get_verifier,
     limiter,
 )
-from paper_ingestion.routers._sse import SSE_DONE, sse_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["analyze"])
@@ -111,7 +111,7 @@ async def _analyze_stream(
                 )
             yield sse_event({"type": "step", "step": "downloading", "status": "completed"})
     except Exception as exc:
-        logger.error("Download failed for paper %d: %s", paper_id, exc)
+        logger.error("Download failed for paper %d: %s", paper_id, exc, exc_info=True)
         yield sse_event({"type": "error", "step": "downloading", "message": "PDF download failed"})
         yield SSE_DONE
         return
@@ -189,7 +189,7 @@ async def _analyze_stream(
             embedder,
         )
     except Exception as exc:
-        logger.error("Summarization failed for paper %d: %s", paper_id, exc)
+        logger.error("Summarization failed for paper %d: %s", paper_id, exc, exc_info=True)
         yield sse_event(
             {
                 "type": "error",

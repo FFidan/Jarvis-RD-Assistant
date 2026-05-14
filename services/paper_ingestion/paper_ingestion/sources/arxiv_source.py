@@ -181,7 +181,10 @@ class ArxivSource(PaperSource):
                         ),
                     )
                     logger.warning(
-                        "arxiv _safe_get %s returned malformed XML: %s", ARXIV_API_URL, exc
+                        "arxiv _safe_get %s returned malformed XML: %s",
+                        ARXIV_API_URL,
+                        exc,
+                        exc_info=True,
                     )
                     return None
                 self._clear_poll_diagnostic()
@@ -457,7 +460,9 @@ class ArxivSource(PaperSource):
             try:
                 root = await self._fetch_xml(params)
             except Exception as _exc:
-                logger.warning("arXiv fetch_new_since failed for query: %s", search_query)
+                logger.warning(
+                    "arXiv fetch_new_since failed for query: %s", search_query, exc_info=True
+                )
                 if p_limiter is not None:
                     await p_limiter.update_last_request("error")
                 await self._insert_run_history(
@@ -608,7 +613,7 @@ class ArxivSource(PaperSource):
                     "{}",
                 )
         except Exception as exc:
-            logger.warning("arXiv: failed to insert source_run_history: %s", exc)
+            logger.warning("arXiv: failed to insert source_run_history: %s", exc, exc_info=True)
 
     async def fetch_by_id(self, external_id: str) -> PaperCreate | None:
         """Fetch a single paper by arXiv ID.

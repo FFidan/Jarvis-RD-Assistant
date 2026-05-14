@@ -156,14 +156,6 @@ class ReviewResponse(BaseModel):
     review_log_id: int
 
 
-class GenerateCardsResponse(BaseModel):
-    """Response from card generation."""
-
-    cards_created: int
-    cards: list[CardResponse]
-    confidence: str = "MEDIUM"
-
-
 class RetentionStats(BaseModel):
     """Retention and review statistics."""
 
@@ -402,13 +394,6 @@ class FocusSessionResponse(BaseModel):
 
     status: str
     recorded_hours: float
-
-
-class StreakResponse(BaseModel):
-    """Response for GET /api/executive/streak (unused standalone; embedded in MyDayResponse)."""
-
-    focus_streak_days: int
-    today_focus_hours: float
 
 
 class MyDayTaskItem(BaseModel):

@@ -100,7 +100,8 @@ class Reranker:
             except Exception:
                 if _onnx_available:
                     logger.warning(
-                        "ONNX backend failed; retrying with PyTorch CPU for cross-encoder"
+                        "ONNX backend failed; retrying with PyTorch CPU for cross-encoder",
+                        exc_info=True,
                     )
                     self._model = cross_encoder_cls(self._model_name, device="cpu")
                     logger.info("Cross-encoder loaded on PyTorch/CPU: %s", self._model_name)

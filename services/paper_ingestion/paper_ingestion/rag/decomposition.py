@@ -7,7 +7,6 @@ enabling broader retrieval coverage across the paper collection.
 import logging
 from typing import Any
 
-import httpx
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_SHORT,
     ChatCompletionOptions,
@@ -25,7 +24,6 @@ __all__ = ["decompose_query"]
 @observe()
 async def decompose_query(
     question: str,
-    http_client: httpx.AsyncClient,
     *,
     model: str = "fast",
     openai_client: Any | None = None,
@@ -40,9 +38,6 @@ async def decompose_query(
     ----------
     question : str
         The user's original complex question.
-    http_client : httpx.AsyncClient
-        Kept for API compatibility; no longer used directly (calls go through
-        the Instructor-patched openai_client).
     model : str
         LLM model alias or name (default ``"fast"``).
     openai_client : AsyncOpenAI | None

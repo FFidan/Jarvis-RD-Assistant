@@ -234,7 +234,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
         async with pool.acquire() as conn:
             await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
         checks["postgres"] = "ok"
-    except Exception:
+    except Exception:  # Best-effort: health probe; status string captures failure
         checks["postgres"] = "unavailable"
 
     # Check LiteLLM
@@ -245,7 +245,7 @@ async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
         client: httpx.AsyncClient = request.app.state.http_client
         resp = await client.get(f"{litellm_config.base_url}/health/readiness", timeout=5.0)
         checks["litellm"] = "ok" if resp.status_code == 200 else "unavailable"
-    except Exception:
+    except Exception:  # Best-effort: health probe; status string captures failure
         checks["litellm"] = "unavailable"
 
     all_ok = all(v == "ok" for v in checks.values())

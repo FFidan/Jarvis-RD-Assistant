@@ -452,5 +452,6 @@ async def reload_litellm() -> bool:
         logger.warning(
             "Could not signal LiteLLM to reload — config will apply on next LiteLLM restart: %r",
             exc,
+            exc_info=True,
         )
     return False

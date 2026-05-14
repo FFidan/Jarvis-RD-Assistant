@@ -1,4 +1,4 @@
-from paper_ingestion.routers._sse import SSE_DONE, sse_event
+from jarvis_common.sse import SSE_DONE, sse_event
 
 
 def test_sse_event_basic():

@@ -515,6 +515,7 @@ class Embedder:
                     logger.error(
                         "Failed to clean up %d orphaned Qdrant points",
                         len(successfully_upserted),
+                        exc_info=True,
                     )
             raise
 
