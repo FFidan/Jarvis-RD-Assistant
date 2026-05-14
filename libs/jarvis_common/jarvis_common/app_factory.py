@@ -337,11 +337,18 @@ def configure_middleware_and_errors(
     # 3. CORSMiddleware
     if cors_origins is None:
         cors_origins = get_jarvis_common_settings().cors_origins_list
+    # allow_credentials=True is incompatible with allow_origins=["*"]
+    # (Starlette raises a warning and the browser rejects the response).
+    # When the caller explicitly passes ["*"] — or the env var is set to "*" —
+    # we omit the flag so the server at least returns a usable (non-credentialed)
+    # CORS response rather than an invalid one.
+    use_credentials = cors_origins != ["*"]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key"],
+        allow_credentials=use_credentials,
     )
 
     # 4. ProxyHeadersMiddleware -- outermost.

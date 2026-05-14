@@ -246,6 +246,8 @@ async def assert_paper_ownership(
     conn: asyncpg.Connection,
     paper_id: int,
     user_id: int | None,
+    *,
+    multitenant_enabled: bool = False,
 ) -> None:
     """Raise HTTPException if the caller does not own the paper.
 
@@ -269,6 +271,11 @@ async def assert_paper_ownership(
     user_id:
         The caller's user ID from ``current_user_id_or_none()``.
         ``None`` means single-user mode; all access is allowed.
+    multitenant_enabled:
+        When ``True`` (multi-tenant deployment), papers with
+        ``discovered_by IS NULL`` are *not* auto-granted — the caller must
+        have an explicit ``user_library`` membership.  Defaults to ``False``
+        to preserve single-tenant / canonical-corpus semantics.
     """
     if user_id is None:
         # Single-user mode: skip ownership check entirely.
@@ -282,8 +289,9 @@ async def assert_paper_ownership(
         raise HTTPException(status_code=404, detail="paper not found")
 
     # Sprint B: papers are canonical. Discovered-by-system (NULL) papers
-    # remain freely accessible (canonical-corpus semantics). For papers
-    # discovered by a user, library membership grants access.
+    # remain freely accessible in single-tenant mode (canonical-corpus
+    # semantics).  In multi-tenant mode, NULL discovered_by is NOT a free
+    # pass — the caller still needs library membership.
     # Defensive: tolerate fixtures that still expose the legacy ``user_id``
     # key while production rows ship with ``discovered_by``.
     discovered_by: int | None
@@ -294,7 +302,9 @@ async def assert_paper_ownership(
             discovered_by = row["user_id"]
         except (KeyError, IndexError):
             discovered_by = None
-    if discovered_by is None or str(discovered_by) == str(user_id):
+
+    # Fast-grant: same owner, OR NULL discovered_by in single-tenant mode.
+    if str(discovered_by) == str(user_id) or (discovered_by is None and not multitenant_enabled):
         return
 
     in_library = await conn.fetchval(
@@ -310,12 +320,20 @@ async def assert_papers_ownership(
     conn: asyncpg.Connection,
     paper_ids: list[int],
     user_id: int | None,
+    *,
+    multitenant_enabled: bool = False,
 ) -> None:
     """Raise HTTPException if the caller lacks access to any paper in *paper_ids*.
 
     Single-user/API-key-only mode keeps the legacy permissive behavior. In
     browser-authenticated mode this checks the whole batch at once so public
     batch job routes cannot enqueue work for another user's library entries.
+
+    Parameters
+    ----------
+    multitenant_enabled:
+        When ``True``, papers with ``discovered_by IS NULL`` are not
+        auto-granted and require an explicit ``user_library`` entry.
     """
     if user_id is None or not paper_ids:
         return
@@ -333,7 +351,9 @@ async def assert_papers_ownership(
     candidate_ids: list[int] = []
     for paper_id in unique_ids:
         discovered_by = by_id[paper_id]["discovered_by"]
-        if discovered_by is None or str(discovered_by) == str(user_id):
+        if str(discovered_by) == str(user_id) or (
+            discovered_by is None and not multitenant_enabled
+        ):
             continue
         candidate_ids.append(paper_id)
 

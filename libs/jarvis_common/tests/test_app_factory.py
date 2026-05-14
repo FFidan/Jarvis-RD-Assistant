@@ -72,6 +72,33 @@ class TestConfigureMiddleware:
         kwargs = cors_mw.kwargs if hasattr(cors_mw, "kwargs") else cors_mw.options
         assert kwargs["allow_origins"] == ["https://a.test", "https://b.test"]
 
+    def test_cors_middleware_allows_credentials_for_concrete_origins(self) -> None:
+        """allow_credentials=True when origins is a concrete list (not wildcard)."""
+        app = FastAPI()
+        configure_middleware_and_errors(
+            app,
+            limiter=create_limiter(),
+            cors_origins=["https://app.example.test"],
+        )
+
+        cors_mw = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+        kwargs = cors_mw.kwargs if hasattr(cors_mw, "kwargs") else cors_mw.options
+        assert kwargs.get("allow_credentials") is True
+
+    def test_cors_middleware_omits_credentials_for_wildcard_origins(self) -> None:
+        """allow_credentials must be False/absent when origins is [\"*\"] to stay spec-compliant."""
+        app = FastAPI()
+        configure_middleware_and_errors(
+            app,
+            limiter=create_limiter(),
+            cors_origins=["*"],
+        )
+
+        cors_mw = next(m for m in app.user_middleware if m.cls is CORSMiddleware)
+        kwargs = cors_mw.kwargs if hasattr(cors_mw, "kwargs") else cors_mw.options
+        # allow_credentials must not be True when origins is wildcard.
+        assert kwargs.get("allow_credentials") is not True
+
 
 # ---------------------------------------------------------------------------
 # configure_lifespan -- custom hooks ordering
