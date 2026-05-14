@@ -151,7 +151,7 @@ export function App() {
       <FirstRunGate>
         <Routes>
           {/* WS-2F: pre-auth wizard — reachable even with no session, by design. */}
-          <Route path="/first-run" element={<RouteErrorBoundary><FirstRunSetupPage /></RouteErrorBoundary>} />
+          <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />
           {/* Magic-link landing must be reachable without an existing session — */}
           {/* it's the page that CREATES the session. */}
           <Route path="/auth/verify" element={<RouteErrorBoundary><AuthVerifyPage /></RouteErrorBoundary>} />
@@ -168,11 +168,11 @@ export function App() {
         <NavigateBridgeRegistrar />
         <PomodoroAutoLogger />
         <Routes>
-          <Route path="/setup" element={<RouteErrorBoundary><SetupWizard /></RouteErrorBoundary>} />
+          <Route path="/setup" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SetupWizard /></Suspense></RouteErrorBoundary>} />
           {/* WS-2F: when an authed-but-stale session lingers on an unconfigured */}
           {/* install, FirstRunGate redirects to /first-run; this route renders */}
           {/* the wizard outside of AppShell so the user can complete setup. */}
-          <Route path="/first-run" element={<RouteErrorBoundary><FirstRunSetupPage /></RouteErrorBoundary>} />
+          <Route path="/first-run" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><FirstRunSetupPage /></Suspense></RouteErrorBoundary>} />
           <Route
             path="*"
             element={
@@ -182,15 +182,15 @@ export function App() {
                   <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
                   <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
-                  <Route path="logs" element={<RouteErrorBoundary><AdminOnlyRoute><LogsPage /></AdminOnlyRoute></RouteErrorBoundary>} />
-                  <Route path="admin/users" element={<RouteErrorBoundary><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></RouteErrorBoundary>} />
+                  <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><LogsPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
+                  <Route path="admin/users" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><ResearchFeedPage /></RouteErrorBoundary>} />
                   <Route path="ask" element={<Navigate to="/feed?surface=ask" replace />} />
                   <Route path="pulse" element={<RouteErrorBoundary><PulseDeckPage /></RouteErrorBoundary>} />
-                  <Route path="paper/:paperId" element={<RouteErrorBoundary><PaperDetailPage /></RouteErrorBoundary>} />
+                  <Route path="paper/:paperId" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><PaperDetailPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="citations" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><CitationGraphPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="knowledge" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><KnowledgeGraphPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="*" element={<RouteErrorBoundary><NotFoundPage /></RouteErrorBoundary>} />

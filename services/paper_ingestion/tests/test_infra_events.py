@@ -160,3 +160,22 @@ def test_context_none_becomes_empty_dict(app_and_pool):
     rows = conn.executemany.call_args[0][1]
     assert rows[0][4] == {}
     assert isinstance(rows[0][4], dict)
+
+
+def test_check_auth_uses_compare_digest(app_and_pool, monkeypatch):
+    """_check_auth must delegate equality to hmac.compare_digest (CWE-208 timing safety)."""
+    app, _pool, conn = app_and_pool
+
+    import paper_ingestion.routers.infra_events as infra_events_mod
+
+    mock_cd = MagicMock(return_value=True)
+    monkeypatch.setattr(infra_events_mod.hmac, "compare_digest", mock_cd)
+
+    client = TestClient(app)
+    client.post(
+        "/infra-events",
+        json=[{"source": "x", "message": "y"}],
+        headers={"X-Infra-Key": "test-infra-secret"},
+    )
+
+    mock_cd.assert_called_once_with(b"test-infra-secret", b"test-infra-secret")

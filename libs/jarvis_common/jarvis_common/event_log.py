@@ -1,6 +1,5 @@
 """Explicit semantic event logging into system_events."""
 
-import json
 import logging
 import uuid
 from typing import Literal
@@ -35,7 +34,7 @@ async def log_event(
                 category,
                 source,
                 message,
-                json.dumps(context or {}),
+                context or {},
                 correlation_id,
             )
     except (asyncpg.PostgresError, OSError) as exc:

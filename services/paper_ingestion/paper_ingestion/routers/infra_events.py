@@ -11,6 +11,7 @@ isn't shared with infrastructure tooling.
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 from pathlib import Path
@@ -52,7 +53,7 @@ def _check_auth(provided: str | None) -> None:
         # No key configured: refuse all writes. The Vector sidecar should
         # not be running without a key.
         raise HTTPException(status_code=503, detail="infra ingest disabled")
-    if provided != expected:
+    if not hmac.compare_digest((provided or "").encode(), expected.encode()):
         raise HTTPException(status_code=403, detail="invalid infra ingest key")
 
 

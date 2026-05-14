@@ -208,9 +208,9 @@ async def test_upsert_journal_entry_passes_raw_dict_not_json_string():
         f"got {type(prompts_param).__name__!r}: {prompts_param!r}"
     )
     assert prompts_param == {"first_move": "Regression guard"}
-    assert prompts_param != json.dumps({"first_move": "Regression guard"}), (
-        "H2 regression: upsert_journal_entry is double-encoding the JSONB value"
-    )
+    assert prompts_param != json.dumps(  # nolint:jsonb-double-encode
+        {"first_move": "Regression guard"}
+    ), "H2 regression: upsert_journal_entry is double-encoding the JSONB value"
 
 
 # ---------------------------------------------------------------------------

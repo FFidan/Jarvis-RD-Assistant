@@ -55,13 +55,14 @@ async def test_log_event_inserts_row_with_all_fields():
 
     conn.execute.assert_awaited_once()
     call_args = conn.execute.call_args
-    # Positional args after the SQL string: level, category, source, message, context_json, correlation_id
+    # Positional args after the SQL string: level, category, source, message, context (dict), correlation_id
     _, pos_args = call_args[0][0], call_args[0][1:]
     assert pos_args[0] == "error"
     assert pos_args[1] == "auth"
     assert pos_args[2] == "test.module"
     assert pos_args[3] == "something failed"
-    assert '"key": "value"' in pos_args[4]
+    # asyncpg JSONB codec handles serialisation — context is passed as a plain dict, NOT json.dumps()
+    assert pos_args[4] == {"key": "value"}  # nolint:jsonb-double-encode
     assert pos_args[5] == test_uuid
 
 

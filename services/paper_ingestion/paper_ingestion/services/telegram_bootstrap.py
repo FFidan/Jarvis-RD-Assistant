@@ -81,7 +81,7 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
         return
 
     # Pass the dict directly — asyncpg's JSONB codec handles serialisation.
-    # json.dumps() here would double-encode the value. (WEB-C01)
+    # json.dumps() here would double-encode the value. (WEB-C01)  # nolint:jsonb-double-encode
     cache_value = {"username": username, "set_at": now.isoformat()}
     try:
         async with db_pool.acquire() as conn:

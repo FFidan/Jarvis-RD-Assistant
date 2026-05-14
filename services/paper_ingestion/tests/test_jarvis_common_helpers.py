@@ -77,7 +77,7 @@ async def test_dynamic_update_serializes_jsonb_and_extra_sets():
     params = conn.fetchrow.await_args.args[1:]
 
     assert 'UPDATE "user_config" SET "value" = $2::jsonb, updated_at = NOW()' in sql
-    # JC-001 fix: asyncpg codec handles serialisation — raw dict is passed, NOT json.dumps()
+    # JC-001 fix: asyncpg codec handles serialisation — raw dict is passed, NOT json.dumps()  # nolint:jsonb-double-encode
     assert params == (7, {"enabled": True})
     assert row == {"id": 7, "config": {"enabled": True}}
 

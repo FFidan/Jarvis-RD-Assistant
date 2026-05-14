@@ -310,7 +310,7 @@ async def test_autoconfigure_models_hook_stores_bare_string_not_double_encoded()
     for c in llm_inserts:
         # args[2] is the value parameter ($2::jsonb).
         value_arg = c.args[2]
-        # Must be a plain Python str — NOT the result of json.dumps(str)
+        # Must be a plain Python str — NOT the result of json.dumps(str)  # nolint:jsonb-double-encode
         # which would look like '"mistral-nemo"' (starts and ends with a quote).
         assert isinstance(value_arg, str), f"Expected str, got {type(value_arg)}"
         assert not (value_arg.startswith('"') and value_arg.endswith('"')), (

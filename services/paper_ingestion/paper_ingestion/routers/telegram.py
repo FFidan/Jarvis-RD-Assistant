@@ -194,7 +194,7 @@ async def get_pairing_status(
     if value is None:
         return PairingStatus(paired=False, chat_id=None)
     # Defensive: tolerate the literal string "null" which may appear if a
-    # caller wrote json.dumps(None) via an older code path.
+    # caller wrote json.dumps(None) via an older code path.  # nolint:jsonb-double-encode
     if isinstance(value, str) and value.lower() == "null":
         return PairingStatus(paired=False, chat_id=None)
     if isinstance(value, int) and not isinstance(value, bool):
