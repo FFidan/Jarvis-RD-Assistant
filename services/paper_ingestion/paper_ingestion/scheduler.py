@@ -39,7 +39,7 @@ async def _is_pulse_enabled(db_pool: Any) -> bool:
                 "SELECT value FROM user_config WHERE key = 'pulse.enabled' AND user_id IS NULL"
             )
     except Exception:
-        logger.exception("pulse: failed to read pulse.enabled config", exc_info=True)
+        logger.exception("pulse: failed to read pulse.enabled config")
         return False
     if row is None:
         return False

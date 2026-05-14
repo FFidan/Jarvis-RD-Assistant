@@ -204,6 +204,63 @@ describe('FeedPaperRow', () => {
   });
 });
 
+// DOM-F-02 (regression): stable onHardDelete — FeedPaperRow must be memo'd and
+// accept a stable onHardDelete reference without re-rendering.
+describe('FeedPaperRow onHardDelete stable callback (DOM-F-02 regression)', () => {
+  it('FeedPaperRow is memo-wrapped so a stable onHardDelete does not trigger spurious re-renders', () => {
+    // Strategy: use a memo-wrapped spy that delegates to FeedPaperRow.
+    // React.memo compares props by reference. If FeedPaperRow's own memo layer
+    // were absent, the inner body would run on every parent re-render regardless.
+    // Here we directly confirm:
+    //   1. FeedPaperRow carries $$typeof === Symbol(react.memo)
+    //   2. With identical prop references the DOM is stable across rerenders
+    //
+    // (A render-count spy on the inner function requires vi.spyOn on a named export
+    // which is not available for the default memo pattern; the $$typeof check + DOM
+    // stability is the canonical vitest approach.)
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const stablePaper: FeedPaper = { ...paper, id: 300, title: 'Stable Memo Row', state: 'trash' };
+    const stableOnHardDelete = vi.fn();
+
+    // Confirm structural guarantee first.
+    // eslint-disable-next-line react/display-name
+    function Probe() { return null; }
+    const memoType = (React.memo(Probe) as unknown as { $$typeof: symbol }).$$typeof;
+    const rowType = (FeedPaperRow as unknown as { $$typeof: symbol }).$$typeof;
+    expect(rowType).toBe(memoType);
+
+    // DOM stability: re-rendering with the same prop references must not change DOM.
+    const { rerender } = render(
+      React.createElement(
+        QueryClientProvider,
+        { client },
+        React.createElement(FeedPaperRow, {
+          paper: stablePaper,
+          onHardDelete: stableOnHardDelete,
+        }),
+      ),
+    );
+
+    rerender(
+      React.createElement(
+        QueryClientProvider,
+        { client },
+        React.createElement(FeedPaperRow, {
+          paper: stablePaper,
+          onHardDelete: stableOnHardDelete,
+        }),
+      ),
+    );
+
+    // Title still present — confirms no unexpected unmount or crash.
+    expect(screen.getAllByText('Stable Memo Row').length).toBeGreaterThanOrEqual(1);
+  });
+});
+
 // DOM-F-02: verify FeedPaperRow is wrapped in React.memo so unrelated rows do
 // not re-render when sibling state changes.
 describe('FeedPaperRow memoization', () => {

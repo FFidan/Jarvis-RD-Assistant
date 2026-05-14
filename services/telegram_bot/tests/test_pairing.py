@@ -18,6 +18,7 @@ import re
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
@@ -424,6 +425,74 @@ async def test_pair_rebound_stale_prior_chat_does_not_fail_new_pairing():
     update.message.reply_text.assert_awaited_once()
     reply = update.message.reply_text.call_args[0][0]
     assert "Paired" in reply
+
+
+# ---------------------------------------------------------------------------
+# Finding 3.12/3.14: UPSERT SQL must use CTE to capture pre-update chat_id
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pair_upsert_sql_uses_cte_for_prior_chat_id():
+    """The UPSERT SQL must contain WITH prev AS … so prior_chat_id is the
+    PRE-update value, not the post-update value that always equals the new
+    chat_id (making the rebound branch permanently dead).
+    """
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    conn = _make_conn()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"user_id": 10, "expires_at": future, "consumed_at": None},
+            {"was_update": False, "prior_chat_id": None},
+        ]
+    )
+    pool = _make_pool(conn)
+    update = _make_update(chat_id=9999, username="user1")
+    context = _make_context(pool, args=["ctetoken"])
+
+    await pair_command(update, context)
+
+    # Verify the UPSERT call (second fetchrow) uses the CTE pattern.
+    assert conn.fetchrow.await_count == 2
+    upsert_sql: str = conn.fetchrow.await_args_list[1].args[0]
+    assert "WITH prev AS" in upsert_sql, (
+        f"UPSERT SQL must use 'WITH prev AS' CTE to capture pre-update chat_id; got:\n{upsert_sql}"
+    )
+    assert "(SELECT chat_id FROM prev)" in upsert_sql, (
+        "UPSERT RETURNING must reference (SELECT chat_id FROM prev)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Finding N1: UNIQUE(chat_id) violation — chat already paired to another user
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pair_chat_already_paired_to_another_account():
+    """If chat_id is already paired to user A and user B tries to pair the same
+    chat, asyncpg raises UniqueViolationError.  The handler must catch it and
+    reply with a clear 'already paired' message rather than a generic error.
+    """
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    conn = _make_conn()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"user_id": 20, "expires_at": future, "consumed_at": None},
+            asyncpg.UniqueViolationError("duplicate key value violates unique constraint"),
+        ]
+    )
+    pool = _make_pool(conn)
+    update = _make_update(chat_id=5555, username="userB")
+    context = _make_context(pool, args=["tokenB"])
+
+    await pair_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "already paired" in text.lower() or "another account" in text.lower(), (
+        f"Expected 'already paired' message for UniqueViolationError, got: {text!r}"
+    )
 
 
 # ---------------------------------------------------------------------------

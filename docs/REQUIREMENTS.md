@@ -94,7 +94,7 @@ respx>=0.21.0                # Mock httpx for async tests
 | Ollama | `ollama/ollama:0.17.7` | Local LLM inference (GPU recommended) |
 | Ollama Bootstrap | Custom init container | One-shot model pull for Ollama (runs before ollama service starts) |
 | Qdrant | `qdrant/qdrant:v1.13.2` | Vector store for paper chunk embeddings |
-| LiteLLM | `docker.litellm.ai/berriai/litellm:main-stable` | Unified LLM gateway (pull_policy: never) |
+| LiteLLM | `docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5` | Unified LLM gateway (pull_policy: never) |
 | React dashboard | `nginx:alpine` (built from `frontend/`) | Web dashboard (container port 3000; current Compose host binding 3001) |
 
 ## External APIs (free, no key required for basic usage)

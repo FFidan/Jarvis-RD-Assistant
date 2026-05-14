@@ -38,9 +38,24 @@ async def _run_briefing_for_chat(
         DB user PK for scoping paper queries. None = single-tenant (matches NULL rows).
     """
     async with db_pool.acquire() as conn:
-        row = await conn.fetchrow(
-            "SELECT COUNT(*) as count FROM papers WHERE created_at >= NOW() - INTERVAL '24 hours'"
-        )
+        # New papers in the last 24 hours — scoped to the user's library when
+        # user_id is set (Sprint B canonical-corpus model: membership lives in
+        # user_library, not papers.user_id).  Falls back to a sitewide count
+        # for legacy single-tenant mode (user_id=None).
+        if user_id is not None:
+            row = await conn.fetchrow(
+                """SELECT COUNT(*) AS count
+                   FROM papers p
+                   JOIN user_library ul ON ul.paper_id = p.id
+                   WHERE ul.user_id = $1
+                     AND p.created_at >= NOW() - INTERVAL '24 hours'""",
+                user_id,
+            )
+        else:
+            row = await conn.fetchrow(
+                "SELECT COUNT(*) AS count FROM papers"
+                " WHERE created_at >= NOW() - INTERVAL '24 hours'"
+            )
         new_papers_count = row["count"] if row else 0
 
         # In-progress tasks — scoped by user_id when available
@@ -65,14 +80,28 @@ async def _run_briefing_for_chat(
                 LIMIT 10"""
             )
 
-        # Upcoming milestones (next 7 days)
-        milestones = await conn.fetch(
-            """SELECT m.name, m.deadline, p.name as project_name
-            FROM milestones m
-            LEFT JOIN projects p ON m.project_id = p.id
-            WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'
-            ORDER BY m.deadline"""
-        )
+        # Upcoming milestones (next 7 days) — scoped to the user's milestones
+        # via milestones.user_id (migration 066).  NULL milestones are system-
+        # shared and visible to all users in single-tenant mode.
+        if user_id is not None:
+            milestones = await conn.fetch(
+                """SELECT m.name, m.deadline, p.name as project_name
+                FROM milestones m
+                LEFT JOIN projects p ON m.project_id = p.id
+                WHERE m.completed = FALSE
+                  AND m.deadline <= NOW() + INTERVAL '7 days'
+                  AND m.user_id IS NOT DISTINCT FROM $1
+                ORDER BY m.deadline""",
+                user_id,
+            )
+        else:
+            milestones = await conn.fetch(
+                """SELECT m.name, m.deadline, p.name as project_name
+                FROM milestones m
+                LEFT JOIN projects p ON m.project_id = p.id
+                WHERE m.completed = FALSE AND m.deadline <= NOW() + INTERVAL '7 days'
+                ORDER BY m.deadline"""
+            )
 
     # Due cards from learning engine
     due_cards = 0

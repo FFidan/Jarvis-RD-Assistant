@@ -92,10 +92,24 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     # Release the connection before the HTTP call to the embedder.
     # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
-        # 1. Topics
-        topic_rows = await conn.fetch(
-            "SELECT id, name, description, query_terms FROM topics ORDER BY name"
-        )
+        # 1. Topics — scoped to the user's subscriptions when user_id is set
+        # (migration 074: user_topic_subscriptions is the per-user subscription
+        # table; topics itself is a global catalogue with no user_id column).
+        # In single-tenant / system mode (user_id=None) all topics are returned
+        # to preserve the pre-Sprint-A behaviour.
+        if user_id is not None:
+            topic_rows = await conn.fetch(
+                """SELECT t.id, t.name, t.description, t.query_terms
+                   FROM topics t
+                   JOIN user_topic_subscriptions uts ON uts.topic_id = t.id
+                   WHERE uts.user_id = $1
+                   ORDER BY t.name""",
+                user_id,
+            )
+        else:
+            topic_rows = await conn.fetch(
+                "SELECT id, name, description, query_terms FROM topics ORDER BY name"
+            )
         topics = [
             TopicRef(
                 id=r["id"],
@@ -106,9 +120,15 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
             for r in topic_rows
         ]
 
-        # 2. Tracked author identifiers — split into names (lowercased) and S2 IDs
+        # 2. Tracked author identifiers — scoped to the user when user_id is set
+        # (migration 070 added user_id to tracked_authors).  NULL rows are
+        # system-shared and included in single-tenant mode (user_id=None).
         author_rows = await conn.fetch(
-            "SELECT author_name, s2_author_id FROM tracked_authors WHERE enabled = TRUE"
+            """SELECT author_name, s2_author_id
+               FROM tracked_authors
+               WHERE enabled = TRUE
+                 AND user_id IS NOT DISTINCT FROM $1""",
+            user_id,
         )
         tracked_author_names: set[str] = set()
         tracked_author_s2_ids: set[str] = set()

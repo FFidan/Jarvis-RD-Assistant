@@ -225,6 +225,20 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes }: Fe
   const onUnstarCb = useCallback((id: number) => unstarMutation.mutate(id), [unstarMutation]);
   const onRestoreCb = useCallback((id: number) => restoreMutation.mutate(id), [restoreMutation]);
 
+  // DOM-F-02 (onHardDelete): stable callback — avoids inline arrow that creates a new
+  // function reference every parent render and defeats React.memo on FeedPaperRow.
+  // We keep a ref to the latest `papers` array so the callback can look up the
+  // title at click time without being included in the dependency array.
+  const papersRef = useRef(papers);
+  useEffect(() => { papersRef.current = papers; }, [papers]);
+  const onHardDeleteCb = useCallback(
+    (id: number) => {
+      const p = papersRef.current.find((r) => r.id === id);
+      if (p) openHardDelete(id, p.title);
+    },
+    [openHardDelete],
+  );
+
   // ── Keyboard shortcuts (j/k navigation + surface-aware row actions) ───────
 
   // Clamp focusedIdx to valid range so the hook always gets a valid index or null
@@ -329,7 +343,7 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes }: Fe
                 onStar={onStarCb}
                 onUnstar={onUnstarCb}
                 onRestore={onRestoreCb}
-                onHardDelete={(id) => openHardDelete(id, paper.title)}
+                onHardDelete={onHardDeleteCb}
                 onView={onView}
                 viewLabel="View Details"
               />

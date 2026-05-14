@@ -203,6 +203,9 @@ export function AdminUsersPage() {
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
   const [pendingRoleUserId, setPendingRoleUserId] = useState<number | null>(null);
+  // DOM-F-07 (delete): track which specific user's delete is in-flight so only
+  // that row's button is disabled, not all rows (same pattern as pendingRoleUserId).
+  const [pendingDeleteUserId, setPendingDeleteUserId] = useState<number | null>(null);
 
   const { data: users, isLoading, isError } = useQuery({
     queryKey: ['admin', 'users'],
@@ -230,13 +233,18 @@ export function AdminUsersPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (userId: number) => deleteUser(userId),
+    mutationFn: (userId: number) => {
+      setPendingDeleteUserId(userId);
+      return deleteUser(userId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       setPendingDelete(null);
+      setPendingDeleteUserId(null);
     },
     onError: () => {
       setPendingDelete(null);
+      setPendingDeleteUserId(null);
     },
   });
 
@@ -335,7 +343,7 @@ export function AdminUsersPage() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                      disabled={isSelf || deleteMutation.isPending}
+                      disabled={isSelf || pendingDeleteUserId === user.id}
                       onClick={() => setPendingDelete(user)}
                       aria-label={`Remove ${user.email}`}
                       title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}

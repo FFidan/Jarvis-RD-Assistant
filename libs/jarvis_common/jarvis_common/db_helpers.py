@@ -276,6 +276,10 @@ async def assert_paper_ownership(
         ``discovered_by IS NULL`` are *not* auto-granted — the caller must
         have an explicit ``user_library`` membership.  Defaults to ``False``
         to preserve single-tenant / canonical-corpus semantics.
+
+        **Stub status (audit 3.5):** production callers currently pass the
+        default (``False``) — the multi-tenant NULL-discovered_by tightening
+        is opt-in for tests + future migration. See audit finding 3.5.
     """
     if user_id is None:
         # Single-user mode: skip ownership check entirely.
@@ -334,6 +338,10 @@ async def assert_papers_ownership(
     multitenant_enabled:
         When ``True``, papers with ``discovered_by IS NULL`` are not
         auto-granted and require an explicit ``user_library`` entry.
+
+        **Stub status (audit 3.5):** production callers currently pass the
+        default (``False``) — the multi-tenant NULL-discovered_by tightening
+        is opt-in for tests + future migration. See audit finding 3.5.
     """
     if user_id is None or not paper_ids:
         return

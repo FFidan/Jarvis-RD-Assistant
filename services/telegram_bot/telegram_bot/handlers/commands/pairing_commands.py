@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+import asyncpg
 from jarvis_common.event_log import log_event
 from telegram import Update
 from telegram.ext import ContextTypes
@@ -103,19 +104,30 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 # Upsert the pairing — one row per user_id, UNIQUE on chat_id.
                 # RETURNING lets us detect whether an existing row was displaced
                 # (rebound) so we can audit-log and notify the prior chat.
+                #
+                # The CTE captures the PRE-update chat_id before the UPSERT
+                # executes.  Without it, the subquery in RETURNING would see the
+                # POST-INSERT value (always == the new chat_id), making the
+                # rebound branch permanently dead.
                 upsert_row = await conn.fetchrow(
-                    """INSERT INTO telegram_user_pairings
+                    """
+                    WITH prev AS (
+                        SELECT chat_id
+                        FROM telegram_user_pairings
+                        WHERE user_id = $1
+                        FOR UPDATE
+                    )
+                    INSERT INTO telegram_user_pairings
                            (user_id, chat_id, telegram_username, paired_at)
-                       VALUES ($1, $2, $3, NOW())
-                       ON CONFLICT (user_id) DO UPDATE
-                           SET chat_id = EXCLUDED.chat_id,
-                               telegram_username = EXCLUDED.telegram_username,
-                               paired_at = NOW()
-                       RETURNING
-                           (xmax <> 0)          AS was_update,
-                           (SELECT p.chat_id
-                            FROM telegram_user_pairings p
-                            WHERE p.user_id = $1)  AS prior_chat_id""",
+                    VALUES ($1, $2, $3, NOW())
+                    ON CONFLICT (user_id) DO UPDATE
+                        SET chat_id = EXCLUDED.chat_id,
+                            telegram_username = EXCLUDED.telegram_username,
+                            paired_at = NOW()
+                    RETURNING
+                        (xmax <> 0)              AS was_update,
+                        (SELECT chat_id FROM prev) AS prior_chat_id
+                    """,
                     user_id,
                     chat.id,
                     telegram_username,
@@ -174,6 +186,18 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text(
             "✅ Paired! You'll now receive personalised JARVIS notifications here.\n\n"
             "Use /whoami to confirm your pairing.",
+        )
+    except asyncpg.UniqueViolationError:
+        # migration 071 adds UNIQUE(chat_id) on telegram_user_pairings.
+        # If user B tries to pair a chat already owned by user A, the INSERT
+        # ON CONFLICT (user_id) path still violates the chat_id unique constraint.
+        logger.warning(
+            "Pairing rejected: chat_id=%d is already paired to another account",
+            chat.id,
+        )
+        await message.reply_text(
+            "This chat is already paired to another account.\n"
+            "Have the previous owner /unpair first, then try again."
         )
     except Exception:
         logger.exception("Error completing Telegram pairing for chat_id=%d", chat.id)
