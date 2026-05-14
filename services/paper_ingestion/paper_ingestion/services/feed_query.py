@@ -73,15 +73,6 @@ _BASE_FROM_CORPUS_USER = (
     " ON pr.paper_id = p.id AND pr.dismissed = FALSE"
     " AND pr.user_id IS NOT DISTINCT FROM $1"
 )
-_BASE_FROM_NO_USER = (
-    " FROM papers p"
-    " LEFT JOIN paper_summaries ps ON p.id = ps.paper_id"
-    " LEFT JOIN paper_user_state pus"
-    " ON p.id = pus.paper_id AND pus.user_id IS NULL"
-    " LEFT JOIN paper_recommendations pr"
-    " ON pr.paper_id = p.id AND pr.dismissed = FALSE"
-    " AND pr.user_id IS NULL"
-)
 
 
 @dataclass(slots=True)
@@ -153,9 +144,13 @@ def build_feed_queries(
     # always reserved for user_id so downstream parameter numbering matches
     # historical expectations (and the LEFT JOIN onto paper_user_state still
     # binds against $1).
-    if user_id is None:
-        base_from = _BASE_FROM_NO_USER
-    elif scope == "corpus":
+    if user_id is None or scope == "corpus":
+        # _BASE_FROM_CORPUS_USER binds user_id to $1 via IS NOT DISTINCT FROM $1
+        # which evaluates to IS NULL when user_id is NULL — semantically identical
+        # to the old _BASE_FROM_NO_USER literal. Keeping the $1 reference also
+        # gives asyncpg/Postgres a type to resolve from `pus.user_id` (integer);
+        # without it, an unused $1=NULL raised IndeterminateDatatypeError when
+        # the SQL had only $2 LIMIT / $3 OFFSET refs.
         base_from = _BASE_FROM_CORPUS_USER
     else:
         base_from = _BASE_FROM_USER

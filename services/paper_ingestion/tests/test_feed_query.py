@@ -245,3 +245,43 @@ def test_build_feed_queries_no_user_id_uses_canonical_corpus_fallback():
 
     assert "JOIN user_library" not in query_parts.data_query
     assert " FROM papers p" in query_parts.data_query
+
+
+def test_build_feed_queries_params_align_with_placeholders_when_user_id_none():
+    """Regression: every $N referenced in the SQL must have a matching param.
+
+    Bug: when user_id=None and no filters were set, the SQL ended up with
+    only $LIMIT / $OFFSET placeholders but params still contained an
+    unused leading None (intended for $1). asyncpg's prepare step then
+    raised IndeterminateDatatypeError: could not determine data type of
+    parameter $1, returning 500 on every plain GET /api/papers/feed.
+
+    The fix uses _BASE_FROM_CORPUS_USER (which DOES reference $1 via
+    IS NOT DISTINCT FROM $1) so $1's type is resolvable from pus.user_id.
+    This test asserts the contract directly: the SQL must reference every
+    parameter index from 1..N where N == len(params).
+    """
+    import re
+
+    query_parts = build_feed_queries(
+        unread_only=False,
+        sort="discovered_at",
+        limit=5,
+        offset=0,
+        q=None,
+        statuses=None,
+        source_types=None,
+        topic_names=None,
+        date_from=None,
+        date_to=None,
+        user_id=None,
+    )
+
+    referenced = {int(m) for m in re.findall(r"\$(\d+)", query_parts.data_query)}
+    n_params = len(query_parts.params)
+    assert referenced == set(range(1, n_params + 1)), (
+        f"SQL references {sorted(referenced)} but params has {n_params} entries. "
+        f"Every $N from 1..{n_params} must appear in the SQL exactly when the "
+        f"params list has N entries; unused params cause asyncpg "
+        f"IndeterminateDatatypeError."
+    )

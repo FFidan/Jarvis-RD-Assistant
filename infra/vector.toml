@@ -7,11 +7,16 @@ enabled = false
 
 [sources.docker_logs]
 type = "docker_logs"
+# Whitelist: only tail containers from this compose project. Without this,
+# Vector tails EVERY container on the docker daemon, including sibling
+# projects (e.g. deploy-*, claude-ollama, codeboarding-*) — 50%+ of recent
+# system_events volume came from those before this filter was added.
+include_containers = [
+  "jarvis_rd_assistant-",  # prefix match: every service from this compose project
+  "jarvis_caddy_local",    # reverse proxy (separate container name)
+]
 exclude_containers = [
-  "vector",                       # don't capture our own logs
-  "jarvis_paper_ingestion",       # app emits via SystemEventHandler instead
-  "jarvis_learning_engine",
-  "jarvis_telegram_bot",
+  "jarvis_vector",         # don't tail ourselves
 ]
 
 # --- Transforms ---

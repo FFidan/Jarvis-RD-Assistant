@@ -110,4 +110,4 @@ profile:
 
 ## Boot the local stack with profiling-only Postgres/ptrace overrides.
 profile-stack-up:
-	$(COMPOSE_PERF) up -d postgres paper_ingestion dashboard
+	$(COMPOSE_PERF) up -d --no-deps postgres paper_ingestion dashboard

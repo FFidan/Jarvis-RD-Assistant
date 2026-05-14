@@ -124,9 +124,9 @@ def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG
     without a key configured), returns ``{}`` so that loopback-only enforcement
     still protects the endpoint.
     """
-    from jarvis_common.settings import SecretsSettings  # noqa: PLC0415 — lazy to avoid cycles
+    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415 — lazy to avoid cycles
 
-    secret = SecretsSettings().litellm_master_key
+    secret = get_secrets_settings().litellm_master_key
     master_key = secret.get_secret_value() if secret else ""
     if master_key:
         return {"Authorization": f"Bearer {master_key}"}

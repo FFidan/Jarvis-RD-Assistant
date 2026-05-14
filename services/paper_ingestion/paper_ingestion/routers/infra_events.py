@@ -106,7 +106,7 @@ async def ingest_infra_events(
             "infra",
             e.source[:200],
             e.message[:65535],
-            json.dumps(e.context or {}),
+            e.context or {},
             None,  # correlation_id — infra events don't carry one
         )
         for e in events
