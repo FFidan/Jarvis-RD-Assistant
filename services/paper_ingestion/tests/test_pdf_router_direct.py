@@ -395,6 +395,84 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
 
 
 # ---------------------------------------------------------------------------
+# H10: batch_process_papers must scope to user_library when user_id is set
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_batch_process_papers_scopes_to_user_library(tmp_path, monkeypatch):
+    """batch_process_papers must only process papers in the caller's user_library.
+
+    H10 audit finding: when user_id is not None the SQL must JOIN user_library
+    so that user A cannot trigger re-embedding of the whole corpus.
+
+    Setup: corpus has 5 downloaded papers; user A owns 2 of them.
+    The conn.fetch mock returns only those 2 rows (simulating the JOIN).
+    We assert:
+      - conn.fetch was called with a query that contains 'user_library'
+      - only 2 papers were queued
+      - the defer call carries user_id=7
+    """
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+
+    # Two PDFs that belong to user A
+    pdf_a = storage_dir / "20.pdf"
+    pdf_a.write_bytes(b"%PDF-1.7\nuser_a_paper")
+    pdf_b = storage_dir / "21.pdf"
+    pdf_b.write_bytes(b"%PDF-1.7\nuser_a_paper_2")
+
+    # conn.fetch simulates the DB returning only user A's 2 papers
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {"id": 20, "pdf_local_path": str(pdf_a)},
+        {"id": 21, "pdf_local_path": str(pdf_b)},
+    ]
+    pool = _make_pool(conn)
+    request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
+
+    monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=7))
+
+    fake_uuid = "job-scoped-123"
+    mock_defer = AsyncMock()
+
+    from unittest.mock import patch as mock_patch  # noqa: PLC0415
+
+    import jarvis_common.task_registry as task_registry
+
+    mock_task_bp = MagicMock()
+    mock_task_bp.defer_async = mock_defer
+    with (
+        mock_patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task_bp}),
+        mock_patch("uuid.uuid4", return_value=fake_uuid),
+    ):
+        result = await pdf.batch_process_papers.__wrapped__(
+            request,
+            limit=10,
+            force=False,
+            db_pool=pool,
+        )
+
+    # Only the 2 user-library papers should have been queued
+    assert result["queued"] == 2
+    assert result["total_unprocessed"] == 2
+    assert result["skipped_missing_pdf"] == 0
+    assert result["job_id"] == fake_uuid
+
+    # The SQL sent to the DB must include user_library JOIN
+    fetch_call_sql = conn.fetch.await_args_list[0].args[0]
+    assert "user_library" in fetch_call_sql, (
+        "batch_process_papers must JOIN user_library when user_id is set"
+    )
+
+    # user_id must be threaded to the job
+    mock_defer.assert_awaited_once_with(
+        job_id=fake_uuid, user_id=7, paper_ids=[20, 21], force=False
+    )
+
+
+# ---------------------------------------------------------------------------
 # PI-015: upload_pdf atomicity — dangling-file rollback on UPDATE failure
 # ---------------------------------------------------------------------------
 

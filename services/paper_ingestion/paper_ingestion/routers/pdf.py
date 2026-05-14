@@ -390,6 +390,11 @@ async def batch_process_papers(
     When ``force=True``, includes ALL papers with downloaded PDFs (even those
     already processed), allowing re-extraction with updated models.
 
+    In multi-user mode (``user_id`` is not None), only papers present in the
+    caller's ``user_library`` are eligible — preventing cross-user data touch
+    and DoS amplification via the full corpus.  In single-tenant mode
+    (``user_id`` is None) the original full-corpus behaviour is preserved.
+
     Parameters
     ----------
     limit : int
@@ -408,31 +413,62 @@ async def batch_process_papers(
 
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        if force:
-            rows = await conn.fetch(
-                """
-                SELECT p.id, p.pdf_local_path FROM papers p
-                WHERE p.pdf_downloaded = TRUE
-                  AND p.pdf_local_path IS NOT NULL
-                ORDER BY p.id
-                LIMIT $1
-                """,
-                limit,
-            )
+        if user_id is not None:
+            if force:
+                rows = await conn.fetch(
+                    """
+                    SELECT p.id, p.pdf_local_path FROM papers p
+                    JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
+                    WHERE p.pdf_downloaded = TRUE
+                      AND p.pdf_local_path IS NOT NULL
+                    ORDER BY p.id
+                    LIMIT $1
+                    """,
+                    limit,
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT p.id, p.pdf_local_path FROM papers p
+                    JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
+                    WHERE p.pdf_downloaded = TRUE
+                      AND p.pdf_local_path IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
+                      )
+                    ORDER BY p.id
+                    LIMIT $1
+                    """,
+                    limit,
+                    user_id,
+                )
         else:
-            rows = await conn.fetch(
-                """
-                SELECT p.id, p.pdf_local_path FROM papers p
-                WHERE p.pdf_downloaded = TRUE
-                  AND p.pdf_local_path IS NOT NULL
-                  AND NOT EXISTS (
-                      SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
-                  )
-                ORDER BY p.id
-                LIMIT $1
-                """,
-                limit,
-            )
+            if force:
+                rows = await conn.fetch(
+                    """
+                    SELECT p.id, p.pdf_local_path FROM papers p
+                    WHERE p.pdf_downloaded = TRUE
+                      AND p.pdf_local_path IS NOT NULL
+                    ORDER BY p.id
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            else:
+                rows = await conn.fetch(
+                    """
+                    SELECT p.id, p.pdf_local_path FROM papers p
+                    WHERE p.pdf_downloaded = TRUE
+                      AND p.pdf_local_path IS NOT NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id
+                      )
+                    ORDER BY p.id
+                    LIMIT $1
+                    """,
+                    limit,
+                )
 
     # Pre-flight filter: only enqueue ids whose PDFs are inside storage + exist.
     # This preserves the previous response-shape counts (queued/skipped_missing_pdf).
@@ -453,9 +489,6 @@ async def batch_process_papers(
     job_id: str | None = None
     if queued_ids:
         job_id = str(uuid.uuid4())
-        # Phase 2 WS-2D: thread caller user_id for audit-trail attribution.
-        # Re-embedding is paper-level (not per-user), but the caller identity
-        # should still flow through the job record.
         await KIND_TO_TASK["papers.batch_process"].defer_async(
             job_id=job_id,
             user_id=user_id,

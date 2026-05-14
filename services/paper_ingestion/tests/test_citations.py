@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import asyncpg
 import pytest
+from fastapi import HTTPException
 from paper_ingestion.models import (
     CitationFetchResponse,
     CitationGraphResponse,
@@ -520,3 +521,148 @@ async def test_batch_fetch_citations_response_shape():
     assert result.message.startswith("Job ")
     assert "queued" in result.message
     assert result.queued >= 1
+
+
+# ---------------------------------------------------------------------------
+# H11: ownership enforcement on citation endpoints
+# ---------------------------------------------------------------------------
+# assert_paper_ownership semantics (from db_helpers.py):
+#   - user_id=None  → single-user mode, all access allowed (no DB hit)
+#   - user_id set   → fetchrow("SELECT discovered_by FROM papers WHERE id=$1")
+#       None        → raises HTTPException(404)
+#       row present, caller in library or canonical (discovered_by=None) → OK
+#       row present, not in library, different discoverer → raises HTTPException(403)
+#
+# These tests exercise the "user B cannot access user A's paper" path for each
+# of the three endpoints added in H11.
+
+
+class FakeRecord(dict):
+    """asyncpg.Record substitute that supports dict[key] and .keys()."""
+
+    def keys(self):
+        return super().keys()
+
+
+async def _user_b(_request):
+    """Simulate a caller with user_id=2 (does not own paper owned by user 1)."""
+    del _request
+    return 2
+
+
+@pytest.mark.parametrize(
+    "endpoint_name,call_kwargs",
+    [
+        (
+            "get_paper_citations",
+            {"paper_id": 7},
+        ),
+        (
+            "fetch_citations_for_paper",
+            {"paper_id": 7},
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_single_paper_citation_endpoints_403_for_other_user(
+    monkeypatch, endpoint_name, call_kwargs
+):
+    """Single-paper citation endpoints raise 403 when caller does not own the paper.
+
+    The paper exists (discovered_by=1) but the caller is user 2 and is not in
+    the paper's user_library entry → assert_paper_ownership raises 403.
+    """
+    from paper_ingestion.routers import citations as citations_router
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.citations.current_user_id_or_none",
+        _user_b,
+    )
+
+    pool, conn = _make_pool_and_conn()
+    # assert_paper_ownership probes discovered_by; user 1 owns this paper
+    conn.fetchrow.return_value = FakeRecord(discovered_by=1)
+    # user_library miss → caller is not in library → 403
+    conn.fetchval = AsyncMock(return_value=None)
+
+    endpoint = getattr(citations_router, endpoint_name).__wrapped__
+
+    # fetch_citations_for_paper also needs an s2_source dependency but we
+    # never reach it because ownership check fires first.
+    extra = {}
+    if endpoint_name == "fetch_citations_for_paper":
+        extra["s2_source"] = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await endpoint(MagicMock(), db_pool=pool, **call_kwargs, **extra)
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_citation_graph_403_for_unowned_paper(monkeypatch):
+    """GET /api/citations/graph raises 403 for the first unowned paper_id.
+
+    Semantics: strict-fail on first unauthorized id (per-id loop in the router).
+    paper_id=7 is owned by user 1; caller is user 2 and is not in the library.
+    """
+    from paper_ingestion.routers import citations as citations_router
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.citations.current_user_id_or_none",
+        _user_b,
+    )
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = FakeRecord(discovered_by=1)
+    conn.fetchval = AsyncMock(return_value=None)  # not in library
+
+    with pytest.raises(HTTPException) as exc_info:
+        await citations_router.get_citation_graph.__wrapped__(
+            MagicMock(),
+            paper_ids=[7],
+            depth=1,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_citation_graph_filters_unauthorized_ids(monkeypatch):
+    """Mixed list [owned_id, unowned_id] → 403 on the first unowned id.
+
+    Chosen semantics: strict-fail (mirrors assert_paper_ownership default).
+    The endpoint aborts at the first unauthorized paper rather than returning
+    a partial subgraph.  This is the simpler, safer contract: callers learn
+    explicitly which paper they lack access to.
+    """
+    from paper_ingestion.routers import citations as citations_router
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.citations.current_user_id_or_none",
+        _user_b,
+    )
+
+    pool, conn = _make_pool_and_conn()
+
+    async def _fetchrow(sql, paper_id):
+        # Paper 1: caller is the discoverer (ownership granted)
+        # Paper 99: discovered by user 1 (not the caller)
+        if paper_id == 1:
+            return FakeRecord(discovered_by=2)
+        return FakeRecord(discovered_by=1)
+
+    conn.fetchrow.side_effect = _fetchrow
+    # For paper 99: user_library miss → not in library
+    conn.fetchval = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await citations_router.get_citation_graph.__wrapped__(
+            MagicMock(),
+            paper_ids=[1, 99],
+            depth=1,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 403
