@@ -318,7 +318,7 @@ Six cron-scheduled nudge types are delivered to the paired chat (timezone-aware,
 
 Commands are rate-limited per-user by a sliding-window decorator. `/pulse_now` additionally has a **5-minute cooldown** to protect the LLM gateway from manual refresh loops.
 
-**Security note on `TELEGRAM_CHAT_ID`:** The current release uses a global `TELEGRAM_CHAT_ID` env var; all notifications go to a single chat. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. Keep the bot in a private DM for now. **Sprint A** (see `docs/plans/2026-05-10-multiuser-followup-sprints.md`) will replace `TELEGRAM_CHAT_ID` with per-user chat pairing: each user generates a pairing code in Settings and sends `/start <code>` to the bot; notifications are then routed per-user.
+**Security note on `TELEGRAM_CHAT_ID`:** The current release uses a global `TELEGRAM_CHAT_ID` env var; all notifications go to a single chat. If you point it at a **group chat**, *any member of that group can send commands and see your papers*. Keep the bot in a private DM for now. **Sprint A** (see `docs/plans/archive/2026-05-10-multiuser-followup-sprints.md`) will replace `TELEGRAM_CHAT_ID` with per-user chat pairing: each user generates a pairing code in Settings and sends `/start <code>` to the bot; notifications are then routed per-user.
 
 ## Remote Access (LAN)
 

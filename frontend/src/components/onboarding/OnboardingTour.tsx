@@ -114,7 +114,9 @@ function useDismissedState(): [boolean | null, () => Promise<void>] {
 
 // ── Component ──────────────────────────────────────────────────────────────
 
-export function OnboardingTour() {
+// Default export required for React.lazy() in AppShell.
+// Named re-export preserved for direct imports (e.g. tests).
+export default function OnboardingTour() {
   const [run, setRun] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const { loading, eligible } = useOnboardingEligibility();
@@ -186,3 +188,6 @@ export function OnboardingTour() {
     />
   );
 }
+
+// Named re-export so tests can import { OnboardingTour } without change.
+export { OnboardingTour };

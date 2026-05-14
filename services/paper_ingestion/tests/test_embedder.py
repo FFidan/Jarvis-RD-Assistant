@@ -22,7 +22,7 @@ async def test_chunk_text_basic():
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _FakeEncoding()
+    embedder._encoding = _FakeEncoding()  # type: ignore[assignment]
 
     text = "This is a test sentence. " * 40
     chunks = embedder.chunk_text(text)
@@ -39,7 +39,7 @@ async def test_chunk_text_with_page_boundaries():
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _FakeEncoding()
+    embedder._encoding = _FakeEncoding()  # type: ignore[assignment]
 
     # Make pages large enough that chunks don't span both
     page1 = "Page one has important research content about attention mechanisms. " * 80
@@ -127,7 +127,7 @@ async def test_search_chunks_global_returns_empty_on_qdrant_failure():
 
 async def test_search_chunks_global_filters_by_user_id():
     """user_id kwarg produces a Filter(should=[user_id==N OR is_null])."""
-    from qdrant_client.models import FieldCondition, IsNullCondition
+    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
 
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
@@ -141,7 +141,10 @@ async def test_search_chunks_global_filters_by_user_id():
     assert qf is not None
     assert len(qf.should) == 2
     assert any(
-        isinstance(c, FieldCondition) and c.key == "user_id" and c.match.value == 42
+        isinstance(c, FieldCondition)
+        and c.key == "user_id"
+        and isinstance(c.match, MatchValue)
+        and c.match.value == 42
         for c in qf.should
     )
     assert any(isinstance(c, IsNullCondition) for c in qf.should)
@@ -162,7 +165,7 @@ async def test_search_chunks_global_no_filter_when_user_id_none():
 
 async def test_search_similar_filters_user_and_excludes_paper():
     """search_similar composes must_not[paper_id] AND should[user_id OR null]."""
-    from qdrant_client.models import FieldCondition, IsNullCondition
+    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
 
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
@@ -175,11 +178,17 @@ async def test_search_similar_filters_user_and_excludes_paper():
     qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
     assert qf is not None
     assert qf.must_not is not None and len(qf.must_not) == 1
-    assert qf.must_not[0].key == "paper_id"
-    assert qf.must_not[0].match.value == 11
+    paper_clause = qf.must_not[0]
+    assert isinstance(paper_clause, FieldCondition)
+    assert paper_clause.key == "paper_id"
+    assert isinstance(paper_clause.match, MatchValue)
+    assert paper_clause.match.value == 11
     assert qf.should is not None and len(qf.should) == 2
     assert any(
-        isinstance(c, FieldCondition) and c.key == "user_id" and c.match.value == 7
+        isinstance(c, FieldCondition)
+        and c.key == "user_id"
+        and isinstance(c.match, MatchValue)
+        and c.match.value == 7
         for c in qf.should
     )
     assert any(isinstance(c, IsNullCondition) for c in qf.should)
@@ -265,7 +274,7 @@ async def test_chunk_text_offsets_align_with_decoded_window():
     mock_http = AsyncMock()
     mock_qdrant = AsyncMock()
     embedder = Embedder(mock_http, mock_qdrant)
-    embedder._encoding = _FakeEncoding()
+    embedder._encoding = _FakeEncoding()  # type: ignore[assignment]
 
     # Para 1: short (won't be force-split), Para 2: long (will be force-split)
     # Para 3: short again (on a different "page")

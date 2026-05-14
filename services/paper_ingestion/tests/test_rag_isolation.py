@@ -4,9 +4,12 @@ Proves the search functions in ``paper_ingestion.ingestion.embedder`` honour
 the ``user_id`` kwarg: caller user_id=A sees only A-tagged chunks + canonical
 (NULL) chunks; never user-B chunks.
 
-The BM25 leg of ``hybrid_search`` is out of scope for this filter (Decision 6
-in the 2026-05-14 plan): user-level paper visibility belongs at the router
-layer, not at the embedder. We assert the semantic leg receives the scope.
+The BM25 leg of ``hybrid_search`` is intentionally OUT of this filter (Decision 6
+of the 2026-05-14 RAG/topics/hygiene sweep — see
+docs/plans/2026-05-14-functional-sweep-rag-topics-hygiene.md). User-level
+paper visibility belongs at the router layer (e.g. papers/feed joins
+paper_user_state), not at the embedder. The semantic leg is scoped; the
+BM25 leg surfaces cross-corpus discovery for not-yet-claimed papers.
 """
 
 from __future__ import annotations
@@ -94,6 +97,40 @@ async def test_hybrid_search_threads_user_id_to_semantic_leg_only():
     await embedder.hybrid_search("neural odes", db_pool=db_pool, limit=5, user_id=7)
 
     assert embedder.search_chunks_global.call_args.kwargs["user_id"] == 7
+
+
+async def test_hybrid_search_bm25_leg_does_not_filter_by_user_id():
+    """BM25 leg's SQL string must not reference user_id (Decision 6, 2026-05-14 sweep).
+
+    Per-user paper visibility is enforced at the router layer (papers/feed
+    endpoint joins paper_user_state); the BM25 leg of hybrid_search
+    intentionally surfaces cross-corpus matches so that searches against
+    not-yet-claimed papers still work. Regression guard: if someone adds
+    a WHERE user_id = $N to the BM25 SQL, this test fails.
+    """
+    embedder = _make_embedder([])
+    embedder.search_chunks_global = AsyncMock(return_value=[])
+
+    db_pool = MagicMock()
+    conn = AsyncMock()
+    captured_sql: list[str] = []
+
+    async def _capture(sql, *args, **kwargs):
+        captured_sql.append(sql)
+        return []
+
+    conn.fetch = AsyncMock(side_effect=_capture)
+    db_pool.acquire.return_value.__aenter__.return_value = conn
+
+    await embedder.hybrid_search("neural odes", db_pool=db_pool, limit=5, user_id=42)
+
+    assert captured_sql, "BM25 SQL should have been captured"
+    sql_text = " ".join(captured_sql).lower()
+    assert "user_id" not in sql_text, (
+        "BM25 SQL must not reference user_id (Decision 6, 2026-05-14 sweep). "
+        f"Captured SQL: {captured_sql}"
+    )
+    assert "$3" not in sql_text, "BM25 SQL should only have $1 and $2 parameters"
 
 
 async def test_prepare_cross_paper_rag_threads_user_id():

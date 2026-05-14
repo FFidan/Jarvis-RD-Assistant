@@ -1,4 +1,4 @@
-import { useState, useEffect, type ReactNode } from 'react';
+import { useState, useEffect, lazy, Suspense, type ReactNode } from 'react';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { TopBar } from '@/components/layout/TopBar';
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet';
@@ -8,7 +8,12 @@ import { useThemeEffect } from '@/hooks/use-theme-effect';
 import { useAppearance } from '@/hooks/use-appearance';
 import { useJobStore, registerVisibilityHydrate } from '@/stores/job-store';
 import { KeyboardCheatSheet } from '@/components/shared/KeyboardCheatSheet';
-import { OnboardingTour } from '@/components/onboarding/OnboardingTour';
+
+// Lazy-loaded: defers react-joyride + react-floater + popper.js (~50 kB gz)
+// from the eager bundle. The tour is only shown to first-time users.
+const OnboardingTour = lazy(
+  () => import('@/components/onboarding/OnboardingTour'),
+);
 
 interface AppShellProps {
   children: ReactNode;
@@ -55,7 +60,9 @@ export function AppShell({ children }: AppShellProps) {
 
       <Toaster position="bottom-right" toastOptions={{ style: { paddingBottom: 'env(safe-area-inset-bottom)' } }} />
       <KeyboardCheatSheet />
-      <OnboardingTour />
+      <Suspense fallback={null}>
+        <OnboardingTour />
+      </Suspense>
     </div>
   );
 }
