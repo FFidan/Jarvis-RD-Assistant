@@ -275,7 +275,7 @@ async def test_logout_revokes_session_and_clears_cookie(monkeypatch) -> None:
     )
     response = Response()
 
-    await auth_router.logout(request, response)
+    await auth_router.logout.__wrapped__(request, response)
 
     conn.execute.assert_awaited_once()
     update_sql = conn.execute.await_args.args[0]
@@ -293,7 +293,7 @@ async def test_logout_with_no_cookie_is_noop(monkeypatch) -> None:
     request = _build_request(pool, cookies={})
     response = Response()
 
-    await auth_router.logout(request, response)
+    await auth_router.logout.__wrapped__(request, response)
 
     conn.execute.assert_not_called()
 

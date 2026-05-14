@@ -236,6 +236,7 @@ async def verify(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[],
 )
+@limiter.limit("30/minute")
 async def logout(request: Request, response: Response) -> Response:
     """Revoke the current session and clear the cookie.
 

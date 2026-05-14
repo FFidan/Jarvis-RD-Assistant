@@ -175,6 +175,7 @@ async def require_unconfigured_or_admin(request: Request) -> None:
     response_model=SetupStatusResponse,
     dependencies=[],
 )
+@limiter.limit("30/minute")
 async def get_status(request: Request) -> SetupStatusResponse:
     """Return ``{configured: true}`` iff at least one admin user exists.
 

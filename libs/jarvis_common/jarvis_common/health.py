@@ -32,7 +32,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -40,9 +40,17 @@ from fastapi.responses import JSONResponse
 from jarvis_common.auth import verify_api_key
 from jarvis_common.models import HealthCheckResponse
 
+if TYPE_CHECKING:
+    import asyncpg
+    import httpx
+
+    from jarvis_common.llm_client import LiteLLMConfig
+
 __all__ = [
     "HealthCheck",
     "HealthProbe",
+    "make_litellm_probe",
+    "make_postgres_probe",
     "register_health_routes",
     "run_health_checks",
 ]
@@ -135,3 +143,88 @@ def register_health_routes(
         if status == "degraded":
             return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]
         return body
+
+
+# ---------------------------------------------------------------------------
+# Shared probe factories (L-10)
+#
+# paper_ingestion and learning_engine both had near-identical _probe_postgres /
+# _probe_litellm functions.  Extracting them here keeps the failure-handling
+# (warning log + "unavailable") policy consistent across services and ensures
+# a fix to one applies to both.  The factories return :data:`HealthProbe`
+# callables suitable for the ``checks`` list passed to
+# :func:`register_health_routes`.
+# ---------------------------------------------------------------------------
+
+
+def make_postgres_probe(
+    pool: asyncpg.Pool | None = None,
+    *,
+    state_attr: str = "db_pool",
+) -> HealthProbe:
+    """Build a ``HealthProbe`` that executes ``SELECT 1`` against an asyncpg pool.
+
+    Two binding modes:
+
+    * Pass *pool* explicitly when it is already constructed at registration
+      time (e.g. inside a lifespan callback).
+    * Omit *pool* to defer resolution: the returned probe reads
+      ``request.app.state.<state_attr>`` per call. This is the common case
+      because ``register_health_routes`` runs at module load while the pool
+      is created later in ``configure_lifespan``.
+
+    Returns ``"ok"`` when the round-trip succeeds, ``"unavailable"`` (with a
+    warning log) on any exception. The per-probe timeout is enforced by
+    :func:`run_health_checks` (L-08).
+    """
+
+    async def _probe(request: Request) -> str:
+        resolved = pool if pool is not None else getattr(request.app.state, state_attr)
+        try:
+            async with resolved.acquire() as conn:
+                await conn.fetchval("SELECT 1")
+        except Exception:
+            _logger.warning("Health check: PostgreSQL unavailable", exc_info=True)
+            return "unavailable"
+        return "ok"
+
+    return _probe
+
+
+def make_litellm_probe(
+    http_client: httpx.AsyncClient | None = None,
+    config: LiteLLMConfig | None = None,
+    *,
+    http_client_attr: str = "http_client",
+) -> HealthProbe:
+    """Build a ``HealthProbe`` that hits LiteLLM's ``/health/readiness``.
+
+    Pass *http_client* and *config* explicitly when both are already
+    available; otherwise leave them ``None`` and the probe resolves
+    ``request.app.state.<http_client_attr>`` plus a fresh
+    :func:`get_litellm_config` on each call (matching the pattern of the
+    service-local probes this factory replaces).
+
+    Returns ``"ok"`` on HTTP 200, ``"unavailable"`` on any other status or
+    exception. The per-probe timeout is enforced by :func:`run_health_checks`.
+    """
+
+    async def _probe(request: Request) -> str:
+        try:
+            client = (
+                http_client
+                if http_client is not None
+                else getattr(request.app.state, http_client_attr)
+            )
+            cfg = config
+            if cfg is None:
+                from jarvis_common.llm_client import get_litellm_config  # noqa: PLC0415
+
+                cfg = get_litellm_config()
+            resp = await client.get(f"{cfg.base_url}/health/readiness")
+            return "ok" if resp.status_code == 200 else "unavailable"
+        except Exception:
+            _logger.warning("Health check: LiteLLM unavailable", exc_info=True)
+            return "unavailable"
+
+    return _probe

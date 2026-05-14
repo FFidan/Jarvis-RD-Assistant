@@ -14,9 +14,7 @@ import asyncio
 import logging
 from typing import Any
 
-import asyncpg
-import httpx
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
     ServiceLifespanConfig,
@@ -34,6 +32,7 @@ from jarvis_common.app_factory import (
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
+from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
@@ -217,33 +216,11 @@ app.include_router(jobs.router)
 # ---------------------------------------------------------------------------
 
 
-async def _probe_postgres(request: Request) -> str:
-    try:
-        pool: asyncpg.Pool = request.app.state.db_pool
-        async with pool.acquire() as conn:
-            await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
-    except Exception:
-        return "unavailable"
-    return "ok"
-
-
-async def _probe_litellm(request: Request) -> str:
-    try:
-        from jarvis_common.llm_client import get_litellm_config
-
-        litellm_config = get_litellm_config()
-        client: httpx.AsyncClient = request.app.state.http_client
-        resp = await client.get(f"{litellm_config.base_url}/health/readiness", timeout=5.0)
-        return "ok" if resp.status_code == 200 else "unavailable"
-    except Exception:
-        return "unavailable"
-
-
 register_health_routes(
     app,
     service_name="learning_engine",
     checks=[
-        ("postgres", _probe_postgres),
-        ("litellm", _probe_litellm),
+        ("postgres", make_postgres_probe()),
+        ("litellm", make_litellm_probe()),
     ],
 )

@@ -42,7 +42,7 @@ from jarvis_common.app_factory import (
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
-from jarvis_common.llm_client import get_litellm_config
+from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
 from qdrant_client import AsyncQdrantClient
@@ -532,19 +532,6 @@ async def _probe_qdrant(request: Request) -> str:
     return "ok"
 
 
-async def _probe_litellm(request: Request) -> str:
-    try:
-        litellm_config = get_litellm_config()
-        resp = await asyncio.wait_for(
-            request.app.state.http_client.get(f"{litellm_config.base_url}/health/readiness"),
-            timeout=5.0,
-        )
-        return "ok" if resp.status_code == 200 else "unavailable"
-    except Exception:
-        logger.warning("Health check: LiteLLM unavailable", exc_info=True)
-        return "unavailable"
-
-
 async def _probe_ollama(request: Request) -> str:
     try:
         ollama_url = get_paper_ingestion_settings().ollama_base_url
@@ -578,9 +565,9 @@ register_health_routes(
     app,
     service_name="paper_ingestion",
     checks=[
-        ("postgres", _probe_postgres),
+        ("postgres", make_postgres_probe()),
         ("qdrant", _probe_qdrant),
-        ("litellm", _probe_litellm),
+        ("litellm", make_litellm_probe()),
         ("ollama", _probe_ollama),
         ("vector", _probe_vector),
     ],

@@ -278,3 +278,69 @@ class TestWarnMultitenantStub:
         critical_records = [r for r in caplog.records if r.levelname == "CRITICAL"]
         assert critical_records, "expected a CRITICAL log line when MULTITENANT_ENABLED=true"
         assert "stub" in critical_records[0].getMessage().lower()
+
+
+# ---------------------------------------------------------------------------
+# Shared probe factories (L-10)
+# ---------------------------------------------------------------------------
+
+
+class TestMakePostgresProbe:
+    @pytest.mark.asyncio
+    async def test_returns_ok_on_success(self) -> None:
+        """A pool whose SELECT 1 succeeds yields ``"ok"``."""
+        from unittest.mock import AsyncMock
+
+        from jarvis_common.health import make_postgres_probe
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=1)
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        probe = make_postgres_probe(pool)
+        result = await probe(_make_request())
+        assert result == "ok"
+        conn.fetchval.assert_awaited_once_with("SELECT 1")
+
+    @pytest.mark.asyncio
+    async def test_returns_unavailable_on_failure(self) -> None:
+        """Any exception from the pool surfaces as ``"unavailable"``."""
+        from unittest.mock import AsyncMock
+
+        from jarvis_common.health import make_postgres_probe
+
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(side_effect=RuntimeError("pg down"))
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        probe = make_postgres_probe(pool)
+        result = await probe(_make_request())
+        assert result == "unavailable"
+
+    @pytest.mark.asyncio
+    async def test_deferred_pool_resolved_from_request_state(self) -> None:
+        """When pool is omitted, the probe reads it from ``request.app.state.db_pool``."""
+        from unittest.mock import AsyncMock
+
+        from fastapi import FastAPI
+        from jarvis_common.health import make_postgres_probe
+
+        conn = AsyncMock()
+        conn.fetchval = AsyncMock(return_value=1)
+        pool = MagicMock()
+        pool.acquire.return_value.__aenter__ = AsyncMock(return_value=conn)
+        pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        app = FastAPI()
+        app.state.db_pool = pool
+
+        probe = make_postgres_probe()  # deferred
+
+        async def _call() -> str:
+            scope = {"type": "http", "headers": [], "app": app}
+            return await probe(Request(scope))
+
+        result = await _call()
+        assert result == "ok"
