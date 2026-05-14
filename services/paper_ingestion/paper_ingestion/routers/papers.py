@@ -180,7 +180,7 @@ async def list_papers(
         if embedder is not None and embedder.qdrant is not None:
             try:
                 hybrid_results = await embedder.hybrid_search(
-                    q, db_pool, limit=limit, offset=offset
+                    q, db_pool, limit=limit, offset=offset, user_id=user_id
                 )
                 return [await hybrid_dict_to_paper_response(r, db_pool) for r in hybrid_results]
             except Exception:

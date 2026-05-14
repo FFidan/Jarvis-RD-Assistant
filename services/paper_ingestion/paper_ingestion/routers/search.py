@@ -419,7 +419,10 @@ async def search_hybrid(
             detail="Qdrant unavailable for hybrid search",
         )
 
-    results = await embedder.hybrid_search(body.query, db_pool, limit=body.max_results)
+    user_id = await current_user_id_or_none(request)
+    results = await embedder.hybrid_search(
+        body.query, db_pool, limit=body.max_results, user_id=user_id
+    )
     return results
 
 

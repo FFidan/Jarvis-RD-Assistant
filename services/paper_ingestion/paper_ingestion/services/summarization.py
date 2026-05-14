@@ -92,11 +92,13 @@ async def _find_cross_references(
     # --- Semantic similarity approach (preferred) ---
     if embedder is not None:
         try:
-            # Get paper's abstract for richer query
+            # Get paper's abstract for richer query; discovered_by scopes
+            # cross-reference search to the owner's library + canonical chunks.
             abstract_row = await conn.fetchrow(
-                "SELECT abstract FROM papers WHERE id = $1", paper_id
+                "SELECT abstract, discovered_by FROM papers WHERE id = $1", paper_id
             )
             abstract = abstract_row["abstract"] if abstract_row and abstract_row["abstract"] else ""
+            owner_id = abstract_row["discovered_by"] if abstract_row else None
             query_text = f"{title}. {abstract}"
 
             results = await embedder.search_similar(
@@ -104,6 +106,7 @@ async def _find_cross_references(
                 limit=15,
                 paper_id_filter=paper_id,
                 score_threshold=0.65,
+                user_id=owner_id,
             )
 
             if results:

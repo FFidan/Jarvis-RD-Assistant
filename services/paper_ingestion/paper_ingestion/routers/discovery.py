@@ -73,6 +73,7 @@ async def find_similar_papers(
             limit=limit * 3,  # extra results for dedup
             paper_id_filter=paper_id,
             score_threshold=0.6,
+            user_id=user_id,
         )
 
         # Deduplicate by paper_id, keep highest score per paper

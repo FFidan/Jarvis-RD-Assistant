@@ -191,6 +191,7 @@ async def run_process_pdf(
     # Qdrant delete intentionally moved outside the lock (see below) to avoid
     # holding the advisory lock during network I/O.
     point_ids_to_delete: list[str] = []
+    owner_id: int | None = None
     async with db_pool.acquire() as conn:
         async with advisory_lock(conn, 1, paper_id):
             existing_count = await conn.fetchval(
@@ -210,13 +211,18 @@ async def run_process_pdf(
                     paper_id,
                 )
                 point_ids_to_delete = [r["embedding_id"] for r in old_rows]
+            owner_id = await conn.fetchval(
+                "SELECT discovered_by FROM papers WHERE id = $1", paper_id
+            )
     # Lock and connection released here.
 
     await _maybe_progress(0.1, "Downloaded")
 
     # --- Phase 2: Extract text, chunk, embed (no lock, no connection held) ---
     try:
-        _full_text, chunks, point_ids = await pdf_processor.process(pdf_path, paper_id)
+        _full_text, chunks, point_ids = await pdf_processor.process(
+            pdf_path, paper_id, user_id=owner_id
+        )
     except torch.OutOfMemoryError as e:
         logger.error("PDF text-extraction GPU OOM for paper %d: %s", paper_id, e)
         raise RuntimeError(

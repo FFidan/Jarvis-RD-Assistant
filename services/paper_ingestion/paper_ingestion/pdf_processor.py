@@ -333,6 +333,8 @@ class PDFProcessor:
         self,
         pdf_path: Path,
         paper_id: int,
+        *,
+        user_id: int | None = None,
     ) -> tuple[str, list[ChunkForEmbedding], list[str]]:
         """Full PDF processing pipeline: extract, chunk, snapshot, embed.
 
@@ -342,6 +344,9 @@ class PDFProcessor:
             Path to the already-downloaded PDF.
         paper_id : int
             Paper DB ID.
+        user_id : int | None
+            Owner of the source paper (resolved by the caller from
+            ``papers.discovered_by``). NULL = canonical/shared chunk.
 
         Returns
         -------
@@ -365,6 +370,6 @@ class PDFProcessor:
         chunks = await asyncio.to_thread(self.embedder.chunk_text, full_text, page_boundaries)
 
         # 4. Embed and store in Qdrant
-        point_ids = await self.embedder.embed_and_store(paper_id, chunks)
+        point_ids = await self.embedder.embed_and_store(paper_id, chunks, user_id=user_id)
 
         return full_text, chunks, point_ids

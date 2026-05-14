@@ -441,6 +441,8 @@ class Embedder:
         paper_id: int,
         chunks: list[ChunkForEmbedding],
         batch_size: int = 32,
+        *,
+        user_id: int | None = None,
     ) -> list[str]:
         """Embed chunks and upsert into Qdrant.
 
@@ -452,6 +454,9 @@ class Embedder:
             Text chunks to embed and store.
         batch_size : int
             Number of chunks to embed per API call.
+        user_id : int | None
+            Owner of the source paper. NULL = canonical/shared (visible to all
+            authenticated users via the OR-IS-NULL leg of the scope filter).
 
         Returns
         -------
@@ -488,6 +493,7 @@ class Embedder:
                                 "page_number": chunk.page_number,
                                 "content": chunk.content,
                                 "embedding_model": EMBEDDING_MODEL_NAME,
+                                "user_id": user_id,
                             },
                         )
                     )
@@ -520,6 +526,7 @@ class Embedder:
         limit: int = 10,
         paper_id_filter: int | None = None,
         score_threshold: float = 0.5,
+        user_id: int | None = None,
     ) -> list[dict]:
         """Search Qdrant for chunks similar to query text.
 
@@ -533,6 +540,9 @@ class Embedder:
             If set, exclude chunks from this paper.
         score_threshold : float
             Minimum cosine similarity score.
+        user_id : int | None
+            If set, restrict to chunks owned by ``user_id`` or marked
+            canonical (NULL payload).
 
         Returns
         -------
@@ -546,16 +556,19 @@ class Embedder:
 
         query_embedding = (await self.embed_texts([query_text]))[0]
 
-        query_filter = None
+        must_not_clauses: list = []
         if paper_id_filter is not None:
-            query_filter = Filter(
-                must_not=[
-                    FieldCondition(
-                        key="paper_id",
-                        match=MatchValue(value=paper_id_filter),
-                    )
-                ]
+            must_not_clauses.append(
+                FieldCondition(key="paper_id", match=MatchValue(value=paper_id_filter))
             )
+        user_filter = _user_scope_filter(user_id)
+        if must_not_clauses or user_filter:
+            query_filter = Filter(
+                must_not=must_not_clauses or None,
+                should=user_filter.should if user_filter else None,
+            )
+        else:
+            query_filter = None
 
         response = await self.qdrant.query_points(
             collection_name=COLLECTION_NAME,
@@ -754,20 +767,10 @@ class Embedder:
     ) -> list[dict]:
         """Search ALL chunks in Qdrant without a paper_id filter.
 
-        Parameters
-        ----------
-        query_text : str
-            Text to find similar chunks for.
-        limit : int
-            Maximum number of chunk results.
-        score_threshold : float
-            Minimum cosine similarity score.
-        user_id : int | None
-            Optional caller user ID for future multi-tenant chunk scoping.
-            Currently a no-op — chunks do not yet have a ``user_id`` payload
-            column.  When the multi-tenant schema pass adds that column, wire
-            a Qdrant payload filter here.
-            # TODO(multitenant): wire when chunks gain user_id
+        When ``user_id`` is set, results are scoped to chunks owned by that
+        user OR marked canonical (``user_id`` payload IS NULL). When unset,
+        no scope filter is applied (preserves single-tenant + procrastinate
+        task code paths).
 
         Returns
         -------
@@ -786,6 +789,7 @@ class Embedder:
                 collection_name=COLLECTION_NAME,
                 query=query_embedding,
                 limit=limit,
+                query_filter=_user_scope_filter(user_id),
                 score_threshold=score_threshold,
                 with_payload=True,
             )
@@ -818,8 +822,13 @@ class Embedder:
         limit: int = 10,
         offset: int = 0,
         k: int = 60,
+        user_id: int | None = None,
     ) -> list[dict]:
         """Hybrid search combining BM25 keyword + semantic vector search via RRF.
+
+        ``user_id`` scopes only the semantic leg (passed through to
+        ``search_chunks_global``). The BM25 leg is intentionally untouched —
+        per-user paper visibility belongs at the router layer, not here.
 
         Uses Reciprocal Rank Fusion to combine rankings from PostgreSQL
         full-text search and Qdrant cosine similarity search.
@@ -888,7 +897,9 @@ class Embedder:
         # ------------------------------------------------------------------
         # PI-CORE-006: match the same candidate_limit so both legs see the full
         # pool needed to produce correct RRF rankings before offset is applied.
-        chunks = await self.search_chunks_global(query, limit=candidate_limit, score_threshold=0.05)
+        chunks = await self.search_chunks_global(
+            query, limit=candidate_limit, score_threshold=0.05, user_id=user_id
+        )
 
         # Aggregate: max chunk score per paper
         paper_max_score: dict[int, float] = defaultdict(float)
@@ -1144,3 +1155,23 @@ async def delete_paper_vectors(paper_id: int) -> None:
     if embedder is None:
         raise RuntimeError("Embedder not initialised; cannot delete paper vectors")
     await embedder.delete_paper_vectors(paper_id)
+
+
+def _user_scope_filter(user_id: int | None):
+    """Return a Qdrant Filter (user_id==X OR is_null) or None when unscoped."""
+    if user_id is None:
+        return None
+    from qdrant_client.models import (
+        FieldCondition,
+        Filter,
+        IsNullCondition,
+        MatchValue,
+        PayloadField,
+    )
+
+    return Filter(
+        should=[
+            FieldCondition(key="user_id", match=MatchValue(value=user_id)),
+            IsNullCondition(is_null=PayloadField(key="user_id")),
+        ]
+    )

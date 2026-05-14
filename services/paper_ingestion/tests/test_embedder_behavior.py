@@ -282,6 +282,30 @@ async def test_embed_and_store_returns_uuids(monkeypatch):
     e.qdrant.upsert.assert_awaited_once()
 
 
+async def test_embed_and_store_includes_user_id_in_payload(monkeypatch):
+    """embed_and_store stamps the caller-supplied user_id onto every payload."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+    e.embed_texts = AsyncMock(return_value=[[0.1] * EMBEDDING_DIMENSION])
+
+    await e.embed_and_store(paper_id=7, chunks=[_chunk(0)], user_id=99)
+
+    points = e.qdrant.upsert.call_args.kwargs["points"]
+    assert points[0].payload["user_id"] == 99
+
+
+async def test_embed_and_store_user_id_none_for_canonical(monkeypatch):
+    """Omitting user_id stamps None — the canonical/shared marker."""
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+    e.embed_texts = AsyncMock(return_value=[[0.1] * EMBEDDING_DIMENSION])
+
+    await e.embed_and_store(paper_id=7, chunks=[_chunk(0)])
+
+    points = e.qdrant.upsert.call_args.kwargs["points"]
+    assert points[0].payload["user_id"] is None
+
+
 async def test_embed_and_store_empty_chunks():
     """embed_and_store with no chunks returns empty list and skips qdrant."""
     e = _make_embedder()

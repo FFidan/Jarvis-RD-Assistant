@@ -331,7 +331,8 @@ async def ask_cross_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client)
+    user_id = await current_user_id_or_none(request)
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client, user_id=user_id)
 
     # Short-circuit when no chunks were found
     if isinstance(result, CrossPaperRagNoResults):
@@ -410,8 +411,11 @@ async def ask_cross_paper_stream(
     body : CrossPaperAskRequest
         Question, max_chunks, max_papers, and decompose parameters.
     """
+    user_id = await current_user_id_or_none(request)
     try:
-        result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client)
+        result = await prepare_cross_paper_rag(
+            embedder, db_pool, body, http_client, user_id=user_id
+        )
     except HTTPException:
         raise
     except Exception as exc:

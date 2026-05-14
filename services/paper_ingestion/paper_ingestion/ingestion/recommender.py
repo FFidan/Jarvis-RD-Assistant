@@ -58,7 +58,9 @@ async def refresh_recommendations(app: Any, user_id: int | None = None) -> int:
         text = f"{proj['name']}. {proj['description'] or ''}".strip()
         if not text:
             continue
-        results = await embedder.search_similar(text, limit=20, score_threshold=0.3)
+        results = await embedder.search_similar(
+            text, limit=20, score_threshold=0.3, user_id=user_id
+        )
         for paper_id, score in _aggregate_to_papers(results):
             existing = project_scores.get(paper_id, (0.0, ""))
             if score > existing[0]:

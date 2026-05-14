@@ -83,7 +83,7 @@ def _stub_openai_client(monkeypatch):
 async def test_find_cross_references_prefers_semantic_results():
     """Semantic search results are deduplicated and preferred over keyword fallback."""
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"abstract": "Abstract"}
+    conn.fetchrow.return_value = {"abstract": "Abstract", "discovered_by": None}
     embedder = AsyncMock()
     embedder.search_similar.return_value = [
         {"paper_id": 2, "score": 0.91},
@@ -102,7 +102,7 @@ async def test_find_cross_references_prefers_semantic_results():
 async def test_find_cross_references_falls_back_to_keyword_overlap():
     """Keyword fallback is used when semantic search fails."""
     conn = AsyncMock()
-    conn.fetchrow.return_value = {"abstract": "Abstract"}
+    conn.fetchrow.return_value = {"abstract": "Abstract", "discovered_by": None}
     conn.fetch.return_value = [{"id": 8, "title": "Retrieval Agents"}]
     embedder = AsyncMock()
     embedder.search_similar.side_effect = RuntimeError("qdrant down")
