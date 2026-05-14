@@ -1,0 +1,81 @@
+"""Regression tests for auth_check — telegram_user_pairings lookup (C1 fix).
+
+Covers:
+- test_auth_check_accepts_paired_user: chat_id in telegram_user_pairings -> True
+- test_auth_check_rejects_unpaired_unknown_chat: chat_id not in any table -> False
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pydantic import SecretStr
+from telegram_bot.config import BotConfig
+from telegram_bot.handlers.helpers import auth_check as _auth_check
+
+
+def _make_config_no_env() -> BotConfig:
+    """BotConfig with telegram_chat_id=None to skip env-var path."""
+    return BotConfig(
+        telegram_token="test-token",
+        telegram_chat_id=None,  # type: ignore[arg-type]
+        database_url="postgres://test",
+        paper_ingestion_url="http://paper:8000",
+        learning_engine_url="http://learn:8001",
+        jarvis_api_key=SecretStr("test-key"),
+    )
+
+
+def _make_update(chat_id: int) -> MagicMock:
+    update = MagicMock()
+    update.effective_chat = MagicMock()
+    update.effective_chat.id = chat_id
+    return update
+
+
+def _make_pool(*, fetchval_return=None, fetchrow_return=None) -> MagicMock:
+    """Build a minimal pool mock covering both DB lookups in auth_check."""
+    pool = MagicMock()
+    pool.fetchval = AsyncMock(return_value=fetchval_return)
+    pool.fetchrow = AsyncMock(return_value=fetchrow_return)
+    return pool
+
+
+# ---------------------------------------------------------------------------
+# C1 regression tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auth_check_accepts_paired_user():
+    """chat_id present in telegram_user_pairings grants access (priority 3)."""
+    # Simulate: user_config owner row is None, but pairing row exists.
+    pairing_row = {"user_id": 1}
+    pool = _make_pool(fetchval_return=None, fetchrow_return=pairing_row)
+    update = _make_update(chat_id=999)
+    config = _make_config_no_env()
+
+    result = await _auth_check(update, config, pool)
+
+    assert result is True
+    # Ensure the pairing query was actually made
+    pool.fetchrow.assert_awaited_once()
+    call_sql = pool.fetchrow.await_args.args[0]
+    assert "telegram_user_pairings" in call_sql
+    assert pool.fetchrow.await_args.args[1] == 999
+
+
+@pytest.mark.asyncio
+async def test_auth_check_rejects_unpaired_unknown_chat():
+    """chat_id absent from env, user_config, and pairings table -> False."""
+    pool = _make_pool(fetchval_return=None, fetchrow_return=None)
+    update = _make_update(chat_id=12345)
+    config = _make_config_no_env()
+
+    result = await _auth_check(update, config, pool)
+
+    assert result is False
+    # Both DB paths should have been consulted
+    pool.fetchval.assert_awaited_once()
+    pool.fetchrow.assert_awaited_once()

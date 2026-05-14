@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import asyncpg
 import pytest
 from fastapi import HTTPException
 
@@ -159,7 +160,8 @@ async def test_bulk_action_mixed_validity():
     assert set(result["succeeded"]) == {1, 2}
     assert len(result["failed"]) == 1
     assert result["failed"][0]["paper_id"] == 999
-    assert "not found" in result["failed"][0]["error"]
+    # Error must be a safe enum code, not a raw exception string
+    assert result["failed"][0]["error"] == "invalid_action"
 
 
 @pytest.mark.asyncio
@@ -251,8 +253,59 @@ async def test_bulk_hard_delete_rejects_non_trash_papers():
     assert set(result["succeeded"]) == {10, 20}
     assert len(result["failed"]) == 1
     assert result["failed"][0]["paper_id"] == inbox_id
-    # Error message must reference the expected state
-    assert "trash" in result["failed"][0]["error"]
+    # Error must be a safe enum code (no raw DB/exception text)
+    assert result["failed"][0]["error"] == "conflict"
+
+
+# ---------------------------------------------------------------------------
+# DOM-A-07: bulk_action error sanitization
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exc, expected_code",
+    [
+        (asyncpg.UniqueViolationError(), "already_in_state"),
+        (asyncpg.ForeignKeyViolationError(), "not_found"),
+        (asyncpg.NotNullViolationError(), "constraint_error"),
+        (asyncpg.CheckViolationError(), "constraint_error"),
+        (asyncpg.PostgresError(), "db_error"),
+        (ValueError("unknown bulk action: bad"), "invalid_action"),
+        (HTTPException(status_code=404, detail="paper not found"), "not_found"),
+        (HTTPException(status_code=403, detail="paper not owned"), "forbidden"),
+        (HTTPException(status_code=409, detail="wrong state"), "conflict"),
+        (RuntimeError("internal surprise"), "unknown_error"),
+    ],
+)
+async def test_bulk_action_error_returns_safe_code(exc, expected_code):
+    """DOM-A-07: bulk_action_papers must return a safe enum code, never raw exception text.
+
+    The failed[*].error field must not contain DB schema names, constraint names,
+    SQL text, or any other implementation detail.
+    """
+    pool = _make_pool_and_conn()[0]
+
+    async def _always_raise(c, paper_id, user_id, action, **_kwargs):
+        raise exc
+
+    with patch.object(papers, "_apply_bulk_action", side_effect=_always_raise):
+        result = await papers.bulk_action_papers.__wrapped__(
+            _mock_request(),
+            body=BulkActionRequest(paper_ids=[42], action="save"),
+            db_pool=pool,
+        )
+
+    assert result["succeeded"] == []
+    assert len(result["failed"]) == 1
+    failed_entry = result["failed"][0]
+    assert failed_entry["paper_id"] == 42
+
+    error_code = failed_entry["error"]
+    assert error_code == expected_code, f"Expected safe code {expected_code!r}, got {error_code!r}"
+    # Belt-and-suspenders: the returned string must never contain raw DB artifact names
+    assert "papers_pkey" not in error_code
+    assert "asyncpg" not in error_code
 
 
 # ---------------------------------------------------------------------------

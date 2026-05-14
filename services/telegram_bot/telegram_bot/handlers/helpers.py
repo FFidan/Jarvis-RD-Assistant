@@ -53,6 +53,9 @@ async def auth_check(
     2. DB fallback: ``user_config.telegram.owner_chat_id`` (populated by the
        dashboard pairing flow). asyncpg's JSONB codec decodes the value, which
        may be ``None``, ``int``, or ``str``.
+    3. Multi-tenant pairing: ``telegram_user_pairings.chat_id`` (migration 071).
+       Any chat_id present in this table was explicitly paired by a registered
+       user and is therefore authorised.
     """
     chat = update.effective_chat
     if chat is None:
@@ -66,9 +69,16 @@ async def auth_check(
         )
     except Exception:
         return False
-    if row is None:
-        return False
+    if row is not None:
+        try:
+            return chat.id == int(row)
+        except (ValueError, TypeError):
+            pass
     try:
-        return chat.id == int(row)
-    except (ValueError, TypeError):
+        pairing_row = await db_pool.fetchrow(
+            "SELECT user_id FROM telegram_user_pairings WHERE chat_id = $1",
+            chat.id,
+        )
+    except Exception:
         return False
+    return pairing_row is not None

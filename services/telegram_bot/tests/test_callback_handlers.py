@@ -410,8 +410,10 @@ async def test_paper_action_auth_fail_answers_query():
         "paper:save:42", chat_id=99999
     )
     # auth_check's DB fallback queries user_config; return None to take the
-    # explicit "no owner paired" reject path.
+    # explicit "no owner paired" reject path.  Also return None for the
+    # telegram_user_pairings lookup (migration 071) so the denial is complete.
     mock_db.fetchval.return_value = None
+    mock_db.fetchrow.return_value = None
 
     await paper_action_callback(update, context)
 
@@ -427,6 +429,7 @@ async def test_paper_feedback_auth_fail_answers_query():
         "paper:feedback_pos:42:pulse_thumbs", chat_id=99999
     )
     mock_db.fetchval.return_value = None
+    mock_db.fetchrow.return_value = None
 
     await paper_feedback_callback(update, context)
 
@@ -748,8 +751,11 @@ def test_start_review_not_registered_in_callback_handler():
 def _make_unauthed_callback(callback_data: str) -> tuple:
     """Build (update, context, mock_db) for an unauthorised caller (chat_id != 12345)."""
     update, context, mock_db, _ = _make_callback_update_and_context(callback_data, chat_id=99999)
-    # auth_check DB path returns None → no paired owner → denied
+    # auth_check DB path returns None → no paired owner → denied.
+    # Also return None for telegram_user_pairings (migration 071) so denial
+    # propagates through all three lookup stages.
     mock_db.fetchval.return_value = None
+    mock_db.fetchrow.return_value = None
     return update, context, mock_db
 
 

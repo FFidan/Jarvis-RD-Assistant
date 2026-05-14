@@ -981,6 +981,35 @@ async def hard_delete_paper(
 # ---------------------------------------------------------------------------
 
 
+def _classify_bulk_error(exc: Exception) -> str:
+    """Map exceptions to safe, operator-diagnostic response codes.
+
+    Raw exception messages (asyncpg constraint names, SQL text) are never
+    forwarded to the caller — only the code string is returned.  The original
+    exception is always logged server-side via ``logger.exception`` at the
+    call site.
+    """
+    if isinstance(exc, HTTPException):
+        if exc.status_code == 404:
+            return "not_found"
+        if exc.status_code == 403:
+            return "forbidden"
+        if exc.status_code == 409:
+            return "conflict"
+        return "http_error"
+    if isinstance(exc, asyncpg.UniqueViolationError):
+        return "already_in_state"
+    if isinstance(exc, asyncpg.ForeignKeyViolationError):
+        return "not_found"
+    if isinstance(exc, asyncpg.NotNullViolationError | asyncpg.CheckViolationError):
+        return "constraint_error"
+    if isinstance(exc, asyncpg.PostgresError):
+        return "db_error"
+    if isinstance(exc, ValueError):
+        return "invalid_action"
+    return "unknown_error"
+
+
 @router.post("/bulk")
 @limiter.limit("10/minute")
 async def bulk_action_papers(
@@ -1019,7 +1048,12 @@ async def bulk_action_papers(
                         )
                     succeeded.append(paper_id)
                 except Exception as exc:  # noqa: BLE001
-                    failed.append({"paper_id": paper_id, "error": str(exc)})
+                    logger.exception(
+                        "bulk_action_papers: paper_id=%d action=%s failed",
+                        paper_id,
+                        body.action,
+                    )
+                    failed.append({"paper_id": paper_id, "error": _classify_bulk_error(exc)})
 
     # Qdrant cleanup runs OUTSIDE the PostgreSQL transaction to avoid deadlock /
     # SAVEPOINT bloat.  Failures are logged but do not affect the HTTP response.
