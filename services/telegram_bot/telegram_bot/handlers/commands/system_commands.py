@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 
@@ -18,10 +19,19 @@ logger = logging.getLogger(__name__)
 
 _MAX_FOCUS_MINUTES = 480  # 8 hours — prevents resource exhaustion
 
-# Pairing rate-limit constants (inline implementation; see TODO below)
-_PAIRING_RATE_WINDOW_SECONDS = 60  # sliding window duration
-_PAIRING_MAX_ATTEMPTS = 5  # max pairing attempts per window
-# TODO(B-followup): convert to @rate_limit decorator when promoted to public API
+
+@rate_limit(max_calls=5, window_seconds=60)
+async def _handle_pairing_rate_gate(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    """Rate-gate for the pairing flow (5 attempts per 60 s per chat).
+
+    Delegates to ``_do_pairing``; the pairing ``code`` is carried via
+    ``context.args`` (set by ``_handle_pairing`` before dispatch).
+    """
+    code: str = (context.args or [""])[0]
+    await _do_pairing(update, context, code)
 
 
 async def _handle_pairing(
@@ -36,33 +46,24 @@ async def _handle_pairing(
     ``user_config.telegram.owner_chat_id`` (as a JSON integer) and deletes the
     used code. Invalid/expired codes are also cleaned up opportunistically.
 
-    Rate-limited to 5 attempts per 60 s per chat to prevent brute-forcing.
+    Rate-limited to 5 attempts per 60 s per chat via ``@rate_limit`` on
+    ``_handle_pairing_rate_gate`` (TOCTOU-safe asyncio.Lock per key).
     """
-    import hashlib
-    import time
+    context.args = [code]
+    await _handle_pairing_rate_gate(update, context)
 
-    from telegram_bot.handlers.rate_limit import _timestamps
 
+async def _do_pairing(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    code: str,
+) -> None:
+    """Inner pairing logic, invoked after the rate-gate passes."""
     db_pool = get_db(context)
     chat = update.effective_chat
     message = update.message
     if chat is None or message is None:
         return
-
-    # --- inline rate-limit: pairing attempts per sliding window per chat ---
-    # TODO(B-followup): convert to @rate_limit decorator when promoted to public API
-    _rl_key = f"{chat.id}:telegram_bot.handlers.commands.system_commands._handle_pairing"
-    _now = time.monotonic()
-    _stamps = _timestamps[_rl_key]
-    _stamps[:] = [t for t in _stamps if _now - t < _PAIRING_RATE_WINDOW_SECONDS]
-    if len(_stamps) >= _PAIRING_MAX_ATTEMPTS:
-        logger.warning("pairing rate-limited chat_id=%s", chat.id)
-        await message.reply_text(
-            f"Too many pairing attempts — please wait {_PAIRING_RATE_WINDOW_SECONDS}s"
-            " before trying again."
-        )
-        return
-    _stamps.append(_now)
 
     code_hash = hashlib.sha256(code.encode()).hexdigest()[:8]
     try:

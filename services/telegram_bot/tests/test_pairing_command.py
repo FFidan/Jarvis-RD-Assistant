@@ -378,3 +378,52 @@ async def test_pair_command_rate_limited_after_five_calls() -> None:
     assert pool.acquire.call_count == 5, (
         f"Expected 5 DB acquires (one per non-rate-limited call), got {pool.acquire.call_count}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M-05: _handle_pairing uses @rate_limit (5 attempts per 60s via start_command)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_start_pair_rate_limited_after_five_calls() -> None:
+    """M-05: /start PAIR_<code> is guarded by @rate_limit(max_calls=5, window_seconds=60).
+
+    The previous inline timestamp-mutation in _handle_pairing had a TOCTOU
+    race.  After M-05 the guard is the @rate_limit decorator on
+    _handle_pairing_rate_gate — which holds a per-key asyncio.Lock.
+
+    After 5 allowed calls the 6th must be stopped before pool.acquire().
+    """
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    future = datetime.now(UTC) + timedelta(minutes=5)
+    conn = _make_conn(fetchrow_return={"expires_at": future})
+    pool = _make_pool(conn)
+    config = _make_config(telegram_chat_id=None)
+
+    chat_id = 555_002
+    for _ in range(5):
+        update = _make_update("/start PAIR_TESTCODE", chat_id=chat_id)
+        context = _make_context(pool, config)
+        await start_command(update, context)
+
+    assert pool.acquire.call_count == 5, (
+        f"Expected 5 DB acquires for 5 non-rate-limited calls, got {pool.acquire.call_count}"
+    )
+
+    # 6th call must be rate-limited — DB acquire must not increase.
+    last_update = _make_update("/start PAIR_TESTCODE", chat_id=chat_id)
+    last_context = _make_context(pool, config)
+    await start_command(last_update, last_context)
+
+    assert pool.acquire.call_count == 5, (
+        "6th /start PAIR_* call must not reach DB (rate gate fires first)"
+    )
+    last_update.message.reply_text.assert_awaited_once()
+    reply: str = last_update.message.reply_text.call_args[0][0]
+    assert "rate" in reply.lower() or "limit" in reply.lower(), (
+        f"Expected rate-limit reply on 6th call, got: {reply!r}"
+    )

@@ -222,7 +222,6 @@ async def stage1_embedding_filter(
             "topic": topic_sim,
             "recency": recency,
             "author_bonus": author_bonus,
-            "l2_penalty": negative_penalty,
         }
         # Preliminary score (for ranking cut only)
         prelim = embedding_sim + topic_sim + recency + author_bonus * 0.5

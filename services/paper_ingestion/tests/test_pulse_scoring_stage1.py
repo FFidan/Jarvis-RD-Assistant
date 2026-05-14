@@ -262,8 +262,10 @@ async def test_stage1_scored_candidate_has_expected_signals():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
 
     signals = result[0].signals
-    for key in ("embedding", "topic", "recency", "author_bonus", "l2_penalty"):
+    for key in ("embedding", "topic", "recency", "author_bonus"):
         assert key in signals, f"Missing signal: {key}"
+    # M-06: l2_penalty key dropped from signals (math still applied to embedding)
+    assert "l2_penalty" not in signals, "l2_penalty key must not be in signals (M-06)"
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +275,7 @@ async def test_stage1_scored_candidate_has_expected_signals():
 
 @pytest.mark.asyncio
 async def test_stage1_no_negative_centroid_no_penalty():
-    """When profile.negative_centroid is None, l2_penalty signal is 0.0."""
+    """When profile.negative_centroid is None, no penalty applied to embedding_sim."""
     paper = _make_paper()
     profile = _make_profile(centroid=None, negative_centroid=None)
     embedder = _make_embedder([[1.0, 0.0, 0.0, 0.0]])
@@ -281,7 +283,7 @@ async def test_stage1_no_negative_centroid_no_penalty():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
 
     assert len(result) == 1
-    assert result[0].signals["l2_penalty"] == 0.0
+    assert "l2_penalty" not in result[0].signals
 
 
 @pytest.mark.asyncio
@@ -309,8 +311,9 @@ async def test_stage1_with_negative_centroid_applies_penalty():
 
     assert len(result) == 1
     signals = result[0].signals
+    # M-06: l2_penalty key is gone; verify the math is still applied via embedding
+    assert "l2_penalty" not in signals
     expected_penalty = l2_lambda * 1.0  # cosine([1,0,0,0], [1,0,0,0]) = 1.0
-    assert abs(signals["l2_penalty"] - expected_penalty) < 1e-6
     # embedding signal = 0.0 (no positive centroid) - penalty → negative
     assert abs(signals["embedding"] - (0.0 - expected_penalty)) < 1e-6
 
@@ -333,5 +336,6 @@ async def test_stage1_with_negative_centroid_orthogonal_no_penalty():
     result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
 
     assert len(result) == 1
-    # cosine([0,1,0,0], [1,0,0,0]) = 0.0 → penalty = 0.0
-    assert abs(result[0].signals["l2_penalty"]) < 1e-6
+    # cosine([0,1,0,0], [1,0,0,0]) = 0.0 → penalty = 0.0 → embedding unchanged at 0.0
+    assert "l2_penalty" not in result[0].signals
+    assert abs(result[0].signals["embedding"]) < 1e-6
