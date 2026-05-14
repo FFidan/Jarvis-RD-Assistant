@@ -207,3 +207,50 @@ async def test_drain_loop_passes_native_dict_not_json_string():
         "Codec must encode natively — caller must not pre-encode."  # nolint:jsonb-double-encode
     )
     assert jsonb_param == ctx
+
+
+@pytest.mark.asyncio
+async def test_outage_recovery_does_not_loop_on_insert_failure():
+    """L-06: outage flags must be reset before the recovery INSERT runs.
+
+    If the recovery INSERT raises after the reset, the outer except clause
+    re-arms ``_was_in_outage`` and re-queues nothing — the next drain handles
+    fresh events normally instead of re-emitting an ever-growing "dropped N"
+    row on every cycle.
+    """
+    pool = _make_pool()
+    conn = pool.acquire.return_value.__aenter__.return_value
+    handler = SystemEventHandler(pool=pool, flush_interval_s=0.001)
+
+    # Pre-seed outage state so the recovery branch will fire.
+    handler._was_in_outage = True
+    handler._dropped = 7
+
+    # Make the recovery INSERT (conn.execute) raise; executemany succeeds.
+    conn.execute = AsyncMock(side_effect=RuntimeError("recovery insert failed"))
+
+    record = _make_record(logging.WARNING, "post-outage event")
+    handler.emit(record)
+
+    sleep_call_count = 0
+
+    async def _immediate_sleep(_delay: float) -> None:
+        nonlocal sleep_call_count
+        sleep_call_count += 1
+        if sleep_call_count > 1:
+            raise asyncio.CancelledError
+
+    with patch.object(asyncio, "sleep", _immediate_sleep):
+        try:
+            await handler._drain_loop()
+        except asyncio.CancelledError:
+            pass
+
+    # Recovery INSERT was attempted, so flags must already have been reset
+    # before it ran (otherwise the except branch would have re-set them and
+    # the test guarantee couldn't hold).
+    assert conn.execute.called, "recovery INSERT should have been attempted"
+    # After the failing recovery INSERT, the outer except DOES re-set
+    # _was_in_outage = True, but _dropped is now 0 — so the next drain will
+    # not fire the recovery branch again (which requires _dropped > 0).
+    assert handler._dropped == 0, "dropped counter must be reset before recovery INSERT"

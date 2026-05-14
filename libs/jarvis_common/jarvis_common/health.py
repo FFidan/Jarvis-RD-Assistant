@@ -29,6 +29,8 @@ as degraded.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -51,21 +53,33 @@ HealthCheck = tuple[str, HealthProbe]
 # Status values that do NOT contribute to a "degraded" overall status.
 _OK_STATUSES: frozenset[str] = frozenset({"ok", "unknown"})
 
+# Per-probe wall-clock budget — keeps the aggregator responsive even when a
+# downstream dependency hangs (L-08).
+_PROBE_TIMEOUT_S: float = 5.0
+
+_logger = logging.getLogger(__name__)
+
 
 async def run_health_checks(
     request: Request, checks: list[HealthCheck]
 ) -> tuple[str, dict[str, str]]:
     """Execute every probe sequentially and return ``(status, checks_dict)``.
 
-    Each probe is awaited in declared order.  Probes are expected to handle
-    their own exceptions and return a status string; if a probe nevertheless
-    raises, the aggregator records the check as ``"unavailable"`` so the
-    overall response is still well-formed.
+    Each probe is awaited in declared order under a 5s ``asyncio.wait_for``
+    budget (L-08); a probe that exceeds the budget is recorded as
+    ``"timeout"`` so a hung dependency cannot stall the ``/health`` endpoint
+    indefinitely. Probes are expected to handle their own exceptions and
+    return a status string; if a probe nevertheless raises, the aggregator
+    records the check as ``"unavailable"`` so the overall response is still
+    well-formed.
     """
     results: dict[str, str] = {}
     for name, probe in checks:
         try:
-            results[name] = await probe(request)
+            results[name] = await asyncio.wait_for(probe(request), timeout=_PROBE_TIMEOUT_S)
+        except TimeoutError:
+            _logger.warning("Health probe %r exceeded %.1fs", name, _PROBE_TIMEOUT_S)
+            results[name] = "timeout"
         except Exception:  # Best-effort: a misbehaving probe must not 500 the endpoint
             results[name] = "unavailable"
 

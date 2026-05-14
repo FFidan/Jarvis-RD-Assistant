@@ -9,6 +9,7 @@ Covers :mod:`jarvis_common.health`:
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import httpx
@@ -111,6 +112,33 @@ class TestRunHealthChecks:
 
         assert status == "degraded"
         assert results == {"a": "unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_slow_probe_recorded_as_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """L-08: a hung probe must not stall ``/health`` — it returns ``"timeout"``.
+
+        Patch the module-level probe timeout to a tiny value so the test runs
+        in milliseconds.
+        """
+        import jarvis_common.health as health_module
+
+        monkeypatch.setattr(health_module, "_PROBE_TIMEOUT_S", 0.05)
+
+        async def probe_hung(_r: Request) -> str:
+            await asyncio.sleep(10.0)
+            return "ok"
+
+        async def probe_fast(_r: Request) -> str:
+            return "ok"
+
+        status, results = await run_health_checks(
+            _make_request(),
+            [("fast", probe_fast), ("hung", probe_hung)],
+        )
+
+        assert results["fast"] == "ok"
+        assert results["hung"] == "timeout"
+        assert status == "degraded"
 
 
 # ---------------------------------------------------------------------------

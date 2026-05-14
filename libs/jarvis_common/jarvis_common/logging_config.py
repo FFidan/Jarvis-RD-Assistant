@@ -7,9 +7,10 @@ import json
 import logging
 import sys
 import uuid
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 
@@ -141,16 +142,21 @@ class SystemEventHandler(logging.Handler):
                         ],
                     )
                     if self._was_in_outage and self._dropped > 0:
+                        # L-06: reset outage flags BEFORE the recovery INSERT so a
+                        # failing INSERT cannot re-trigger the recovery branch on
+                        # every subsequent drain (infinite emit loop). Snapshot
+                        # the dropped count for the row payload first.
+                        dropped_count = self._dropped
+                        self._dropped = 0
+                        self._was_in_outage = False
                         await conn.execute(
                             "INSERT INTO system_events (level, category, source, message) "
                             "VALUES ($1, $2, $3, $4)",
                             "error",
                             "error",
                             "SystemEventHandler",
-                            f"dropped {self._dropped} events during outage",
+                            f"dropped {dropped_count} events during outage",
                         )
-                        self._dropped = 0
-                        self._was_in_outage = False
             except Exception:
                 self._was_in_outage = True
                 for e in batch:
@@ -165,7 +171,48 @@ class SystemEventHandler(logging.Handler):
                 pass
 
 
-def configure_logging(service_name: str, log_level: str = "INFO") -> None:
+# L-07: keys carrying user-identifying or credential material that must never
+# land in structured logs. The scrubber processor drops these keys from the
+# event_dict before the renderer/formatter runs.
+DEFAULT_PII_KEYS: frozenset[str] = frozenset(
+    {
+        "email",
+        "token",
+        "body",
+        "api_key",
+        "password",
+        "secret",
+        "Authorization",
+        "X-API-Key",
+    }
+)
+
+
+def _make_pii_scrubber(
+    pii_keys: frozenset[str],
+) -> Callable[[Any, str, dict[str, Any]], dict[str, Any]]:
+    """Build a structlog processor that drops *pii_keys* from the event dict.
+
+    The returned callable mutates ``event_dict`` in place and returns it
+    (structlog processor contract). Keys absent from the event are ignored.
+    """
+
+    def _drop_pii_keys(
+        _logger: Any, _method_name: str, event_dict: dict[str, Any]
+    ) -> dict[str, Any]:
+        for key in pii_keys:
+            event_dict.pop(key, None)
+        return event_dict
+
+    return _drop_pii_keys
+
+
+def configure_logging(
+    service_name: str,
+    log_level: str = "INFO",
+    *,
+    pii_keys: frozenset[str] | None = None,
+) -> None:
     """Replace default logging config with structured JSON output.
 
     Wires both stdlib logging (via ``JSONFormatter``) and structlog so that
@@ -179,7 +226,13 @@ def configure_logging(service_name: str, log_level: str = "INFO") -> None:
         Service identifier included in every log line.
     log_level : str
         Root logger level (default ``"INFO"``).
+    pii_keys : frozenset[str] | None
+        Keys to scrub from structlog event dicts before rendering (L-07).
+        ``None`` uses :data:`DEFAULT_PII_KEYS`; pass an explicit set to extend
+        or override (most callers should accept the default).
     """
+    keys = pii_keys if pii_keys is not None else DEFAULT_PII_KEYS
+
     root = logging.getLogger()
     root.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     root.handlers.clear()
@@ -193,7 +246,10 @@ def configure_logging(service_name: str, log_level: str = "INFO") -> None:
     # Wire structlog to emit through stdlib so JSONFormatter stays the single
     # renderer.  Processors up to PrintLoggerFactory are stdlib-agnostic;
     # PrintLoggerFactory is replaced by stdlib binding so events flow through
-    # the handler + formatter wired above.
+    # the handler + formatter wired above. The PII scrubber sits last (just
+    # before wrap_for_formatter) so every other processor has already merged
+    # its keys into the event_dict — anything sensitive added by upstream
+    # processors gets dropped here.
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
@@ -203,6 +259,7 @@ def configure_logging(service_name: str, log_level: str = "INFO") -> None:
             structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.processors.StackInfoRenderer(),
             structlog.processors.format_exc_info,
+            _make_pii_scrubber(keys),
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

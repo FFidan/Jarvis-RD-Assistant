@@ -246,5 +246,6 @@ __all__ = [
     "rotate_key",
     "refresh_fernet_cache",
     "reload_fernet_on_sighup",
+    "resolve_secret_row",
     "validate_encrypted_config_rows",
 ]
