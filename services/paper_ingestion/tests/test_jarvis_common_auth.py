@@ -141,6 +141,34 @@ def test_validate_production_config_requires_config_key(monkeypatch):
         validate_production_config()
 
 
+def test_validate_production_config_requires_hmac_key(monkeypatch):
+    """Production without JARVIS_MODEL_HMAC_KEY must fail at boot (M-07).
+
+    The derivation-from-JARVIS_API_KEY fallback was removed in production so
+    a stolen bearer cannot also forge pulse model blobs.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "z" * 44)
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+
+    with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY"):
+        validate_production_config()
+
+
+def test_validate_production_config_rejects_short_hmac_key(monkeypatch):
+    """``JARVIS_MODEL_HMAC_KEY`` must be at least 32 characters in production (M-07)."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "z" * 44)
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 16)
+
+    with pytest.raises(RuntimeError, match="at least 32 characters"):
+        validate_production_config()
+
+
 def test_validate_production_config_config_key_not_required_outside_production(
     monkeypatch,
 ):

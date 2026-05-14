@@ -18,23 +18,28 @@ _HMAC_DIGEST_LEN = 32  # SHA-256 digest length in bytes
 def _hmac_key() -> bytes:
     """Return the HMAC signing key for model blobs (read at call time, not import time).
 
-    Resolution order (audit H14 — public-literal fallback removed):
+    Resolution order (audit H14 — public-literal fallback removed; M-07
+    extended: derivation fallback also forbidden in production):
 
     1. ``JARVIS_MODEL_HMAC_KEY`` — dedicated env var, preferred. Use this so
        compromise of the HTTP bearer (``JARVIS_API_KEY``) does not also let an
        attacker forge model blobs.
     2. ``sha256(b"model-signing:" + JARVIS_API_KEY)`` — backward-compatible
        derivation. Domain-separated so the derived key cannot collide with any
-       direct use of the bearer.
+       direct use of the bearer. **Only permitted outside production.**
 
-    Raises ``RuntimeError`` if neither is set. The previous public-literal
-    fallback (``"jarvis-dev-unsafe-hmac-key"``) was removed because any
-    attacker with DB write access could forge pickle blobs signed with it,
-    achieving RCE through ``_verify_and_unpickle`` → ``pickle.loads``.
+    Raises ``RuntimeError`` if no usable key is configured. In production
+    (``ENVIRONMENT=production``), ``JARVIS_MODEL_HMAC_KEY`` is mandatory —
+    the derivation fallback is refused so a stolen bearer cannot also forge
+    model blobs.
     """
     model_key = os.environ.get("JARVIS_MODEL_HMAC_KEY")
     if model_key:
         return model_key.encode()
+    if os.environ.get("ENVIRONMENT", "").lower() == "production":
+        raise RuntimeError(
+            "JARVIS_MODEL_HMAC_KEY must be set in production (no derivation fallback)"
+        )
     api_key = os.environ.get("JARVIS_API_KEY")
     if api_key:
         return hashlib.sha256(b"model-signing:" + api_key.encode()).digest()

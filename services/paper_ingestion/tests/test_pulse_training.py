@@ -19,6 +19,7 @@ from paper_ingestion.pulse.training import (
     load_active_classifier,
     train_classifier_model,
 )
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -465,6 +466,19 @@ def test_hmac_key_derives_from_api_key(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("JARVIS_API_KEY", "foo")
     expected = hashlib.sha256(b"model-signing:foo").digest()
     assert _hmac_key() == expected
+
+
+def test_hmac_key_raises_in_production_without_env(monkeypatch: pytest.MonkeyPatch):
+    """M-07: in production, JARVIS_MODEL_HMAC_KEY is mandatory — no derivation fallback.
+
+    Even when ``JARVIS_API_KEY`` is present, the derivation path is refused so
+    a stolen bearer cannot also forge model blobs.
+    """
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.delenv("JARVIS_MODEL_HMAC_KEY", raising=False)
+    monkeypatch.setenv("JARVIS_API_KEY", "bearer-token-32-chars-aaaaaaaaaa")
+    with pytest.raises(RuntimeError, match="JARVIS_MODEL_HMAC_KEY must be set in production"):
+        _hmac_key()
 
 
 def test_sign_then_verify_roundtrip(monkeypatch: pytest.MonkeyPatch):

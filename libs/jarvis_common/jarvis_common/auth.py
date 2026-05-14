@@ -363,22 +363,25 @@ def validate_production_config() -> None:
                 f"JARVIS_API_KEY must be at least 32 characters (got {len(api_key)})"
             )
 
-    # H14 — Pulse model HMAC key gate. The pulse classifier signs pickle blobs
-    # with HMAC-SHA256; without a real key, an attacker with DB write access
-    # could forge a signed blob and trigger RCE via pickle.loads. The dedicated
-    # JARVIS_MODEL_HMAC_KEY is preferred to avoid dual-use compromise with the
-    # HTTP bearer; otherwise the key is derived from JARVIS_API_KEY with a
-    # domain-separated SHA-256. In production, refuse to start unless at least
-    # one path is configured.
+    # H14 / M-07 — Pulse model HMAC key gate. The pulse classifier signs
+    # pickle blobs with HMAC-SHA256; without a real key, an attacker with DB
+    # write access could forge a signed blob and trigger RCE via pickle.loads.
+    # In production, the dedicated ``JARVIS_MODEL_HMAC_KEY`` is mandatory
+    # (M-07 — the derivation-from-JARVIS_API_KEY fallback is refused so a
+    # stolen bearer cannot also forge model blobs). Require ≥ 32 chars so
+    # the signing key has meaningful entropy.
     if env == "production":
         import os as _os  # noqa: PLC0415
 
         model_hmac_key = _os.environ.get("JARVIS_MODEL_HMAC_KEY", "")
-        if not model_hmac_key and not api_key:
+        if not model_hmac_key:
             raise RuntimeError(
-                "Pulse model HMAC key required in production: set "
-                "JARVIS_MODEL_HMAC_KEY (preferred) or JARVIS_API_KEY. "
-                "See docs/SECURITY.md#pulse-model-signing."
+                "JARVIS_MODEL_HMAC_KEY must be set in production "
+                "(no derivation fallback). See docs/SECURITY.md#pulse-model-signing."
+            )
+        if len(model_hmac_key) < 32:
+            raise RuntimeError(
+                f"JARVIS_MODEL_HMAC_KEY must be at least 32 characters (got {len(model_hmac_key)})"
             )
 
         # DOM-E-08 — Config encryption key gate. user_config rows are encrypted
