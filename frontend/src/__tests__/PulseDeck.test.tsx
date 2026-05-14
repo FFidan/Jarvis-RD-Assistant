@@ -222,4 +222,31 @@ describe('PulseDeck', () => {
       expect(screen.getByTestId('paper-detail')).toBeInTheDocument();
     });
   });
+
+  it('only passes savePending=true to the targeted card while a mutation is in flight (M-13)', async () => {
+    const { ratePulseCard } = await import('@/lib/api');
+    // Return a never-settling promise to keep the mutation in-flight
+    vi.mocked(ratePulseCard).mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup();
+    vi.mocked(fetchPulseToday).mockResolvedValue(makeDeck());
+    renderDeck();
+
+    await screen.findByText('Paper One');
+    await screen.findByText('Paper Two');
+
+    // Both Save buttons should be enabled before any mutation
+    const saveButtonsBefore = screen.getAllByRole('button', { name: /^save$/i });
+    expect(saveButtonsBefore).toHaveLength(2);
+    expect(saveButtonsBefore[0]).not.toBeDisabled();
+    expect(saveButtonsBefore[1]).not.toBeDisabled();
+
+    // Click Save on Paper One — mutation starts, stays in flight
+    await user.click(saveButtonsBefore[0]);
+
+    // Paper Two's Save button must NOT be disabled while Paper One is saving
+    await waitFor(() => {
+      const card2SaveButton = screen.getAllByRole('button', { name: /^save$/i }).at(-1);
+      expect(card2SaveButton).not.toBeDisabled();
+    });
+  });
 });

@@ -244,20 +244,23 @@ export function PulseDeck() {
         </div>
       )}
       <div className="space-y-3">
-        {deck.cards.map((card, idx) => (
-          <div
-            key={card.card_id}
-            data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
-          >
-            <PulseCard
-              card={card}
-              onRate={handleRate}
-              onOpen={handleOpen}
-              rated={ratedCards.has(card.paper_id)}
-              savePending={rateMutation.isPending}
-            />
-          </div>
-        ))}
+        {deck.cards.map((card, idx) => {
+          const pendingSavePaperId = rateMutation.variables?.paperId;
+          return (
+            <div
+              key={card.card_id}
+              data-tour-id={idx === 0 ? 'pulse-card-first' : undefined}
+            >
+              <PulseCard
+                card={card}
+                onRate={handleRate}
+                onOpen={handleOpen}
+                rated={ratedCards.has(card.paper_id)}
+                savePending={pendingSavePaperId === card.paper_id && rateMutation.isPending}
+              />
+            </div>
+          );
+        })}
       </div>
     </section>
   );

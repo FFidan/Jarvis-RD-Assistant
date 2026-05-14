@@ -497,28 +497,69 @@ async def get_knowledge_graph(
     entity_type: str | None = None,
     min_paper_count: int = 1,
     limit: int = 200,
+    user_id: int | None = None,
 ) -> dict:
-    """Get the full knowledge graph or a filtered subset."""
+    """Get the full knowledge graph or a filtered subset.
+
+    When *user_id* is provided the result is scoped to entities that the
+    caller has at least one ``paper_entities`` row for (M-01).  Passing
+    ``None`` preserves the legacy owner/server path (unscoped).
+    """
     try:
         if entity_type:
-            entities = await conn.fetch(
-                """SELECT id, name, canonical_name, entity_type, description, metadata,
-                          embedding_id, paper_count, created_at FROM entities
-                   WHERE entity_type = $1 AND paper_count >= $2
-                   ORDER BY paper_count DESC LIMIT $3""",
-                entity_type,
-                min_paper_count,
-                limit,
-            )
+            if user_id is not None:
+                entities = await conn.fetch(
+                    """SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
+                              e.metadata, e.embedding_id, e.paper_count, e.created_at
+                       FROM entities e
+                       WHERE e.entity_type = $1 AND e.paper_count >= $2
+                         AND EXISTS (
+                             SELECT 1 FROM paper_entities pe
+                             WHERE pe.entity_id = e.id
+                               AND pe.user_id IS NOT DISTINCT FROM $4
+                         )
+                       ORDER BY e.paper_count DESC LIMIT $3""",
+                    entity_type,
+                    min_paper_count,
+                    limit,
+                    user_id,
+                )
+            else:
+                entities = await conn.fetch(
+                    """SELECT id, name, canonical_name, entity_type, description, metadata,
+                              embedding_id, paper_count, created_at FROM entities
+                       WHERE entity_type = $1 AND paper_count >= $2
+                       ORDER BY paper_count DESC LIMIT $3""",
+                    entity_type,
+                    min_paper_count,
+                    limit,
+                )
         else:
-            entities = await conn.fetch(
-                """SELECT id, name, canonical_name, entity_type, description, metadata,
-                          embedding_id, paper_count, created_at FROM entities
-                   WHERE paper_count >= $1
-                   ORDER BY paper_count DESC LIMIT $2""",
-                min_paper_count,
-                limit,
-            )
+            if user_id is not None:
+                entities = await conn.fetch(
+                    """SELECT e.id, e.name, e.canonical_name, e.entity_type, e.description,
+                              e.metadata, e.embedding_id, e.paper_count, e.created_at
+                       FROM entities e
+                       WHERE e.paper_count >= $1
+                         AND EXISTS (
+                             SELECT 1 FROM paper_entities pe
+                             WHERE pe.entity_id = e.id
+                               AND pe.user_id IS NOT DISTINCT FROM $3
+                         )
+                       ORDER BY e.paper_count DESC LIMIT $2""",
+                    min_paper_count,
+                    limit,
+                    user_id,
+                )
+            else:
+                entities = await conn.fetch(
+                    """SELECT id, name, canonical_name, entity_type, description, metadata,
+                              embedding_id, paper_count, created_at FROM entities
+                       WHERE paper_count >= $1
+                       ORDER BY paper_count DESC LIMIT $2""",
+                    min_paper_count,
+                    limit,
+                )
     except asyncpg.exceptions.UndefinedTableError:
         return {"entities": [], "relationships": []}
 
@@ -566,8 +607,14 @@ async def get_knowledge_graph(
 async def query_knowledge_graph(
     conn: ConnLike,
     query: str,
+    user_id: int | None = None,
 ) -> list[dict]:
-    """Answer a knowledge graph query using SQL pattern matching on entities."""
+    """Answer a knowledge graph query using SQL pattern matching on entities.
+
+    When *user_id* is provided the result is scoped to entities and
+    relationships the caller has ``paper_entities`` rows for (M-04).
+    Passing ``None`` preserves the legacy owner/server path (unscoped).
+    """
     # Simple keyword extraction for SQL matching
     query_lower = query.lower()
 
@@ -582,45 +629,97 @@ async def query_knowledge_graph(
                     target_name = query_lower.split(keyword)[-1].strip().rstrip("?. ")
                     break
 
-            rows = await conn.fetch(
-                """SELECT e1.name AS method_name, e1.entity_type AS method_type,
-                          e2.name AS target_name, e2.entity_type AS target_type,
-                          er.relationship_type, er.evidence_quote, er.confidence
-                   FROM entity_relationships er
-                   JOIN entities e1 ON er.source_entity_id = e1.id
-                   JOIN entities e2 ON er.target_entity_id = e2.id
-                   WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
-                     AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
-                   ORDER BY er.confidence DESC""",
-                f"%{escape_like(target_name)}%",
-            )
+            if user_id is not None:
+                rows = await conn.fetch(
+                    """SELECT e1.name AS method_name, e1.entity_type AS method_type,
+                              e2.name AS target_name, e2.entity_type AS target_type,
+                              er.relationship_type, er.evidence_quote, er.confidence
+                       FROM entity_relationships er
+                       JOIN entities e1 ON er.source_entity_id = e1.id
+                       JOIN entities e2 ON er.target_entity_id = e2.id
+                       WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
+                         AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
+                         AND EXISTS (
+                             SELECT 1 FROM paper_entities pe
+                             WHERE pe.entity_id = e1.id
+                               AND pe.user_id IS NOT DISTINCT FROM $2
+                         )
+                       ORDER BY er.confidence DESC""",
+                    f"%{escape_like(target_name)}%",
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT e1.name AS method_name, e1.entity_type AS method_type,
+                              e2.name AS target_name, e2.entity_type AS target_type,
+                              er.relationship_type, er.evidence_quote, er.confidence
+                       FROM entity_relationships er
+                       JOIN entities e1 ON er.source_entity_id = e1.id
+                       JOIN entities e2 ON er.target_entity_id = e2.id
+                       WHERE LOWER(e2.name) LIKE $1 ESCAPE '\\'
+                         AND er.relationship_type IN ('used_on', 'evaluates', 'applied_to')
+                       ORDER BY er.confidence DESC""",
+                    f"%{escape_like(target_name)}%",
+                )
             return [dict(r) for r in rows]
 
         elif "outperforms" in query_lower or "better than" in query_lower:
-            rows = await conn.fetch(
-                """SELECT e1.name AS method_name, e2.name AS compared_to,
-                          er.evidence_quote, er.confidence
-                   FROM entity_relationships er
-                   JOIN entities e1 ON er.source_entity_id = e1.id
-                   JOIN entities e2 ON er.target_entity_id = e2.id
-                   WHERE er.relationship_type = 'outperforms'
-                   ORDER BY er.confidence DESC
-                   LIMIT 50""",
-            )
+            if user_id is not None:
+                rows = await conn.fetch(
+                    """SELECT e1.name AS method_name, e2.name AS compared_to,
+                              er.evidence_quote, er.confidence
+                       FROM entity_relationships er
+                       JOIN entities e1 ON er.source_entity_id = e1.id
+                       JOIN entities e2 ON er.target_entity_id = e2.id
+                       WHERE er.relationship_type = 'outperforms'
+                         AND EXISTS (
+                             SELECT 1 FROM paper_entities pe
+                             WHERE pe.entity_id = e1.id
+                               AND pe.user_id IS NOT DISTINCT FROM $1
+                         )
+                       ORDER BY er.confidence DESC
+                       LIMIT 50""",
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT e1.name AS method_name, e2.name AS compared_to,
+                              er.evidence_quote, er.confidence
+                       FROM entity_relationships er
+                       JOIN entities e1 ON er.source_entity_id = e1.id
+                       JOIN entities e2 ON er.target_entity_id = e2.id
+                       WHERE er.relationship_type = 'outperforms'
+                       ORDER BY er.confidence DESC
+                       LIMIT 50""",
+                )
             return [dict(r) for r in rows]
 
         else:
             # Generic: search entities by name
-            rows = await conn.fetch(
-                """SELECT e.*, pe.paper_id,
-                          (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
-                   FROM entities e
-                   JOIN paper_entities pe ON e.id = pe.entity_id
-                   WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
-                   ORDER BY e.paper_count DESC
-                   LIMIT 20""",
-                f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
-            )
+            if user_id is not None:
+                rows = await conn.fetch(
+                    """SELECT e.*, pe.paper_id,
+                              (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
+                       FROM entities e
+                       JOIN paper_entities pe ON e.id = pe.entity_id
+                       WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
+                         AND pe.user_id IS NOT DISTINCT FROM $2
+                       ORDER BY e.paper_count DESC
+                       LIMIT 20""",
+                    f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT e.*, pe.paper_id,
+                              (SELECT title FROM papers p WHERE p.id = pe.paper_id) AS paper_title
+                       FROM entities e
+                       JOIN paper_entities pe ON e.id = pe.entity_id
+                       WHERE LOWER(e.name) LIKE $1 ESCAPE '\\'
+                       ORDER BY e.paper_count DESC
+                       LIMIT 20""",
+                    f"%{escape_like(query_lower.strip().rstrip('?. '))}%",
+                )
             return [dict(r) for r in rows]
     except asyncpg.exceptions.UndefinedTableError:
         return []

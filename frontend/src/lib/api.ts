@@ -1329,12 +1329,21 @@ export async function fetchSnapshot(paperId: number, page: number): Promise<stri
 
 // --- My Day Journal ---
 
-export async function getJournalEntry(date: string): Promise<JournalEntry | null> {
+export async function getJournalEntry(
+  date: string,
+  options?: { signal?: AbortSignal },
+): Promise<JournalEntry | null> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 300_000);
+  // Combine the internal timeout signal with any caller-provided signal
+  // (e.g. TanStack Query's abort-on-unmount signal).
+  const callerSignal = options?.signal;
+  const signal = callerSignal
+    ? AbortSignal.any([controller.signal, callerSignal])
+    : controller.signal;
   try {
     const res = await fetch(`/api/my-day/journal?date=${date}`, {
-      signal: controller.signal,
+      signal,
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',

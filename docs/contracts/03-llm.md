@@ -316,21 +316,19 @@ boundaries; that's the only B.2 work it gets.
 
 ### 6.2 Query decomposition (`decompose_query`)
 
-[rag/decomposition.py:22-88](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L22-L88) uses `call_llm_json_value` (scalar list) today.
-After Wave 3 of the impl spec, it migrates to:
+[rag/decomposition.py:75-85](../../services/paper_ingestion/paper_ingestion/rag/decomposition.py#L75-L85) uses `call_llm_structured` with `RootModel[list[str]]` (Wave 3 complete):
 
 ```python
 class QueryDecomposition(RootModel[list[str]]):
     pass
 
 result = await call_llm_structured(
-    http_client, response_model=QueryDecomposition, ...
+    openai_client, response_model=QueryDecomposition, ...
 )
 sub_queries = result.root  # list[str]
 ```
 
-This kills `call_llm_json_value` cleanly. **Until Wave 3 lands,
-`call_llm_json_value` is permitted ONLY at this single call site.**
+`call_llm_json_value` has been fully removed from this call site. No permitted exceptions remain.
 
 ### 6.3 Embeddings (`embed_texts`)
 
@@ -419,7 +417,7 @@ Every cited identifier was Read in the session producing this contract.
 | Site 4 `call_llm` invocation (cards) | services/learning_engine/learning_engine/card_generator.py:119 | Inside `_call_llm_for_cards` |
 | Site 5 `call_llm` invocation (contradictions) | services/paper_ingestion/paper_ingestion/services/contradictions.py:516 | Inside `_classify_candidate` |
 | Site 6 `call_llm` invocation (weekly) | services/paper_ingestion/paper_ingestion/weekly_summary.py:178 | Inside per-topic loop in `generate_weekly_summary` |
-| `decompose_query` `call_llm_json_value` use | services/paper_ingestion/paper_ingestion/rag/decomposition.py:61-70 | Scalar list[str]; migrates to RootModel in Wave 3 |
+| `decompose_query` `call_llm_structured` use | services/paper_ingestion/paper_ingestion/rag/decomposition.py:75-85 | Scalar list[str] via RootModel; Wave 3 complete |
 | RAG streaming raw `client.stream` | services/paper_ingestion/paper_ingestion/rag/streaming.py:319-325 | The streaming exception (§6.1) |
 | `ExtractedField` storage model | services/paper_ingestion/paper_ingestion/models/extractions.py:81-89 | Existing storage shape; unchanged by B.1 |
 | `ExtractionField` template-field def | services/paper_ingestion/paper_ingestion/models/extractions.py:40-46 | Needs name regex validator added |

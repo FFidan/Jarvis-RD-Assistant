@@ -152,8 +152,9 @@ async def get_graph(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        data = await get_knowledge_graph(conn, entity_type, min_paper_count)
+        data = await get_knowledge_graph(conn, entity_type, min_paper_count, user_id=user_id)
 
     entities = [
         EntityResponse(
@@ -207,21 +208,52 @@ async def list_entities(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if entity_type:
-            rows = await conn.fetch(
-                """SELECT * FROM entities WHERE entity_type = $1
-                   ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
-                entity_type,
-                limit,
-                offset,
-            )
+            if user_id is not None:
+                rows = await conn.fetch(
+                    """SELECT e.* FROM entities e
+                       WHERE e.entity_type = $1
+                         AND EXISTS (
+                             SELECT 1 FROM paper_entities pe
+                             WHERE pe.entity_id = e.id
+                               AND pe.user_id IS NOT DISTINCT FROM $4
+                         )
+                       ORDER BY e.paper_count DESC LIMIT $2 OFFSET $3""",
+                    entity_type,
+                    limit,
+                    offset,
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT * FROM entities WHERE entity_type = $1
+                       ORDER BY paper_count DESC LIMIT $2 OFFSET $3""",
+                    entity_type,
+                    limit,
+                    offset,
+                )
         else:
-            rows = await conn.fetch(
-                "SELECT * FROM entities ORDER BY paper_count DESC LIMIT $1 OFFSET $2",
-                limit,
-                offset,
-            )
+            if user_id is not None:
+                rows = await conn.fetch(
+                    """SELECT e.* FROM entities e
+                       WHERE EXISTS (
+                           SELECT 1 FROM paper_entities pe
+                           WHERE pe.entity_id = e.id
+                             AND pe.user_id IS NOT DISTINCT FROM $3
+                       )
+                       ORDER BY e.paper_count DESC LIMIT $1 OFFSET $2""",
+                    limit,
+                    offset,
+                    user_id,
+                )
+            else:
+                rows = await conn.fetch(
+                    "SELECT * FROM entities ORDER BY paper_count DESC LIMIT $1 OFFSET $2",
+                    limit,
+                    offset,
+                )
 
     return [
         EntityResponse(
@@ -246,10 +278,25 @@ async def get_entity_detail(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
         if not entity:
             raise HTTPException(404, f"Entity {entity_id} not found")
+
+        # Scope visibility: when a session user is present, verify the entity
+        # is visible to them (has at least one paper_entities row for their
+        # user_id).  Server-to-server callers (user_id=None) are unscoped.
+        if user_id is not None:
+            visible = await conn.fetchval(
+                """SELECT 1 FROM paper_entities
+                   WHERE entity_id = $1 AND user_id IS NOT DISTINCT FROM $2
+                   LIMIT 1""",
+                entity_id,
+                user_id,
+            )
+            if not visible:
+                raise HTTPException(404, f"Entity {entity_id} not found")
 
         rels = await conn.fetch(
             """SELECT * FROM entity_relationships
@@ -258,14 +305,28 @@ async def get_entity_detail(
             entity_id,
         )
 
-        papers = await conn.fetch(
-            """SELECT p.id, p.title, pe.mention_count
-               FROM paper_entities pe
-               JOIN papers p ON p.id = pe.paper_id
-               WHERE pe.entity_id = $1
-               ORDER BY pe.mention_count DESC""",
-            entity_id,
-        )
+        # Scope the "papers that mention this entity" list to the caller's
+        # own paper_entities rows to prevent paper enumeration (M-03).
+        if user_id is not None:
+            papers = await conn.fetch(
+                """SELECT p.id, p.title, pe.mention_count
+                   FROM paper_entities pe
+                   JOIN papers p ON p.id = pe.paper_id
+                   WHERE pe.entity_id = $1
+                     AND pe.user_id IS NOT DISTINCT FROM $2
+                   ORDER BY pe.mention_count DESC""",
+                entity_id,
+                user_id,
+            )
+        else:
+            papers = await conn.fetch(
+                """SELECT p.id, p.title, pe.mention_count
+                   FROM paper_entities pe
+                   JOIN papers p ON p.id = pe.paper_id
+                   WHERE pe.entity_id = $1
+                   ORDER BY pe.mention_count DESC""",
+                entity_id,
+            )
 
     return EntityDetailResponse(
         entity=EntityResponse(
@@ -303,6 +364,7 @@ async def kg_query(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> KGQueryResponse:
     """Query the knowledge graph with natural language."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
-        results = await query_knowledge_graph(conn, q)
+        results = await query_knowledge_graph(conn, q, user_id=user_id)
     return KGQueryResponse(results=results, query=q)

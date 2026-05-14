@@ -863,3 +863,330 @@ def test_batch_extract_entities_accepts_admin():
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert body == {"extracted": 0, "failed": 0, "total": 0}
+
+
+# ---------------------------------------------------------------------------
+# M-01: get_graph — user_id scoping (Wave 1 closeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_graph_scopes_entities_to_user(monkeypatch):
+    """get_graph returns only entities belonging to the requesting user (M-01).
+
+    User B (id=2) has paper_entities rows for entity 2 only.
+    The response must not contain entity 1 (owned by user A / id=1).
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+
+    # get_knowledge_graph is called with user_id=2 and returns only entity 2
+    monkeypatch.setattr(
+        kg_router,
+        "get_knowledge_graph",
+        AsyncMock(
+            return_value={
+                "entities": [
+                    {
+                        "id": 2,
+                        "name": "GLUE",
+                        "canonical_name": "glue",
+                        "entity_type": "dataset",
+                        "description": None,
+                        "metadata": {},
+                        "paper_count": 1,
+                        "created_at": None,
+                        "display_size": 18,
+                    }
+                ],
+                "relationships": [],
+                "entity_type_counts": {"dataset": 1},
+            }
+        ),
+    )
+
+    pool = _make_pool(AsyncMock())
+    result = await kg_router.get_graph.__wrapped__(
+        MagicMock(),
+        entity_type=None,
+        min_paper_count=1,
+        db_pool=pool,
+    )
+
+    entity_ids = [e.id for e in result.entities]
+    assert entity_ids == [2], f"Expected only entity 2, got {entity_ids}"
+    assert 1 not in entity_ids
+
+
+@pytest.mark.asyncio
+async def test_get_knowledge_graph_filters_by_user_id():
+    """get_knowledge_graph helper passes user_id to the scoped SQL branch (M-01).
+
+    When user_id is provided the helper must execute the EXISTS-subquery variant
+    of the SQL rather than the unscoped variant.
+    """
+    from paper_ingestion.extraction.entities import get_knowledge_graph
+
+    mock_conn = AsyncMock()
+    # First fetch → entities; second fetch → relationships (empty)
+    mock_conn.fetch.side_effect = [
+        [
+            {
+                "id": 2,
+                "name": "GLUE",
+                "canonical_name": "glue",
+                "entity_type": "dataset",
+                "paper_count": 1,
+            }
+        ],
+        [],
+    ]
+
+    result = await get_knowledge_graph(mock_conn, user_id=2)
+
+    assert len(result["entities"]) == 1
+    assert result["entities"][0]["id"] == 2
+    # Verify the scoped SQL branch was used (contains the EXISTS clause)
+    first_call_sql = mock_conn.fetch.call_args_list[0].args[0]
+    assert "IS NOT DISTINCT FROM" in first_call_sql
+
+
+# ---------------------------------------------------------------------------
+# M-02: list_entities — user_id scoping (Wave 1 closeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_entities_scopes_to_user(monkeypatch):
+    """list_entities returns only entities belonging to the requesting user (M-02).
+
+    User B (id=2) must not see entities that only have paper_entities rows for
+    user A (id=1).
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+
+    conn = AsyncMock()
+    # Only entity 2 is returned (user B's data)
+    conn.fetch.return_value = [
+        {
+            "id": 2,
+            "name": "GLUE",
+            "canonical_name": "glue",
+            "entity_type": "dataset",
+            "description": None,
+            "metadata": {},
+            "paper_count": 1,
+            "created_at": None,
+        }
+    ]
+    pool = _make_pool(conn)
+
+    result = await kg_router.list_entities.__wrapped__(
+        MagicMock(),
+        entity_type=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+    )
+
+    entity_ids = [e.id for e in result]
+    assert entity_ids == [2], f"Expected only entity 2, got {entity_ids}"
+    # Verify the scoped SQL branch was used
+    sql_called = conn.fetch.call_args.args[0]
+    assert "IS NOT DISTINCT FROM" in sql_called
+
+
+@pytest.mark.asyncio
+async def test_list_entities_unscoped_when_no_user(monkeypatch):
+    """list_entities is unscoped when user_id is None (server-to-server path, M-02)."""
+    import paper_ingestion.routers.knowledge_graph as kg_router
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=None),  # no session
+    )
+
+    conn = AsyncMock()
+    conn.fetch.return_value = [
+        {
+            "id": 1,
+            "name": "BERT",
+            "canonical_name": "bert",
+            "entity_type": "method",
+            "description": None,
+            "metadata": {},
+            "paper_count": 3,
+            "created_at": None,
+        }
+    ]
+    pool = _make_pool(conn)
+
+    result = await kg_router.list_entities.__wrapped__(
+        MagicMock(),
+        entity_type=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+    )
+
+    assert len(result) == 1
+    sql_called = conn.fetch.call_args.args[0]
+    # Unscoped branch must NOT contain the user_id filter
+    assert "IS NOT DISTINCT FROM" not in sql_called
+
+
+# ---------------------------------------------------------------------------
+# M-03: get_entity_detail — user_id scoping (Wave 1 closeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_entity_detail_rejects_entity_not_owned_by_user(monkeypatch):
+    """get_entity_detail returns 404 when the entity has no paper_entities row for
+    the requesting user — prevents paper enumeration via entity IDs (M-03).
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+
+    conn = AsyncMock()
+    # Entity exists in DB
+    conn.fetchrow.return_value = {
+        "id": 1,
+        "name": "BERT",
+        "canonical_name": "bert",
+        "entity_type": "method",
+        "description": None,
+        "metadata": {},
+        "paper_count": 5,
+        "created_at": None,
+    }
+    # But user B has no paper_entities row for entity 1
+    conn.fetchval.return_value = None
+    pool = _make_pool(conn)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await kg_router.get_entity_detail.__wrapped__(
+            MagicMock(),
+            entity_id=1,
+            db_pool=pool,
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_get_entity_detail_papers_scoped_to_user(monkeypatch):
+    """get_entity_detail scopes the papers list to the requesting user's
+    paper_entities rows, not all papers that mention the entity (M-03).
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+
+    conn = AsyncMock()
+    conn.fetchrow.return_value = {
+        "id": 3,
+        "name": "ResNet",
+        "canonical_name": "resnet",
+        "entity_type": "method",
+        "description": None,
+        "metadata": {},
+        "paper_count": 2,
+        "created_at": None,
+    }
+    # visibility check → user B has a row for entity 3
+    conn.fetchval.return_value = 1
+    # relationships (empty for simplicity)
+    # papers scoped to user B (only paper 2)
+    conn.fetch.side_effect = [
+        [],  # rels
+        [{"id": 2, "title": "Paper B", "mention_count": 1}],  # papers for user B
+    ]
+    pool = _make_pool(conn)
+
+    result = await kg_router.get_entity_detail.__wrapped__(
+        MagicMock(),
+        entity_id=3,
+        db_pool=pool,
+    )
+
+    paper_ids = [p["id"] for p in result.papers]
+    assert paper_ids == [2], f"Expected only paper 2, got {paper_ids}"
+    # Verify scoped SQL was used for the papers fetch
+    papers_sql = conn.fetch.call_args_list[1].args[0]
+    assert "IS NOT DISTINCT FROM" in papers_sql
+
+
+# ---------------------------------------------------------------------------
+# M-04: kg_query — user_id scoping (Wave 1 closeout)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_kg_query_scopes_generic_search_to_user(monkeypatch):
+    """kg_query scopes the generic entity search to the requesting user (M-04).
+
+    User B must not see entities from user A's paper_entities rows.
+    """
+    import paper_ingestion.routers.knowledge_graph as kg_router
+
+    monkeypatch.setattr(
+        kg_router,
+        "current_user_id_or_none",
+        AsyncMock(return_value=2),  # user B
+    )
+    monkeypatch.setattr(
+        kg_router,
+        "query_knowledge_graph",
+        AsyncMock(return_value=[{"name": "GLUE", "paper_id": 2}]),
+    )
+
+    pool = _make_pool(AsyncMock())
+    result = await kg_router.kg_query.__wrapped__(
+        MagicMock(),
+        q="GLUE",
+        db_pool=pool,
+    )
+
+    assert result.results == [{"name": "GLUE", "paper_id": 2}]
+    # Verify query_knowledge_graph was called with user_id=2
+    kg_router.query_knowledge_graph.assert_awaited_once()
+    call_kwargs = kg_router.query_knowledge_graph.call_args
+    assert call_kwargs.kwargs.get("user_id") == 2
+
+
+@pytest.mark.asyncio
+async def test_query_knowledge_graph_generic_filters_by_user_id():
+    """query_knowledge_graph helper applies user_id filter to the generic branch (M-04)."""
+    from paper_ingestion.extraction.entities import query_knowledge_graph
+
+    mock_conn = AsyncMock()
+    mock_conn.fetch.return_value = [{"name": "GLUE", "paper_id": 2}]
+
+    rows = await query_knowledge_graph(mock_conn, "GLUE", user_id=2)
+
+    assert rows == [{"name": "GLUE", "paper_id": 2}]
+    sql_called = mock_conn.fetch.call_args.args[0]
+    assert "IS NOT DISTINCT FROM" in sql_called

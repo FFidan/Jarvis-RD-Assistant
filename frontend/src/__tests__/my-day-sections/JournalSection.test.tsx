@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { JournalSection } from '@/components/my-day/sections/JournalSection';
 
 // ---------------------------------------------------------------------------
@@ -19,7 +20,14 @@ const { getJournalEntry, upsertJournalEntry } = await import('@/lib/api');
 // ---------------------------------------------------------------------------
 
 function renderJournal() {
-  return render(<JournalSection />);
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <JournalSection />
+    </QueryClientProvider>,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -133,5 +141,27 @@ describe('JournalSection — saveTimer cleanup on unmount', () => {
       expect.objectContaining({ first_move: expect.stringContaining('Ship the feature') }),
       expect.any(AbortSignal),
     );
+  });
+});
+
+describe('JournalSection — useQuery abort on unmount (M-12)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(upsertJournalEntry).mockResolvedValue(undefined as any);
+  });
+
+  it('passes an AbortSignal to getJournalEntry so requests can be cancelled', async () => {
+    vi.mocked(getJournalEntry).mockResolvedValue(null);
+    const { unmount } = renderJournal();
+
+    await waitFor(() => expect(vi.mocked(getJournalEntry)).toHaveBeenCalled());
+
+    const callArgs = vi.mocked(getJournalEntry).mock.calls[0];
+    expect(callArgs).toBeDefined();
+    // Second argument should be options object with a signal
+    expect(callArgs[1]).toBeDefined();
+    expect(callArgs[1]!.signal).toBeInstanceOf(AbortSignal);
+
+    unmount();
   });
 });

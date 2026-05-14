@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { MarkerCaption as SectionHeader } from '@/components/typography/MarkerCaption';
 import { getJournalEntry, upsertJournalEntry } from '@/lib/api';
 import type { JournalPrompts } from '@/types';
@@ -8,25 +9,33 @@ export function JournalSection() {
   const [prompts, setPrompts] = useState<JournalPrompts>({});
   const [expanded, setExpanded] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveAbortController = useRef<AbortController | null>(null);
 
+  // Use TanStack Query for initial load — forwards the query's AbortSignal so
+  // the in-flight fetch is cancelled when the component unmounts (M-12).
+  const { data: journalEntry, error: loadQueryError } = useQuery({
+    queryKey: ['journalEntry', today],
+    queryFn: ({ signal }) => getJournalEntry(today, { signal }),
+  });
+
+  // Populate local state when the query result arrives.
+  // TanStack Query v5 removed the onSuccess callback; use useEffect instead.
   useEffect(() => {
-    setLoadError(null);
-    getJournalEntry(today).then((entry) => {
-      if (entry) {
-        setPrompts(entry.prompts);
-        // Auto-expand if reflection fields have content
-        if (entry.prompts.worked || entry.prompts.blocked) {
-          setExpanded(true);
-        }
+    if (journalEntry) {
+      setPrompts(journalEntry.prompts);
+      // Auto-expand if reflection fields have content
+      if (journalEntry.prompts.worked || journalEntry.prompts.blocked) {
+        setExpanded(true);
       }
-    }).catch((err) => {
-      console.error('Journal load failed:', err);
-      setLoadError(err instanceof Error ? err.message : 'Journal could not be loaded');
-    });
-  }, [today]);
+    }
+  }, [journalEntry]);
+
+  const loadError = loadQueryError
+    ? loadQueryError instanceof Error
+      ? loadQueryError.message
+      : 'Journal could not be loaded'
+    : null;
 
   // Cleanup: clear any pending save timer and abort any in-flight fetch on unmount
   // to prevent setState-on-unmounted-component warnings.
