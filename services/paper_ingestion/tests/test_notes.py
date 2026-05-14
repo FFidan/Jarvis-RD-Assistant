@@ -238,8 +238,12 @@ async def test_list_notes_filters_by_source(_app):
 
     assert resp.status_code == 200
     assert resp.json()[0]["source"] == "zotero"
-    assert "source = $2" in conn.fetch.await_args.args[0]
-    assert conn.fetch.await_args.args[1:] == (1, "zotero")
+    fetch_sql = conn.fetch.await_args.args[0]
+    assert "source = $2" in fetch_sql
+    assert "user_id IS NOT DISTINCT FROM" in fetch_sql
+    # args: paper_id, source, user_id (now 3 params)
+    assert conn.fetch.await_args.args[1] == 1
+    assert conn.fetch.await_args.args[2] == "zotero"
 
 
 async def test_update_note(_app):
@@ -698,3 +702,84 @@ async def test_promote_note_403_for_other_user(_app, monkeypatch):
 
     assert resp.status_code == 403
     assert "not owned" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# DOM-A-05 / DOM-A-06 / DOM-A-14 — note-authorship scoping
+# ---------------------------------------------------------------------------
+
+
+async def _async_user_7(_request):
+    return 7
+
+
+async def _async_user_8(_request):
+    return 8
+
+
+async def test_list_notes_scopes_to_author(_app, monkeypatch):
+    """DOM-A-14: list_notes scopes to the caller's user_id.
+
+    User 7 creates 2 notes (user_id=7).  User 8 calls list_notes — the SQL
+    includes ``user_id IS NOT DISTINCT FROM $2`` so the mock returns an empty
+    list because the conn.fetch stub returns [].
+    """
+    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    app, conn = _app
+    # assert_paper_ownership: single fetchrow for paper lookup (user_id=8 → None discovery → allow)
+    conn.fetchrow.return_value = {"discovered_by": None}
+    # The user-scoped SELECT returns empty (user 7's notes, not user 8's)
+    conn.fetch.return_value = []
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/papers/1/notes")
+
+    assert resp.status_code == 200
+    assert resp.json() == []
+    # Confirm the SQL carries the user_id scoping parameter
+    fetch_sql = conn.fetch.await_args.args[0]
+    assert "user_id IS NOT DISTINCT FROM" in fetch_sql
+
+
+async def test_update_note_rejects_non_author(_app, monkeypatch):
+    """DOM-A-05: update_note returns 404 when caller is not the note author.
+
+    Note was created by user 7. User 8 attempts to update it.  The authorship
+    SELECT (id + user_id IS NOT DISTINCT FROM) returns None → 404.
+    """
+    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    app, conn = _app
+    # First fetchval: source check → "user" (not zotero)
+    conn.fetchval.return_value = "user"
+    # The authorship SELECT returns None (note belongs to user 7, not 8)
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.put("/api/notes/1", json={"user_note": "hijack"})
+
+    assert resp.status_code == 404
+
+
+async def test_delete_note_rejects_non_author(_app, monkeypatch):
+    """DOM-A-06: delete_note returns 404 when caller is not the note author.
+
+    Note was created by user 7. User 8 attempts to delete it.  The authorship
+    SELECT returns None → 404.
+    """
+    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    app, conn = _app
+    # First fetchval: source check → "user" (not zotero)
+    conn.fetchval.return_value = "user"
+    # The authorship SELECT returns None (note belongs to user 7, not 8)
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.delete("/api/notes/1")
+
+    assert resp.status_code == 404

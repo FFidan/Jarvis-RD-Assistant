@@ -615,16 +615,34 @@ async def _fetch_effective_config_row(
     conn: Any,
     key: str,
     user_id: int | None,
+    *,
+    is_admin: bool = False,
 ) -> asyncpg.Record | None:
-    """Return caller-specific personal config with system/default fallback."""
+    """Return caller-specific personal config, with NULL-row fallback only for admins.
+
+    For personal keys the NULL-row (system default) is only returned when the
+    caller is an admin; regular authenticated users see only their own row
+    (404 if absent) to prevent system-default leakage (DOM-A-09).
+    System/unknown keys always use the NULL-row path regardless of role.
+    """
     scope = _classify_config_key(key)
     if scope == "personal" and user_id is not None:
+        if is_admin:
+            # Admins may see system default as fallback.
+            return await conn.fetchrow(
+                """SELECT key, value, encrypted_value, user_id
+                   FROM user_config
+                   WHERE key = $1 AND (user_id = $2 OR user_id IS NULL)
+                   ORDER BY user_id IS NULL
+                   LIMIT 1""",
+                key,
+                user_id,
+            )
+        # Non-admin: only return the caller's own row — no NULL-row fallback.
         return await conn.fetchrow(
             """SELECT key, value, encrypted_value, user_id
                FROM user_config
-               WHERE key = $1 AND (user_id = $2 OR user_id IS NULL)
-               ORDER BY user_id IS NULL
-               LIMIT 1""",
+               WHERE key = $1 AND user_id = $2""",
             key,
             user_id,
         )
@@ -722,8 +740,9 @@ async def get_config(
     if _classify_config_key(key) == "system" and _has_browser_session(request):
         await require_admin(request)
     caller_user_id = await current_user_id_or_none(request)
+    is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        row = await _fetch_effective_config_row(conn, key, caller_user_id)
+        row = await _fetch_effective_config_row(conn, key, caller_user_id, is_admin=is_admin)
     if not row:
         raise HTTPException(404, f"Config key '{key}' not found")
     value = _resolve_config_value(key, row)
@@ -1129,8 +1148,9 @@ async def test_provider(
 
     config_key = f"llm.{provider}.api_key"
     caller_user_id = await current_user_id_or_none(request)
+    is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
-        row = await _fetch_effective_config_row(conn, config_key, caller_user_id)
+        row = await _fetch_effective_config_row(conn, config_key, caller_user_id, is_admin=is_admin)
 
     api_key: str | None = None
     if row is not None:

@@ -130,6 +130,81 @@ async def test_get_config_not_found(_app):
 
 
 @pytest.mark.asyncio
+async def test_get_personal_config_does_not_leak_system_default_to_non_admin(_app):
+    """DOM-A-09: non-admin caller gets 404 when no personal row exists, not the NULL-row default.
+
+    Seed scenario: a NULL-row (system default) exists for a personal key.
+    Caller B has user_id=7, non-admin role, and no per-user row.
+    Expected: 404, not the system-default value.
+    """
+    from paper_ingestion.routers import settings
+
+    _app_obj, conn, _ = _app
+    # fetchrow returns None when queried by user_id only (no NULL-row fallback in SQL)
+    conn.fetchrow.return_value = None
+
+    request = SimpleNamespace(state=SimpleNamespace(user_id=7, user_role="member"))
+
+    # Use a known PERSONAL_KEY so _classify_config_key returns "personal".
+    personal_key = "fsrs.desired_retention"
+
+    with pytest.raises(Exception) as exc_info:
+        await settings.get_config.__wrapped__(
+            request,
+            key=personal_key,
+            db_pool=_app_obj.state.db_pool,
+        )
+
+    from fastapi import HTTPException
+
+    assert isinstance(exc_info.value, HTTPException)
+    assert exc_info.value.status_code == 404
+
+    # Verify the SQL sent to the DB does NOT include "user_id IS NULL" fallback.
+    call_args = conn.fetchrow.await_args
+    assert call_args is not None
+    sql_issued = call_args.args[0]
+    assert "user_id IS NULL" not in sql_issued, (
+        "Non-admin personal-key fetch must not fall back to NULL-row: "
+        f"issued SQL was: {sql_issued!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_admin_still_sees_system_default(_app):
+    """DOM-A-09: admin caller gets the NULL-row fallback when no per-user row exists."""
+    from paper_ingestion.routers import settings
+
+    _app_obj, conn, _ = _app
+    # Admin path: fetchrow returns the NULL-row system default.
+    conn.fetchrow.return_value = FakeRecord(
+        key="fsrs.desired_retention",
+        value='"0.9"',
+        encrypted_value=None,
+        user_id=None,
+    )
+
+    request = SimpleNamespace(state=SimpleNamespace(user_id=99, user_role="admin"))
+
+    personal_key = "fsrs.desired_retention"
+    result = await settings.get_config.__wrapped__(
+        request,
+        key=personal_key,
+        db_pool=_app_obj.state.db_pool,
+    )
+
+    assert result.key == personal_key
+
+    # Verify the SQL includes the NULL-row fallback clause.
+    call_args = conn.fetchrow.await_args
+    assert call_args is not None
+    sql_issued = call_args.args[0]
+    assert "user_id IS NULL" in sql_issued, (
+        f"Admin personal-key fetch must include NULL-row fallback: issued SQL was: {sql_issued!r}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_set_config_allowed_key(_app):
     """PUT /api/config/{key} sets a config value for an allowed key."""
     app, conn, mock_http = _app

@@ -12,8 +12,9 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from paper_ingestion.routers._sse import SSE_DONE, sse_event
-from paper_ingestion.routers.analyze import _analyze_stream
+from paper_ingestion.routers.analyze import _analyze_stream, analyze_paper
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -509,3 +510,106 @@ async def test_analyze_stream_local_paper_with_pdf_local_path(monkeypatch):
     assert events[1]["status"] == "skipped"
 
     deps["pdf_processor"].download_pdf.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# H9: assert_paper_ownership hoisted above async_mode branch
+# ---------------------------------------------------------------------------
+
+
+def _make_analyze_deps():
+    """Return mocked FastAPI-injected dependencies for analyze_paper."""
+    mock_request = MagicMock()
+
+    mock_conn = AsyncMock()
+    mock_pool = AsyncMock()
+    mock_pool.acquire = MagicMock(return_value=AsyncMock())
+    mock_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
+    mock_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    deps = {
+        "db_pool": mock_pool,
+        "http_client": AsyncMock(),
+        "pdf_processor": MagicMock(),
+        "embedder": MagicMock(),
+        "verifier": MagicMock(),
+    }
+    return mock_request, mock_pool, deps
+
+
+@pytest.mark.asyncio
+async def test_analyze_paper_default_branch_asserts_ownership():
+    """H9: default streaming branch raises 403 before yielding any data.
+
+    Simulates user B attempting to stream-analyze a paper owned by user A.
+    assert_paper_ownership is patched to raise HTTPException(403) — the
+    primary guard in analyze_paper must fire before a StreamingResponse is
+    constructed.
+    """
+    from paper_ingestion.deps import limiter
+
+    mock_request, mock_pool, deps = _make_analyze_deps()
+
+    old_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        with patch(
+            "paper_ingestion.routers.analyze.assert_paper_ownership",
+            new=AsyncMock(
+                side_effect=HTTPException(status_code=403, detail="paper not owned by current user")
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await analyze_paper(
+                    request=mock_request,
+                    paper_id=42,
+                    async_mode=False,
+                    db_pool=deps["db_pool"],
+                    http_client=deps["http_client"],
+                    pdf_processor=deps["pdf_processor"],
+                    embedder=deps["embedder"],
+                    verifier=deps["verifier"],
+                )
+    finally:
+        limiter.enabled = old_enabled
+
+    assert exc_info.value.status_code == 403
+    assert "not owned" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_analyze_paper_async_mode_still_asserts_ownership():
+    """H9: async_mode=True branch raises 403 before enqueuing a job.
+
+    Ownership is now checked before the ``if async_mode:`` branch, so both
+    paths share the same guard.
+    """
+    from paper_ingestion.deps import limiter
+
+    mock_request, mock_pool, deps = _make_analyze_deps()
+
+    old_enabled = limiter.enabled
+    limiter.enabled = False
+    try:
+        with patch(
+            "paper_ingestion.routers.analyze.assert_paper_ownership",
+            new=AsyncMock(
+                side_effect=HTTPException(status_code=403, detail="paper not owned by current user")
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await analyze_paper(
+                    request=mock_request,
+                    paper_id=42,
+                    async_mode=True,
+                    db_pool=deps["db_pool"],
+                    http_client=deps["http_client"],
+                    pdf_processor=deps["pdf_processor"],
+                    embedder=deps["embedder"],
+                    verifier=deps["verifier"],
+                )
+    finally:
+        limiter.enabled = old_enabled
+
+    assert exc_info.value.status_code == 403
+    assert "not owned" in exc_info.value.detail

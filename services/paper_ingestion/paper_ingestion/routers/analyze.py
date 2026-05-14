@@ -53,6 +53,12 @@ async def _analyze_stream(
     set) skip the download step entirely — they never have a ``pdf_url`` and
     that is expected, not an error.
     """
+    # Belt-and-braces ownership check: assert before yielding any data.
+    # The primary check lives in analyze_paper (above the if async_mode branch),
+    # but this guard protects any future caller that invokes _analyze_stream directly.
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
 
     # ---- Step 1: Download PDF ----
     yield sse_event({"type": "step", "step": "downloading", "status": "started"})
@@ -220,14 +226,15 @@ async def analyze_paper(
     With ``?async=true``: enqueues a ``paper.analyze`` job and returns
     ``{"job_id": "...", "status": "queued"}`` immediately.
     """
+    user_id = await current_user_id_or_none(request)
+    async with db_pool.acquire() as conn:
+        await assert_paper_ownership(conn, paper_id, user_id)
+
     if async_mode:
         import uuid
 
         from jarvis_common.task_registry import KIND_TO_TASK
 
-        user_id = await current_user_id_or_none(request)
-        async with db_pool.acquire() as conn:
-            await assert_paper_ownership(conn, paper_id, user_id)
         jarvis_job_id = str(uuid.uuid4())
         await KIND_TO_TASK["paper.analyze"].defer_async(
             job_id=jarvis_job_id, user_id=user_id, paper_id=paper_id

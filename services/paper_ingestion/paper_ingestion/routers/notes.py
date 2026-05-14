@@ -56,15 +56,20 @@ async def list_notes(
         await assert_paper_ownership(conn, paper_id, user_id)
         if source is None:
             rows = await conn.fetch(
-                "SELECT * FROM paper_notes WHERE paper_id = $1 ORDER BY created_at DESC",
+                "SELECT * FROM paper_notes"
+                " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                " ORDER BY created_at DESC",
                 paper_id,
+                user_id,
             )
         else:
             rows = await conn.fetch(
-                "SELECT * FROM paper_notes WHERE paper_id = $1 AND source = $2"
+                "SELECT * FROM paper_notes"
+                " WHERE paper_id = $1 AND source = $2 AND user_id IS NOT DISTINCT FROM $3"
                 " ORDER BY created_at DESC",
                 paper_id,
                 source,
+                user_id,
             )
     return [_note_response(r) for r in rows]
 
@@ -148,13 +153,18 @@ async def update_note(
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
             raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-        # WS-6B-α: ownership check — short-circuits in single-tenant mode.
+        # DOM-A-05: authorship check — user B must not update user A's note.
+        # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
         if user_id is not None:
-            paper_id = await conn.fetchval(
-                "SELECT paper_id FROM paper_notes WHERE id = $1", note_id
+            note_row = await conn.fetchrow(
+                "SELECT paper_id FROM paper_notes"
+                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                note_id,
+                user_id,
             )
-            if paper_id is not None:
-                await assert_paper_ownership(conn, paper_id, user_id)
+            if note_row is None:
+                raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            await assert_paper_ownership(conn, note_row["paper_id"], user_id)
         row = await dynamic_update(
             conn,
             "paper_notes",
@@ -295,13 +305,18 @@ async def delete_note(
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
             raise HTTPException(status_code=403, detail="Zotero annotation notes are read-only")
-        # WS-6B-α: ownership check — short-circuits in single-tenant mode.
+        # DOM-A-06: authorship check — user B must not delete user A's note.
+        # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
         if user_id is not None:
-            paper_id = await conn.fetchval(
-                "SELECT paper_id FROM paper_notes WHERE id = $1", note_id
+            note_row = await conn.fetchrow(
+                "SELECT paper_id FROM paper_notes"
+                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                note_id,
+                user_id,
             )
-            if paper_id is not None:
-                await assert_paper_ownership(conn, paper_id, user_id)
+            if note_row is None:
+                raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
+            await assert_paper_ownership(conn, note_row["paper_id"], user_id)
         await delete_or_404(
             conn,
             "DELETE FROM paper_notes WHERE id = $1",
