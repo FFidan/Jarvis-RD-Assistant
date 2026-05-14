@@ -102,7 +102,7 @@ select = ["E", "F", "I", "N", "W", "UP"]
 "services/paper_ingestion/tests/*" = ["E402", "E501"]
 "services/learning_engine/tests/*" = ["E501"]
 "libs/jarvis_common/tests/*" = ["E501"]
-"scripts/*" = ["E402"]
+"scripts/*" = ["E402", "N999"]
 # Long SQL / prompt template strings in app code.
 "libs/jarvis_common/jarvis_common/jobs.py" = ["E501"]
 "services/paper_ingestion/paper_ingestion/extraction.py" = ["E501"]
