@@ -380,3 +380,21 @@ def validate_production_config() -> None:
                 "JARVIS_MODEL_HMAC_KEY (preferred) or JARVIS_API_KEY. "
                 "See docs/SECURITY.md#pulse-model-signing."
             )
+
+        # DOM-E-08 — Config encryption key gate. user_config rows are encrypted
+        # with Fernet using JARVIS_CONFIG_KEY. Without it the first decrypt at
+        # request-time raises a cryptic error instead of a clear boot failure.
+        # Always require the key in production so the operator is forced to
+        # provision it before any traffic arrives.
+        config_key_secret = get_secrets_settings().jarvis_config_key
+        config_key = config_key_secret.get_secret_value() if config_key_secret else ""
+        if not config_key:
+            raise RuntimeError(
+                "JARVIS_CONFIG_KEY must be set in production. "
+                "Generate with: python -c 'from cryptography.fernet import "
+                "Fernet; print(Fernet.generate_key().decode())'"
+            )
+        if len(config_key) < 32:
+            raise RuntimeError(
+                f"JARVIS_CONFIG_KEY must be at least 32 characters (got {len(config_key)})"
+            )

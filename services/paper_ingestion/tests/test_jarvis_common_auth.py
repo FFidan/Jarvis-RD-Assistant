@@ -123,5 +123,32 @@ def test_validate_production_config_accepts_dedicated_model_hmac_key(monkeypatch
     monkeypatch.setenv("DEV_MODE", "false")
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 32)
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "z" * 44)  # Fernet keys are 44 chars
 
     validate_production_config()
+
+
+def test_validate_production_config_requires_config_key(monkeypatch):
+    """Production without JARVIS_CONFIG_KEY must fail at boot (DOM-E-08)."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 32)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_FILE", raising=False)
+
+    with pytest.raises(RuntimeError, match="JARVIS_CONFIG_KEY"):
+        validate_production_config()
+
+
+def test_validate_production_config_config_key_not_required_outside_production(
+    monkeypatch,
+):
+    """JARVIS_CONFIG_KEY is only required in production; development should pass without it."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("DEV_MODE", "false")
+    monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY", raising=False)
+    monkeypatch.delenv("JARVIS_CONFIG_KEY_FILE", raising=False)
+
+    validate_production_config()  # must not raise

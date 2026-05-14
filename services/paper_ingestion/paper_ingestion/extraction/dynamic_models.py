@@ -29,6 +29,8 @@ def _build_extraction_response_model(field_names: tuple[str, ...]) -> type[BaseM
     on every extraction call.
     """
     fields_kwargs: dict[str, Any] = {
+        # pydantic create_model requires Optional[X] here; the PEP 604 X|None
+        # form doesn't round-trip through dynamic model construction.
         name: (Optional[ExtractedFieldOutput], None)  # noqa: UP007,UP045
         for name in field_names
     }
