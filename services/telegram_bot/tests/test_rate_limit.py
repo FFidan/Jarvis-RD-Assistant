@@ -10,11 +10,12 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
 import time
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from telegram_bot.handlers.rate_limit import _timestamps, rate_limit
+from telegram_bot.handlers.rate_limit import _locks, _timestamps, rate_limit
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -238,3 +239,116 @@ async def test_rate_limit_cooldown_branch_uses_callback_answer_when_message_is_n
     call_kwargs = callback_query.answer.await_args[1]
     assert call_kwargs.get("show_alert") is True
     assert "Cooldown" in call_kwargs.get("text", "") or "Rate limit" in call_kwargs.get("text", "")
+
+
+# ---------------------------------------------------------------------------
+# DOM-D-06: TOCTOU under concurrency
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rate_limiter_no_toctou_under_concurrency():
+    """DOM-D-06: concurrent callers cannot race past the sliding-window check.
+
+    Without an asyncio.Lock, two coroutines both read ``len(recent) < max_calls``
+    before either appends, allowing more than max_calls invocations to succeed.
+    With the per-key Lock the read-check-then-append is atomic, so exactly
+    max_calls=10 succeed and the remaining 1 is rejected.
+    """
+    _timestamps.clear()
+    _locks.clear()
+
+    chat_id = 99010
+    max_calls = 10
+    callers = 11  # one more than the limit
+
+    pass_count = 0
+    reject_count = 0
+
+    @rate_limit(max_calls=max_calls, window_seconds=60)
+    async def _guarded(update, context):  # type: ignore[no-untyped-def]
+        nonlocal pass_count
+        pass_count += 1
+        return "ok"
+
+    context = _make_context()
+
+    async def _call() -> None:
+        nonlocal reject_count
+        update = _make_update(chat_id=chat_id)
+        result = await _guarded(update, context)
+        if result is None:
+            reject_count += 1
+
+    await asyncio.gather(*[_call() for _ in range(callers)])
+
+    assert pass_count == max_calls, (
+        f"Expected exactly {max_calls} passes, got {pass_count} (reject_count={reject_count})"
+    )
+    assert reject_count == 1, (
+        f"Expected exactly 1 rejection, got {reject_count} (pass_count={pass_count})"
+    )
+
+
+# ---------------------------------------------------------------------------
+# DOM-D-03: rate-limit fires before silent-drop auth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_fires_before_silent_drop_auth():
+    """DOM-D-03: rate-limiter must shed load BEFORE the silent-drop auth check.
+
+    When ``@rate_limit`` is the outer decorator and ``@auth_required`` is inner,
+    an unauthenticated flood must hit the rate-limit ceiling (reply_text called)
+    rather than silently dropping every request (no reply_text, just ``return``).
+
+    Without the reordering, auth would run first: the silent-drop path consumes
+    a coroutine slot per request but never touches the rate-limiter bucket, so
+    an attacker can flood indefinitely and the rate-limiter never fires.
+    """
+    _timestamps.clear()
+    _locks.clear()
+
+    chat_id = 99011
+    max_calls = 3
+
+    reply_text_calls: list[str] = []
+    handler_calls = 0
+
+    @rate_limit(max_calls=max_calls, window_seconds=60)
+    async def _outer_rate_inner_auth(update, context):  # type: ignore[no-untyped-def]
+        """Simulates @rate_limit outer / @auth_required inner.
+
+        The inner 'auth' layer simply returns None (silent drop) — it never
+        calls reply_text, so ANY reply_text call we see must come from the
+        rate-limiter, not from auth.
+        """
+        nonlocal handler_calls
+        handler_calls += 1
+        # Simulate silent-drop auth: no reply, just return None
+        return None
+
+    flood_size = max_calls + 3  # enough to trigger rate-limit
+
+    for _ in range(flood_size):
+        update = _make_update(chat_id=chat_id)
+        update.message.reply_text = AsyncMock(
+            side_effect=lambda text, **kw: reply_text_calls.append(text)
+        )
+        await _outer_rate_inner_auth(update, context=_make_context())
+
+    # Rate-limiter must have fired at least once (reply_text called with a
+    # "Rate limit exceeded" message) — proving it ran before the inner layer.
+    rate_limit_replies = [t for t in reply_text_calls if "Rate limit" in t or "rate" in t.lower()]
+    assert len(rate_limit_replies) >= 1, (
+        f"Expected at least one rate-limit reply, got reply_text_calls={reply_text_calls!r}. "
+        "This means the rate-limiter never fired — auth silent-drop ran first."
+    )
+
+    # Inner handler must have been called at most max_calls times (rate-limiter
+    # stopped the flood after the window was exhausted).
+    assert handler_calls <= max_calls, (
+        f"handler_calls={handler_calls} exceeds max_calls={max_calls}: "
+        "rate-limiter did not stop the flood."
+    )

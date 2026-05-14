@@ -274,7 +274,11 @@ async def run_pulse(
             for name in ("citation_pagerank", "citation_count", "citation_adamic_adar")
         )
         citation_by_external_id = (
-            await compute_citation_signals(db_pool, [sc.paper.external_id for sc in stage2_out])
+            await compute_citation_signals(
+                db_pool,
+                [sc.paper.external_id for sc in stage2_out],
+                user_id=user_id,
+            )
             if wants_citation
             else {}
         )

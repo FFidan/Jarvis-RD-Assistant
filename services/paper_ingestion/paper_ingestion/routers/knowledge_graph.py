@@ -10,6 +10,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common.auth import require_admin
 
 from paper_ingestion.deps import (
     get_db_pool,
@@ -80,7 +81,11 @@ async def extract_entities(
         ) from e
 
 
-@router.post("/extract-entities/batch", response_model=BatchEntityExtractResponse)
+@router.post(
+    "/extract-entities/batch",
+    response_model=BatchEntityExtractResponse,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("2/minute")
 async def batch_extract_entities(
     request: Request,

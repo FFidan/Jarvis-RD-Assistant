@@ -11,11 +11,26 @@ logger = logging.getLogger(__name__)
 async def compute_citation_signals(
     db_pool: Any,
     external_ids: list[str],
+    *,
+    user_id: int | None = None,
 ) -> dict[str, dict[str, float]]:
     """Return normalized citation graph signals keyed by paper external_id.
 
     The function degrades to zero/empty signals when ``networkx`` is not
     installed or when citation data is unavailable.
+
+    Parameters
+    ----------
+    db_pool:
+        asyncpg connection pool.
+    external_ids:
+        External IDs of the candidate papers to score.
+    user_id:
+        Caller's user ID used to scope the ``liked`` CTE so that Adamic-Adar
+        scores are computed from **this user's** positive feedback only.
+        When *None* (single-user / system mode), only rows with
+        ``recommendation_feedback.user_id IS NULL`` are included, preserving
+        the existing single-tenant behaviour.
     """
     if not external_ids:
         return {}
@@ -35,6 +50,7 @@ async def compute_citation_signals(
                 FROM recommendation_feedback rf
                 WHERE rf.signal = 'positive'
                   AND rf.source IN ('pulse_thumbs', 'dismiss_combined')
+                  AND rf.user_id IS NOT DISTINCT FROM $2
                 ORDER BY rf.paper_id DESC
                 LIMIT 100
             ),
@@ -53,6 +69,7 @@ async def compute_citation_signals(
             WHERE p.id IN (SELECT id FROM relevant)
             """,
             external_ids,
+            user_id,
         )
     if not rows:
         return {}

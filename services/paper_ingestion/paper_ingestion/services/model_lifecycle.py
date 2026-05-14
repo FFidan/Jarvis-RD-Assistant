@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import platform
@@ -158,6 +159,27 @@ def get_cached_hardware(state: Any | None = None) -> HardwareInfo:
             return cached
 
     info = detect_hardware()
+    if state is not None:
+        state.hw_info = info
+        state.hw_info_at = now
+    return info
+
+
+async def async_get_cached_hardware(state: Any | None = None) -> HardwareInfo:
+    """Async variant of get_cached_hardware for use in async handlers.
+
+    Returns cached hardware when still fresh; otherwise runs detect_hardware()
+    in a thread pool via asyncio.to_thread so the event loop is not blocked
+    during the ~2 s nvidia-smi subprocess call.
+    """
+    now = datetime.now(UTC)
+    cached = getattr(state, "hw_info", None) if state is not None else None
+    cached_at = getattr(state, "hw_info_at", None) if state is not None else None
+    if isinstance(cached, HardwareInfo) and isinstance(cached_at, datetime):
+        if now - cached_at < _HARDWARE_TTL:
+            return cached
+
+    info = await asyncio.to_thread(detect_hardware)
     if state is not None:
         state.hw_info = info
         state.hw_info_at = now

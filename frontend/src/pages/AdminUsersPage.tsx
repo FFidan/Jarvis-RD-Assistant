@@ -202,6 +202,7 @@ export function AdminUsersPage() {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<AdminUser | null>(null);
   const [roleError, setRoleError] = useState<string | null>(null);
+  const [pendingRoleUserId, setPendingRoleUserId] = useState<number | null>(null);
 
   const { data: users, isLoading, isError } = useQuery({
     queryKey: ['admin', 'users'],
@@ -209,11 +210,14 @@ export function AdminUsersPage() {
   });
 
   const roleMutation = useMutation({
-    mutationFn: ({ userId, role }: { userId: number; role: 'user' | 'admin' }) =>
-      updateUserRole(userId, role),
+    mutationFn: ({ userId, role }: { userId: number; role: 'user' | 'admin' }) => {
+      setPendingRoleUserId(userId);
+      return updateUserRole(userId, role);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
       setRoleError(null);
+      setPendingRoleUserId(null);
     },
     onError: (err) => {
       if (err instanceof ApiError) {
@@ -221,6 +225,7 @@ export function AdminUsersPage() {
       } else {
         setRoleError('Failed to update role.');
       }
+      setPendingRoleUserId(null);
     },
   });
 
@@ -298,7 +303,7 @@ export function AdminUsersPage() {
                       onValueChange={(v) =>
                         roleMutation.mutate({ userId: user.id, role: v as 'user' | 'admin' })
                       }
-                      disabled={roleMutation.isPending}
+                      disabled={pendingRoleUserId === user.id}
                     >
                       <SelectTrigger className="w-28 h-8 text-xs" aria-label={`Role for ${user.email}`}>
                         <SelectValue />

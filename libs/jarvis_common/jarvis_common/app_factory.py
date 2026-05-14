@@ -362,8 +362,70 @@ def configure_middleware_and_errors(
     app.add_exception_handler(Exception, generic_exception_handler)
 
 
+async def init_langfuse_hook(
+    app: FastAPI,
+    *,
+    set_services_callback: Callable[[Any], None] | None = None,
+) -> None:
+    """Initialize Langfuse SDK and Instructor-patched OpenAI client.
+
+    DOM-J-01: shared lifespan hook used by both ``paper_ingestion`` and
+    ``learning_engine``.  No-op when ``LANGFUSE_HOST`` is unset (local dev
+    without ``--profile observability``).  Attaches ``app.state.openai_client``
+    for use by ``call_llm_structured`` in request handlers and job workers.
+
+    Parameters
+    ----------
+    app:
+        The FastAPI application.  ``app.state.openai_client`` is set on it.
+    set_services_callback:
+        Optional callable receiving the Instructor-patched OpenAI client to
+        populate a per-service module-level holder (e.g. ``paper_ingestion._state.set_services``
+        or ``learning_engine._state.set_services``).  When provided, called as
+        ``set_services_callback(openai_client)``.
+    """
+    import instructor  # noqa: PLC0415
+    import openai  # noqa: PLC0415
+
+    from jarvis_common.llm_client import (  # noqa: PLC0415
+        _langfuse_lifespan_hook,
+        get_litellm_config,
+    )
+
+    _langfuse_lifespan_hook()
+    litellm_config = get_litellm_config()
+    _master_key_secret = get_secrets_settings().litellm_master_key
+    openai_client = instructor.from_openai(
+        openai.AsyncOpenAI(
+            base_url=f"{litellm_config.base_url}/v1",
+            api_key=_master_key_secret.get_secret_value() if _master_key_secret else "dummy",
+        ),
+        mode=instructor.Mode.JSON,
+    )
+    app.state.openai_client = openai_client
+    if set_services_callback is not None:
+        set_services_callback(openai_client)
+
+
+def make_init_langfuse_hook(
+    set_services_callback: Callable[[Any], None] | None = None,
+) -> LifespanHook:
+    """Return an ``init_langfuse_hook`` bound to a per-service ``set_services`` callback.
+
+    Convenience factory for use in :class:`ServiceLifespanConfig.custom_init_tasks`,
+    where each hook must have signature ``(app: FastAPI) -> Awaitable[None]``.
+    """
+
+    async def _hook(app: FastAPI) -> None:
+        await init_langfuse_hook(app, set_services_callback=set_services_callback)
+
+    return _hook
+
+
 __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
+    "init_langfuse_hook",
+    "make_init_langfuse_hook",
 ]

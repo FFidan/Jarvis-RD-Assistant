@@ -54,6 +54,9 @@ class UserProfile(BaseModel):
     lookback_days: int = Field(default=7, ge=1, le=90)
     # Startup grace before first outbound HTTP burst (seconds)
     startup_grace_seconds: float = Field(default=0.0, ge=0.0, le=300.0)
+    # L2 negative-centroid penalty coefficient — validated [0.0, 2.0]; default 0.5.
+    # Kept separate from `weights` so stage3_combine does not iterate it as a signal.
+    l2_lambda: float = Field(default=0.5, ge=0.0, le=2.0)
 
 
 async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = None) -> UserProfile:
@@ -169,17 +172,30 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
     # ------------------------------------------------------------------
     async with db_pool.acquire() as conn:
         # 4. Config: weights, deck_size, stage2_top_k, l2_lambda
+        # Prefer per-user row; fall back to NULL-row global default.
         config_rows = await conn.fetch(
             """
-            SELECT key, value FROM user_config
+            SELECT key, value, user_id FROM user_config
             WHERE key IN (
                 'pulse.weights', 'pulse.deck_size', 'pulse.stage2_top_k', 'pulse.l2_lambda',
                 'pulse.lookback_days', 'pulse.startup_grace_seconds'
             )
-            AND user_id IS NULL
-            """
+            AND (user_id IS NOT DISTINCT FROM $1 OR user_id IS NULL)
+            ORDER BY key, user_id NULLS LAST
+            """,
+            user_id,
         )
-        cfg: dict[str, Any] = {r["key"]: r["value"] for r in config_rows}
+        # Build cfg dict: for each key, the user-specific row (non-NULL user_id) wins
+        # over the global default (NULL user_id). Rows are ordered per-key with
+        # user-specific rows first (NULLS LAST on user_id).
+        _cfg_raw: dict[str, Any] = {}
+        for r in config_rows:
+            k = r["key"]
+            # asyncpg Record supports .get(); prefer user-specific row (non-NULL user_id)
+            # over global default (NULL user_id).
+            if k not in _cfg_raw or r.get("user_id") is not None:
+                _cfg_raw[k] = r["value"]
+        cfg: dict[str, Any] = _cfg_raw
         # asyncpg JSONB auto-decodes — do NOT call json.loads()
         raw_weights = cfg.get("pulse.weights", _DEFAULT_WEIGHTS)
         weights: dict[str, float] = dict(_DEFAULT_WEIGHTS)
@@ -194,9 +210,10 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         stage2_top_k = int(cfg.get("pulse.stage2_top_k", _DEFAULT_STAGE2_TOP_K))
 
         # Read l2_lambda — validated by A2 config validator ([0.0, 2.0]); default 0.5.
+        # Stored as a dedicated UserProfile field, NOT inside weights, so that
+        # stage3_combine never iterates it as a scoring signal (DOM-B-01).
         raw_l2 = cfg.get("pulse.l2_lambda")
         l2_lambda: float = float(raw_l2) if raw_l2 is not None else 0.5
-        weights["l2_lambda"] = l2_lambda
 
         raw_lookback = cfg.get("pulse.lookback_days")
         lookback_days: int = max(1, min(90, int(raw_lookback))) if raw_lookback is not None else 7
@@ -389,4 +406,5 @@ async def load_profile(db_pool: Any, *, embedder: Any, user_id: int | None = Non
         dampened_topics=dampened_set,
         lookback_days=lookback_days,
         startup_grace_seconds=startup_grace_seconds,
+        l2_lambda=l2_lambda,
     )

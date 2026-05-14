@@ -254,6 +254,7 @@ export function PulseDeck() {
               onRate={handleRate}
               onOpen={handleOpen}
               rated={ratedCards.has(card.paper_id)}
+              savePending={rateMutation.isPending}
             />
           </div>
         ))}

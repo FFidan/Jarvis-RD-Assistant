@@ -184,7 +184,7 @@ async def stage1_embedding_filter(
 
     # L2 negative-centroid penalty (Wave 1cd §7.2)
     negative_centroid = profile.negative_centroid  # list[float] | None
-    l2_lambda = float(profile.weights.get("l2_lambda", 0.5))
+    l2_lambda = float(profile.l2_lambda)
 
     scored: list[ScoredCandidate] = []
     for idx, candidate in enumerate(candidates):

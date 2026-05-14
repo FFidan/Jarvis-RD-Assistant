@@ -116,7 +116,7 @@ services:
       - jarvis
 
   ollama:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.17.7}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     restart: unless-stopped
     mem_limit: 20g
     ports:
@@ -150,7 +150,7 @@ services:
       - jarvis
 
   ollama-bootstrap:
-    image: ${OLLAMA_IMAGE:-ollama/ollama:0.17.7}
+    image: ${OLLAMA_IMAGE:-ollama/ollama:0.23.1}
     depends_on:
       ollama:
         condition: service_healthy
@@ -207,7 +207,7 @@ services:
   # ==========================================================================
 
   litellm:
-    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm:main-stable}
+    image: ${LITELLM_IMAGE:-docker.litellm.ai/berriai/litellm@sha256:29252f25ed1b538d44f6b76ec97412c5537a180b39ede744b9f3e86ffdd278f5}
     restart: unless-stopped
     ports:
       - "127.0.0.1:4000:4000"
@@ -260,6 +260,7 @@ services:
       context: .
       dockerfile: services/paper_ingestion/Dockerfile
       args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
         INSTALL_OPTIONAL: ${INSTALL_OPTIONAL:-false}
     restart: unless-stopped
     hostname: paper-ingestion-1
@@ -330,6 +331,8 @@ services:
     build:
       context: .
       dockerfile: services/learning_engine/Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
     restart: unless-stopped
     hostname: learning-engine-1
     ports:
@@ -369,6 +372,8 @@ services:
     build:
       context: .
       dockerfile: services/telegram_bot/Dockerfile
+      args:
+        PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
     restart: unless-stopped
     hostname: telegram-bot-1
     profiles:
@@ -414,12 +419,11 @@ services:
         NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
     restart: unless-stopped
     ports:
-      # Dashboard publishes plain HTTP on host 3010 by default (NOT 3000 — that
-      # is reserved for sibling apps like Jarvis_BusinessAssistant on this
-      # machine). For HTTPS on 3001 (matches prod TLS-at-edge), enable the
+      # Dashboard publishes plain HTTP on host 3001 by default (NOT 3000 — that
+      # is reserved for the internal container port). For HTTPS, enable the
       # caddy-local profile: `docker compose --profile caddy-local up -d`.
       # Override DASHBOARD_HOST_PORT in .env if you need a different port.
-      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3010}:3000"
+      - "${DASHBOARD_BIND_HOST:-127.0.0.1}:${DASHBOARD_HOST_PORT:-3001}:3000"
     environment:
       JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
       JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}
@@ -465,7 +469,7 @@ services:
       - ./scripts/backup.sh:/usr/local/bin/backup.sh:ro
       - postgres_backups:/backups
     entrypoint: >
-      sh -c "while true; do /usr/local/bin/backup.sh; sleep $${BACKUP_INTERVAL_SECONDS:-86400}; done"
+      sh -euc "while true; do /usr/local/bin/backup.sh; sleep $${BACKUP_INTERVAL_SECONDS:-86400}; done"
     depends_on:
       postgres:
         condition: service_healthy
@@ -509,7 +513,7 @@ services:
       - jarvis
 
   langfuse:
-    image: langfuse/langfuse:2
+    image: ${LANGFUSE_IMAGE:-langfuse/langfuse@sha256:85c278dcab96c15db94191a5c1664f85aba2d7fb6771a00e99681c902c4b7015}
     profiles: [observability]
     restart: unless-stopped
     ports:

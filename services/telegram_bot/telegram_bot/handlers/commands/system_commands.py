@@ -154,8 +154,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/help`` — display available commands.
 
@@ -171,8 +171,8 @@ async def help_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(format_help(), parse_mode="HTML")
 
 
-@auth_required
 @rate_limit(max_calls=1, window_seconds=60, cooldown_seconds=300)
+@auth_required
 async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/pulse_now`` — trigger immediate Pulse generation.
 
@@ -211,8 +211,8 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
 
-@auth_required
 @rate_limit(max_calls=3, window_seconds=60)
+@auth_required
 async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/focus [duration]`` — start a focus session."""
     if update.message is None or update.effective_chat is None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
+from jarvis_common.event_log import log_event
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -100,18 +101,28 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 user_id: int = int(row["user_id"])
 
                 # Upsert the pairing — one row per user_id, UNIQUE on chat_id.
-                await conn.execute(
+                # RETURNING lets us detect whether an existing row was displaced
+                # (rebound) so we can audit-log and notify the prior chat.
+                upsert_row = await conn.fetchrow(
                     """INSERT INTO telegram_user_pairings
                            (user_id, chat_id, telegram_username, paired_at)
                        VALUES ($1, $2, $3, NOW())
                        ON CONFLICT (user_id) DO UPDATE
                            SET chat_id = EXCLUDED.chat_id,
                                telegram_username = EXCLUDED.telegram_username,
-                               paired_at = NOW()""",
+                               paired_at = NOW()
+                       RETURNING
+                           (xmax <> 0)          AS was_update,
+                           (SELECT p.chat_id
+                            FROM telegram_user_pairings p
+                            WHERE p.user_id = $1)  AS prior_chat_id""",
                     user_id,
                     chat.id,
                     telegram_username,
                 )
+                prior_chat_id: int | None = None
+                if upsert_row is not None and upsert_row["was_update"]:
+                    prior_chat_id = upsert_row["prior_chat_id"]
 
                 # Mark the token as consumed so it cannot be replayed.
                 await conn.execute(
@@ -120,6 +131,46 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 )
 
         logger.info("Telegram pairing complete: user_id=%d chat_id=%d", user_id, chat.id)
+
+        # --- rebound: a different chat_id just took over this user's pairing ---
+        if prior_chat_id is not None and prior_chat_id != chat.id:
+            logger.warning(
+                "Telegram pairing rebound: user_id=%d displaced chat_id=%d → new chat_id=%d",
+                user_id,
+                prior_chat_id,
+                chat.id,
+            )
+            # Audit trail in system_events (fire-and-forget — don't fail the pairing)
+            try:
+                await log_event(
+                    pool=db_pool,
+                    level="warning",
+                    category="auth",
+                    source="telegram_bot",
+                    message="pairing.rebound",
+                    context={
+                        "user_id": user_id,
+                        "prior_chat_id": prior_chat_id,
+                        "new_chat_id": chat.id,
+                    },
+                )
+            except Exception:
+                logger.exception("Failed to log pairing.rebound audit event")
+            # Notify the displaced chat (best-effort — stale/blocked chats must not fail pairing)
+            try:
+                await context.bot.send_message(
+                    prior_chat_id,
+                    text=(
+                        "⚠️ Security notice: Your JARVIS account is now paired to a different "
+                        "Telegram chat. If this wasn't you, please contact your administrator."
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Could not notify prior chat_id=%d of pairing rebound (chat may be stale)",
+                    prior_chat_id,
+                )
+
         await message.reply_text(
             "✅ Paired! You'll now receive personalised JARVIS notifications here.\n\n"
             "Use /whoami to confirm your pairing.",
@@ -129,8 +180,8 @@ async def pair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await message.reply_text("Pairing failed — please try again from the dashboard.")
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def unpair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/unpair`` — remove the current user's Telegram pairing.
 
@@ -228,15 +279,11 @@ async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         return
 
-    user_id: int = int(row["user_id"])
     username_part = f" (@{row['telegram_username']})" if row["telegram_username"] else ""
     paired_at = row["paired_at"]
     paired_str = paired_at.strftime("%Y-%m-%d %H:%M UTC") if paired_at else "unknown"
 
     await message.reply_text(
-        f"✅ <b>Paired</b>{username_part}\n"
-        f"JARVIS user ID: <code>{user_id}</code>\n"
-        f"Chat ID: <code>{chat.id}</code>\n"
-        f"Paired at: {paired_str}",
+        f"✅ <b>Paired</b>{username_part}\nPaired since: {paired_str}",
         parse_mode="HTML",
     )

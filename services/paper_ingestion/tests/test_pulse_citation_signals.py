@@ -140,3 +140,36 @@ async def test_compute_citation_signals_normalizes_small_graph(
             "citation_adamic_adar": 1.0,
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_compute_citation_signals_scopes_liked_to_user(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Liked CTE must be scoped to the caller's user_id (DOM-B-02).
+
+    User A likes paper P (paper_id=10).  When pulse runs for user B (user_id=2),
+    the ``liked`` CTE query must bind user B's user_id, so user A's feedback
+    cannot boost Adamic-Adar scores for user B's deck.
+
+    We verify this by:
+    1. Calling compute_citation_signals with user_id=2.
+    2. Inspecting the SQL passed to conn.fetch — it must contain
+       'IS NOT DISTINCT FROM' and bind the value 2 as a parameter.
+    """
+    _install_fake_networkx(monkeypatch)
+    pool, conn = _make_pool_and_conn()
+    # Return empty rows — we only care that the right SQL + params were sent.
+    conn.fetch.return_value = []
+
+    await compute_citation_signals(pool, ["arxiv:1"], user_id=2)
+
+    conn.fetch.assert_awaited_once()
+    call_args = conn.fetch.call_args
+    sql: str = call_args[0][0]
+    params: list = list(call_args[0][1:])
+
+    assert "IS NOT DISTINCT FROM" in sql, (
+        f"liked CTE SQL must use IS NOT DISTINCT FROM; got: {sql!r}"
+    )
+    assert 2 in params, f"user_id=2 must be bound as a query parameter; got params={params}"

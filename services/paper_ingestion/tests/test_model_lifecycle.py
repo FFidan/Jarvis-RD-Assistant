@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import socket
+from unittest.mock import patch
 
 from jarvis_common.model_catalog import ModelCatalogEntry
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
     _model_pull_job,
+    async_get_cached_hardware,
     build_model_statuses,
     catalog_entry_for_model,
     compute_vram_fit,
@@ -317,3 +319,27 @@ def test_build_model_statuses_uses_num_ctx_per_role() -> None:
     fd = by_id["qwen3:14b"]["fit_detail"]
     assert fd["at_num_ctx"] == 32768
     assert fd["default"] == "unfit"
+
+
+# ---------------------------------------------------------------------------
+# DOM-J-07: async_get_cached_hardware uses asyncio.to_thread on cache miss
+# ---------------------------------------------------------------------------
+
+
+async def test_async_get_cached_hardware_uses_to_thread_on_cache_miss() -> None:
+    """async_get_cached_hardware must delegate to asyncio.to_thread(detect_hardware)
+    when no valid cache entry is present, ensuring the event loop is not blocked
+    by the nvidia-smi subprocess call (DOM-J-07)."""
+    fake_hw = _hw_16gb()
+
+    async def _fake_to_thread(fn, *args, **kwargs):  # noqa: ARG001
+        return fake_hw
+
+    with patch(
+        "paper_ingestion.services.model_lifecycle.asyncio.to_thread",
+        side_effect=_fake_to_thread,
+    ) as mock_to_thread:
+        result = await async_get_cached_hardware(state=None)
+
+    mock_to_thread.assert_called_once_with(detect_hardware)
+    assert result is fake_hw

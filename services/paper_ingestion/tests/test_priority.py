@@ -317,3 +317,100 @@ def test_compute_paper_priority_single_user_mode_skips_ownership():
     _conn_arg, paper_id_arg, user_id_arg = mock_ownership.await_args.args
     assert paper_id_arg == 7
     assert user_id_arg is None
+
+
+# ---------------------------------------------------------------------------
+# recompute_all_priorities — admin gate tests (3.17)
+# ---------------------------------------------------------------------------
+
+
+def _make_recompute_client(*, user_role: str | None):
+    """Return (TestClient, conn, app) with the priority router mounted.
+
+    Parameters
+    ----------
+    user_role:
+        Value placed on ``request.state.user_role``.  ``None`` simulates an
+        API-key-only caller (no session cookie — legacy single-tenant path,
+        allowed through by ``require_admin``).
+        ``"user"`` simulates a non-admin browser session → must get 403.
+        ``"admin"`` simulates an admin browser session → must get 200.
+    """
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.routers import priority as priority_router
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    # conn.fetch returns empty list so endpoint completes quickly
+    conn.fetch.return_value = []
+
+    app.include_router(priority_router.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    # Inject user_role into request.state by overriding require_admin to a
+    # version that sets state first, then delegates to the real dependency.
+    async def _patched_require_admin(request: Request) -> None:
+        if user_role is not None:
+            request.state.user_role = user_role
+        await require_admin(request)
+
+    app.dependency_overrides[require_admin] = _patched_require_admin
+
+    tc = TestClient(app, raise_server_exceptions=False)
+    return tc, conn, app
+
+
+def test_recompute_all_priorities_rejects_non_admin():
+    """POST /api/papers/recompute-priorities returns 403 for a non-admin caller.
+
+    3.17 fix: require_admin dependency must be declared on the route so that
+    any browser session with role != 'admin' is rejected before any DB work.
+    """
+    tc, conn, app = _make_recompute_client(user_role="user")
+    try:
+        resp = tc.post("/api/papers/recompute-priorities")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 403, (
+        f"Expected 403 (admin gate), got {resp.status_code}: {resp.text}"
+    )
+    # No DB work should be done after the rejection
+    conn.fetch.assert_not_called()
+    conn.executemany.assert_not_called()
+
+
+def test_recompute_all_priorities_accepts_admin():
+    """POST /api/papers/recompute-priorities returns 200 for an admin caller.
+
+    3.17 fix: admin-role browser sessions (and API-key-only callers with no
+    session cookie) must be allowed through.
+    """
+    tc, conn, app = _make_recompute_client(user_role="admin")
+    try:
+        resp = tc.post("/api/papers/recompute-priorities")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body == {"updated": 0}

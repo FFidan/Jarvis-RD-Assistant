@@ -57,12 +57,11 @@ def _pulse_card_keyboard(paper_id: int | str) -> InlineKeyboardMarkup:
     )
 
 
-# Decorator order: @auth_required outer, @rate_limit inner.
-# This is intentional: auth failure terminates the chain before any rate-limiter
-# slot is consumed, preventing unauthenticated callers from exhausting the window.
-# DoS mitigation at the network edge (nginx/Caddy rate-limit) is the complement.
-@auth_required
+# Decorator order: @rate_limit outer, @auth_required inner.
+# Rate-limiting runs FIRST so unauthenticated floods are shed before any auth
+# DB lookup occurs (DOM-D-03: silent-drop auth must not run before rate-limiter).
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/papers [query]`` — search paper_ingestion API or list Library papers."""
     if update.message is None:
@@ -135,8 +134,8 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/stats`` — fetch and display learning statistics from the learning engine."""
     if update.message is None:
@@ -162,8 +161,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(format_review_stats(stats), parse_mode="HTML")
 
 
-@auth_required
 @rate_limit(max_calls=3, window_seconds=60)
+@auth_required
 async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/briefing`` — composite morning briefing (papers, cards, tasks, milestones)."""
     if update.message is None:
@@ -218,8 +217,8 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await update.message.reply_text(text, parse_mode="HTML")
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/next`` — surface the top Pulse card as the next paper to read."""
     if update.message is None:
@@ -291,8 +290,8 @@ def _inbox_keyboard(
     return InlineKeyboardMarkup([primary, secondary])
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/inbox`` — show top 10 unread inbox papers for triage."""
     if update.message is None:

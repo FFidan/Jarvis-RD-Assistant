@@ -8,14 +8,15 @@ Covers:
 - /pair <token>  unknown token → replies error
 - /unpair        paired chat → removes pairing, purges unconsumed tokens
 - /unpair        not paired → replies informational
-- /whoami        paired chat → replies user_id + chat_id
+- /whoami        paired chat → shows paired-since timestamp (no raw user_id)
 - /whoami        not paired → replies unpaired instructions
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -196,12 +197,13 @@ async def test_pair_expired_token_deletes_and_replies_error():
 async def test_pair_valid_token_upserts_pairing_and_marks_consumed():
     """Valid token upserts telegram_user_pairings and marks token consumed."""
     future = datetime.now(UTC) + timedelta(minutes=10)
-    conn = _make_conn(
-        fetchrow_return={
-            "user_id": 99,
-            "expires_at": future,
-            "consumed_at": None,
-        }
+    conn = _make_conn()
+    # First fetchrow: token lookup; second: UPSERT RETURNING (no rebound)
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"user_id": 99, "expires_at": future, "consumed_at": None},
+            {"was_update": False, "prior_chat_id": None},
+        ]
     )
     pool = _make_pool(conn)
     update = _make_update(chat_id=12345, username="alice")
@@ -209,13 +211,16 @@ async def test_pair_valid_token_upserts_pairing_and_marks_consumed():
 
     await pair_command(update, context)
 
-    # Two execute calls: upsert pairings + mark consumed
-    assert conn.execute.await_count == 2
-    upsert_sql = conn.execute.await_args_list[0].args[0]
-    consumed_sql = conn.execute.await_args_list[1].args[0]
-    assert "telegram_user_pairings" in upsert_sql
-    assert "INSERT" in upsert_sql or "ON CONFLICT" in upsert_sql
+    # One execute call: mark token consumed; upsert now uses fetchrow (RETURNING)
+    assert conn.execute.await_count == 1
+    consumed_sql = conn.execute.await_args_list[0].args[0]
     assert "consumed_at" in consumed_sql
+
+    # UPSERT was issued via fetchrow (second call)
+    assert conn.fetchrow.await_count == 2
+    upsert_sql = conn.fetchrow.await_args_list[1].args[0]
+    assert "telegram_user_pairings" in upsert_sql
+    assert "ON CONFLICT" in upsert_sql
 
     # Success reply
     update.message.reply_text.assert_awaited_once()
@@ -272,10 +277,9 @@ async def test_unpair_not_paired_chat_replies_informational():
 
 
 @pytest.mark.asyncio
-async def test_whoami_paired_chat_shows_user_id():
-    """Paired chat shows user_id and chat_id in the reply."""
-    paired_at = datetime.now(UTC)
-    # asyncpg Record-like object
+async def test_whoami_paired_chat_shows_paired_since():
+    """Paired chat shows paired-since timestamp; must NOT leak the raw DB user_id."""
+    paired_at = datetime(2025, 6, 1, 10, 30, tzinfo=UTC)
     row = {
         "user_id": 99,
         "telegram_username": "alice",
@@ -291,8 +295,10 @@ async def test_whoami_paired_chat_shows_user_id():
     update.message.reply_text.assert_awaited_once()
     text = update.message.reply_text.call_args[0][0]
     assert "Paired" in text
-    assert "99" in text  # user_id
-    assert "12345" in text  # chat_id
+    assert "2025-06-01" in text  # paired-since date present
+    # 3.14 (DOM-D-07): raw DB PK must not be in the reply
+    assert not re.search(r"user_id=\d+", text), f"Raw user_id leaked in /whoami reply: {text!r}"
+    assert "99" not in text, f"Raw numeric DB PK 99 leaked in /whoami reply: {text!r}"
 
 
 @pytest.mark.asyncio
@@ -327,4 +333,123 @@ async def test_whoami_legacy_owner_shows_system_owner_message():
         "system owner" in text.lower()
         or "legacy" in text.lower()
         or "single-tenant" in text.lower()
+    )
+
+
+# ---------------------------------------------------------------------------
+# DOM-D-05: /pair rebound — second pairing from a new chat emits audit + notify
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pair_rebound_emits_system_event_and_notifies_prior_chat():
+    """DOM-D-05: pairing from a new chat displacing an existing pairing must:
+    - emit a system_events 'pairing.rebound' audit entry via log_event
+    - attempt to notify the prior chat_id via bot.send_message
+    - still succeed and reply Paired to the new chat
+    """
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    conn = _make_conn()
+    # First fetchrow: token lookup; second: UPSERT RETURNING (rebound)
+    upsert_result = {"was_update": True, "prior_chat_id": 1001}
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"user_id": 55, "expires_at": future, "consumed_at": None},
+            upsert_result,
+        ]
+    )
+    pool = _make_pool(conn)
+    # New pairing comes from chat 2002 (displaces 1001)
+    update = _make_update(chat_id=2002, username="bob")
+    context = _make_context(pool, args=["newtoken"])
+    context.bot = MagicMock()
+    context.bot.send_message = AsyncMock()
+
+    mock_log_event = AsyncMock()
+    with patch(
+        "telegram_bot.handlers.commands.pairing_commands.log_event",
+        mock_log_event,
+    ):
+        await pair_command(update, context)
+
+    # 1. log_event called with pairing.rebound
+    mock_log_event.assert_awaited_once()
+    log_kwargs = mock_log_event.await_args.kwargs
+    assert log_kwargs["message"] == "pairing.rebound"
+    assert log_kwargs["category"] == "auth"
+    assert log_kwargs["context"]["prior_chat_id"] == 1001
+    assert log_kwargs["context"]["new_chat_id"] == 2002
+
+    # 2. Prior chat notified
+    context.bot.send_message.assert_awaited_once()
+    notify_args = context.bot.send_message.await_args
+    called_chat = notify_args.args[0] if notify_args.args else notify_args.kwargs.get("chat_id")
+    assert called_chat == 1001
+    notified_text: str = notify_args.kwargs.get("text", "")
+    assert "paired" in notified_text.lower() or "security" in notified_text.lower()
+
+    # 3. New chat still gets success reply
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.call_args[0][0]
+    assert "Paired" in reply
+
+
+@pytest.mark.asyncio
+async def test_pair_rebound_stale_prior_chat_does_not_fail_new_pairing():
+    """DOM-D-05: if notifying prior chat raises (stale/blocked), pairing still succeeds."""
+    future = datetime.now(UTC) + timedelta(minutes=10)
+    conn = _make_conn()
+    upsert_result = {"was_update": True, "prior_chat_id": 9999}
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {"user_id": 77, "expires_at": future, "consumed_at": None},
+            upsert_result,
+        ]
+    )
+    pool = _make_pool(conn)
+    update = _make_update(chat_id=3003, username="carol")
+    context = _make_context(pool, args=["token77"])
+    context.bot = MagicMock()
+    # Simulate blocked/stale prior chat raising
+    context.bot.send_message = AsyncMock(side_effect=Exception("chat not found"))
+
+    mock_log_event = AsyncMock()
+    with patch(
+        "telegram_bot.handlers.commands.pairing_commands.log_event",
+        mock_log_event,
+    ):
+        await pair_command(update, context)
+
+    # Pairing still succeeds despite failed notification
+    update.message.reply_text.assert_awaited_once()
+    reply = update.message.reply_text.call_args[0][0]
+    assert "Paired" in reply
+
+
+# ---------------------------------------------------------------------------
+# DOM-D-07: /whoami must not leak raw DB user_id (PK)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_whoami_does_not_leak_db_user_id():
+    """DOM-D-07: /whoami reply must contain no 'user_id=<digits>' pattern."""
+    paired_at = datetime.now(UTC)
+    row = {
+        "user_id": 12345678,
+        "telegram_username": None,
+        "paired_at": paired_at,
+    }
+    pool = _make_pool(_make_conn(), fetchrow_return=row)
+    update = _make_update(chat_id=99)
+    context = _make_context(pool, args=[])
+
+    await whoami_command(update, context)
+
+    text = update.message.reply_text.call_args[0][0]
+    assert not re.search(r"user_id=\d+", text), (
+        f"DOM-D-07: raw DB PK leaked in /whoami reply: {text!r}"
+    )
+    assert "12345678" not in text, (
+        f"DOM-D-07: raw numeric PK 12345678 leaked in /whoami reply: {text!r}"
     )

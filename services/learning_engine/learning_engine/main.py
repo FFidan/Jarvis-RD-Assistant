@@ -12,6 +12,7 @@ AnkiExporter) lives in ``custom_init_tasks`` hooks below.
 
 import asyncio
 import logging
+from typing import Any
 
 import asyncpg
 import httpx
@@ -25,6 +26,9 @@ from jarvis_common import (
     configure_logging,
     configure_middleware_and_errors,
     verify_api_key,
+)
+from jarvis_common.app_factory import (
+    make_init_langfuse_hook,
 )
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
@@ -54,34 +58,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-async def _init_langfuse_hook(app: FastAPI) -> None:
-    """Initialize Langfuse SDK and Instructor-patched OpenAI client.
-
-    No-op when LANGFUSE_HOST is unset — local dev without --profile observability.
-    Attaches ``app.state.openai_client`` (and ``svc.openai_client``) for use by
-    ``call_llm_structured`` in ``CardGenerator.generate_cards``.
-    """
-    import instructor  # noqa: PLC0415
-    import openai  # noqa: PLC0415
-    from jarvis_common.llm_client import (  # noqa: PLC0415
-        _langfuse_lifespan_hook,
-        get_litellm_config,
-    )
-    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415
-
+def _set_openai_client(openai_client: Any) -> None:
+    """Bridge for ``make_init_langfuse_hook`` — populates ``learning_engine._state.svc``."""
     from learning_engine._state import set_services  # noqa: PLC0415
 
-    _langfuse_lifespan_hook()
-    litellm_config = get_litellm_config()
-    _master_key_secret = get_secrets_settings().litellm_master_key
-    openai_client = instructor.from_openai(
-        openai.AsyncOpenAI(
-            base_url=f"{litellm_config.base_url}/v1",
-            api_key=_master_key_secret.get_secret_value() if _master_key_secret else "dummy",
-        ),
-        mode=instructor.Mode.JSON,
-    )
-    app.state.openai_client = openai_client
     set_services(openai_client=openai_client)
 
 
@@ -166,7 +146,7 @@ async def _log_le_started(app: FastAPI) -> None:
 _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     custom_init_tasks=[
-        _init_langfuse_hook,
+        make_init_langfuse_hook(_set_openai_client),
         _warn_multitenant_stub,
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
@@ -175,7 +155,7 @@ _lifespan_config = ServiceLifespanConfig(
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
     custom_teardown_tasks=[
-        None,  # _init_langfuse_hook
+        None,  # init_langfuse_hook
         None,  # _warn_multitenant_stub
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker

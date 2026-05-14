@@ -10,6 +10,7 @@ export function JournalSection() {
   const [saving, setSaving] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveAbortController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setLoadError(null);
@@ -27,14 +28,16 @@ export function JournalSection() {
     });
   }, [today]);
 
-  // Cleanup: clear any pending save timer on unmount to prevent state updates on
-  // an unmounted component and avoid network requests after navigation.
+  // Cleanup: clear any pending save timer and abort any in-flight fetch on unmount
+  // to prevent setState-on-unmounted-component warnings.
   useEffect(() => {
     return () => {
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
         saveTimer.current = null;
       }
+      saveAbortController.current?.abort();
+      saveAbortController.current = null;
     };
   }, []);
 
@@ -42,12 +45,18 @@ export function JournalSection() {
     (next: JournalPrompts) => {
     if (loadError) return;
     if (saveTimer.current) clearTimeout(saveTimer.current);
+    // Abort any in-flight save before scheduling a new one
+    saveAbortController.current?.abort();
+    saveAbortController.current = null;
       setSaving(false);
       saveTimer.current = setTimeout(() => {
+        const controller = new AbortController();
+        saveAbortController.current = controller;
         setSaving(true);
-        upsertJournalEntry(today, next)
+        upsertJournalEntry(today, next, controller.signal)
           .then(() => setSaving(false))
           .catch((err) => {
+            if (err instanceof DOMException && err.name === 'AbortError') return;
             console.error('Journal save failed:', err);
             setSaving(false);
           });

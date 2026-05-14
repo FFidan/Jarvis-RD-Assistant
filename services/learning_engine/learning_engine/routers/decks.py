@@ -2,6 +2,7 @@
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
+from jarvis_common.auth import current_user_id_or_none
 
 from learning_engine.converters import row_to_deck_response
 from learning_engine.deps import get_db_pool, limiter
@@ -18,16 +19,18 @@ async def create_deck(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> DeckResponse:
     """Create a new flashcard deck."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
-            INSERT INTO decks (name, description, topic_id)
-            VALUES ($1, $2, $3)
+            INSERT INTO decks (name, description, topic_id, user_id)
+            VALUES ($1, $2, $3, $4)
             RETURNING *, 0 AS card_count, 0 AS due_count
             """,
             body.name,
             body.description,
             body.topic_id,
+            user_id,
         )
     return row_to_deck_response(row)
 
@@ -39,6 +42,7 @@ async def list_decks(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[DeckResponse]:
     """List all decks with card and due counts."""
+    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -47,8 +51,10 @@ async def list_decks(
                    COUNT(c.id) FILTER (WHERE c.due_at <= NOW()) AS due_count
             FROM decks d
             LEFT JOIN cards c ON c.deck_id = d.id
+            WHERE d.user_id IS NOT DISTINCT FROM $1
             GROUP BY d.id
             ORDER BY d.created_at DESC
-            """
+            """,
+            user_id,
         )
     return [row_to_deck_response(row) for row in rows]

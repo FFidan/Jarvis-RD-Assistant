@@ -1,86 +1,118 @@
 """Centralized configuration for the Telegram bot."""
 
+from __future__ import annotations
+
 import logging
-import os
-from dataclasses import dataclass
 
 import asyncpg
-from jarvis_common import build_database_url, init_pg_connection
-from pydantic import SecretStr
+from jarvis_common import init_pg_connection
+from jarvis_common.app_factory import build_database_url
+from jarvis_common.config import JarvisCommonSettings
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class BotConfig:
-    """Immutable configuration loaded from environment variables."""
+class BotConfig(JarvisCommonSettings):
+    model_config = SettingsConfigDict(
+        env_file=None, extra="ignore", case_sensitive=False, populate_by_name=True
+    )
+    """Typed pydantic-settings configuration for the Telegram bot.
 
-    telegram_token: str
-    telegram_chat_id: int | None
-    database_url: str
-    paper_ingestion_url: str
-    learning_engine_url: str
-    jarvis_api_key: SecretStr | None
+    Extends ``JarvisCommonSettings`` with bot-specific keys.  All fields map
+    1:1 to the existing env vars — no drops, no renames.
+
+    1:1 env-var table (telegram-bot layer)
+    ----------------------------------------
+    Env var                 Field                   Notes
+    ---                     ---                     ---
+    TELEGRAM_BOT_TOKEN      telegram_token          Required; bot token
+    TELEGRAM_CHAT_ID        telegram_chat_id        Optional; int or None
+    DATABASE_URL            database_url            Inherited; fallback DSN
+    PAPER_INGESTION_URL     paper_ingestion_url     Service URL
+    LEARNING_ENGINE_URL     learning_engine_url     Service URL
+    JARVIS_API_KEY          jarvis_api_key          Optional; auth header
+    """
+
+    # --- Telegram bot token ---------------------------------------------
+    telegram_token: str = Field(
+        default="",
+        alias="TELEGRAM_BOT_TOKEN",
+        description="Telegram bot token (TELEGRAM_BOT_TOKEN).  Required at runtime.",
+    )
+
+    # --- Outbound chat ID -----------------------------------------------
+    telegram_chat_id: int | None = Field(
+        default=None,
+        alias="TELEGRAM_CHAT_ID",
+        description=(
+            "Telegram chat ID for outbound messages (TELEGRAM_CHAT_ID).  "
+            "None = use DB pairing flow."
+        ),
+    )
+
+    # --- Backend service URLs -------------------------------------------
+    paper_ingestion_url: str = Field(
+        default="http://paper_ingestion:8000",
+        description="Paper Ingestion service URL (PAPER_INGESTION_URL).",
+    )
+    learning_engine_url: str = Field(
+        default="http://learning_engine:8001",
+        description="Learning Engine service URL (LEARNING_ENGINE_URL).",
+    )
+
+    # --- API auth key ---------------------------------------------------
+    jarvis_api_key: SecretStr | None = Field(  # type: ignore[assignment]
+        default=None,
+        description="JARVIS API key for authenticated backend calls (JARVIS_API_KEY).",
+    )
+
+    @field_validator("telegram_chat_id", mode="before")
+    @classmethod
+    def _coerce_chat_id(cls, v: object) -> int | None:
+        """Coerce TELEGRAM_CHAT_ID: non-integer strings become None."""
+        if v is None or v == "":
+            return None
+        try:
+            return int(v)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            logger.warning("TELEGRAM_CHAT_ID=%r not parseable as integer; treating as unset", v)
+            return None
 
     @classmethod
-    def from_env(cls) -> "BotConfig":
-        """Build config from environment variables.
+    def from_env(cls) -> BotConfig:
+        """Build and validate config from environment variables.
 
         Raises
         ------
         SystemExit
-            If required variables are missing.
+            If required variables are missing (TELEGRAM_BOT_TOKEN, DATABASE_URL).
         """
-        from jarvis_common.settings import SecretsSettings  # noqa: PLC0415
+        cfg = cls()
 
-        secrets = SecretsSettings()
-        token_secret = secrets.telegram_bot_token
-        token = token_secret.get_secret_value() if token_secret else ""
-        if not token:
+        if not cfg.telegram_token:
             logger.critical("TELEGRAM_BOT_TOKEN is not set")
             raise SystemExit(1)
 
-        chat_id_str = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
-        chat_id: int | None
-        if not chat_id_str:
+        if cfg.telegram_chat_id is None:
             logger.info(
                 "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
             )
-            chat_id = None
-        else:
-            try:
-                chat_id = int(chat_id_str)
-            except ValueError:
-                logger.warning(
-                    "TELEGRAM_CHAT_ID=%r not parseable as integer; treating as unset",
-                    chat_id_str,
-                )
-                chat_id = None
 
+        # Resolve database URL via Docker-Secret-aware helper; overrides the
+        # plain DATABASE_URL field when a secrets file is mounted.
         try:
-            database_url = build_database_url()
+            resolved_url = build_database_url()
         except RuntimeError as exc:
             logger.critical("Cannot build DATABASE_URL: %s", exc)
             raise SystemExit(1) from exc
 
-        api_key_secret = secrets.jarvis_api_key
-        _raw_api_key = api_key_secret.get_secret_value() if api_key_secret else ""
-        if not _raw_api_key:
+        if not cfg.jarvis_api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
-        jarvis_api_key: SecretStr | None = SecretStr(_raw_api_key) if _raw_api_key else None
 
-        return cls(
-            telegram_token=token,
-            telegram_chat_id=chat_id,
-            database_url=database_url,
-            paper_ingestion_url=os.environ.get(
-                "PAPER_INGESTION_URL", "http://paper_ingestion:8000"
-            ),
-            learning_engine_url=os.environ.get(
-                "LEARNING_ENGINE_URL", "http://learning_engine:8001"
-            ),
-            jarvis_api_key=jarvis_api_key,
-        )
+        # Return a new instance with the resolved database_url applied.
+        return cfg.model_copy(update={"database_url": resolved_url})
 
 
 async def create_db_pool(database_url: str) -> asyncpg.Pool:

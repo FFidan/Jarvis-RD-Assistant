@@ -557,6 +557,7 @@ async def test_optional_signals_requested_are_enriched_before_stage3(patch_pipel
     compute_citation_signals.assert_awaited_once_with(
         pool,
         [sc.paper.external_id for sc in patch_pipeline["stage2"]],
+        user_id=None,
     )
     classifier_scores.assert_awaited_once()
     assert classifier_scores.await_args is not None

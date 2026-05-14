@@ -17,8 +17,8 @@ from telegram_bot.project_manager import ProjectManager
 logger = logging.getLogger(__name__)
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/tasks [project_id]`` — list in-progress tasks, optionally filtered by project."""
     if update.message is None:
@@ -68,8 +68,8 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await update.message.reply_text(truncate("\n".join(lines)), parse_mode="HTML")
 
 
-@auth_required
 @rate_limit(max_calls=10, window_seconds=60)
+@auth_required
 async def done_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/done <task_id>`` — mark a task as complete via ProjectManager."""
     if update.message is None:

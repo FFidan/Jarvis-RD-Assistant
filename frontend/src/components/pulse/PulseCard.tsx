@@ -27,6 +27,11 @@ export interface PulseCardProps {
    * The full /pulse Pulse Deck page leaves this default (false) → all 4 actions.
    */
   hideTrashAndReject?: boolean;
+  /**
+   * Whether a save mutation is pending in the parent. When true, disables the
+   * Save button to prevent double-tap firing the save twice (DOM-F-03).
+   */
+  savePending?: boolean;
 }
 
 /**
@@ -43,6 +48,7 @@ export function PulseCard({
   onOpen,
   rated = false,
   hideTrashAndReject = false,
+  savePending = false,
 }: PulseCardProps) {
   const queryClient = useQueryClient();
 
@@ -124,8 +130,6 @@ export function PulseCard({
   // We rely solely on server-authoritative card.user_state (not the local `rated` flag)
   // to avoid a race where `rated` flips true before the cache refetches, causing a
   // second click to fire onRate('save') again instead of unsavePaper.
-  // TODO(parent): pass saveMut.isPending from PulseDeck/PulsePreviewCard as a prop
-  // so the button can also be disabled while the initial save round-trip is in flight.
   const isSaved = card.user_state === 'to_read';
 
   const handleSaveClick = (e: React.MouseEvent) => {
@@ -239,7 +243,7 @@ export function PulseCard({
               variant={isSaved ? 'default' : 'outline'}
               size="sm"
               aria-label={isSaved ? 'Unsave' : 'Save'}
-              disabled={unsaveMut.isPending}
+              disabled={savePending || unsaveMut.isPending}
               onClick={handleSaveClick}
             >
               <Bookmark className="h-3.5 w-3.5" />

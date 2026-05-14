@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { JournalSection } from '@/components/my-day/sections/JournalSection';
 
@@ -33,6 +33,10 @@ describe('JournalSection — saveTimer cleanup on unmount', () => {
     vi.mocked(upsertJournalEntry).mockResolvedValue(undefined as any);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('clears the pending save timer when the component unmounts mid-debounce', async () => {
     const user = userEvent.setup();
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
@@ -58,6 +62,55 @@ describe('JournalSection — saveTimer cleanup on unmount', () => {
     clearTimeoutSpy.mockRestore();
   });
 
+  it('aborts in-flight fetch and does not call setState when unmounting during a save', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+
+    // Track the signal passed to upsertJournalEntry
+    let capturedSignal: AbortSignal | undefined;
+    vi.mocked(upsertJournalEntry).mockImplementation(
+      (_date, _prompts, signal) => {
+        capturedSignal = signal;
+        // Return a promise that never resolves on its own (simulates in-flight)
+        return new Promise<any>((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('AbortError', 'AbortError')));
+        });
+      },
+    );
+
+    const consoleErrorSpy = vi.spyOn(console, 'error');
+
+    const { unmount } = renderJournal();
+
+    await screen.findByPlaceholderText("What's the one thing you'll do first tomorrow?");
+
+    const textarea = screen.getByPlaceholderText("What's the one thing you'll do first tomorrow?");
+    await user.type(textarea, 'In-flight text');
+
+    // Advance past the 1500ms debounce so upsertJournalEntry is called
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+
+    // Confirm the fetch was initiated
+    expect(vi.mocked(upsertJournalEntry)).toHaveBeenCalledOnce();
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    // Unmount while the fetch is still in flight
+    unmount();
+
+    // The signal should be aborted after unmount
+    expect(capturedSignal!.aborted).toBe(true);
+
+    // No "setState-on-unmounted" error should have been logged
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('setState'),
+    );
+
+    consoleErrorSpy.mockRestore();
+  });
+
   it('saves when the component stays mounted until the debounce fires', async () => {
     const user = userEvent.setup();
     renderJournal();
@@ -78,6 +131,7 @@ describe('JournalSection — saveTimer cleanup on unmount', () => {
     expect(vi.mocked(upsertJournalEntry)).toHaveBeenCalledWith(
       expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       expect.objectContaining({ first_move: expect.stringContaining('Ship the feature') }),
+      expect.any(AbortSignal),
     );
   });
 });

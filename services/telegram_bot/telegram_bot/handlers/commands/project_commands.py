@@ -28,8 +28,8 @@ def _project_keyboard(project_id: int | str) -> InlineKeyboardMarkup:
     )
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/projects`` — list all active projects with status and description."""
     if update.message is None:
@@ -67,8 +67,8 @@ async def projects_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
 
-@auth_required
 @rate_limit(max_calls=5, window_seconds=60)
+@auth_required
 async def newproject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/newproject <name>`` — create a new project via ProjectManager."""
     if update.message is None:

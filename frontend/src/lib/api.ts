@@ -1350,10 +1350,15 @@ export async function getJournalEntry(date: string): Promise<JournalEntry | null
   }
 }
 
-export async function upsertJournalEntry(date: string, prompts: JournalPrompts): Promise<JournalEntry> {
+export async function upsertJournalEntry(
+  date: string,
+  prompts: JournalPrompts,
+  signal?: AbortSignal,
+): Promise<JournalEntry> {
   return apiFetch<JournalEntry>('/api/my-day/journal', {
     method: 'POST',
     body: JSON.stringify({ date, prompts }),
+    signal,
   });
 }
 

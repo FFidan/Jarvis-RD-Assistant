@@ -36,6 +36,9 @@ from jarvis_common import (
     verify_api_key,
 )
 from jarvis_common.app_factory import (
+    make_init_langfuse_hook,
+)
+from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
 from jarvis_common.llm_client import get_litellm_config
@@ -84,31 +87,10 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 
-async def _init_langfuse_hook(app: FastAPI) -> None:
-    """Initialize Langfuse SDK and Instructor-patched OpenAI client.
-
-    No-op when LANGFUSE_HOST is unset — local dev without --profile observability.
-    Attaches ``app.state.openai_client`` (and ``svc.openai_client``) for use by
-    ``call_llm_structured`` in request handlers and job workers.
-    """
-    import instructor  # noqa: PLC0415
-    import openai  # noqa: PLC0415
-    from jarvis_common.llm_client import _langfuse_lifespan_hook  # noqa: PLC0415
-    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415
-
+def _set_openai_client(openai_client: Any) -> None:
+    """Bridge for ``make_init_langfuse_hook`` — populates ``paper_ingestion._state.svc``."""
     from paper_ingestion._state import set_services  # noqa: PLC0415
 
-    _langfuse_lifespan_hook()
-    litellm_config = get_litellm_config()
-    _master_key_secret = get_secrets_settings().litellm_master_key
-    openai_client = instructor.from_openai(
-        openai.AsyncOpenAI(
-            base_url=f"{litellm_config.base_url}/v1",
-            api_key=_master_key_secret.get_secret_value() if _master_key_secret else "dummy",
-        ),
-        mode=instructor.Mode.JSON,
-    )
-    app.state.openai_client = openai_client
     set_services(openai_client=openai_client)
 
 
@@ -273,7 +255,7 @@ async def _autoconfigure_models_hook(app: FastAPI) -> None:
     if row is not None:
         return  # Already ran; rehydrate above is all we need
 
-    hardware = detect_hardware()
+    hardware = await asyncio.to_thread(detect_hardware)
     logger.info(
         "First-boot auto-configure: hardware tier=%d vram=%.1f GB",
         hardware.tier,
@@ -401,7 +383,7 @@ _lifespan_config = ServiceLifespanConfig(
         "timeout": httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
     },
     custom_init_tasks=[
-        _init_langfuse_hook,
+        make_init_langfuse_hook(_set_openai_client),
         _warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
@@ -415,7 +397,7 @@ _lifespan_config = ServiceLifespanConfig(
     ],
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
-        None,  # _init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
+        None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
         None,  # _warn_multitenant_stub
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook

@@ -764,3 +764,102 @@ async def test_extract_entities_rejects_unowned_paper(monkeypatch):
     assert exc_info.value.status_code == 403
     ownership_mock.assert_awaited_once_with(conn, 1, 2)
     extract_mock.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# batch_extract_entities — admin gate tests (3.18)
+# ---------------------------------------------------------------------------
+
+
+def _make_batch_extract_client(*, user_role: str | None):
+    """Return (TestClient, conn, app) with the knowledge_graph router mounted.
+
+    Parameters
+    ----------
+    user_role:
+        Value placed on ``request.state.user_role``.  ``None`` simulates an
+        API-key-only caller (no session cookie — allowed through by
+        ``require_admin``).  ``"user"`` → 403.  ``"admin"`` → 200.
+    """
+    from fastapi import FastAPI, Request
+    from fastapi.testclient import TestClient
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
+    from paper_ingestion.deps import (
+        get_db_pool,
+        get_http_client,
+        get_optional_embedder,
+        get_optional_qdrant,
+        limiter,
+    )
+    from paper_ingestion.routers import knowledge_graph as kg_router
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+
+    conn = AsyncMock()
+    conn.fetch.return_value = []  # no papers needing extraction → fast path
+    pool = _make_pool(conn)
+
+    app.include_router(kg_router.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_http_client] = lambda: AsyncMock()
+    app.dependency_overrides[get_optional_embedder] = lambda: None
+    app.dependency_overrides[get_optional_qdrant] = lambda: None
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    # Override require_admin so we can inject the role into request.state
+    # before delegating to the real dependency.
+    async def _patched_require_admin(request: Request) -> None:
+        if user_role is not None:
+            request.state.user_role = user_role
+        await require_admin(request)
+
+    app.dependency_overrides[require_admin] = _patched_require_admin
+
+    tc = TestClient(app, raise_server_exceptions=False)
+    return tc, conn, app
+
+
+def test_batch_extract_entities_rejects_non_admin():
+    """POST /api/extract-entities/batch returns 403 for a non-admin caller.
+
+    3.18 fix: require_admin dependency must be declared on the route so that
+    any browser session with role != 'admin' is rejected before any DB or
+    LLM work is triggered.
+    """
+    tc, conn, app = _make_batch_extract_client(user_role="user")
+    try:
+        resp = tc.post("/api/extract-entities/batch")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 403, (
+        f"Expected 403 (admin gate), got {resp.status_code}: {resp.text}"
+    )
+    # No DB work should be performed after the rejection
+    conn.fetch.assert_not_called()
+
+
+def test_batch_extract_entities_accepts_admin():
+    """POST /api/extract-entities/batch returns 200 for an admin caller.
+
+    3.18 fix: admin-role browser sessions (and API-key-only callers with no
+    session cookie) must be allowed through.
+    """
+    tc, conn, app = _make_batch_extract_client(user_role="admin")
+    try:
+        resp = tc.post("/api/extract-entities/batch")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter
+
+        limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+    body = resp.json()
+    assert body == {"extracted": 0, "failed": 0, "total": 0}

@@ -6,7 +6,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, log_audit
 from jarvis_common.auth import current_user_id_or_none
-from jarvis_common.db_helpers import dynamic_update
+from jarvis_common.db_helpers import assert_paper_ownership, dynamic_update
 
 from learning_engine.card_store import insert_card
 from learning_engine.converters import row_to_card_response
@@ -39,6 +39,9 @@ async def create_card(
     """Create a flashcard manually."""
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
+        if body.paper_id is not None:
+            await assert_paper_ownership(conn, body.paper_id, user_id)
+
         fsrs_state, due_at = fsrs_manager.create_new_card()
         evidence = body.evidence.model_dump() if body.evidence else {}
 

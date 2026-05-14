@@ -15,7 +15,11 @@ import { ProjectsPage } from '@/pages/ProjectsPage';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
-import { ResearchFeedPage } from '@/pages/ResearchFeedPage';
+// ResearchFeedPage is lazy-loaded (DOM-F-10) — keeps ~26 kB of feed components
+// out of the HomePage initial bundle.
+const ResearchFeedPage = lazy(() =>
+  import('@/pages/ResearchFeedPage').then((m) => ({ default: m.ResearchFeedPage })),
+);
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
 import { getFirstRunStatus, getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -30,6 +34,8 @@ import { AdminOnlyRoute } from '@/components/auth/AdminOnlyRoute';
 // - PaperDetailPage pulls react-markdown + math/syntax stacks (~392 kB).
 // - Setup wizards & AdminUsersPage are large (12-16 kB each) and only used
 //   by admins / on first run.
+// - ResearchFeedPage (DOM-F-10): ~26 kB of feed components excluded from
+//   the HomePage initial bundle.
 const KnowledgeGraphPage = lazy(() =>
   import('@/pages/KnowledgeGraphPage').then((m) => ({ default: m.KnowledgeGraphPage })),
 );
@@ -187,7 +193,7 @@ export function App() {
                   <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
-                  <Route path="feed" element={<RouteErrorBoundary><ResearchFeedPage /></RouteErrorBoundary>} />
+                  <Route path="feed" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ResearchFeedPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="ask" element={<Navigate to="/feed?surface=ask" replace />} />
                   <Route path="pulse" element={<RouteErrorBoundary><PulseDeckPage /></RouteErrorBoundary>} />
                   <Route path="paper/:paperId" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><PaperDetailPage /></Suspense></RouteErrorBoundary>} />

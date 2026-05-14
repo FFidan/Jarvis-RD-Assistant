@@ -266,6 +266,7 @@ export function PulsePreviewCard({ containerRef }: PulsePreviewCardProps) {
             onOpen={handleOpen}
             rated={ratedCards.has(card.paper_id)}
             hideTrashAndReject
+            savePending={rateMutation.isPending}
           />
         ))}
 

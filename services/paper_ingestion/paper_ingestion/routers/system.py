@@ -23,9 +23,9 @@ from paper_ingestion.ingestion.embedder import (
 from paper_ingestion.models import SystemModelsResponse
 from paper_ingestion.services.model_lifecycle import (
     HardwareInfo,
+    async_get_cached_hardware,
     build_model_statuses,
     catalog_entry_for_model,
-    get_cached_hardware,
     normalize_model_tag,
     recommendations_for_role,
 )
@@ -298,7 +298,7 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
     except RuntimeError as exc:
         result["issues"]["embedding_config"] = str(exc)
 
-    hardware: HardwareInfo = get_cached_hardware(request.app.state)
+    hardware: HardwareInfo = await async_get_cached_hardware(request.app.state)
     result["hardware"].update(hardware.to_dict())
 
     # Fetch per-machine num_ctx overrides so fit_detail reflects the user's chosen context.
@@ -351,7 +351,7 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
 @limiter.limit("10/minute")
 async def get_system_hardware(request: Request) -> dict[str, Any]:
     """Return local accelerator information for model selection."""
-    return get_cached_hardware(request.app.state).to_dict()
+    return (await async_get_cached_hardware(request.app.state)).to_dict()
 
 
 @router.get("/models/recommendations")
@@ -362,7 +362,7 @@ async def get_model_recommendations(
 ) -> dict[str, Any]:
     """Return catalog-backed model recommendations for one role."""
     models = await get_system_models(request)
-    hardware = get_cached_hardware(request.app.state)
+    hardware = await async_get_cached_hardware(request.app.state)
     cloud_api_keys = await _cloud_key_presence(request.app.state.db_pool)
     return {
         "role": role,

@@ -6,6 +6,7 @@ Uses an in-memory sliding-window approach — no external dependencies.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import defaultdict
@@ -20,6 +21,12 @@ logger = logging.getLogger(__name__)
 # chat_id:command_name → list of monotonic timestamps
 _timestamps: dict[str, list[float]] = defaultdict(list)
 
+# Per-key asyncio locks — lazy creation via defaultdict.
+# Guards the read-check-then-append sequence against concurrent coroutines
+# (TOCTOU: two coroutines both pass `len(recent) >= max_calls` before either
+# appends, allowing max_calls+N invocations to slip through).
+_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+
 
 def rate_limit(
     max_calls: int = 5,
@@ -31,6 +38,10 @@ def rate_limit(
     *cooldown_seconds* > 0 enforces a hard per-command cooldown after the last
     invocation (distinct from the sliding-window cap). Use for heavyweight
     commands like ``/pulse_now``.
+
+    Thread/coroutine safety: all timestamp mutations happen under a per-key
+    ``asyncio.Lock`` so that concurrent invocations cannot interleave between
+    the window check and the append (TOCTOU fix, DOM-D-06).
     """
 
     def decorator(func):  # type: ignore[no-untyped-def]
@@ -42,28 +53,51 @@ def rate_limit(
                 return await func(update, context)
             chat_id = str(update.effective_chat.id)
             key = f"{chat_id}:{func.__module__}.{func.__qualname__}"
-            now = time.monotonic()
-            horizon = max(window_seconds, cooldown_seconds)
 
-            # Garbage-collect old entries unconditionally so stale timestamps
-            # can never skew the window for long-idle users.
-            stamps = _timestamps[key]
-            stamps[:] = [t for t in stamps if now - t < horizon]
+            async with _locks[key]:
+                now = time.monotonic()
+                horizon = max(window_seconds, cooldown_seconds)
 
-            # --- cooldown check (heavy commands) ---
-            if cooldown_seconds and stamps:
-                elapsed = now - stamps[-1]
-                if elapsed < cooldown_seconds:
-                    remaining = int(cooldown_seconds - elapsed)
+                # Garbage-collect old entries unconditionally so stale timestamps
+                # can never skew the window for long-idle users.
+                stamps = _timestamps[key]
+                stamps[:] = [t for t in stamps if now - t < horizon]
+
+                # --- cooldown check (heavy commands) ---
+                if cooldown_seconds and stamps:
+                    elapsed = now - stamps[-1]
+                    if elapsed < cooldown_seconds:
+                        remaining = int(cooldown_seconds - elapsed)
+                        logger.warning(
+                            "Rate-limited %s (cooldown %ds remaining) chat=%s",
+                            func.__name__,
+                            remaining,
+                            chat_id,
+                        )
+                        if update.message:
+                            await update.message.reply_text(
+                                f"Please wait {remaining}s before using this command again."
+                            )
+                        elif update.callback_query:
+                            await update.callback_query.answer(
+                                text="Rate limit exceeded — try again later", show_alert=True
+                            )
+                        return None
+
+                # --- sliding window check ---
+                recent = [t for t in stamps if now - t < window_seconds]
+                if len(recent) >= max_calls:
                     logger.warning(
-                        "Rate-limited %s (cooldown %ds remaining) chat=%s",
+                        "Rate-limited %s (%d/%d in %ds) chat=%s",
                         func.__name__,
-                        remaining,
+                        len(recent),
+                        max_calls,
+                        window_seconds,
                         chat_id,
                     )
                     if update.message:
                         await update.message.reply_text(
-                            f"Please wait {remaining}s before using this command again."
+                            f"Rate limit exceeded — max {max_calls} calls per {window_seconds}s."
                         )
                     elif update.callback_query:
                         await update.callback_query.answer(
@@ -71,28 +105,8 @@ def rate_limit(
                         )
                     return None
 
-            # --- sliding window check ---
-            recent = [t for t in stamps if now - t < window_seconds]
-            if len(recent) >= max_calls:
-                logger.warning(
-                    "Rate-limited %s (%d/%d in %ds) chat=%s",
-                    func.__name__,
-                    len(recent),
-                    max_calls,
-                    window_seconds,
-                    chat_id,
-                )
-                if update.message:
-                    await update.message.reply_text(
-                        f"Rate limit exceeded — max {max_calls} calls per {window_seconds}s."
-                    )
-                elif update.callback_query:
-                    await update.callback_query.answer(
-                        text="Rate limit exceeded — try again later", show_alert=True
-                    )
-                return None
+                stamps.append(now)
 
-            stamps.append(now)
             return await func(update, context)
 
         return wrapper

@@ -202,6 +202,40 @@ describe('AdminUsersPage', () => {
   });
 });
 
+describe('per-row role select isolation (DOM-F-07)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  it('only disables the mutating row select; other rows remain enabled', async () => {
+    // Mutation never resolves — stays pending so we can inspect disabled state.
+    updateUserRoleMock.mockReturnValue(new Promise(() => {}));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const aliceTrigger = screen.getByRole('combobox', { name: /role for alice@example\.com/i });
+    const adminTrigger = screen.getByRole('combobox', { name: /role for admin@example\.com/i });
+
+    // Trigger mutation on alice's row.
+    await userEvent.click(aliceTrigger);
+    // Select an item from the open listbox.
+    const adminOption = screen.getByRole('option', { name: /admin/i });
+    await userEvent.click(adminOption);
+
+    await waitFor(() => {
+      expect(updateUserRoleMock).toHaveBeenCalled();
+    });
+
+    // alice's trigger must now be disabled; admin's trigger must still be enabled.
+    expect(aliceTrigger).toBeDisabled();
+    expect(adminTrigger).not.toBeDisabled();
+  });
+});
+
 describe('AdminOnlyRoute guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();

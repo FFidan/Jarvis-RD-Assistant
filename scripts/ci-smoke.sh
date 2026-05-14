@@ -14,6 +14,7 @@ export OLLAMA_HOST_PORT="${OLLAMA_HOST_PORT:-11440}"
 cleanup() {
   COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker compose \
     -f "$ROOT_DIR/docker-compose.yml" \
+    --env-file "$ROOT_DIR/versions.env" \
     -f "$OVERRIDE_FILE" \
     down -v --remove-orphans >/dev/null 2>&1 || true
   rm -rf "$TMP_DIR"
@@ -69,6 +70,7 @@ YAML
 compose() {
   COMPOSE_PROJECT_NAME="$PROJECT_NAME" docker compose \
     -f "$ROOT_DIR/docker-compose.yml" \
+    --env-file "$ROOT_DIR/versions.env" \
     -f "$OVERRIDE_FILE" \
     "$@"
 }

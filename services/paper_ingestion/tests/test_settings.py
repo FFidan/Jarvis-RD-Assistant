@@ -1274,3 +1274,85 @@ async def test_fsrs_learning_steps_invalid_rejected(_app, bad_value):
         )
 
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# DOM-A-12: zotero.poll_cron scheduler-refresh failure rolls back DB write
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_set_config_rolls_back_on_scheduler_failure(monkeypatch):
+    """PUT /api/config/zotero.poll_cron rolls back the DB write when scheduler refresh fails.
+
+    Before DOM-A-12 the zotero.poll_cron block swallowed the reschedule exception
+    with a logger.warning, leaving the DB updated while the live cron remained stale.
+    After the fix, the exception is re-raised and the DB write is undone.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common import verify_api_key
+    from paper_ingestion.deps import get_db_pool, get_scheduler
+    from paper_ingestion.main import app
+
+    # --- DB mock ---------------------------------------------------------
+    pool, conn = _make_pool_and_conn()
+
+    # fetchrow: return the existing cron value so the pre-read captures it
+    old_cron = "0 3 * * *"
+    conn.fetchrow.return_value = FakeRecord(key="zotero.poll_cron", value=old_cron)
+
+    # Track execute calls so we can assert rollback was issued
+    execute_calls: list[tuple] = []
+
+    async def _capture_execute(*args, **kwargs):
+        execute_calls.append(args)
+
+    conn.execute = AsyncMock(side_effect=_capture_execute)
+
+    # --- Scheduler mock: reschedule_job raises -------------------------
+    mock_scheduler = MagicMock()
+    mock_scheduler.reschedule_job.side_effect = RuntimeError("job not found")
+
+    # --- Wire overrides ------------------------------------------------
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_scheduler] = lambda: mock_scheduler
+    app.dependency_overrides[verify_api_key] = lambda: None
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            # Starlette re-raises unhandled server exceptions through the ASGI transport;
+            # catch them here so we can still inspect the rollback side-effect.
+            try:
+                await client.put(
+                    "/api/config/zotero.poll_cron",
+                    json={"key": "zotero.poll_cron", "value": "0 5 * * *"},
+                )
+            except Exception:
+                pass  # expected: scheduler RuntimeError propagates as server error
+
+        # The DB rollback execute must have been called: at least one call
+        # must reference the old cron value (INSERT … old_cron) or a DELETE.
+        rollback_issued = any(
+            (
+                # rollback INSERT with old value: (sql, user_id, old_cron)
+                (len(args) >= 3 and args[2] == old_cron)
+                # or DELETE fallback
+                or (len(args) >= 1 and isinstance(args[0], str) and "DELETE" in args[0])
+            )
+            for args in execute_calls
+        )
+        assert rollback_issued, (
+            "Expected a rollback DB execute (old cron re-write or DELETE) after scheduler failure,"
+            f" but execute calls were: {execute_calls}"
+        )
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True

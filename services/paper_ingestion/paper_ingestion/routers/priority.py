@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_or_none, require_admin
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -68,7 +68,11 @@ async def compute_paper_priority(
     return {"paper_id": paper_id, "priority_score": score, "priority_level": level}
 
 
-@router.post("/papers/recompute-priorities", response_model=RecomputePrioritiesResponse)
+@router.post(
+    "/papers/recompute-priorities",
+    response_model=RecomputePrioritiesResponse,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("5/minute")
 async def recompute_all_priorities(
     request: Request,

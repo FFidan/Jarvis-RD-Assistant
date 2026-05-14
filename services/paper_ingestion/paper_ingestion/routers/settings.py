@@ -796,7 +796,8 @@ async def set_config(
             model_id=str(body.value),
             db_pool=db_pool,
         )
-    # For pulse.cron: read the current value before overwriting so we can roll back.
+    # For pulse.cron / zotero.poll_cron: read the current value before overwriting
+    # so we can roll back if the scheduler refresh fails (DOM-A-12).
     old_pulse_cron: str | None = None
     if key == "pulse.cron":
         async with db_pool.acquire() as conn:
@@ -805,6 +806,17 @@ async def set_config(
             )
         if row is not None and isinstance(row["value"], str):
             old_pulse_cron = row["value"]
+
+    old_zotero_poll_cron: str | None = None
+    if key == "zotero.poll_cron":
+        async with db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM user_config"
+                " WHERE key = 'zotero.poll_cron' AND user_id IS NOT DISTINCT FROM $1",
+                row_user_id,
+            )
+        if row is not None and isinstance(row["value"], str):
+            old_zotero_poll_cron = row["value"]
 
     if key in ROLE_TO_ALIAS:
         from paper_ingestion.services.litellm_config import _config_lock
@@ -902,10 +914,30 @@ async def set_config(
                 )
                 logger.info("zotero_library_sync rescheduled live (cron=%s)", body.value)
         except Exception:
-            logger.warning(
-                "zotero_library_sync live reschedule failed (job may not exist yet)",
+            # Scheduler refresh failed — roll back the DB write so DB and live cron
+            # stay consistent (DOM-A-12).
+            _zotero_rollback_sql = (
+                "INSERT INTO user_config (user_id, key, value)"
+                " VALUES ($1, 'zotero.poll_cron', $2::jsonb)"
+                " ON CONFLICT (user_id, key) DO UPDATE"
+                " SET value = $2::jsonb, updated_at = NOW()"
+            )
+            async with db_pool.acquire() as conn:
+                if old_zotero_poll_cron is not None:
+                    await conn.execute(_zotero_rollback_sql, row_user_id, old_zotero_poll_cron)
+                else:
+                    await conn.execute(
+                        "DELETE FROM user_config"
+                        " WHERE key = 'zotero.poll_cron'"
+                        " AND user_id IS NOT DISTINCT FROM $1",
+                        row_user_id,
+                    )
+            logger.error(
+                "zotero_library_sync reschedule failed; DB write rolled back (cron=%s)",
+                body.value,
                 exc_info=True,
             )
+            raise
     if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
         async with db_pool.acquire() as conn:
             await conn.execute(

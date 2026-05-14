@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import {
   ArchiveRestore,
   BookOpen,
@@ -74,7 +75,7 @@ export interface FeedPaperRowProps {
   viewLabel?: string;
 }
 
-export function FeedPaperRow({
+function FeedPaperRowInner({
   paper,
   surface: _surface,
   isSelected,
@@ -660,3 +661,10 @@ export function FeedPaperRow({
     </div>
   );
 }
+
+/**
+ * DOM-F-02: memoized to prevent re-renders of unrelated rows when sibling
+ * row state changes (e.g. one row's mutation fires → only that row re-renders).
+ */
+export const FeedPaperRow = memo(FeedPaperRowInner);
+FeedPaperRow.displayName = 'FeedPaperRow';

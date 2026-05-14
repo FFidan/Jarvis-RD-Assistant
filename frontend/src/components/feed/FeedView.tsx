@@ -205,6 +205,26 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes }: Fe
     setHardDeleteTarget({ id: paperId, title });
   }, []);
 
+  // --- DOM-F-02: stable callbacks for FeedPaperRow props ---
+  // Inline arrows create new function references each render and break React.memo.
+  // These useCallbacks depend only on their respective mutation refs which are
+  // stable across renders (TanStack Query mutations are stable objects).
+
+  const onToggleSelectCb = useCallback(
+    (id: number) => useBulkSelection.getState().toggle(id),
+    [],
+  );
+  const onSaveCb = useCallback((id: number) => saveMutation.mutate(id), [saveMutation]);
+  const onSkipCb = useCallback((id: number) => skipMutation.mutate(id), [skipMutation]);
+  const onMarkReadingCb = useCallback((id: number) => markReadingMut.mutate(id), [markReadingMut]);
+  const onMarkDoneCb = useCallback((id: number) => markDoneMut.mutate(id), [markDoneMut]);
+  const onSetAsideCb = useCallback((id: number) => saveMutation.mutate(id), [saveMutation]);
+  const onReopenCb = useCallback((id: number) => markReadingMut.mutate(id), [markReadingMut]);
+  const onTrashCb = useCallback((id: number) => trashMutation.mutate(id), [trashMutation]);
+  const onStarCb = useCallback((id: number) => starMutation.mutate(id), [starMutation]);
+  const onUnstarCb = useCallback((id: number) => unstarMutation.mutate(id), [unstarMutation]);
+  const onRestoreCb = useCallback((id: number) => restoreMutation.mutate(id), [restoreMutation]);
+
   // ── Keyboard shortcuts (j/k navigation + surface-aware row actions) ───────
 
   // Clamp focusedIdx to valid range so the hook always gets a valid index or null
@@ -295,20 +315,20 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes }: Fe
                 paper={paper}
                 surface={surface}
                 isSelected={selectedIds.has(paper.id)}
-                onToggleSelect={(id) => useBulkSelection.getState().toggle(id)}
-                // Lifecycle callbacks wired to mutations
-                onSave={(id) => saveMutation.mutate(id)}
-                onSkip={(id) => skipMutation.mutate(id)}
-                onMarkReading={(id) => markReadingMut.mutate(id)}
-                onMarkDone={(id) => markDoneMut.mutate(id)}
+                onToggleSelect={onToggleSelectCb}
+                // Lifecycle callbacks wired to mutations (stable via useCallback — DOM-F-02)
+                onSave={onSaveCb}
+                onSkip={onSkipCb}
+                onMarkReading={onMarkReadingCb}
+                onMarkDone={onMarkDoneCb}
                 // setAside: /save sets state='to_read' unconditionally (grounded: routers/papers.py:527)
-                onSetAside={(id) => saveMutation.mutate(id)}
+                onSetAside={onSetAsideCb}
                 // reopen: Done → reading
-                onReopen={(id) => markReadingMut.mutate(id)}
-                onTrash={(id) => trashMutation.mutate(id)}
-                onStar={(id) => starMutation.mutate(id)}
-                onUnstar={(id) => unstarMutation.mutate(id)}
-                onRestore={(id) => restoreMutation.mutate(id)}
+                onReopen={onReopenCb}
+                onTrash={onTrashCb}
+                onStar={onStarCb}
+                onUnstar={onUnstarCb}
+                onRestore={onRestoreCb}
                 onHardDelete={(id) => openHardDelete(id, paper.title)}
                 onView={onView}
                 viewLabel="View Details"

@@ -156,6 +156,36 @@ describe('PulseCard', () => {
     expect(screen.queryByRole('button', { name: /^thumbs down$/i })).not.toBeInTheDocument();
   });
 
+  describe('DOM-F-03 — Save button disabled during pending save', () => {
+    it('disables save button when savePending=true', () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const onRate = vi.fn();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PulseCard card={sampleCard} onRate={onRate} savePending={true} />
+        </QueryClientProvider>,
+      );
+      const saveButton = screen.getByRole('button', { name: /save/i });
+      expect(saveButton).toBeDisabled();
+    });
+
+    it('enables save button when savePending=false', () => {
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const onRate = vi.fn();
+      render(
+        <QueryClientProvider client={queryClient}>
+          <PulseCard card={sampleCard} onRate={onRate} savePending={false} />
+        </QueryClientProvider>,
+      );
+      const saveButton = screen.getByRole('button', { name: /save/i });
+      expect(saveButton).not.toBeDisabled();
+    });
+  });
+
   describe('B.1 — Save button unsave flow', () => {
     function renderWithRated(rated: boolean, cardOverrides: Partial<PulseCardItem> = {}) {
       const queryClient = new QueryClient({

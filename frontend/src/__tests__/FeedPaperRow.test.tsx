@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
+import React from 'react';
 import { FeedPaperRow } from '@/components/feed/FeedPaperRow';
 import type { FeedPaper } from '@/types';
 
@@ -200,5 +201,76 @@ describe('FeedPaperRow', () => {
     renderRow({ paper, onToggleSelect, isSelected: false });
     await user.click(screen.getByRole('checkbox', { name: `Select ${paper.title} for bulk action` }));
     expect(onToggleSelect).toHaveBeenCalledWith(paper.id);
+  });
+});
+
+// DOM-F-02: verify FeedPaperRow is wrapped in React.memo so unrelated rows do
+// not re-render when sibling state changes.
+describe('FeedPaperRow memoization', () => {
+  it('test_feed_paper_row_is_memoized: is exported as a React.memo component', () => {
+    // React.memo wraps the inner function and sets $$typeof to Symbol(react.memo).
+    // This is the canonical way to assert memoization without depending on
+    // render-count infrastructure.
+    const memoType = (React.memo(() => null) as { $$typeof: symbol }).$$typeof;
+    const rowType = (FeedPaperRow as unknown as { $$typeof: symbol }).$$typeof;
+    expect(rowType).toBe(memoType);
+  });
+
+  it('does not re-render an unselected row when a sibling row changes selection', () => {
+    // Render two rows in a parent that controls isSelected independently.
+    let renderCountA = 0;
+
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+
+    const paperA: FeedPaper = { ...paper, id: 100, title: 'Row A' };
+    const paperB: FeedPaper = { ...paper, id: 101, title: 'Row B' };
+
+    // Spy on FeedPaperRow renders by wrapping in a thin counter component.
+    function RowWithCount({
+      p,
+      isSelected,
+      counter,
+    }: {
+      p: FeedPaper;
+      isSelected: boolean;
+      counter: { count: number };
+    }) {
+      counter.count++;
+      return (
+        <FeedPaperRow
+          paper={p}
+          isSelected={isSelected}
+          onToggleSelect={vi.fn()}
+        />
+      );
+    }
+
+    const counterA = { count: 0 };
+    const counterB = { count: 0 };
+
+    function Parent({ selectedB }: { selectedB: boolean }) {
+      return (
+        <QueryClientProvider client={client}>
+          <RowWithCount p={paperA} isSelected={false} counter={counterA} />
+          <RowWithCount p={paperB} isSelected={selectedB} counter={counterB} />
+        </QueryClientProvider>
+      );
+    }
+
+    const { rerender } = render(<Parent selectedB={false} />);
+    const initialCountA = counterA.count;
+    const initialCountB = counterB.count;
+
+    // Change only row B's isSelected — row A should not re-render.
+    act(() => {
+      rerender(<Parent selectedB={true} />);
+    });
+
+    // Row A must not have re-rendered (count unchanged since initial render).
+    // Row B should have re-rendered because its prop changed.
+    expect(counterA.count).toBe(initialCountA);
+    expect(counterB.count).toBeGreaterThan(initialCountB);
   });
 });

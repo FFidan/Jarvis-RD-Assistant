@@ -1,4 +1,5 @@
-FROM python:3.12.9-slim
+ARG PYTHON_BASE_IMAGE=python:3.12.9-slim
+FROM ${PYTHON_BASE_IMAGE}
 
 # Set to "true" to install sentence-transformers + PyTorch (adds ~2 GB).
 # Required only when RERANKER_ENABLED=true at runtime.
