@@ -69,9 +69,9 @@ async def download_pdf(
     # Phase 1: load and validate (short transaction — no lock held during I/O)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Paper not found")
         await assert_paper_ownership(conn, paper_id, user_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Paper not found")
     if not row["pdf_url"]:
         raise HTTPException(status_code=400, detail="Paper has no PDF URL")
     if row["pdf_downloaded"]:
@@ -214,9 +214,9 @@ async def process_pdf(
 async def upload_pdf(
     request: Request,
     file: UploadFile = File(...),
-    title: str = Form(...),
-    authors: str = Form(default=""),
-    abstract: str = Form(default=""),
+    title: str = Form(..., max_length=500),
+    authors: str = Form(default="", max_length=2000),
+    abstract: str = Form(default="", max_length=10000),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PaperResponse:
     """Upload a local PDF file and register it as a paper.

@@ -633,6 +633,7 @@ services:
   vector:
     image: ${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}
     container_name: jarvis_vector
+    profiles: [observability]
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

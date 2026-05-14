@@ -94,6 +94,56 @@ async def test_send_chunked_splits_long_messages():
 
 
 @pytest.mark.asyncio
+async def test_send_chunked_balances_tags_across_boundary():
+    """<b>...</b> straddling the 3900-char boundary must be closed/reopened."""
+    bot = AsyncMock()
+    # Build a message where <b>…</b> straddles the split point.
+    # "pad" fills the first chunk to just below 3900 chars; "tail" lands in
+    # the second chunk.  The tag opens before the boundary and closes after.
+    pad = "x" * 3890
+    lines = [pad, "<b>foo bar baz</b>"]
+
+    await paper_digest._send_chunked(bot, 1234, lines)
+
+    assert bot.send_message.await_count >= 2
+    calls = bot.send_message.await_args_list
+
+    # Every chunk must have balanced tags (equal opens and closes for <b>).
+    import re
+
+    for call in calls:
+        text = call.kwargs["text"]
+        opens = len(re.findall(r"<b>", text, re.IGNORECASE))
+        closes = len(re.findall(r"</b>", text, re.IGNORECASE))
+        assert opens == closes, f"Unbalanced <b> in chunk: {text!r}"
+
+
+@pytest.mark.asyncio
+async def test_send_chunked_handles_nested_tags():
+    """Nested <b><a>…</a></b> straddling a boundary must be balanced in both chunks."""
+    bot = AsyncMock()
+    pad = "x" * 3888
+    # The nested tags open before the split and close after it.
+    lines = [pad, '<b><a href="http://example.com">link text</a></b>']
+
+    await paper_digest._send_chunked(bot, 1234, lines)
+
+    assert bot.send_message.await_count >= 2
+    calls = bot.send_message.await_args_list
+
+    import re
+
+    for call in calls:
+        text = call.kwargs["text"]
+        b_opens = len(re.findall(r"<b>", text, re.IGNORECASE))
+        b_closes = len(re.findall(r"</b>", text, re.IGNORECASE))
+        a_opens = len(re.findall(r"<a\b[^>]*>", text, re.IGNORECASE))
+        a_closes = len(re.findall(r"</a>", text, re.IGNORECASE))
+        assert b_opens == b_closes, f"Unbalanced <b> in chunk: {text!r}"
+        assert a_opens == a_closes, f"Unbalanced <a> in chunk: {text!r}"
+
+
+@pytest.mark.asyncio
 async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     """run_paper_digest prefers the API digest when it returns topics."""
     bot = AsyncMock()

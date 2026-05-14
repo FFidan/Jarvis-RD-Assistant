@@ -50,6 +50,10 @@ Ollama warm-up plus a logged-in user session.
 # This preloads pg_stat_statements and grants SYS_PTRACE to paper_ingestion.
 make profile-stack-up
 
+# Optional: also start the Vector log-aggregation sidecar (mounts docker.sock).
+# Requires explicit opt-in because it carries privileged docker-socket access.
+docker compose --profile observability up -d vector
+
 # Default: full snapshot
 make profile
 

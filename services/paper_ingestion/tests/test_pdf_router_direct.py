@@ -695,3 +695,87 @@ def test_process_pdf_async_response_model_no_500():
     body = resp.json()
     assert body["job_id"] == fake_job_id
     assert body["status"] == "queued"
+
+
+# ---------------------------------------------------------------------------
+# DOM-A-04: download_pdf null-row guard must run before ownership check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_assert_paper_ownership_runs_after_null_row_guard_in_pdf_router(monkeypatch):
+    """download_pdf must return 404 for unknown paper_id before calling ownership.
+
+    DOM-A-04: previously assert_paper_ownership was called while row was still
+    None (fetchrow returned None), causing it to run on a non-existent paper.
+    After the fix, the null-row guard raises HTTPException(404) first.
+    """
+    conn = AsyncMock()
+    conn.fetchrow.return_value = None  # paper does not exist
+
+    pool = _make_pool(conn)
+
+    # Ownership must never be called for a non-existent paper
+    ownership = AsyncMock()
+    monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
+    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+
+    processor = AsyncMock()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await pdf.download_pdf.__wrapped__(
+            MagicMock(),
+            paper_id=9999,
+            db_pool=pool,
+            pdf_processor=processor,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Paper not found" in exc_info.value.detail
+    # Ownership must NOT have been called — the null guard fires first
+    ownership.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# DOM-A-10: upload_pdf form fields must enforce max_length limits
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_pdf_rejects_oversized_title(tmp_path, monkeypatch):
+    """upload_pdf must reject a title longer than 500 characters with HTTP 422.
+
+    DOM-A-10: without max_length on the Form(...) parameter, an oversized title
+    would reach the DB and cause either a silent truncation or a constraint
+    violation.  After adding max_length=500 FastAPI/Pydantic rejects the request
+    before the handler body executes.
+    """
+    import io
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from paper_ingestion.deps import get_db_pool, get_embedder, get_pdf_processor
+    from paper_ingestion.routers.pdf import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    fake_pool = MagicMock()
+    app.dependency_overrides[get_db_pool] = lambda: fake_pool
+    app.dependency_overrides[get_pdf_processor] = lambda: MagicMock()
+    app.dependency_overrides[get_embedder] = lambda: MagicMock()
+
+    oversized_title = "A" * 601  # exceeds 500-char limit
+
+    pdf_bytes = b"%PDF-1.7\n" + b"x" * 100
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post(
+            "/api/upload-pdf",
+            data={"title": oversized_title, "authors": "", "abstract": ""},
+            files={"file": ("paper.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        )
+
+    assert resp.status_code == 422, (
+        f"Expected 422 for oversized title, got {resp.status_code}: {resp.text}"
+    )
