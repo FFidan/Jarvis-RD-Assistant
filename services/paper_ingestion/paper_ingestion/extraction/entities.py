@@ -276,8 +276,16 @@ async def extract_entities_for_paper(
     embedder: Any | None = None,
     qdrant_client: Any | None = None,
     openai_client: Any | None = None,
+    *,
+    user_id: int | None = None,
 ) -> EntityExtractionResponse:
-    """Extract and persist entities and relationships for one paper."""
+    """Extract and persist entities and relationships for one paper.
+
+    ``user_id`` is stamped onto every ``paper_entities`` row written by this
+    call so the KG read endpoints can scope results per-user (H3 +
+    M-01..M-04). Passing ``None`` writes a system-shared row, matching the
+    project convention from migs 062–076.
+    """
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow("SELECT id, title FROM papers WHERE id = $1", paper_id)
         if not paper:
@@ -389,13 +397,16 @@ async def extract_entities_for_paper(
                 chunks[0]["id"] if chunks else None,
             )
             await conn.execute(
-                """INSERT INTO paper_entities (paper_id, entity_id, mention_count, first_chunk_id)
-                   VALUES ($1, $2, 1, $3)
+                """INSERT INTO paper_entities
+                       (paper_id, entity_id, mention_count, first_chunk_id, user_id)
+                   VALUES ($1, $2, 1, $3, $4)
                    ON CONFLICT (paper_id, entity_id) DO UPDATE
-                   SET mention_count = paper_entities.mention_count + 1""",
+                   SET mention_count = paper_entities.mention_count + 1,
+                       user_id = COALESCE(paper_entities.user_id, EXCLUDED.user_id)""",
                 paper_id,
                 entity_id,
                 first_chunk_id,
+                user_id,
             )
 
         for rel in relationships_data:

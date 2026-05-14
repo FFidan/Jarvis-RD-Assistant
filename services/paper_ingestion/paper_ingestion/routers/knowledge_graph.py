@@ -56,9 +56,12 @@ async def batch_extract_entities(
 ) -> dict[str, int]:
     """Backfill entity extraction for all summarized papers."""
     async with db_pool.acquire() as conn:
-        # Get papers with summaries but no entities
+        # Get papers with summaries but no entities. ``discovered_by`` is the
+        # per-paper owner under the canonical-corpus design (mig 042); we
+        # stamp that user onto every paper_entities row written by this job
+        # so the KG read endpoints can scope correctly (H3 + M-01..M-04).
         rows = await conn.fetch(
-            """SELECT p.id FROM papers p
+            """SELECT p.id, p.discovered_by FROM papers p
                JOIN paper_summaries ps ON p.id = ps.paper_id
                WHERE p.id NOT IN (SELECT DISTINCT paper_id FROM paper_entities)
                ORDER BY p.created_at DESC
@@ -75,6 +78,7 @@ async def batch_extract_entities(
                 row["id"],
                 embedder=embedder,
                 qdrant_client=qdrant,
+                user_id=row["discovered_by"],
             )
             extracted += 1
         except Exception:
@@ -98,6 +102,14 @@ async def extract_entities(
     user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
+        # Fall back to the paper's discovered_by when the caller is the
+        # server-to-server / admin owner path (user_id is None) so the row
+        # is still attributed to the paper's owning user.
+        if user_id is None:
+            owner = await conn.fetchval("SELECT discovered_by FROM papers WHERE id = $1", paper_id)
+            attribution_user_id: int | None = owner
+        else:
+            attribution_user_id = user_id
     try:
         return await extract_entities_for_paper(
             http_client,
@@ -105,6 +117,7 @@ async def extract_entities(
             paper_id,
             embedder=embedder,
             qdrant_client=qdrant,
+            user_id=attribution_user_id,
         )
     except ValueError as e:
         msg = str(e)
