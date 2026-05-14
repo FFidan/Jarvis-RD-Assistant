@@ -48,35 +48,42 @@ async def auth_check(
     update: Update,
     config: BotConfig,
     db_pool: asyncpg.Pool,
-) -> bool:
-    """Check whether the incoming chat is authorised.
+) -> tuple[bool, int | None]:
+    """Check whether the incoming chat is authorised and return its user_id.
+
+    Returns
+    -------
+    tuple[bool, int | None]
+        ``(True, user_id)`` for paired multi-tenant chats — the user_id is the
+        DB PK from ``telegram_user_pairings`` and MUST be used to scope all
+        per-user queries downstream.
+        ``(True, None)`` for the legacy single-tenant owner paths (env-var
+        match or ``user_config.telegram.owner_chat_id``) — downstream queries
+        stay unscoped to preserve owner visibility.
+        ``(False, None)`` for unauthorised chats.
 
     Priority order:
-    1. ``TELEGRAM_CHAT_ID`` env var (via ``config.telegram_chat_id``) — if set
-       and matches, allow immediately.
-    2. DB fallback: ``user_config.telegram.owner_chat_id`` (populated by the
-       dashboard pairing flow). asyncpg's JSONB codec decodes the value, which
-       may be ``None``, ``int``, or ``str``.
+    1. ``TELEGRAM_CHAT_ID`` env var (via ``config.telegram_chat_id``).
+    2. DB fallback: ``user_config.telegram.owner_chat_id`` (dashboard pairing).
     3. Multi-tenant pairing: ``telegram_user_pairings.chat_id`` (migration 071).
-       Any chat_id present in this table was explicitly paired by a registered
-       user and is therefore authorised.
     """
     chat = update.effective_chat
     if chat is None:
-        return False
+        return False, None
     env_chat_id = getattr(config, "telegram_chat_id", None)
     if env_chat_id and chat.id == env_chat_id:
-        return True
+        return True, None
     try:
         row = await db_pool.fetchval(
             "SELECT value FROM user_config WHERE key = 'telegram.owner_chat_id' AND user_id IS NULL"
         )
     except Exception:
         logger.warning("auth_check: DB error reading owner_chat_id; denying request", exc_info=True)
-        return False
+        return False, None
     if row is not None:
         try:
-            return chat.id == int(row)
+            if chat.id == int(row):
+                return True, None
         except (ValueError, TypeError):
             pass
     try:
@@ -88,5 +95,7 @@ async def auth_check(
         logger.warning(
             "auth_check: DB error reading telegram_user_pairings; denying request", exc_info=True
         )
-        return False
-    return pairing_row is not None
+        return False, None
+    if pairing_row is None:
+        return False, None
+    return True, pairing_row["user_id"]

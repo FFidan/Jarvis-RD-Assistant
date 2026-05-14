@@ -117,7 +117,8 @@ async def review_start(
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         return ConversationHandler.END
 
     context.user_data["cards_reviewed"] = 0
@@ -148,7 +149,8 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         return ConversationHandler.END
     await query.answer()
 
@@ -178,7 +180,8 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         return ConversationHandler.END
     await query.answer()
 
@@ -259,7 +262,8 @@ async def cancel_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         return ConversationHandler.END
 
     reviewed = context.user_data.get("cards_reviewed", 0)

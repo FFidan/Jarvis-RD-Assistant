@@ -25,7 +25,6 @@ LOCAL_PDF_SCAN_DIR          local_pdf_scan_dir          services/local_pdfs.py
 BBT_BASE_URL                bbt_base_url                integrations/zotero_client.py
 APP_BASE_URL                app_base_url                routers/auth.py, routers/admin.py
 AUTO_FETCH_INTERVAL_HOURS   auto_fetch_interval_hours   main.py, pipelines/auto_fetch.py
-MULTITENANT_ENABLED         multitenant_enabled         main.py
 PULSE_STAGE2_MODEL          pulse_stage2_model          pulse/scoring.py
 PULSE_STAGE2_MAX_RETRIES    pulse_stage2_max_retries    pulse/scoring.py
 SEMANTIC_SCHOLAR_API_KEY    semantic_scholar_api_key    routers/search_helpers.py,
@@ -149,16 +148,6 @@ class PaperIngestionSettings(JarvisCommonSettings):
         description=(
             "Hours between automatic paper fetches (AUTO_FETCH_INTERVAL_HOURS). "
             "0 = scheduler starts but no periodic job is registered."
-        ),
-    )
-
-    # --- Multi-tenancy --------------------------------------------------
-    multitenant_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable multi-tenant mode (MULTITENANT_ENABLED).  When true, "
-            "auth resolver enforces ownership checks.  Currently a stub — "
-            "enabling logs CRITICAL to warn operators."
         ),
     )
 

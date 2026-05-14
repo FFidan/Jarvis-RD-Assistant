@@ -35,6 +35,7 @@ class TestJarvisCommonSettings:
         assert s.trusted_proxy_cidrs == ""
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
+        assert s.multitenant_enabled is False
 
     def test_database_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host/db")

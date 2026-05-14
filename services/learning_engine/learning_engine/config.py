@@ -9,7 +9,6 @@ to a typed ``LearningEngineSettings`` class. Inherits shared infra keys from
 Env var                   Field                     Call sites
 ---                       ---                       ---
 SNAPSHOT_STORAGE_PATH     snapshot_storage_path     card_generator.py
-MULTITENANT_ENABLED       multitenant_enabled       main.py
 """
 
 from __future__ import annotations
@@ -37,16 +36,6 @@ class LearningEngineSettings(JarvisCommonSettings):
             "Directory for paper analysis snapshot files (SNAPSHOT_STORAGE_PATH). "
             "Learning Engine reads snapshots written by Paper Ingestion's "
             "summarization pipeline when generating cards."
-        ),
-    )
-
-    # --- Multi-tenancy --------------------------------------------------
-    multitenant_enabled: bool = Field(
-        default=False,
-        description=(
-            "Enable multi-tenant mode (MULTITENANT_ENABLED).  When true, "
-            "auth resolver enforces ownership checks.  Currently a stub — "
-            "enabling logs CRITICAL to warn operators."
         ),
     )
 

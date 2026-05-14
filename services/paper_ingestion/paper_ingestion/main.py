@@ -27,13 +27,14 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
-    HealthCheckResponse,
     ServiceLifespanConfig,
     build_database_url,
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
+    register_health_routes,
     verify_api_key,
+    warn_multitenant_stub,
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
@@ -92,14 +93,6 @@ def _set_openai_client(openai_client: Any) -> None:
     from paper_ingestion._state import set_services  # noqa: PLC0415
 
     set_services(openai_client=openai_client)
-
-
-async def _warn_multitenant_stub(app: FastAPI) -> None:
-    """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
-    if get_paper_ingestion_settings().multitenant_enabled:
-        logger.critical(
-            "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
-        )
 
 
 async def _validate_bbt_url_hook(app: FastAPI) -> None:
@@ -384,7 +377,7 @@ _lifespan_config = ServiceLifespanConfig(
     },
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),
-        _warn_multitenant_stub,
+        warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
         _migrate_plaintext_secrets_hook,
@@ -398,7 +391,7 @@ _lifespan_config = ServiceLifespanConfig(
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
-        None,  # _warn_multitenant_stub
+        None,  # warn_multitenant_stub
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
         None,  # _migrate_plaintext_secrets_hook
@@ -515,106 +508,83 @@ app.include_router(infra_events.router)
 
 
 # ---------------------------------------------------------------------------
-# Health check
+# Health check — probes are service-owned; aggregator + routes live in
+# jarvis_common.health (DOM-J-03).
 # ---------------------------------------------------------------------------
 
 
-async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
-    """Execute all dependency probes and return (status, checks)."""
-    checks: dict[str, str] = {}
-
-    # PostgreSQL
+async def _probe_postgres(request: Request) -> str:
     try:
         async with request.app.state.db_pool.acquire() as conn:
             await asyncio.wait_for(conn.execute("SELECT 1"), timeout=5.0)
-        checks["postgres"] = "ok"
     except Exception:
         logger.warning("Health check: PostgreSQL unavailable", exc_info=True)
-        checks["postgres"] = "unavailable"
+        return "unavailable"
+    return "ok"
 
-    # Qdrant
+
+async def _probe_qdrant(request: Request) -> str:
     try:
         await asyncio.wait_for(request.app.state.qdrant_client.get_collections(), timeout=5.0)
-        checks["qdrant"] = "ok"
     except Exception:
         logger.warning("Health check: Qdrant unavailable", exc_info=True)
-        checks["qdrant"] = "unavailable"
+        return "unavailable"
+    return "ok"
 
-    # LiteLLM
+
+async def _probe_litellm(request: Request) -> str:
     try:
         litellm_config = get_litellm_config()
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{litellm_config.base_url}/health/readiness"),
             timeout=5.0,
         )
-        checks["litellm"] = "ok" if resp.status_code == 200 else "unavailable"
+        return "ok" if resp.status_code == 200 else "unavailable"
     except Exception:
         logger.warning("Health check: LiteLLM unavailable", exc_info=True)
-        checks["litellm"] = "unavailable"
+        return "unavailable"
 
-    # Ollama
+
+async def _probe_ollama(request: Request) -> str:
     try:
         ollama_url = get_paper_ingestion_settings().ollama_base_url
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{ollama_url}/api/tags"),
             timeout=5.0,
         )
-        checks["ollama"] = "ok" if resp.status_code == 200 else "unavailable"
+        return "ok" if resp.status_code == 200 else "unavailable"
     except Exception:
         logger.warning("Health check: Ollama unavailable", exc_info=True)
-        checks["ollama"] = "unavailable"
+        return "unavailable"
 
-    # Vector sidecar — probed via its internal API; API is disabled in production
-    # so we attempt the connection and report "unknown" on any failure rather than
-    # "unavailable" (which would drag overall status to "degraded").
+
+async def _probe_vector(request: Request) -> str:
+    """Vector sidecar probe — API is disabled in production so failures map to
+    ``"unknown"`` (not ``"unavailable"``) so they do not drag overall status
+    to ``"degraded"``.
+    """
     try:
         vector_url = get_paper_ingestion_settings().vector_api_url
         resp = await asyncio.wait_for(
             request.app.state.http_client.get(f"{vector_url}/health"),
             timeout=3.0,
         )
-        checks["vector"] = "ok" if resp.status_code == 200 else "unknown"
+        return "ok" if resp.status_code == 200 else "unknown"
     except Exception:
-        # Vector API is disabled by default; treat as unknown, not degraded
-        checks["vector"] = "unknown"
-
-    # "unknown" (e.g. vector with API disabled) does not trigger degraded status
-    status = "ok" if all(v in ("ok", "unknown") for v in checks.values()) else "degraded"
-    return status, checks
+        return "unknown"
 
 
-@app.get("/health", dependencies=[], response_model=None)
-async def health_check(request: Request) -> dict[str, Any]:
-    """Public health probe — returns only ``{"status": "ok"|"degraded"|"down"}``.
-
-    No dependency details are exposed to unauthenticated callers.
-    Docker healthchecks and upstreams check the HTTP status code: 200 = ok,
-    503 = degraded.  Use ``GET /health/internal`` (requires auth) for the full
-    dependency breakdown.
-    """
-    status, _ = await _run_health_checks(request)
-    content = {"status": status}
-    if status == "degraded":
-        return JSONResponse(status_code=503, content=content)  # type: ignore[return-value]
-    return content
-
-
-@app.get("/health/internal", response_model=HealthCheckResponse)
-async def health_check_internal(
-    request: Request,
-    _auth: None = Depends(verify_api_key),
-) -> HealthCheckResponse:
-    """Authenticated health probe — returns full dependency details.
-
-    Includes individual check results for PostgreSQL, Qdrant, and LiteLLM.
-    Requires a valid API key.  Returns HTTP 503 when any dependency is
-    unavailable.
-    """
-    status, checks = await _run_health_checks(request)
-    body = HealthCheckResponse(status=status, service="paper_ingestion", checks=checks)
-    if status == "degraded":
-        return JSONResponse(status_code=503, content=body.model_dump())  # type: ignore[return-value]
-    return body
+register_health_routes(
+    app,
+    service_name="paper_ingestion",
+    checks=[
+        ("postgres", _probe_postgres),
+        ("qdrant", _probe_qdrant),
+        ("litellm", _probe_litellm),
+        ("ollama", _probe_ollama),
+        ("vector", _probe_vector),
+    ],
+)
 
 
 # ---------------------------------------------------------------------------

@@ -19,13 +19,14 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, ORJSONResponse
 from jarvis_common import (
-    HealthCheckResponse,
     ServiceLifespanConfig,
     build_database_url,
     configure_lifespan,
     configure_logging,
     configure_middleware_and_errors,
+    register_health_routes,
     verify_api_key,
+    warn_multitenant_stub,
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
@@ -37,7 +38,6 @@ from jarvis_common.settings import get_core_settings
 
 from learning_engine.anki_exporter import AnkiExporter
 from learning_engine.card_generator import CardGenerator
-from learning_engine.config import get_learning_engine_settings
 from learning_engine.deps import limiter
 from learning_engine.fsrs_manager import FSRSManager
 
@@ -63,14 +63,6 @@ def _set_openai_client(openai_client: Any) -> None:
     from learning_engine._state import set_services  # noqa: PLC0415
 
     set_services(openai_client=openai_client)
-
-
-async def _warn_multitenant_stub(app: FastAPI) -> None:
-    """C1 doc: log CRITICAL when MULTITENANT_ENABLED=true because auth resolver is a stub."""
-    if get_learning_engine_settings().multitenant_enabled:
-        logger.critical(
-            "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
-        )
 
 
 async def _init_fsrs_and_generators(app: FastAPI) -> None:
@@ -147,7 +139,7 @@ _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),
-        _warn_multitenant_stub,
+        warn_multitenant_stub,
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
         _log_le_started,
@@ -156,7 +148,7 @@ _lifespan_config = ServiceLifespanConfig(
     # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
     custom_teardown_tasks=[
         None,  # init_langfuse_hook
-        None,  # _warn_multitenant_stub
+        None,  # warn_multitenant_stub
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
         None,  # _log_le_started
@@ -220,68 +212,38 @@ app.include_router(jobs.router)
 
 
 # ---------------------------------------------------------------------------
-# Health check
+# Health check — probes are service-owned; aggregator + routes live in
+# jarvis_common.health (DOM-J-03).
 # ---------------------------------------------------------------------------
 
 
-async def _run_health_checks(request: Request) -> tuple[str, dict[str, str]]:
-    """Execute all dependency probes and return (status, checks)."""
-    checks: dict[str, str] = {}
-
-    # Check PostgreSQL
+async def _probe_postgres(request: Request) -> str:
     try:
         pool: asyncpg.Pool = request.app.state.db_pool
         async with pool.acquire() as conn:
             await asyncio.wait_for(conn.fetchval("SELECT 1"), timeout=5.0)
-        checks["postgres"] = "ok"
-    except Exception:  # Best-effort: health probe; status string captures failure
-        checks["postgres"] = "unavailable"
+    except Exception:
+        return "unavailable"
+    return "ok"
 
-    # Check LiteLLM
+
+async def _probe_litellm(request: Request) -> str:
     try:
         from jarvis_common.llm_client import get_litellm_config
 
         litellm_config = get_litellm_config()
         client: httpx.AsyncClient = request.app.state.http_client
         resp = await client.get(f"{litellm_config.base_url}/health/readiness", timeout=5.0)
-        checks["litellm"] = "ok" if resp.status_code == 200 else "unavailable"
-    except Exception:  # Best-effort: health probe; status string captures failure
-        checks["litellm"] = "unavailable"
-
-    all_ok = all(v == "ok" for v in checks.values())
-    status = "ok" if all_ok else "degraded"
-    return status, checks
+        return "ok" if resp.status_code == 200 else "unavailable"
+    except Exception:
+        return "unavailable"
 
 
-@app.get("/health", dependencies=[], response_model=None)
-async def health_check(request: Request) -> dict[str, str] | JSONResponse:
-    """Public health probe — returns only ``{"status": "ok"|"degraded"|"down"}``.
-
-    No dependency details are exposed to unauthenticated callers.
-    Docker healthchecks and upstreams check the HTTP status code: 200 = ok,
-    503 = degraded.  Use ``GET /health/internal`` (requires auth) for the full
-    dependency breakdown.
-    """
-    status, _ = await _run_health_checks(request)
-    content: dict[str, str] = {"status": status}
-    if status == "degraded":
-        return JSONResponse(status_code=503, content=content)
-    return content
-
-
-@app.get("/health/internal", response_model=HealthCheckResponse)
-async def health_check_internal(
-    request: Request,
-    _auth: None = Depends(verify_api_key),
-) -> HealthCheckResponse | JSONResponse:
-    """Authenticated health probe — returns full dependency details.
-
-    Includes individual check results for PostgreSQL and LiteLLM.
-    Requires a valid API key.  Returns HTTP 503 when any dependency is
-    unavailable.
-    """
-    status, checks = await _run_health_checks(request)
-    body = {"status": status, "service": "learning_engine", "checks": checks}
-    if status == "degraded":
-        return JSONResponse(status_code=503, content=body)
-    return body
+register_health_routes(
+    app,
+    service_name="learning_engine",
+    checks=[
+        ("postgres", _probe_postgres),
+        ("litellm", _probe_litellm),
+    ],
+)

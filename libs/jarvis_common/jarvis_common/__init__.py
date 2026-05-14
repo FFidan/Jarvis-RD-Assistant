@@ -5,6 +5,7 @@ from jarvis_common.app_factory import (
     build_database_url,
     configure_lifespan,
     configure_middleware_and_errors,
+    warn_multitenant_stub,
 )
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
@@ -43,6 +44,12 @@ from jarvis_common.error_handlers import (
     generic_exception_handler,
     http_exception_handler,
     validation_exception_handler,
+)
+from jarvis_common.health import (
+    HealthCheck,
+    HealthProbe,
+    register_health_routes,
+    run_health_checks,
 )
 from jarvis_common.http_rate_limiter import create_limiter, rate_limit_exceeded_handler
 from jarvis_common.jobs import KEEPALIVE_INTERVAL, MAX_STREAM_SECONDS, stream_job_events
@@ -84,6 +91,12 @@ __all__ = [
     "build_database_url",
     "configure_lifespan",
     "configure_middleware_and_errors",
+    "warn_multitenant_stub",
+    # DOM-J-03: shared health-check routes
+    "HealthCheck",
+    "HealthProbe",
+    "register_health_routes",
+    "run_health_checks",
     "log_audit",
     "verify_api_key",
     "validate_production_config",

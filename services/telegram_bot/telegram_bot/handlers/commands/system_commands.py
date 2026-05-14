@@ -140,10 +140,13 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    if not authorized:
         chat_id = update.effective_chat.id if update.effective_chat else "unknown"
         logger.warning("Unauthorised /start attempt from chat_id=%s", chat_id)
         return
+    if context.user_data is not None:
+        context.user_data["jarvis_user_id"] = jarvis_user_id
 
     if update.message is None:
         return

@@ -40,6 +40,7 @@ LANGFUSE_SECRET_KEY             langfuse_secret_key         shared (SecretStr)
 TRUSTED_PROXY_CIDRS             trusted_proxy_cidrs         shared
 JARVIS_TRUST_CF_CONNECTING_IP   trust_cf_connecting_ip      shared
 JARVIS_MIGRATION_LOCK_CONTENDED_OK  migration_lock_contended_ok  shared
+MULTITENANT_ENABLED             multitenant_enabled         shared
 """
 
 from __future__ import annotations
@@ -194,6 +195,20 @@ class JarvisCommonSettings(BaseSettings):
     def migration_lock_contended_ok(self) -> bool:
         """Alias for ``jarvis_migration_lock_contended_ok`` for cleaner reads."""
         return self.jarvis_migration_lock_contended_ok
+
+    # --- Multi-tenancy --------------------------------------------------
+    # Shared because both paper_ingestion and learning_engine inspect this
+    # flag at startup (via ``warn_multitenant_stub``) and at request time
+    # (db_helpers ownership checks).  DOM-J-02: moved from per-service
+    # Settings so the field is defined once.
+    multitenant_enabled: bool = Field(
+        default=False,
+        description=(
+            "Enable multi-tenant mode (MULTITENANT_ENABLED).  When true, "
+            "auth resolver enforces ownership checks.  Currently a stub — "
+            "enabling logs CRITICAL on startup to warn operators."
+        ),
+    )
 
 
 def get_jarvis_common_settings() -> JarvisCommonSettings:

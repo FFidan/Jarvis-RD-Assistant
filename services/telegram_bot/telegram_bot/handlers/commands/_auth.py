@@ -68,13 +68,16 @@ def auth_required(func: Any) -> Any:
                 await _maybe_emit_auth_event(update.effective_chat.id, db_pool)
 
             # --- auth gate ---
-            if not await auth_check(update, config, db_pool):
+            authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+            if not authorized:
                 chat_id = update.effective_chat.id if update.effective_chat else "unknown"
                 logger.warning(
                     "Unauthorised access attempt from chat_id=%s",
                     chat_id,
                 )
                 return
+            if context.user_data is not None:
+                context.user_data["jarvis_user_id"] = jarvis_user_id
             return await func(update, context)
         finally:
             correlation_id_var.reset(token)

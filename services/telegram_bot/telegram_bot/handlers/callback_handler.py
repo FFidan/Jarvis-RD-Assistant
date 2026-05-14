@@ -85,7 +85,8 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
 
@@ -134,7 +135,8 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
 
@@ -182,7 +184,8 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
 
@@ -225,7 +228,8 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
 
@@ -281,7 +285,8 @@ async def start_review_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, _ = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
 
@@ -312,9 +317,12 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     config = get_config(context)
     db_pool = get_db(context)
-    if not await auth_check(update, config, db_pool):
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
+    if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
+    if context.user_data is not None:
+        context.user_data["jarvis_user_id"] = jarvis_user_id
 
     await query.answer()
 
@@ -324,7 +332,7 @@ async def task_done_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     db = get_db(context)
     pm = ProjectManager(db)
-    result = await pm.complete_task(task_id)
+    result = await pm.complete_task(task_id, user_id=jarvis_user_id)
 
     if not result:
         await query.message.reply_text(f"Task <b>{task_id}</b> not found.", parse_mode="HTML")

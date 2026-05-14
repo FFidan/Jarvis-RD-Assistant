@@ -205,47 +205,53 @@ async def test_start_without_payload_authed_sends_welcome():
 # ---------------------------------------------------------------------------
 
 
+def _attach_pairing_fetchrow(pool, *, return_value=None):
+    """Wire pool.fetchrow used by auth_check's telegram_user_pairings lookup."""
+    pool.fetchrow = AsyncMock(return_value=return_value)
+    return pool
+
+
 @pytest.mark.asyncio
 async def test_auth_check_env_var_priority():
-    """Env var match returns True even when DB has no paired chat."""
+    """Env var match returns (True, None) even when DB has no paired chat."""
     pool = _make_pool(_make_conn(), fetchval_return=None)
     update = _make_update("irrelevant", chat_id=_OWNER_CHAT_ID)
     config = _make_config(telegram_chat_id=_OWNER_CHAT_ID)
 
-    assert await _auth_check(update, config, pool) is True
+    assert await _auth_check(update, config, pool) == (True, None)
     # DB is NOT consulted when env var already matched
     pool.fetchval.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_auth_check_db_fallback():
-    """When env var is missing, DB-stored chat id grants access."""
-    pool = _make_pool(_make_conn(), fetchval_return=555)
+    """When env var is missing, DB-stored chat id grants access as owner."""
+    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=555))
     update = _make_update("irrelevant", chat_id=555)
     config = _make_config(telegram_chat_id=None)
 
-    assert await _auth_check(update, config, pool) is True
+    assert await _auth_check(update, config, pool) == (True, None)
     pool.fetchval.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_auth_check_db_null():
-    """Env var missing + DB null -> unauthorised."""
-    pool = _make_pool(_make_conn(), fetchval_return=None)
+    """Env var missing + DB null + no pairing row -> unauthorised."""
+    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return=None))
     update = _make_update("irrelevant", chat_id=555)
     config = _make_config(telegram_chat_id=None)
 
-    assert await _auth_check(update, config, pool) is False
+    assert await _auth_check(update, config, pool) == (False, None)
 
 
 @pytest.mark.asyncio
 async def test_auth_check_db_string_coerced():
     """DB value stored as a string is still coerced to int for comparison."""
-    pool = _make_pool(_make_conn(), fetchval_return="555")
+    pool = _attach_pairing_fetchrow(_make_pool(_make_conn(), fetchval_return="555"))
     update = _make_update("irrelevant", chat_id=555)
     config = _make_config(telegram_chat_id=None)
 
-    assert await _auth_check(update, config, pool) is True
+    assert await _auth_check(update, config, pool) == (True, None)
 
 
 # ---------------------------------------------------------------------------

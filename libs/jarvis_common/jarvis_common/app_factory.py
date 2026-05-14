@@ -422,10 +422,26 @@ def make_init_langfuse_hook(
     return _hook
 
 
+async def warn_multitenant_stub(app: FastAPI) -> None:
+    """Log CRITICAL when ``MULTITENANT_ENABLED=true`` because auth resolver is a stub.
+
+    DOM-J-02: shared lifespan hook used by both ``paper_ingestion`` and
+    ``learning_engine``.  Reads ``multitenant_enabled`` from the shared
+    :class:`jarvis_common.config.JarvisCommonSettings` (both service Settings
+    classes inherit it).  Signature matches :data:`LifespanHook`, so it can
+    drop straight into ``ServiceLifespanConfig.custom_init_tasks``.
+    """
+    if get_jarvis_common_settings().multitenant_enabled:
+        logger.critical(
+            "MULTITENANT_ENABLED=true but auth resolver is a stub — ownership checks are no-ops"
+        )
+
+
 __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
     "init_langfuse_hook",
     "make_init_langfuse_hook",
+    "warn_multitenant_stub",
 ]

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from fastapi.responses import JSONResponse
 from paper_ingestion.embedder import Embedder
 
 # ---------------------------------------------------------------------------
@@ -240,12 +239,40 @@ async def test_search_chunks_runtime_error_propagates():
 # ---------------------------------------------------------------------------
 
 
-async def test_health_check_degraded():
-    """health_check_internal returns 'degraded' when one dependency is unavailable."""
-    from paper_ingestion.main import health_check_internal
+async def _route_http_get(
+    *, litellm_ok: bool = True, ollama_ok: bool = True, vector_ok: bool = False
+):
+    """Build an httpx-mock .get side-effect routing per-URL.
 
-    # Mock request with app state
-    mock_request = MagicMock()
+    Mirrors the helper in test_health.py — we now call the route handler via
+    ASGITransport (DOM-J-03 refactor moved health_check_internal into the
+    shared jarvis_common.health module).
+    """
+
+    async def _get(url: str, **_kwargs: object) -> MagicMock:
+        resp = MagicMock()
+        if "health/readiness" in url:
+            resp.status_code = 200 if litellm_ok else 503
+        elif "/api/tags" in url:
+            if not ollama_ok:
+                raise ConnectionError("ollama down")
+            resp.status_code = 200
+        elif "vector" in url or "8686" in url:
+            if not vector_ok:
+                raise ConnectionError("vector API disabled")
+            resp.status_code = 200
+        else:
+            resp.status_code = 200
+        return resp
+
+    return _get
+
+
+async def test_health_check_degraded():
+    """GET /health/internal returns 'degraded' when Qdrant is unavailable."""
+    from httpx import ASGITransport
+    from jarvis_common import verify_api_key
+    from paper_ingestion.main import app
 
     # PostgreSQL: working
     mock_conn = AsyncMock()
@@ -255,28 +282,29 @@ async def test_health_check_degraded():
     mock_cm.__aexit__.return_value = False
     mock_pool = MagicMock()
     mock_pool.acquire.return_value = mock_cm
-    mock_request.app.state.db_pool = mock_pool
+    app.state.db_pool = mock_pool
 
     # Qdrant: failing
     mock_qdrant = AsyncMock()
     mock_qdrant.get_collections.side_effect = ConnectionError("Qdrant down")
-    mock_request.app.state.qdrant_client = mock_qdrant
+    app.state.qdrant_client = mock_qdrant
 
-    # LiteLLM: working
+    # LiteLLM + Ollama: working; vector: unknown (disabled)
     mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_litellm_resp = MagicMock()
-    mock_litellm_resp.status_code = 200
-    mock_http.get.return_value = mock_litellm_resp
-    mock_request.app.state.http_client = mock_http
+    mock_http.get = AsyncMock(side_effect=await _route_http_get())
+    app.state.http_client = mock_http
 
-    result = await health_check_internal(mock_request)
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/health/internal")
+    finally:
+        app.dependency_overrides.clear()
 
-    # health_check_internal may return a HealthCheckResponse (Pydantic model) or
-    # a JSONResponse (when degraded).  Normalise to dict for assertions.
-    if isinstance(result, JSONResponse):
-        data = json.loads(bytes(result.body))
-    else:
-        data = result.model_dump()
+    assert resp.status_code == 503
+    data = resp.json()
     assert data["status"] == "degraded"
     assert data["service"] == "paper_ingestion"
     assert data["checks"]["postgres"] == "ok"
@@ -285,10 +313,10 @@ async def test_health_check_degraded():
 
 
 async def test_health_check_all_ok():
-    """health_check_internal returns 'ok' when all dependencies are available."""
-    from paper_ingestion.main import health_check_internal
-
-    mock_request = MagicMock()
+    """GET /health/internal returns 'ok' when all required dependencies are up."""
+    from httpx import ASGITransport
+    from jarvis_common import verify_api_key
+    from paper_ingestion.main import app
 
     # PostgreSQL: working
     mock_conn = AsyncMock()
@@ -298,27 +326,29 @@ async def test_health_check_all_ok():
     mock_cm.__aexit__.return_value = False
     mock_pool = MagicMock()
     mock_pool.acquire.return_value = mock_cm
-    mock_request.app.state.db_pool = mock_pool
+    app.state.db_pool = mock_pool
 
     # Qdrant: working
     mock_qdrant = AsyncMock()
     mock_qdrant.get_collections.return_value = MagicMock()
-    mock_request.app.state.qdrant_client = mock_qdrant
+    app.state.qdrant_client = mock_qdrant
 
-    # LiteLLM: working
+    # LiteLLM + Ollama: working; vector: unknown (disabled by default)
     mock_http = AsyncMock(spec=httpx.AsyncClient)
-    mock_litellm_resp = MagicMock()
-    mock_litellm_resp.status_code = 200
-    mock_http.get.return_value = mock_litellm_resp
-    mock_request.app.state.http_client = mock_http
+    mock_http.get = AsyncMock(side_effect=await _route_http_get())
+    app.state.http_client = mock_http
 
-    result = await health_check_internal(mock_request)
+    app.dependency_overrides[verify_api_key] = lambda: None
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/health/internal")
+    finally:
+        app.dependency_overrides.clear()
 
-    # health_check_internal returns HealthCheckResponse (Pydantic) when ok.
-    if isinstance(result, JSONResponse):
-        data = json.loads(bytes(result.body))
-    else:
-        data = result.model_dump()
+    assert resp.status_code == 200
+    data = resp.json()
     assert data["status"] == "ok"
     assert data["checks"]["postgres"] == "ok"
     assert data["checks"]["qdrant"] == "ok"
