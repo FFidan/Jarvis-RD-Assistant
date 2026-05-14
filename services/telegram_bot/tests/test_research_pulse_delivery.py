@@ -11,13 +11,16 @@ thin delivery layer that:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from pydantic import SecretStr
 from telegram_bot.config import BotConfig
 from telegram_bot.orchestration import research_pulse
+from telegram_bot.owner import UserPairing
+
+_DEFAULT_PAIRING = [UserPairing(user_id=1, chat_id=1234)]
 
 
 def _make_config(api_key: str | None = "secret") -> BotConfig:
@@ -73,7 +76,8 @@ async def test_fetches_pulse_today_and_sends_cards():
     http_client.get.return_value = _ok_response(_make_deck(3))
     db_pool = AsyncMock()
 
-    await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     # One GET to /api/pulse/today with auth header
     http_client.get.assert_awaited_once()
@@ -102,7 +106,8 @@ async def test_empty_deck_sends_fallback_message():
     )
     db_pool = AsyncMock()
 
-    await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     bot.send_message.assert_awaited()
     sent_text = bot.send_message.await_args.kwargs["text"]
@@ -117,7 +122,10 @@ async def test_api_failure_sends_diagnostic(caplog):
     http_client.get.side_effect = httpx.ConnectError("offline")
     db_pool = AsyncMock()
 
-    with caplog.at_level("WARNING"):
+    with (
+        caplog.at_level("WARNING"),
+        patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)),
+    ):
         await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     bot.send_message.assert_awaited()
@@ -151,7 +159,8 @@ async def test_card_message_has_three_inline_buttons(monkeypatch):
     http_client.get.return_value = _ok_response(_make_deck(2))
     db_pool = AsyncMock()
 
-    await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     assert len(captured_keyboards) == 2
     for rows in captured_keyboards:
@@ -184,7 +193,8 @@ async def test_deck_is_capped_to_top_n():
     http_client.get.return_value = _ok_response(_make_deck(20))
     db_pool = AsyncMock()
 
-    await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
+    with patch("telegram_bot.owner.list_user_pairings", AsyncMock(return_value=_DEFAULT_PAIRING)):
+        await research_pulse.run_research_pulse(http_client, db_pool, bot, _make_config())
 
     # PULSE_TELEGRAM_TOP_N is 5 (brevity). With optional header, up to 6 sends.
     assert bot.send_message.await_count <= research_pulse.PULSE_TELEGRAM_TOP_N + 1

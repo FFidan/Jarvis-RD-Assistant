@@ -336,21 +336,7 @@ async def current_user_id_with_owner_override(
     return override_uid
 
 
-def single_tenant_user_id() -> None:  # type: ignore[return]
-    """Legacy alias retained for the Telegram bot.
-
-    The Telegram bot has no browser session and its callers historically passed
-    ``None`` as ``user_id``. Returning ``None`` keeps the legacy single-tenant
-    Telegram path working until WS-2D rewires Telegram to the per-chat user
-    pairing table.
-
-    Returns
-    -------
-    None
-        Sentinel for "no resolved per-user identity" — DB queries match this
-        via ``IS NOT DISTINCT FROM NULL``.
-    """
-    return None  # allow-user-id-none: legacy Telegram single-tenant path
+# allow-user-id-none: legacy Telegram single-tenant path
 
 
 def validate_production_config() -> None:

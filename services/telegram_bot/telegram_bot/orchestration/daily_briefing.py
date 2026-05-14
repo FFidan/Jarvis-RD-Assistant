@@ -107,8 +107,7 @@ async def run_daily_briefing(
     """Send a combined morning briefing with papers, cards, and tasks.
 
     Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    briefings.  Falls back to the legacy single-tenant owner when no per-user
-    pairings exist.
+    briefings.  Skips with a warning when no pairings exist.
 
     Parameters
     ----------
@@ -121,19 +120,16 @@ async def run_daily_briefing(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import list_user_pairings
 
     pairings = await list_user_pairings(db_pool)
-    if pairings:
-        for pairing in pairings:
-            await _run_briefing_for_chat(
-                http_client, db_pool, bot, config, pairing.chat_id, pairing.user_id
-            )
+    if not pairings:
+        logger.warning(
+            "daily_briefing skipped: no Telegram pairings exist — use /pair in Telegram to set up"
+        )
         return
 
-    # Legacy single-tenant fallback
-    owner = await resolve_owner_chat_id(db_pool, config)
-    if owner is None:
-        logger.info("Skipping daily briefing: no telegram owner paired")
-        return
-    await _run_briefing_for_chat(http_client, db_pool, bot, config, owner)
+    for pairing in pairings:
+        await _run_briefing_for_chat(
+            http_client, db_pool, bot, config, pairing.chat_id, pairing.user_id
+        )

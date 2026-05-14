@@ -101,7 +101,13 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
     db_pool = AsyncMock()
     config = _make_config()
 
+    from telegram_bot.owner import UserPairing
+
     with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
+        ),
         patch.object(
             paper_digest,
             "_fetch_digest_from_api",
@@ -109,128 +115,32 @@ async def test_run_paper_digest_uses_llm_digest_when_topics_present():
         ) as fetch_digest,
         patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
         patch.object(paper_digest, "_send_chunked", AsyncMock()) as send_chunked,
-        patch.object(paper_digest, "_simple_digest", AsyncMock()) as simple_digest,
     ):
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
     fetch_digest.assert_awaited_once()
     send_chunked.assert_awaited_once()
-    simple_digest.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_run_paper_digest_falls_back_to_simple_digest():
-    """run_paper_digest falls back when the API returns no topic data."""
+async def test_run_paper_digest_warns_when_api_returns_no_data():
+    """run_paper_digest does not send messages when the API returns no topic data."""
     bot = AsyncMock()
     http_client = AsyncMock(spec=httpx.AsyncClient)
     db_pool = AsyncMock()
     config = _make_config()
 
+    from telegram_bot.owner import UserPairing
+
     with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(return_value=[UserPairing(user_id=1, chat_id=1234)]),
+        ),
         patch.object(paper_digest, "_fetch_digest_from_api", AsyncMock(return_value=None)),
-        patch.object(paper_digest, "_simple_digest", AsyncMock()) as simple_digest,
+        patch.object(paper_digest, "_send_chunked", AsyncMock()) as send_chunked,
     ):
         await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
 
-    simple_digest.assert_awaited_once_with(db_pool, bot, config, 1234, db_user_id=None)
-
-
-@pytest.mark.asyncio
-async def test_simple_digest_query_includes_starred_boolean_or_clause():
-    # Phase A migration (T3): paper_user_state now uses a state ENUM instead of
-    # legacy boolean columns (archived, dismissed) and status text.
-    # The digest must:
-    #   - exclude papers in state 'trash' or 'done' via a top-level NOT EXISTS guard
-    #   - include papers where starred=TRUE or state IN ('reading','done')
-    #   - include papers with a positive pulse_thumbs recommendation_feedback entry
-    #     (replaces the retired pulse_ratings table)
-    db_pool = AsyncMock()
-    db_pool.fetch.return_value = []
-    bot = AsyncMock()
-
-    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=None)
-
-    sql = db_pool.fetch.await_args.args[0]
-    # pus2 alias used in the positive-inclusion subquery; pus used by NOT EXISTS guard
-    assert "COALESCE(pus2.starred, FALSE) = TRUE" in sql
-    assert "pus2.state = 'reading'" in sql
-    # Top-level NOT EXISTS guard uses the new state ENUM (trash/done = excluded)
-    assert "NOT EXISTS" in sql
-    assert "pus.state IN ('trash', 'done')" in sql
-    # recommendation_feedback replaces the retired pulse_ratings table
-    assert "FROM recommendation_feedback rf" in sql
-    assert "rf.signal = 'positive'" in sql
-    assert "rf.source = 'pulse_thumbs'" in sql
-    # Legacy columns/table must NOT appear
-    assert "COALESCE(pus.archived, FALSE)" not in sql
-    assert "COALESCE(pus.dismissed, FALSE)" not in sql
-    assert "FROM pulse_ratings" not in sql
-
-
-@pytest.mark.asyncio
-async def test_simple_digest_db_user_id_default_none_matches_null_row():
-    """db_user_id=None (default) causes IS NOT DISTINCT FROM $1 to match NULL rows.
-
-    A paper archived by a NULL-user_id paper_user_state row must be excluded when
-    _simple_digest is called with db_user_id=None (single-tenant mode).
-    """
-    db_pool = AsyncMock()
-    # Simulate the query returning empty (archived row matched, paper excluded)
-    db_pool.fetch.return_value = []
-    bot = AsyncMock()
-
-    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=None)
-
-    sql, bound_param = db_pool.fetch.await_args.args
-    # IS NOT DISTINCT FROM must appear in all three subqueries
-    assert sql.count("IS NOT DISTINCT FROM $1") == 3
-    # The bound parameter must be None (matches NULL rows via IS NOT DISTINCT FROM)
-    assert bound_param is None
-
-
-@pytest.mark.asyncio
-async def test_simple_digest_db_user_id_42_does_not_see_user_99_archived():
-    """db_user_id=42 scopes queries so user 99's archived flag does not suppress paper.
-
-    The SQL is parameterised with $1 = 42; a paper_user_state row with user_id=99
-    and archived=TRUE must NOT cause the paper to be excluded from user 42's digest.
-    We verify this by confirming the SQL is called with db_user_id=42, so the
-    IS NOT DISTINCT FROM $1 predicate only matches user 42's rows.
-    """
-    db_pool = AsyncMock()
-    # Simulate a paper making it through the filter (user 99's archived row ignored)
-    db_pool.fetch.return_value = [
-        {
-            "id": 1,
-            "title": "Visible Paper",
-            "url": "https://example.com/p1",
-            "published_date": None,
-            "authors": None,
-            "topic_name": "AI",
-            "relevance_score": 0.9,
-            "summary_brief": None,
-            "confidence": None,
-        }
-    ]
-    bot = AsyncMock()
-
-    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=42)
-
-    _, bound_param = db_pool.fetch.await_args.args
-    # The query must be scoped to user 42 — user 99's archived row won't match
-    assert bound_param == 42
-
-
-@pytest.mark.asyncio
-async def test_simple_digest_passes_db_user_id_to_query():
-    """_simple_digest passes db_user_id as the sole bound parameter to db_pool.fetch."""
-    db_pool = AsyncMock()
-    db_pool.fetch.return_value = []
-    bot = AsyncMock()
-
-    await paper_digest._simple_digest(db_pool, bot, _make_config(), 1234, db_user_id=42)
-
-    call_args = db_pool.fetch.await_args.args
-    # args[0] = SQL string, args[1] = db_user_id value
-    assert len(call_args) == 2, "fetch must be called with exactly (sql, db_user_id)"
-    assert call_args[1] == 42
+    # No message should be sent when API returns no data
+    send_chunked.assert_not_awaited()

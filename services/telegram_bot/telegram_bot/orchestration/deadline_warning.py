@@ -68,8 +68,7 @@ async def run_deadline_warning(
     """Send warnings for milestones due in the next 3 days.
 
     Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
-    warnings.  Falls back to the legacy single-tenant owner when no per-user
-    pairings exist.
+    warnings.  Skips with a warning when no pairings exist.
 
     Parameters
     ----------
@@ -82,7 +81,7 @@ async def run_deadline_warning(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import list_user_pairings
 
     milestones = await db_pool.fetch(
         """SELECT m.name, m.deadline, p.name as project_name
@@ -99,14 +98,11 @@ async def run_deadline_warning(
         return
 
     pairings = await list_user_pairings(db_pool)
-    if pairings:
-        for pairing in pairings:
-            await _send_deadline_warning(bot, pairing.chat_id, milestones)
+    if not pairings:
+        logger.warning(
+            "deadline_warning skipped: no Telegram pairings exist — use /pair in Telegram to set up"
+        )
         return
 
-    # Legacy single-tenant fallback
-    owner = await resolve_owner_chat_id(db_pool, config)
-    if owner is None:
-        logger.info("Skipping deadline warning: no telegram owner paired")
-        return
-    await _send_deadline_warning(bot, owner, milestones)
+    for pairing in pairings:
+        await _send_deadline_warning(bot, pairing.chat_id, milestones)

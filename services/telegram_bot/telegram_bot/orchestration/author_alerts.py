@@ -33,18 +33,15 @@ async def run_author_alerts(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import list_user_pairings
 
     pairings = await list_user_pairings(db_pool)
-    # Resolve which chat IDs to deliver to (multi-tenant takes priority over legacy)
-    if pairings:
-        chat_ids = [p.chat_id for p in pairings]
-    else:
-        owner = await resolve_owner_chat_id(db_pool, config)
-        if owner is None:
-            logger.info("Skipping author alerts: no telegram owner paired")
-            return
-        chat_ids = [owner]
+    if not pairings:
+        logger.warning(
+            "author_alerts skipped: no Telegram pairings exist — use /pair in Telegram to set up"
+        )
+        return
+    chat_ids = [p.chat_id for p in pairings]
 
     async with db_pool.acquire() as conn:
         authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")

@@ -130,7 +130,12 @@ async def test_author_alerts_sends_message_when_new_paper_found():
 
     pool.acquire.side_effect = _acquire
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await author_alerts_mod.run_author_alerts(http_client, pool, bot, config)
 
     bot.send_message.assert_awaited_once()
@@ -201,7 +206,12 @@ async def test_daily_briefing_sends_briefing_with_two_papers():
     stats_resp.json.return_value = {"due_now": 5}
     http_client.get.return_value = stats_resp
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await daily_briefing_mod.run_daily_briefing(http_client, pool, bot, config)
 
     bot.send_message.assert_awaited_once()
@@ -255,7 +265,12 @@ async def test_deadline_warning_sends_alert_for_upcoming_milestones():
     pool = AsyncMock()
     pool.fetch.return_value = [milestone_row]
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await deadline_warning_mod.run_deadline_warning(http_client, pool, bot, config)
 
     bot.send_message.assert_awaited_once()
@@ -297,7 +312,12 @@ async def test_review_reminder_sends_message_for_due_cards():
     resp.json.return_value = {"due_now": 3}
     http_client.get.return_value = resp
 
-    with patch("telegram_bot.owner.resolve_owner_chat_id", AsyncMock(return_value=9999)):
+    from telegram_bot.owner import UserPairing
+
+    with patch(
+        "telegram_bot.owner.list_user_pairings",
+        AsyncMock(return_value=[UserPairing(user_id=1, chat_id=9999)]),
+    ):
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, config)
 
     bot.send_message.assert_awaited_once()

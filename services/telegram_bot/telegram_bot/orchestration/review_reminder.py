@@ -88,7 +88,7 @@ async def run_review_reminder(
 
     Sprint A: iterates ``telegram_user_pairings`` and delivers per-user
     reminders by sending ``X-Owner-User-Id`` + ``X-API-Key`` headers.
-    Falls back to the legacy single-tenant owner when no per-user pairings exist.
+    Skips with a warning when no pairings exist.
 
     Parameters
     ----------
@@ -101,17 +101,14 @@ async def run_review_reminder(
     config : BotConfig
         Bot configuration.
     """
-    from telegram_bot.owner import list_user_pairings, resolve_owner_chat_id
+    from telegram_bot.owner import list_user_pairings
 
     pairings = await list_user_pairings(db_pool)
-    if pairings:
-        for pairing in pairings:
-            await _send_reminder_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
+    if not pairings:
+        logger.warning(
+            "review_reminder skipped: no Telegram pairings exist — use /pair in Telegram to set up"
+        )
         return
 
-    # Legacy single-tenant fallback
-    owner = await resolve_owner_chat_id(db_pool, config)
-    if owner is None:
-        logger.info("Skipping review reminder: no telegram owner paired")
-        return
-    await _send_reminder_to_chat(http_client, bot, config, owner)
+    for pairing in pairings:
+        await _send_reminder_to_chat(http_client, bot, config, pairing.chat_id, pairing.user_id)
