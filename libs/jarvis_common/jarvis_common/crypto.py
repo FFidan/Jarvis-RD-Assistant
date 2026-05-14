@@ -10,7 +10,6 @@ from typing import Any
 import asyncpg
 from cryptography.fernet import Fernet, MultiFernet
 
-from jarvis_common.secrets import read_secret
 from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
@@ -23,7 +22,7 @@ def _load_fernet() -> Fernet | MultiFernet:
     Reads ``JARVIS_CONFIG_KEY`` (the *current* / write key) plus the optional
     ``JARVIS_CONFIG_KEY_OLD`` (a previous key kept for read-only decryption
     during a rotation window). Both honour the Docker Secret ``_FILE``
-    convention via :func:`jarvis_common.secrets.read_secret`. When ``OLD`` is
+    convention via :class:`jarvis_common.settings.SecretsSettings`. When ``OLD`` is
     set, returns a :class:`MultiFernet([new, old])` so:
 
     * ``encrypt`` always uses the new key (first in the list),
@@ -37,7 +36,11 @@ def _load_fernet() -> Fernet | MultiFernet:
     :func:`reload_fernet_on_sighup`).
     Raises RuntimeError if the new key is unset or malformed.
     """
-    raw_new = read_secret("JARVIS_CONFIG_KEY")
+    from jarvis_common.settings import SecretsSettings  # noqa: PLC0415
+
+    # Use a fresh snapshot so refresh_fernet_cache() + monkeypatch works in tests.
+    s = SecretsSettings()
+    raw_new = s.jarvis_config_key.get_secret_value() if s.jarvis_config_key else ""
     if not raw_new:
         raise RuntimeError(
             "JARVIS_CONFIG_KEY is not set. "
@@ -51,7 +54,7 @@ def _load_fernet() -> Fernet | MultiFernet:
             f"JARVIS_CONFIG_KEY is malformed (expected urlsafe base64-encoded 32-byte key): {exc}"
         ) from exc
 
-    raw_old = read_secret("JARVIS_CONFIG_KEY_OLD")
+    raw_old = s.jarvis_config_key_old.get_secret_value() if s.jarvis_config_key_old else ""
     if not raw_old:
         return new_fernet
     try:

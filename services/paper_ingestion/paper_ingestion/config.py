@@ -197,7 +197,7 @@ class PaperIngestionSettings(JarvisCommonSettings):
     )
 
     # --- Infrastructure ingest key --------------------------------------
-    # infra_ingest_key and infra_ingest_key_file are read via secrets.read_secret
+    # infra_ingest_key and infra_ingest_key_file are read via PaperIngestionSettings
     # in routers/infra_events.py.  Mirrors the dual-source pattern used for
     # JARVIS_API_KEY so Docker Secret mounts take precedence.
     infra_ingest_key: SecretStr | None = Field(

@@ -51,8 +51,7 @@ from jarvis_common.error_handlers import (
 )
 from jarvis_common.http_rate_limiter import rate_limit_exceeded_handler
 from jarvis_common.request_id import RequestIDMiddleware
-from jarvis_common.secrets import read_secret
-from jarvis_common.settings import get_core_settings
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +195,8 @@ def _log_auth_status() -> None:
     """
     refresh_api_key_cache()
     dev_mode = get_core_settings().dev_mode
-    api_key = read_secret("JARVIS_API_KEY")
+    secret = get_secrets_settings().jarvis_api_key
+    api_key = secret.get_secret_value() if secret else ""
     if api_key:
         logger.info("API key authentication enabled")
     elif dev_mode:

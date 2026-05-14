@@ -117,16 +117,17 @@ def get_litellm_config(
 def build_litellm_headers(config: LiteLLMConfig) -> dict[str, str]:  # noqa: ARG001
     """Return auth headers for a LiteLLM request.
 
-    Resolves ``LITELLM_MASTER_KEY`` via :func:`jarvis_common.secrets.read_secret`
+    Resolves ``LITELLM_MASTER_KEY`` via :class:`jarvis_common.settings.SecretsSettings`
     so the Docker Secret ``LITELLM_MASTER_KEY_FILE`` mount is honoured before
     the legacy plain env var.  When the key resolves to a non-empty value,
     returns ``{"Authorization": "Bearer <key>"}``.  When unset (e.g. dev
     without a key configured), returns ``{}`` so that loopback-only enforcement
     still protects the endpoint.
     """
-    from jarvis_common.secrets import read_secret  # noqa: PLC0415 — lazy to avoid cycles
+    from jarvis_common.settings import SecretsSettings  # noqa: PLC0415 — lazy to avoid cycles
 
-    master_key = read_secret("LITELLM_MASTER_KEY")
+    secret = SecretsSettings().litellm_master_key
+    master_key = secret.get_secret_value() if secret else ""
     if master_key:
         return {"Authorization": f"Bearer {master_key}"}
     return {}

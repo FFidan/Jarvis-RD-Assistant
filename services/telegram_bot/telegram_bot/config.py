@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import asyncpg
 from jarvis_common import build_database_url, init_pg_connection
-from jarvis_common.secrets import read_secret
 from pydantic import SecretStr
 
 logger = logging.getLogger(__name__)
@@ -32,7 +31,11 @@ class BotConfig:
         SystemExit
             If required variables are missing.
         """
-        token = read_secret("TELEGRAM_BOT_TOKEN")
+        from jarvis_common.settings import SecretsSettings  # noqa: PLC0415
+
+        secrets = SecretsSettings()
+        token_secret = secrets.telegram_bot_token
+        token = token_secret.get_secret_value() if token_secret else ""
         if not token:
             logger.critical("TELEGRAM_BOT_TOKEN is not set")
             raise SystemExit(1)
@@ -60,7 +63,8 @@ class BotConfig:
             logger.critical("Cannot build DATABASE_URL: %s", exc)
             raise SystemExit(1) from exc
 
-        _raw_api_key = read_secret("JARVIS_API_KEY")
+        api_key_secret = secrets.jarvis_api_key
+        _raw_api_key = api_key_secret.get_secret_value() if api_key_secret else ""
         if not _raw_api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
         jarvis_api_key: SecretStr | None = SecretStr(_raw_api_key) if _raw_api_key else None

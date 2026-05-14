@@ -3,14 +3,13 @@
 import hmac
 import ipaddress
 import logging
-import os
 
 import asyncpg
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
 from jarvis_common.event_log import log_event
-from jarvis_common.secrets import read_secret
+from jarvis_common.settings import get_core_settings
 
 logger = logging.getLogger(__name__)
 
@@ -19,14 +18,17 @@ _HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness
 
 
 def _load_api_key() -> str | None:
-    """Resolve JARVIS_API_KEY once at import time.
+    """Resolve JARVIS_API_KEY once at import time (and on explicit refresh).
 
-    Honours the _FILE convention (JARVIS_API_KEY_FILE) via read_secret().
-    Returns None when no key is configured so callers can use a simple truth
-    check rather than comparing against an empty string.
+    Constructs a fresh SecretsSettings snapshot so that callers of
+    refresh_api_key_cache() — e.g. tests that monkeypatch JARVIS_API_KEY —
+    always see the current env rather than a stale lru_cache'd result.
+    Returns None when no key is configured.
     """
-    value = read_secret("JARVIS_API_KEY")
-    return value if value else None
+    from jarvis_common.settings import SecretsSettings  # noqa: PLC0415
+
+    value = SecretsSettings().jarvis_api_key
+    return value.get_secret_value() if value is not None else None
 
 
 # Resolved once at import time; avoids a file-read per request.
@@ -52,7 +54,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     the secret on every request.
     """
     jarvis_api_key = _CACHED_API_KEY
-    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
+    dev_mode = get_core_settings().dev_mode
     if request.url.path in _HEALTH_PATHS:
         return
     # /infra-events authenticates via X-Infra-Key (separate secret from
@@ -199,7 +201,6 @@ def assert_multi_tenant_not_implemented() -> None:
 # ---------------------------------------------------------------------------
 
 _OWNER_OVERRIDE_HEADER = "X-Owner-User-Id"
-_DEFAULT_OWNER_CIDRS = "127.0.0.0/8,172.16.0.0/12"
 
 
 def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
@@ -208,7 +209,7 @@ def _parse_allowed_networks() -> list[ipaddress.IPv4Network | ipaddress.IPv6Netw
     Falls back to the default loopback + docker-bridge CIDR list when the
     variable is unset or empty.
     """
-    raw = os.environ.get("OWNER_OVERRIDE_ALLOWED_CIDRS", _DEFAULT_OWNER_CIDRS)
+    raw = get_core_settings().owner_override_allowed_cidrs
     networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
     for part in raw.split(","):
         part = part.strip()
@@ -340,17 +341,14 @@ async def current_user_id_with_owner_override(
 
 
 def validate_production_config() -> None:
-    """Crash at startup if production config is unsafe.
+    """Crash at startup if production config is unsafe."""
+    from jarvis_common.settings import get_core_settings, get_secrets_settings  # noqa: PLC0415
 
-    Raises
-    ------
-    RuntimeError
-        If ENVIRONMENT=production AND DEV_MODE=true, or if not in DEV_MODE
-        and JARVIS_API_KEY is empty, a default sentinel, or shorter than 32 chars.
-    """
-    env = os.environ.get("ENVIRONMENT", "").lower()
-    dev_mode = os.environ.get("DEV_MODE", "false").lower() == "true"
-    api_key = read_secret("JARVIS_API_KEY")
+    core = get_core_settings()
+    env = core.environment.lower()
+    dev_mode = core.dev_mode
+    api_key_secret = get_secrets_settings().jarvis_api_key
+    api_key = api_key_secret.get_secret_value() if api_key_secret else ""
 
     if env == "production" and dev_mode:
         raise RuntimeError("DEV_MODE=true is not allowed in ENVIRONMENT=production")

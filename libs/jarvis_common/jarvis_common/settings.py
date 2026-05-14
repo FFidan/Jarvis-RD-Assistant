@@ -11,10 +11,10 @@ Notes
 * Pydantic-settings reads env vars case-insensitively by default, so the
   snake_case field names match the SHOUTING_CASE env vars (e.g.
   ``dev_mode`` <-> ``DEV_MODE``).
-* The ``auth.py`` module intentionally keeps reading ``JARVIS_API_KEY`` and
-  ``DEV_MODE`` directly from ``os.environ`` — it owns a mutable cache plus a
-  ``refresh_api_key_cache()`` hook that test monkeypatching depends on. Do
-  not move those reads here.
+* ``DEV_MODE``, ``ENVIRONMENT``, and ``OWNER_OVERRIDE_ALLOWED_CIDRS`` now flow
+  through :class:`CoreSettings`.  ``JARVIS_API_KEY`` flows through
+  :class:`SecretsSettings` (cached in ``auth.py`` via ``_CACHED_API_KEY`` +
+  ``refresh_api_key_cache()`` so the per-request path never re-reads env).
 * Risky-to-cache values (e.g. ``JARVIS_ENABLE_TEST_JOBS`` which tests flip at
   runtime) are **not** wrapped in the lru_cache'd factory — the call site
   builds a fresh ``JobsSettings()`` per invocation so runtime env changes are
@@ -23,18 +23,22 @@ Notes
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
     "CoreSettings",
     "JobsSettings",
     "RerankerSettings",
+    "SecretsSettings",
     "TelegramSettings",
     "get_core_settings",
     "get_reranker_settings",
+    "get_secrets_settings",
     "get_telegram_settings",
     "get_jobs_settings",
 ]
@@ -63,6 +67,9 @@ class CoreSettings(BaseSettings):
     # Parsed at the use site — pydantic-settings would otherwise try to JSON-decode
     # a list-typed field and reject plain "dashboard,foo" strings.
     trusted_proxy_hosts: str = "dashboard"
+    # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
+    # Defaults to loopback + docker-bridge ranges.
+    owner_override_allowed_cidrs: str = "127.0.0.0/8,172.16.0.0/12"
 
     @property
     def trusted_proxy_hosts_list(self) -> list[str]:
@@ -139,3 +146,52 @@ def get_jobs_settings() -> JobsSettings:
     ``noop.test``; each call reads the current env so the toggle is honoured.
     """
     return JobsSettings()
+
+
+class SecretsSettings(BaseSettings):
+    """Typed access to all secrets, honouring the ``<NAME>_FILE`` convention.
+
+    A ``model_validator(mode="before")`` resolves ``<FIELD>_FILE`` env vars by
+    reading & stripping the file, then handing the value to the standard
+    pydantic-settings env loader. Replaces the deleted ``jarvis_common.secrets`` module.
+    """
+
+    model_config = _COMMON_CONFIG
+
+    jarvis_api_key: SecretStr | None = None
+    jarvis_config_key: SecretStr | None = None
+    jarvis_config_key_old: SecretStr | None = None
+    telegram_bot_token: SecretStr | None = None
+    litellm_master_key: SecretStr | None = None
+    smtp_host: SecretStr | None = None
+    smtp_port: SecretStr | None = None
+    smtp_user: SecretStr | None = None
+    smtp_pass: SecretStr | None = None
+    smtp_from: SecretStr | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _resolve_file_indirection(cls, values):
+        import os  # noqa: PLC0415
+
+        if not isinstance(values, dict):
+            return values
+        for field_name in cls.model_fields:
+            env_name = field_name.upper()
+            file_var = os.environ.get(f"{env_name}_FILE", "")
+            if file_var:
+                try:
+                    values[field_name] = Path(file_var).read_text().strip()
+                except OSError as exc:
+                    raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
+        return values
+
+
+@lru_cache(maxsize=1)
+def get_secrets_settings() -> SecretsSettings:
+    """Return a cached ``SecretsSettings`` instance.
+
+    Cached for process lifetime — call ``get_secrets_settings.cache_clear()``
+    in tests after mutating secret-related env vars.
+    """
+    return SecretsSettings()

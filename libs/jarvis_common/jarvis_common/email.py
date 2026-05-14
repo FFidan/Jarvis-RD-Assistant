@@ -15,8 +15,7 @@ import logging
 import asyncpg
 
 from jarvis_common.event_log import log_event
-from jarvis_common.secrets import read_secret
-from jarvis_common.settings import get_core_settings
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +29,8 @@ def _smtp_configured() -> bool:
     IP-allowlist auth). HOST, PORT, and FROM are the minimum to compose +
     deliver an envelope.
     """
-    return all(read_secret(name) for name in _REQUIRED_SMTP_VARS)
+    s = get_secrets_settings()
+    return all(getattr(s, name.lower()) is not None for name in _REQUIRED_SMTP_VARS)
 
 
 def _dev_mode() -> bool:
@@ -96,11 +96,12 @@ async def send_magic_link(
 
     import aiosmtplib  # noqa: PLC0415
 
-    host = read_secret("SMTP_HOST") or ""
-    port = int(read_secret("SMTP_PORT") or "587")
-    user = read_secret("SMTP_USER") or None
-    password = read_secret("SMTP_PASS") or None
-    sender = read_secret("SMTP_FROM") or ""
+    s = get_secrets_settings()
+    host = s.smtp_host.get_secret_value() if s.smtp_host else ""
+    port = int(s.smtp_port.get_secret_value()) if s.smtp_port else 587
+    user = s.smtp_user.get_secret_value() if s.smtp_user else None
+    password = s.smtp_pass.get_secret_value() if s.smtp_pass else None
+    sender = s.smtp_from.get_secret_value() if s.smtp_from else ""
 
     message = EmailMessage()
     message["From"] = sender

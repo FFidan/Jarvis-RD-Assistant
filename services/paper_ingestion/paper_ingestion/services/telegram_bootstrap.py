@@ -10,7 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 import httpx
-from jarvis_common import read_secret
+from jarvis_common.settings import get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +22,8 @@ async def refresh_telegram_bot_username(db_pool, http_client: httpx.AsyncClient)
     (<24h old), or if the API call fails. Never raises: the lifespan hook
     must stay resilient to network/token errors.
     """
-    token = read_secret("TELEGRAM_BOT_TOKEN")
+    _token_secret = get_secrets_settings().telegram_bot_token
+    token = _token_secret.get_secret_value() if _token_secret else ""
     if not token:
         return
 

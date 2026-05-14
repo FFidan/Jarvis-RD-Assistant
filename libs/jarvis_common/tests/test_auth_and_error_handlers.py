@@ -22,17 +22,18 @@ class TestCachedApiKey:
         assert hasattr(auth_mod, "_CACHED_API_KEY")
 
     def test_cached_value_not_reread_on_subsequent_calls(self, monkeypatch) -> None:
-        """JC-005: verify_api_key reads _CACHED_API_KEY, not read_secret on each call.
+        """JC-005: verify_api_key reads _CACHED_API_KEY, not get_secrets_settings on each call.
 
         We patch _CACHED_API_KEY directly and confirm the handler uses that
-        value rather than calling read_secret again.
+        value rather than calling get_secrets_settings again.
         """
         import jarvis_common.auth as auth_mod
+        import jarvis_common.settings as settings_mod
 
         # Patch the cache to a known key.
         monkeypatch.setattr(auth_mod, "_CACHED_API_KEY", "cached-test-key-1234567890abcdef")
-        # Confirm read_secret is NOT called during verify_api_key.
-        with patch.object(auth_mod, "read_secret") as mock_read:
+        # Confirm get_secrets_settings is NOT called during verify_api_key.
+        with patch.object(settings_mod, "get_secrets_settings") as mock_read:
             # Run verify_api_key synchronously via asyncio.
             import asyncio
 

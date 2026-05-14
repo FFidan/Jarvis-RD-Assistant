@@ -72,8 +72,8 @@ from jarvis_common.models import (
 )
 from jarvis_common.prompt_safety import escape_llm_text, safe_for_prompt, wrap_delimited
 from jarvis_common.request_id import RequestIDMiddleware
-from jarvis_common.secrets import read_secret
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME, SessionMiddleware
+from jarvis_common.settings import SecretsSettings, get_secrets_settings
 from jarvis_common.source_rate_limiter import SourceRateLimiter
 from jarvis_common.streak import compute_streak
 from jarvis_common.text_utils import author_matches, normalize_author_name
@@ -143,7 +143,8 @@ __all__ = [
     "LLM_TIMEOUT_DEFAULT",
     "LLM_TIMEOUT_LONG",
     "LLM_TIMEOUT_SHORT",
-    "read_secret",
+    "SecretsSettings",
+    "get_secrets_settings",
     "send_magic_link",
     "SessionMiddleware",
     "SESSION_COOKIE_NAME",
