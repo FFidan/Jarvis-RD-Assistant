@@ -188,8 +188,7 @@ Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 | `DEV_MODE` | `false` | Bypass API key auth in services (dev only) |
 | `JARVIS_API_KEY` | `` | API key for inter-service auth; required in production |
 | `SEMANTIC_SCHOLAR_API_KEY` | `` | Optional; increases S2 rate limit from 100/5min to 1000/5min. Also unlocks the multi-seed recommendation endpoint used by the Phase 1 Pulse discovery pipeline. |
-| `VITE_API_KEY` | `` | API key baked into React dashboard at build time |
-| `VITE_DASHBOARD_PASSWORD` | `` | Dashboard login password baked into React build |
+| `VITE_LANGFUSE_PUBLIC_DASHBOARD` | `` | Optional Langfuse cloud dashboard URL; when set, a link card appears in Settings → Providers |
 
 ### Phase 1 Discovery & Pulse additions (shipped 2026-04-11)
 
@@ -216,7 +215,7 @@ Note:
 
 ## Database Migrations
 
-49 migrations currently applied in `db/migrations/` (001-049). Fresh installs get all tables via `db/init.sql`.
+82 migrations currently applied in `db/migrations/` (001–082). Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
@@ -271,8 +270,10 @@ JARVIS uses Docker Secrets for sensitive runtime values. Each secret is stored i
 | `jarvis_api_key` | `/run/secrets/jarvis_api_key` | `paper_ingestion`, `learning_engine` | `JARVIS_API_KEY_FILE` |
 | `qdrant_api_key` | `/run/secrets/qdrant_api_key` | `qdrant`, `paper_ingestion`, `learning_engine` | `QDRANT_API_KEY_FILE` |
 | `telegram_bot_token` | `/run/secrets/telegram_bot_token` | `telegram_bot` | `TELEGRAM_BOT_TOKEN_FILE` |
+| `litellm_master_key` | `/run/secrets/litellm_master_key` | `litellm`, `paper_ingestion`, `learning_engine`, `telegram_bot` | `LITELLM_MASTER_KEY_FILE` |
+| `jarvis_config_key` | `/run/secrets/jarvis_config_key` | `paper_ingestion`, `learning_engine` | `JARVIS_CONFIG_KEY_FILE` |
 
-All four secret files must exist (even if empty for optional services) before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager. (LiteLLM previously had a fifth `litellm_master_key` secret; W1.1 of round-15 closeout dropped it because litellm runs loopback-only and fronts only Ollama — see `litellm/config.yaml` header.)
+These secret files must exist before running `docker compose up`. The `scripts/init-dirs.sh` helper creates the `secrets/` directory but does not populate the files — populate them manually or via your secrets manager.
 
 Plain environment variable fallbacks (e.g., `JARVIS_API_KEY`, `QDRANT_API_KEY`) remain accepted for backwards compatibility and local dev without Docker Secrets.
 

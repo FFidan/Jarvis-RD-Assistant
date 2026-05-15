@@ -521,16 +521,6 @@ app.include_router(infra_events.router)
 # ---------------------------------------------------------------------------
 
 
-async def _probe_postgres(request: Request) -> str:
-    try:
-        async with request.app.state.db_pool.acquire() as conn:
-            await asyncio.wait_for(conn.execute("SELECT 1"), timeout=5.0)
-    except Exception:
-        logger.warning("Health check: PostgreSQL unavailable", exc_info=True)
-        return "unavailable"
-    return "ok"
-
-
 async def _probe_qdrant(request: Request) -> str:
     try:
         await asyncio.wait_for(request.app.state.qdrant_client.get_collections(), timeout=5.0)

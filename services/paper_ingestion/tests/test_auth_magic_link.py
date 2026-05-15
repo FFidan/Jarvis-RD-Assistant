@@ -413,13 +413,20 @@ async def test_send_magic_link_dev_mode_emits_system_event(monkeypatch) -> None:
         pool=fake_pool,
     )
 
+    import hashlib
+
     assert len(log_event_calls) == 1
     call = log_event_calls[0]
     assert call["category"] == "auth"
     assert call["source"] == "auth"
     assert call["message"] == "magic_link_dev_mode"
-    assert call["context"]["email"] == "ferhat@example.com"
-    assert "token=abc" in call["context"]["link"]
+    # H-2: raw email and raw link must NOT appear in the event context —
+    # only a SHA-256 hash of the email and a boolean link_issued flag.
+    expected_hash = hashlib.sha256(b"ferhat@example.com").hexdigest()
+    assert call["context"]["email_hash"] == expected_hash
+    assert call["context"]["link_issued"] is True
+    assert "email" not in call["context"]
+    assert "link" not in call["context"]
 
 
 @pytest.mark.asyncio

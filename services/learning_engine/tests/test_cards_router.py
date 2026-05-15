@@ -342,3 +342,36 @@ async def test_create_card_skips_ownership_check_when_no_paper():
         )
 
     mock_ownership.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# DOS-1: CardCreate field-length caps
+# ---------------------------------------------------------------------------
+
+
+def test_card_create_front_over_cap_is_rejected():
+    """CardCreate.front must reject input exceeding max_length=500 (→ 422-style ValidationError)."""
+    import pydantic
+    import pytest
+
+    with pytest.raises(pydantic.ValidationError):
+        CardCreate(
+            deck_id=1,
+            card_type=CardType.CONCEPT,
+            front="x" * 501,
+            back="valid back",
+        )
+
+
+def test_card_create_back_over_cap_is_rejected():
+    """CardCreate.back must reject input exceeding max_length=2000 (→ 422-style ValidationError)."""
+    import pydantic
+    import pytest
+
+    with pytest.raises(pydantic.ValidationError):
+        CardCreate(
+            deck_id=1,
+            card_type=CardType.CONCEPT,
+            front="valid front",
+            back="x" * 2001,
+        )

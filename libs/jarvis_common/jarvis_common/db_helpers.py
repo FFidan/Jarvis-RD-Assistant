@@ -246,21 +246,29 @@ async def assert_paper_ownership(
     conn: asyncpg.Connection,
     paper_id: int,
     user_id: int | None,
-    *,
-    multitenant_enabled: bool = False,
 ) -> None:
     """Raise HTTPException if the caller does not own the paper.
 
-    Sprint B canonical-corpus semantics
-    ------------------------------------
-    Papers are global (canonical corpus). Ownership = library membership.
+    Canonical-corpus ownership semantics (D4 — decided, see docs/SECURITY.md)
+    --------------------------------------------------------------------------
+    The bibliographic corpus is intentionally shared across all users on an
+    instance. ``discovered_by IS NULL`` means the paper was ingested by
+    instance-level feeds (Pulse, scheduler, Zotero sync) and is visible to
+    every authenticated user without requiring a ``user_library`` row.
+    Per-user isolation lives in the activity/output layer (library membership,
+    notes, cards, projects, ratings, intent), not in corpus access.
+
     Rules:
 
     * Single-user mode (``user_id=None``): all papers are accessible — no check.
     * Multi-user mode (``user_id`` is set):
       - Paper not found → 404.
-      - Paper present AND row exists in ``user_library`` for the caller → allowed.
-      - Paper present BUT NOT in caller's ``user_library`` → 403.
+      - ``discovered_by == user_id`` → allowed (caller's own paper).
+      - ``discovered_by IS NULL`` → allowed (shared canonical/system paper).
+      - Another user's explicitly-owned paper, NOT in caller's
+        ``user_library`` → 403.
+      - Paper not owned by caller but present in caller's
+        ``user_library`` → allowed.
 
     Parameters
     ----------
@@ -271,15 +279,6 @@ async def assert_paper_ownership(
     user_id:
         The caller's user ID from ``current_user_id_or_none()``.
         ``None`` means single-user mode; all access is allowed.
-    multitenant_enabled:
-        When ``True`` (multi-tenant deployment), papers with
-        ``discovered_by IS NULL`` are *not* auto-granted — the caller must
-        have an explicit ``user_library`` membership.  Defaults to ``False``
-        to preserve single-tenant / canonical-corpus semantics.
-
-        **Stub status (audit 3.5):** production callers currently pass the
-        default (``False``) — the multi-tenant NULL-discovered_by tightening
-        is opt-in for tests + future migration. See audit finding 3.5.
     """
     if user_id is None:
         # Single-user mode: skip ownership check entirely.
@@ -292,10 +291,6 @@ async def assert_paper_ownership(
     if row is None:
         raise HTTPException(status_code=404, detail="paper not found")
 
-    # Sprint B: papers are canonical. Discovered-by-system (NULL) papers
-    # remain freely accessible in single-tenant mode (canonical-corpus
-    # semantics).  In multi-tenant mode, NULL discovered_by is NOT a free
-    # pass — the caller still needs library membership.
     # Defensive: tolerate fixtures that still expose the legacy ``user_id``
     # key while production rows ship with ``discovered_by``.
     discovered_by: int | None
@@ -307,13 +302,11 @@ async def assert_paper_ownership(
         except (KeyError, IndexError):
             discovered_by = None
 
-    # Fast-grant: same owner, OR NULL discovered_by in single-tenant mode.
-    # TODO(WS-AUTH): the ``multitenant_enabled`` parameter is now dormant
-    # (no production caller passes True; the MULTITENANT_ENABLED setting was
-    # retired). Collapsing it would flip canonical-corpus ownership semantics
-    # for every caller — deferred to WS-CROSS-USER, which owns the per-user
-    # scoping migration.
-    if str(discovered_by) == str(user_id) or (discovered_by is None and not multitenant_enabled):
+    # Fast-grant: same owner, OR NULL discovered_by (shared canonical paper).
+    # D4 decision: discovered_by IS NULL == system/instance paper, globally
+    # readable by all authenticated users. Behavior pinned by
+    # tests/test_ownership_canonical_invariant.py.
+    if str(discovered_by) == str(user_id) or discovered_by is None:
         return
 
     in_library = await conn.fetchval(
@@ -329,24 +322,17 @@ async def assert_papers_ownership(
     conn: asyncpg.Connection,
     paper_ids: list[int],
     user_id: int | None,
-    *,
-    multitenant_enabled: bool = False,
 ) -> None:
     """Raise HTTPException if the caller lacks access to any paper in *paper_ids*.
 
-    Single-user/API-key-only mode keeps the legacy permissive behavior. In
-    browser-authenticated mode this checks the whole batch at once so public
-    batch job routes cannot enqueue work for another user's library entries.
+    Batch form of :func:`assert_paper_ownership`. Single-user/API-key-only
+    mode keeps the legacy permissive behavior. In browser-authenticated mode
+    this checks the whole batch at once so public batch job routes cannot
+    enqueue work for another user's library entries.
 
-    Parameters
-    ----------
-    multitenant_enabled:
-        When ``True``, papers with ``discovered_by IS NULL`` are not
-        auto-granted and require an explicit ``user_library`` entry.
-
-        **Stub status (audit 3.5):** production callers currently pass the
-        default (``False``) — the multi-tenant NULL-discovered_by tightening
-        is opt-in for tests + future migration. See audit finding 3.5.
+    Same canonical-corpus semantics as the singular helper: ``discovered_by
+    IS NULL`` papers are shared by design and never require a ``user_library``
+    row. See docs/SECURITY.md for the D4 boundary guarantee.
     """
     if user_id is None or not paper_ids:
         return
@@ -364,9 +350,8 @@ async def assert_papers_ownership(
     candidate_ids: list[int] = []
     for paper_id in unique_ids:
         discovered_by = by_id[paper_id]["discovered_by"]
-        if str(discovered_by) == str(user_id) or (
-            discovered_by is None and not multitenant_enabled
-        ):
+        # Fast-grant: same owner, or NULL (shared canonical paper — D4 decided).
+        if str(discovered_by) == str(user_id) or discovered_by is None:
             continue
         candidate_ids.append(paper_id)
 

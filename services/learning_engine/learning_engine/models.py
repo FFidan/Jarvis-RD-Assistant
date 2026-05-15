@@ -74,8 +74,8 @@ class CardCreate(BaseModel):
 
     deck_id: int
     card_type: CardType
-    front: str = Field(..., min_length=1)
-    back: str = Field(..., min_length=1)
+    front: str = Field(..., min_length=1, max_length=500)
+    back: str = Field(..., min_length=1, max_length=2000)
     paper_id: int | None = None
     evidence: Evidence | None = None
 

@@ -237,14 +237,14 @@ services:
         # H-5: Reject known placeholder/weak values in production so a deploy
         # with an unchanged secrets/litellm_master_key.txt fails fast here
         # rather than silently running with a public default.
-        if [ "${ENVIRONMENT:-development}" = "production" ]; then
+        if [ "$${ENVIRONMENT:-development}" = "production" ]; then
           case "$LITELLM_MASTER_KEY" in
             "sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")
               echo 'FATAL: LITELLM_MASTER_KEY is a known placeholder value.' \
                    'Replace secrets/litellm_master_key.txt before deploying to production.' >&2
               exit 1 ;;
           esac
-          if [ "${#LITELLM_MASTER_KEY}" -lt 16 ]; then
+          if [ "$${#LITELLM_MASTER_KEY}" -lt 16 ]; then
             echo 'FATAL: LITELLM_MASTER_KEY is too short (< 16 chars) for production.' >&2
             exit 1
           fi
@@ -671,8 +671,8 @@ services:
       - -c
       - |
         set -euo pipefail
-        INFRA_KEY=$(cat /run/secrets/infra_ingest_key)
-        exec env INFRA_KEY="$INFRA_KEY" vector --config /etc/vector/vector.toml
+        INFRA_KEY=$$(cat /run/secrets/infra_ingest_key)
+        exec env INFRA_KEY="$$INFRA_KEY" vector --config /etc/vector/vector.toml
     secrets:
       - infra_ingest_key
     depends_on:

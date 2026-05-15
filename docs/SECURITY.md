@@ -37,6 +37,56 @@ See `docs/known-residual-risks.md` for the full residual-risk register.
 
 ---
 
+## Data Sharing Boundary
+
+This section states the committed data-sharing model for a JARVIS instance
+(decision D4, 2026-05-15).  The enforcement point is
+`assert_paper_ownership` / `assert_papers_ownership` in
+`libs/jarvis_common/jarvis_common/db_helpers.py`.
+
+### What is shared (corpus layer)
+
+The following data is **shared across all authenticated users on an instance**:
+
+- Paper metadata (title, authors, abstract, publication date, DOI, source).
+- Full-text chunks and embeddings stored in Qdrant.
+- Citation graph edges and knowledge-graph entities derived from those papers.
+- Papers discovered by instance-level feeds: Pulse recommender, background
+  scheduler, and Zotero group syncs.  These have ``papers.discovered_by IS NULL``
+  (audit column only; no functional role).
+
+A paper with ``discovered_by IS NULL`` is a system/instance paper and is
+accessible to every authenticated user without requiring a ``user_library``
+membership row.  This reflects instance configuration (feed settings, Pulse
+model), not any individual user's behavior.
+
+### What is strictly per-user (activity/output layer)
+
+The following is **never cross-visible** — every query is scoped to
+``user_id`` and no cross-user join is permitted:
+
+- Library membership (``user_library`` rows).
+- Paper read-state and ratings.
+- Notes and annotations.
+- Flashcards and card decks.
+- Projects, tasks, and project–paper associations.
+- Daily intent and Pulse preference signals.
+- Structured extractions-of-record.
+- Magic-link identity, session cookies, and user config values.
+
+### Design rationale
+
+This is the same posture as a shared scholarly library with private
+workspaces (comparable to Zotero group libraries or institutional repositories):
+the corpus is a shared resource; the intellectual work on top of it is private.
+
+The prior ``multitenant_enabled`` boolean on the ownership helpers was removed
+in this decision to make the corpus-sharing explicit and untoggleable.
+Regression coverage lives in
+``libs/jarvis_common/tests/test_ownership_canonical_invariant.py``.
+
+---
+
 ## Dev Flags and Production Refusal
 
 JARVIS has five granular development flags. When `DEV_MODE=true`, all five are

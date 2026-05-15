@@ -12,7 +12,7 @@ async def get_today(pool, user_id: int | None) -> IntentRow:
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT intent_text, updated_at FROM daily_intent "
-            "WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)"
+            "WHERE user_id IS NOT DISTINCT FROM $1"
             " AND intent_date = CURRENT_DATE",
             user_id,
         )
@@ -48,7 +48,7 @@ async def delete_today(pool, user_id: int | None) -> None:
     async with pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM daily_intent"
-            " WHERE (user_id IS NULL OR user_id IS NOT DISTINCT FROM $1)"
+            " WHERE user_id IS NOT DISTINCT FROM $1"
             " AND intent_date = CURRENT_DATE",
             user_id,
         )

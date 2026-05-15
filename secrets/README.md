@@ -31,6 +31,7 @@ chmod 600 secrets/*.txt
 | `jarvis_api_key.txt` | `paper_ingestion`, `learning_engine`, `telegram_bot` | JARVIS REST API key (min 32 chars) |
 | `telegram_bot_token.txt` | `paper_ingestion`, `telegram_bot` | Telegram Bot API token from @BotFather |
 | `qdrant_api_key.txt` | `qdrant`, `paper_ingestion` | Qdrant vector database API key |
+| `jarvis_config_key.txt` | `paper_ingestion`, `learning_engine` | Fernet key for at-rest encryption of `user_config.encrypted_value`; generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
 
 ## Mode Bits Reminder
 

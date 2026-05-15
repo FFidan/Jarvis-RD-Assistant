@@ -393,3 +393,39 @@ async def test_review_reminder_skips_when_no_owner():
         await review_reminder_mod.run_review_reminder(http_client, pool, bot, _make_config())
 
     bot.send_message.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# test__owner_headers consolidation
+# ---------------------------------------------------------------------------
+
+
+def test_owner_headers_all_orchestrators_use_canonical():
+    """Verify the 4 orchestration modules import _owner_headers from helpers
+    rather than defining their own copy.
+
+    This is a structural test: it checks that the canonical helper is reachable
+    from each module and that calling it produces the expected headers.
+    """
+
+    from telegram_bot.handlers.helpers import _owner_headers
+    from telegram_bot.orchestration import daily_briefing as db_mod
+    from telegram_bot.orchestration import paper_digest as pd_mod
+    from telegram_bot.orchestration import research_pulse as rp_mod
+    from telegram_bot.orchestration import review_reminder as rr_mod
+
+    # Each module must re-export the canonical function (not a private copy).
+    assert db_mod._owner_headers is _owner_headers, "daily_briefing has its own _owner_headers"
+    assert pd_mod._owner_headers is _owner_headers, "paper_digest has its own _owner_headers"
+    assert rp_mod._owner_headers is _owner_headers, "research_pulse has its own _owner_headers"
+    assert rr_mod._owner_headers is _owner_headers, "review_reminder has its own _owner_headers"
+
+    # Smoke-test that the canonical helper produces correct output.
+    config = _make_config()
+    headers_with_user = _owner_headers(config, 42)
+    assert headers_with_user["X-API-Key"] == "secret"
+    assert headers_with_user["X-Owner-User-Id"] == "42"
+
+    headers_no_user = _owner_headers(config, None)
+    assert headers_no_user["X-API-Key"] == "secret"
+    assert "X-Owner-User-Id" not in headers_no_user

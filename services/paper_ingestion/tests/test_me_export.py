@@ -65,7 +65,7 @@ async def test_export_returns_zip_of_caller_data(monkeypatch) -> None:
     pool = _build_pool(conn)
     monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
 
-    resp = await settings_router.export_my_data(_request(pool))
+    resp = await settings_router.export_my_data.__wrapped__(_request(pool))
     assert resp.media_type == "application/zip"
     body = await _drain(resp)
 
@@ -83,8 +83,31 @@ async def test_export_excludes_other_users_data(monkeypatch) -> None:
     pool = _build_pool(conn)
     monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
 
-    resp = await settings_router.export_my_data(_request(pool))
+    resp = await settings_router.export_my_data.__wrapped__(_request(pool))
     body = await _drain(resp)
     with zipfile.ZipFile(io.BytesIO(body)) as zf:
         assert zf.read("papers.jsonl") == b""
         assert b"not yours" not in zf.read("papers.jsonl")
+
+
+def test_export_my_data_is_rate_limited() -> None:
+    """DOS-2: export_my_data must carry a @limiter.limit decorator (5/minute).
+
+    slowapi's limiter.limit() wraps the function via functools.wraps, which
+    sets __wrapped__ on the outer callable.  We also verify the inner function
+    name is registered in the limiter's route-limit table.
+    """
+    import paper_ingestion.routers.settings as settings_router
+    from paper_ingestion.deps import limiter
+
+    handler = settings_router.export_my_data
+    assert hasattr(handler, "__wrapped__"), (
+        "export_my_data is missing @limiter.limit — __wrapped__ not set (DOS-2)"
+    )
+    # slowapi tracks limits keyed by the function's qualified name
+    qualname = handler.__wrapped__.__qualname__
+    module = handler.__wrapped__.__module__
+    key = f"{module}.{qualname}"
+    assert key in limiter._route_limits, (
+        f"export_my_data ({key!r}) not registered in limiter._route_limits — DOS-2 not satisfied"
+    )

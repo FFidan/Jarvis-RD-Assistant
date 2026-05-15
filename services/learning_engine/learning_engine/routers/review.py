@@ -1,5 +1,6 @@
 """Review and stats endpoints."""
 
+import json
 import logging
 from datetime import datetime, timedelta
 
@@ -58,8 +59,6 @@ async def _build_fsrs_manager_from_db(
             if row["key"] == "fsrs.desired_retention":
                 desired_retention = float(row["value"])
             elif row["key"] == "fsrs.learning_steps":
-                import json
-
                 steps_raw = (
                     json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
                 )

@@ -122,15 +122,16 @@ async def get_project(
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE status = 'done') AS done
-                FROM tasks WHERE project_id = $1
+                FROM tasks WHERE project_id = $1 AND user_id = $2
             ) t ON TRUE
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) AS total,
                        COUNT(*) FILTER (WHERE completed = TRUE) AS done
-                FROM milestones WHERE project_id = $1
+                FROM milestones WHERE project_id = $1 AND user_id = $2
             ) m ON TRUE
             """,
             project_id,
+            user_id,
         )
 
     return ProjectDetailResponse(

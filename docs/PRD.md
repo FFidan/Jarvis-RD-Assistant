@@ -285,13 +285,13 @@ These features shipped in the Sprint 6 remediation pass (audit findings C1/C2/H1
 
 ### Multi-Tenant Status
 
-Multi-tenancy is **scaffolded, not enforced**. Current state as of Sprint 6:
+Multi-tenancy is **GA as of v0.2.0** (2026-05-10). The scaffolding-only phase is complete:
 
-- Migrations 042-043 add `user_id` FK columns and per-user unique constraints across core tables.
-- Sprint 6 threads `user_id` through all write paths; Pulse read-side IDOR is closed.
-- `current_user_id_or_none()` in `libs/jarvis_common/jarvis_common/auth.py` always returns `None` — a stub. Every ownership check short-circuits to pass-through.
-- Setting `MULTITENANT_ENABLED=true` logs CRITICAL but does not enforce anything.
-- Full enforcement is blocked until a real auth resolver (JWT / session lookup) replaces the stubs.
+- Migrations 042-043 added `user_id` FK columns and per-user unique constraints.
+- The auth resolver (`current_user_id_or_none`, `current_user_id_strict`) reads `request.state.user_id` populated by `SessionMiddleware` — it is no longer a stub.
+- All write paths thread `user_id` end-to-end; IDOR is closed on read paths for Pulse and user-data endpoints.
+- Magic-link sessions, Telegram pairing, and admin role separation are all live.
+- See `docs/SECURITY.md` for the full three-identity threat model.
 
 ### 3.5 Zotero Integration
 

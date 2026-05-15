@@ -24,7 +24,7 @@ isolation expectation that every contributor must follow.
 2. Keep PRs focused — one logical change per PR.
 3. Include a brief description of what changed, why, and any migration steps.
 4. Ensure all quality gates pass (see below) before requesting review.
-5. Update `docs/CHANGELOG.md` if the change is user-visible.
+5. Update `CHANGELOG.md` if the change is user-visible.
 
 ---
 
@@ -41,7 +41,7 @@ uv run pytest
 
 Ruff covers linting and import ordering. Pytest runs the full unit + integration
 suite. Tests that require a live database connection use `pytest-postgresql` or
-are marked `docker_only` — the full suite runs inside the Docker containers.
+are marked `live_pg` — the full suite runs inside the Docker containers.
 
 ### Frontend
 

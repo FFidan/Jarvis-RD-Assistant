@@ -8,18 +8,9 @@ from telegram import Bot
 
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_morning_briefing
+from telegram_bot.handlers.helpers import _owner_headers
 
 logger = logging.getLogger(__name__)
-
-
-def _build_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
-    """Build backend auth headers (X-API-Key + optional X-Owner-User-Id)."""
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-    if user_id is not None:
-        headers["X-Owner-User-Id"] = str(user_id)
-    return headers
 
 
 async def _run_briefing_for_chat(
@@ -118,7 +109,7 @@ async def _run_briefing_for_chat(
     try:
         resp = await http_client.get(
             f"{config.learning_engine_url}/api/stats",
-            headers=_build_headers(config, user_id),
+            headers=_owner_headers(config, user_id),
         )
         resp.raise_for_status()
         stats = resp.json()

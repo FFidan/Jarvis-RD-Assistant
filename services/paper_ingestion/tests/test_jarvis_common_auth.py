@@ -118,12 +118,18 @@ def test_validate_production_config_accepts_dedicated_model_hmac_key(monkeypatch
 
     Even when set, ``JARVIS_API_KEY`` is still required (HTTP auth) — so this
     test ensures both gates are independently satisfied.
+    H-2: production also requires SMTP to be fully configured (DEV_SMTP_LOG_ONLY
+    is forbidden in production, so real SMTP vars are the only valid path).
     """
     monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("DEV_MODE", "false")
     monkeypatch.setenv("JARVIS_API_KEY", "x" * 32)
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "y" * 32)
     monkeypatch.setenv("JARVIS_CONFIG_KEY", "z" * 44)  # Fernet keys are 44 chars
+    # H-2: SMTP must be fully configured in production.
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "jarvis@example.com")
 
     validate_production_config()
 

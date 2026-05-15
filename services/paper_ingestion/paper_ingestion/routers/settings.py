@@ -1259,6 +1259,7 @@ _EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
 
 
 @router.get("/me/export")
+@limiter.limit("5/minute")
 async def export_my_data(request: Request) -> Any:
     """Stream a ZIP of the calling user's structured data (GDPR export).
 

@@ -127,9 +127,11 @@ async def get_my_day(
                    COUNT(t.id) FILTER (WHERE t.status = 'done') AS done_tasks,
                    (SELECT m.name FROM milestones m
                     WHERE m.project_id = p.id AND m.completed = FALSE
+                      AND m.user_id = $1
                     ORDER BY m.deadline ASC NULLS LAST LIMIT 1) AS next_milestone,
                    (SELECT m.deadline FROM milestones m
                     WHERE m.project_id = p.id AND m.completed = FALSE
+                      AND m.user_id = $1
                     ORDER BY m.deadline ASC NULLS LAST LIMIT 1) AS next_milestone_deadline
             FROM projects p
             LEFT JOIN tasks t ON t.project_id = p.id

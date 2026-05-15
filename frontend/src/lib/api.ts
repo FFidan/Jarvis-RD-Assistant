@@ -1437,12 +1437,4 @@ export async function fetchWeeklyDigest(days: number = 7): Promise<WeeklyDigestR
 }
 
 // --- React Query hooks ---
-import { useQuery } from '@tanstack/react-query';
-
-export function useFeedCounts() {
-  return useQuery({
-    queryKey: ['feed-counts'],
-    queryFn: fetchFeedCounts,
-    staleTime: 5_000,
-  });
-}
+export { useFeedCounts } from '@/hooks/use-feed-counts';

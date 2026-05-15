@@ -653,4 +653,34 @@ describe('JobStore', () => {
     expect(jobs['job-queued-1']).toBeDefined();
     expect(requireJob(jobs['job-queued-1'], 'job-queued-1').status).toBe('queued');
   });
+
+  it('papers.scan_local: invalidates papers-feed (not the stale feed key) on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":50,"progress_message":"Scanning"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-scan-local',
+      kind: 'papers.scan_local',
+      payload: {},
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Must invalidate the real feed key used by FeedView
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+    // Must NOT invalidate the old stale key
+    const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+    expect(keys).not.toContain('feed');
+  });
 });

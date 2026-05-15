@@ -527,3 +527,44 @@ async def test_whoami_does_not_leak_db_user_id():
     assert "12345678" not in text, (
         f"DOM-D-07: raw numeric PK 12345678 leaked in /whoami reply: {text!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# DOS-3: /whoami rate-limit (5/minute per chat)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_whoami_rate_limited_after_five_calls() -> None:
+    """DOS-3: whoami_command is decorated with @rate_limit(max_calls=5, window_seconds=60).
+
+    After 5 allowed calls the 6th must be silently dropped (return None)
+    without hitting the DB.
+    """
+    from telegram_bot.handlers.rate_limit import _timestamps
+
+    _timestamps.clear()
+
+    row = {
+        "user_id": 1,
+        "telegram_username": "tester",
+        "paired_at": datetime(2025, 1, 1, tzinfo=UTC),
+    }
+    conn = _make_conn(fetchrow_return=row)
+    pool = _make_pool(conn)
+    chat_id = 888_001
+    results: list = []
+    for _ in range(6):
+        update = _make_update(chat_id=chat_id)
+        context = _make_context(pool)
+        result = await whoami_command(update, context)
+        results.append(result)
+
+    assert results[5] is None, (
+        f"Expected 6th whoami call to be rate-limited (None) but got {results[5]!r}"
+    )
+    # whoami_command calls pool.fetchrow() directly (no acquire); 6th call must
+    # not touch the DB — so fetchrow count must be exactly 5.
+    assert pool.fetchrow.call_count == 5, (
+        f"Expected 5 DB fetchrow calls (rate-limiter must stop 6th), got {pool.fetchrow.call_count}"
+    )

@@ -255,6 +255,7 @@ async def unpair_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await message.reply_text("Failed to remove pairing — please try again.")
 
 
+@rate_limit(max_calls=5, window_seconds=60)
 async def whoami_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle ``/whoami`` — show the current chat's pairing status.
 

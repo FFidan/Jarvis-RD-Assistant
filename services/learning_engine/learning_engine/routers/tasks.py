@@ -273,8 +273,8 @@ async def unlink_paper_from_task(
     user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Remove a paper link from a task."""
-    # Verify task ownership before deleting the link
     async with db_pool.acquire() as conn:
+        # Ownership check and DELETE in the same connection to eliminate TOCTOU.
         task = await conn.fetchval(
             "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
             task_id,
@@ -282,13 +282,13 @@ async def unlink_paper_from_task(
         )
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-    await delete_or_404(
-        db_pool,
-        "DELETE FROM task_paper_links WHERE task_id = $1 AND paper_id = $2",
-        task_id,
-        paper_id,
-        detail="Link not found",
-    )
+        result = await conn.execute(
+            "DELETE FROM task_paper_links WHERE task_id = $1 AND paper_id = $2",
+            task_id,
+            paper_id,
+        )
+        if result == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Link not found")
     await log_audit(
         db_pool,
         action="delete",

@@ -122,18 +122,26 @@ Fixed in commits 72577e1 (DB-003: `BEGIN`/`COMMIT` added) and 0cff746 (DB-004: `
 
 ## Sprint 6 deferrals (2026-04-28)
 
-### M1 — legacy NULL `user_id` rows remain compatibility data
+### M1 — legacy NULL `user_id` rows remain compatibility data — CLOSED (2026-05-15)
 
-The authentication resolver and per-user ownership model now exist, and new
-browser-session writes carry real user IDs through the main paper, Pulse, and
-Zotero paths. Legacy single-user/API-key rows with `user_id=NULL` are still
+Multi-tenant GA shipped in v0.4.0. The authentication resolver, per-user
+ownership model, and FK enforcement are live (migrations 077/080/082). New
+writes carry real user IDs; legacy NULL rows are matched via `NULLS NOT
+DISTINCT` and remain valid compatibility data. The backfill question is now
+moot for new deployments — the first-run wizard creates the initial admin
+automatically, and the admin console manages subsequent users.
+
+**Closed:** multi-tenant shipped; NULL compatibility rows are a managed
+migration state, not an open risk. Reopen only if `NULLS NOT DISTINCT`
+semantics are removed or NULL fallback reads are dropped.
+
+*Was:* The authentication resolver and per-user ownership model now exist, and
+new browser-session writes carry real user IDs through the main paper, Pulse,
+and Zotero paths. Legacy single-user/API-key rows with `user_id=NULL` are still
 valid compatibility data and are intentionally matched via `NULLS NOT DISTINCT`
 or explicit fallback reads. Do not backfill them blindly: a future cleanup must
 first decide whether each table's NULL rows represent system defaults, legacy
 single-user ownership, or durable anonymous history.
-
-**Reopen criteria:** before removing API-key/single-user compatibility or
-before enforcing `MULTITENANT_ENABLED=true` without NULL fallback reads.
 
 ### H5 — Migration 043 live-fixture test deferred
 
@@ -224,7 +232,7 @@ All items below were raised in the 2026-04-29 deep audit and closed in commits
 | H5 (bulk) | Bulk selection now clears via `useEffect([surface])` on every surface change including browser back/forward and deep-links, not only imperative chip-handler calls | ef7b3e0 |
 | NI-5 | `app_factory` `zip(strict=True)` + eager length check enforce equal-length `init/teardown` contract; `None` padding supported for hooks without teardown | a65ede4 |
 | NI-6 | Migration-lint script anchors its `cwd` to the repo root, not the caller's shell cwd | 6b8b83e |
-**Still open from Sprint 6:** M1 (multi-tenant user resolver), zotero.remove handler, inbox auto-prune cron, trash auto-purge cron, bulk-dismiss-by-topic, saved-search alerts, and migration 046 transition guard retirement — all tracked in the Sprint 6 deferrals section above.
+**Still open from Sprint 6:** zotero.remove handler, inbox auto-prune cron, trash auto-purge cron, bulk-dismiss-by-topic, saved-search alerts, and migration 046 transition guard retirement — all tracked in the Sprint 6 deferrals section above. M1 (multi-tenant user resolver) is now CLOSED — see Sprint 6 deferrals.
 
 **Phase A — Paper Lifecycle Redesign — LANDED (2026-05-01, version 1.3.0):** the WS-AH2 sprint shipped on top of the *legacy* lifecycle schema (saved/dismissed/starred/archived booleans + status enum). [docs/archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md](archive/2026-05/specs/2026-04-29-paper-lifecycle-redesign.md) collapsed that schema to a single `state` ENUM + orthogonal `starred` flag + separate `recommendation_feedback` table (migrations 047 + 048 + 049). The legacy contract docs `docs/specs/paper-lifecycle-contract.md` and `docs/specs/feed-information-architecture.md` were **deleted** (per spec §11 — clean cut, no deprecated stubs). The WS-AH2 fixes above are *preserved* (NEW-H2, NI-1, NI-2, NI-3, H5, NI-4, NI-5, NI-6) or *structurally superseded* (NEW-M8, DRY-1, L12) by the redesign — see redesign spec §15 for the full disposition table. Phase B sprints (Instructor / Langfuse / mxbai-rerank / Taskiq) follow; see the META plan at [docs/archive/2026-05/old-plans/2026-04-30-marathon-meta.md](archive/2026-05/old-plans/2026-04-30-marathon-meta.md).
 

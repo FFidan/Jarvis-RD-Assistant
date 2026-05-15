@@ -11,7 +11,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from fastapi import HTTPException
 from jarvis_common.db_helpers import assert_paper_ownership, dynamic_update
 
 # ---------------------------------------------------------------------------
@@ -182,7 +181,7 @@ async def test_dynamic_update_error_mentions_bad_fragment():
 
 
 # ---------------------------------------------------------------------------
-# DOM-E-04 — assert_paper_ownership NULL discovered_by semantics
+# DOM-E-04 — assert_paper_ownership NULL discovered_by semantics (D4 decided)
 # ---------------------------------------------------------------------------
 
 
@@ -195,38 +194,15 @@ def _ownership_conn(*, discovered_by: int | None, in_library: int | None = None)
 
 
 @pytest.mark.asyncio
-async def test_assert_ownership_multitenant_rejects_null_discovered_by():
-    """DOM-E-04: multitenant=True, discovered_by=NULL, no library entry → 403.
+async def test_assert_ownership_null_discovered_by_is_free_pass():
+    """DOM-E-04 (D4): discovered_by IS NULL → globally accessible, no library row needed.
 
-    In multi-tenant mode a paper with discovered_by IS NULL must NOT be
-    auto-granted.  The caller must have an explicit user_library row.
-    """
-    conn = _ownership_conn(discovered_by=None, in_library=None)
-    with pytest.raises(HTTPException) as exc_info:
-        await assert_paper_ownership(
-            conn,
-            paper_id=1,
-            user_id=42,
-            multitenant_enabled=True,
-        )
-    assert exc_info.value.status_code == 403
-
-
-@pytest.mark.asyncio
-async def test_assert_ownership_single_tenant_accepts_null_discovered_by():
-    """DOM-E-04: multitenant=False (default), discovered_by=NULL → granted.
-
-    In single-tenant / canonical-corpus mode a paper with NULL discovered_by
-    is a system paper and must remain freely accessible to any authenticated
-    caller, preserving Sprint B semantics.
+    Canonical-corpus papers (discovered_by IS NULL) are shared by design.
+    The prior multitenant_enabled knob was removed; the free pass is permanent.
+    Full contract is pinned in test_ownership_canonical_invariant.py.
     """
     conn = _ownership_conn(discovered_by=None)
     # Should return without raising.
-    await assert_paper_ownership(
-        conn,
-        paper_id=1,
-        user_id=42,
-        multitenant_enabled=False,
-    )
+    await assert_paper_ownership(conn, paper_id=1, user_id=42)
     # fetchval (library check) must NOT have been called — early return.
     conn.fetchval.assert_not_awaited()

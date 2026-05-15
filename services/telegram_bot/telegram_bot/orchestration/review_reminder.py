@@ -7,6 +7,7 @@ import httpx
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
 from telegram_bot.config import BotConfig
+from telegram_bot.handlers.helpers import _owner_headers
 
 logger = logging.getLogger(__name__)
 
@@ -34,11 +35,7 @@ async def _send_reminder_to_chat(
         DB user PK. When set, adds ``X-Owner-User-Id`` + ``X-API-Key`` headers
         so the backend scopes stats to that user.
     """
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-    if user_id is not None:
-        headers["X-Owner-User-Id"] = str(user_id)
+    headers = _owner_headers(config, user_id)
 
     try:
         resp = await http_client.get(

@@ -131,7 +131,7 @@ Before tagging a release:
 - [ ] `uv run pytest -x` passes.
 - [ ] `npm --prefix frontend run test -- --run` passes.
 - [ ] `uv run ruff check services/ libs/ scripts/` is clean.
-- [ ] `docs/CHANGELOG.md` generated and reviewed.
+- [ ] `CHANGELOG.md` generated and reviewed.
 - [ ] `docs/known-residual-risks.md` updated with any newly accepted risks.
 - [ ] Docker images built and smoke-tested against a fresh stack.
 - [ ] Tag signed and pushed.

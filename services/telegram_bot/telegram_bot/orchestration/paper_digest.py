@@ -9,6 +9,7 @@ from telegram import Bot
 
 from telegram_bot.config import BotConfig
 from telegram_bot.formatters import format_weekly_digest, truncate
+from telegram_bot.handlers.helpers import _owner_headers
 
 # HTML tags supported by Telegram's HTML parse mode that can span text.
 _OPEN_TAG_RE = re.compile(r"<(b|i|u|s|a|code|pre|tg-spoiler)(?:\s[^>]*)?>", re.IGNORECASE)
@@ -108,11 +109,7 @@ async def _fetch_digest_from_api(
     dict or None
         Parsed digest payload, or ``None`` on failure.
     """
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-    if user_id is not None:
-        headers["X-Owner-User-Id"] = str(user_id)
+    headers = _owner_headers(config, user_id)
     try:
         resp = await http_client.get(
             f"{config.paper_ingestion_url}/api/digest/weekly",

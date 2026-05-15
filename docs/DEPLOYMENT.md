@@ -1,6 +1,6 @@
 # Deployment Guide
 
-JARVIS is a self-hosted, single-user research assistant. This document is the single source of truth for how to run it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
+JARVIS is a self-hosted, multi-tenant research assistant. This document is the single source of truth for how to run it — from the localhost happy path to LAN exposure, Cloudflare Tunnel, TLS, backups, and common failure modes.
 
 Most content here is also summarised in the [README](../README.md); this document expands on edge cases and operator-grade details. If the two conflict, this file is canonical.
 
@@ -211,12 +211,12 @@ Set every one of these in `.env` (`setup.sh` enforces the first two for you when
 ENVIRONMENT=production
 DEV_MODE=false
 JARVIS_API_KEY=<at least 32 random chars from: openssl rand -hex 32>
-DASHBOARD_PASSWORD=<strong password>
+JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())">
 ```
 
 - `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured; the flag only helps unauthenticated local development.
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
-- `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/CODE_SECURITY_REVIEW_2026-04-14.md`.
+- `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
 ### Encrypted config key rotation
 
@@ -267,7 +267,7 @@ docker compose up -d paper_ingestion learning_engine   # triggers re-read on nex
 
 ---
 
-> **Alternatives:** Cloudflare Tunnel and DIY port-forward+ACME are possible but out of scope for this single-user stack; setup is on the operator if pursued.
+> **Alternatives:** Cloudflare Tunnel and DIY port-forward+ACME are possible but out of scope here; setup is on the operator if pursued.
 
 ## Mode 4 — Tailscale Funnel (alternative tunnel)
 
@@ -625,6 +625,6 @@ bash scripts/production-readiness-check.sh; echo "exit=$?"
 - [README.md](../README.md) — quick start and high-level orientation.
 - [AGENTS.md](../AGENTS.md) — repository conventions and architecture.
 - [docs/PRD.md](PRD.md) — product requirements; §4.1 security NFRs.
-- [docs/CODE_SECURITY_REVIEW_2026-04-14.md](CODE_SECURITY_REVIEW_2026-04-14.md) — security posture and known residual findings.
+- [docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md](archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md) — security posture and known residual findings.
 - [docs/known-residual-risks.md](known-residual-risks.md) — acknowledged-but-deferred risks and their reopen criteria.
 - `PERSONAL-SETUP.md` (gitignored) — your own environment notes; not committed.

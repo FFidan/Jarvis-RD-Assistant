@@ -40,7 +40,7 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
     return paperId == null ? [] : [['paper-detail', paperId]];
   },
   'papers.batch_process':   () => [['papers'], ['action-items-unprocessed']],
-  'papers.scan_local':      () => [['feed'], ['papers']],
+  'papers.scan_local':      () => [['papers-feed'], ['papers']],
   'papers.batch_summarize': () => [['papers']],
   'extraction.single':      (j) => {
     const paperId = getPaperIdFromJob(j);
