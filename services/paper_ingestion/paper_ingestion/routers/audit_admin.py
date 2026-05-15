@@ -66,7 +66,7 @@ async def list_audit_log(
     params.append(limit + 1)
 
     sql = f"""
-        SELECT id, user_id, action, resource, metadata, created_at
+        SELECT id, user_id, action, resource, metadata, "timestamp" AS created_at
         FROM audit_log
         {where_clause}
         ORDER BY id DESC

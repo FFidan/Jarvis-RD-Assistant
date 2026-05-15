@@ -9,6 +9,8 @@ Verifies that:
 - B.4 GET /api/pulse/debug SQL includes user_id filter.
 - B.7 train_classifier_model stamps user_id on INSERT into pulse_models and
       filters recommendation_feedback by user_id.
+- WS-ADMIN-AUDIT: GET /api/admin/audit-log SQL uses "timestamp" AS created_at
+      alias (audit_log has column timestamp, NOT created_at).
 
 Tests use the recording-mock pattern from test_pulse_idor.py:
   _make_pool_and_conn() returns an AsyncMock conn whose .fetch / .fetchrow /
@@ -527,3 +529,99 @@ async def test_train_classifier_model_feedback_select_filters_by_user_id_none():
     )
     params = conn.fetch.await_args.args[1:]
     assert None in params, f"user_id=None must be bound as NULL param; params: {params}"
+
+
+# ---------------------------------------------------------------------------
+# WS-ADMIN-AUDIT B1 regression: audit_log has column "timestamp", not created_at
+# ---------------------------------------------------------------------------
+
+
+def _make_audit_admin_client():
+    """Minimal FastAPI app with only the audit_admin router mounted."""
+    from jarvis_common import require_admin, verify_api_key
+    from paper_ingestion.deps import get_db_pool, limiter
+    from paper_ingestion.routers import audit_admin as audit_admin_router
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+
+    pool, conn = _make_pool_and_conn()
+    app.state.db_pool = pool
+
+    app.include_router(audit_admin_router.router)
+
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[require_admin] = lambda: None
+    app.dependency_overrides[get_db_pool] = lambda: pool
+
+    tc = TestClient(app, raise_server_exceptions=False)
+    return tc, pool, conn, app
+
+
+def test_audit_log_endpoint_selects_timestamp_column_aliased_as_created_at():
+    """GET /api/admin/audit-log must SELECT "timestamp" AS created_at, not bare created_at.
+
+    The audit_log table (mig 030) has column ``timestamp`` (TIMESTAMPTZ) with
+    NO ``created_at`` column. If the SQL references ``created_at`` directly,
+    Postgres raises "column does not exist" and the endpoint 500s. The fix
+    aliases the real column: SELECT ... "timestamp" AS created_at ... so the
+    JSON response field stays ``created_at`` (what the frontend expects).
+
+    This test would have caught B1: if the SQL contained ``created_at`` without
+    the alias, the assertion on ``'"timestamp" AS created_at'`` would fail and
+    alert that the column name is wrong.
+    """
+    import datetime as dt
+
+    tc, _pool, conn, app = _make_audit_admin_client()
+
+    # Simulate one audit_log row returned with the aliased field name.
+    fake_ts = dt.datetime(2026, 5, 15, 12, 0, 0, tzinfo=dt.UTC)
+    conn.fetch.return_value = [
+        FakeRecord(
+            {
+                "id": 1,
+                "user_id": "ferhat",
+                "action": "auth.login",
+                "resource": "/api/auth/verify",
+                "metadata": {},
+                "created_at": fake_ts,  # asyncpg returns the aliased name
+            }
+        )
+    ]
+
+    try:
+        resp = tc.get("/api/admin/audit-log")
+    finally:
+        app.dependency_overrides.clear()
+        from paper_ingestion.deps import limiter as _limiter
+
+        _limiter.enabled = True
+
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
+
+    # Assert the SQL uses the real column with the alias — not bare created_at.
+    sql: str = conn.fetch.call_args.args[0]
+    assert '"timestamp" AS created_at' in sql, (
+        f'SQL must SELECT "timestamp" AS created_at (real column name); got:\n{sql!r}'
+    )
+    # Bare "created_at" without the alias would mean the real column was referenced
+    # directly (which does not exist in audit_log). Ensure no standalone reference.
+    assert "FROM audit_log" in sql, f"SQL must query audit_log; got:\n{sql!r}"
+    # The column must NOT appear as a bare reference outside the alias expression.
+    # i.e. "created_at" must only appear right-hand side of "AS created_at".
+    bare_ref_count = sql.count("created_at")
+    alias_count = sql.count('"timestamp" AS created_at')
+    assert bare_ref_count == alias_count, (
+        f"SQL must reference created_at only as the alias (not as a bare column); got:\n{sql!r}"
+    )
+
+    # The response entries must carry created_at as an ISO string.
+    body = resp.json()
+    assert body["entries"], "Expected at least one entry in the response"
+    entry = body["entries"][0]
+    assert "created_at" in entry, f"Response entry must have created_at field; got: {entry}"
+    assert entry["created_at"] == fake_ts.isoformat(), (
+        f"created_at must be ISO-formatted timestamp; got: {entry['created_at']!r}"
+    )

@@ -418,10 +418,11 @@ configure_middleware_and_errors(
 
 # WS-2A: SessionMiddleware reads the jarvis_session cookie and populates
 # request.state.user_id. Added AFTER configure_middleware_and_errors so it
-# sits inside (i.e. runs AFTER) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders
-# in the request flow — by then the request has its public scheme/host
-# resolved and a request-id attached, which makes session lookup events
-# correlatable in logs.
+# sits OUTSIDE (i.e. runs BEFORE) RequestIDMiddleware/SlowAPI/CORS/ProxyHeaders
+# in the request flow — Starlette add_middleware prepends, so the last-added
+# middleware is outermost and executes first. This means request.state.user_id
+# is already set when SlowAPI's rate-limit key function runs, which is what
+# makes the per-user rate-limit guarantee hold.
 from jarvis_common.session_middleware import SessionMiddleware  # noqa: E402
 
 app.add_middleware(SessionMiddleware)

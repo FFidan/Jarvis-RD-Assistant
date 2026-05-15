@@ -2,6 +2,50 @@
 
 A self-hosted AI research assistant that delivers citation-backed paper briefings, enforces long-term knowledge retention through spaced repetition, and provides lightweight project management -- all via a React dashboard and optional Telegram push notifications.
 
+## Quickstart
+
+```bash
+git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
+cd Jarvis-RD-Assistant
+./setup.sh
+```
+
+`setup.sh` generates strong random secrets, configures TLS, and brings the stack
+up. Open **http://localhost:3001** (or the HTTPS URL it prints). The first-run
+wizard creates the first admin account — no pre-existing credentials required.
+
+**Non-interactive (CI / cloud-init):**
+
+```bash
+# Local dev / CI smoke test
+./setup.sh --non-interactive --profile=dev
+
+# Self-signed HTTPS (home lab)
+./setup.sh --non-interactive --domain=jarvis.local --profile=local-https
+
+# Let's Encrypt (public server)
+./setup.sh --non-interactive --domain=jarvis.example.com \
+  --admin-email=ops@example.com --profile=letsencrypt \
+  --smtp-host=smtp.resend.com --smtp-user=resend \
+  --smtp-pass-file=/run/secrets/smtp_pass
+```
+
+See `./setup.sh --help` for all flags.
+
+After the first admin is created, invite additional users at
+**Settings → Admin → Users** (or `/admin/users`). Each invite sends a 24-hour
+magic-link; users log in by email — no shared passwords.
+
+## Security
+
+JARVIS is multi-tenant: every user's research data is isolated at the query
+layer. The ops API key (`JARVIS_API_KEY`) is a service credential, not a user
+login. Admins manage users but cannot read other users' research data.
+
+See [docs/SECURITY.md](docs/SECURITY.md) for the full threat model, dev-flag
+behaviour, secret environment variable reference, audit log coverage, and
+vulnerability disclosure contact.
+
 ## What It Does
 
 JARVIS is designed for researchers who track multiple topics, read (or should read) dozens of papers per week, and want an assistant that doesn't hallucinate. It runs entirely on your own hardware with local LLMs via Ollama, or optionally connects to cloud providers (OpenAI, Anthropic) through LiteLLM.

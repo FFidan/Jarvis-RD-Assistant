@@ -122,9 +122,13 @@ Everyone who can open the dashboard shares the same library, settings, Pulse
 feedback, Telegram pairing state, and `JARVIS_API_KEY`. Use this only for a
 trusted showcase where shared state is expected.
 
-Do not set `MULTITENANT_ENABLED=true` for this mode. That flag currently logs a
-critical warning because the runtime still uses a single-user auth resolver; it
-does not isolate users or enforce ownership.
+JARVIS is multi-tenant by default. Every user's data is isolated at the query
+layer — each API call that touches user-owned rows passes through
+`current_user_id_strict`, and the first-run wizard creates the initial admin
+automatically. Admins invite additional users from **Settings → Admin → Users**
+(or `/admin/users` directly). The `JARVIS_API_KEY` is an ops credential for
+service-to-service calls and is not a user login — users authenticate via
+magic-link sessions.
 
 ---
 
