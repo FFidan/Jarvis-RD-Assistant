@@ -68,6 +68,38 @@ SMTP_HOST="${SMTP_HOST:-}"
 LETSENCRYPT_DOMAIN="${LETSENCRYPT_DOMAIN:-}"
 JARVIS_CERT_SAN="${JARVIS_CERT_SAN:-}"
 
+# Read secrets from files when the _FILE env var convention is used, otherwise
+# fall back to the plain env var (same pattern as the litellm entrypoint shim).
+_read_secret() {
+  local var_name="$1"
+  local file_var="${var_name}_FILE"
+  local file_path="${!file_var:-}"
+  if [ -n "$file_path" ] && [ -f "$file_path" ]; then
+    cat "$file_path"
+  else
+    printf '%s' "${!var_name:-}"
+  fi
+}
+
+# Resolve LITELLM_MASTER_KEY and POSTGRES_PASSWORD.
+# Docker Compose secrets land at /run/secrets/<name>; check those paths when
+# the env vars are unset so the script works inside and outside of containers.
+LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-}"
+if [ -z "$LITELLM_MASTER_KEY" ] && [ -f /run/secrets/litellm_master_key ]; then
+  LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
+fi
+if [ -z "$LITELLM_MASTER_KEY" ] && [ -f "${SCRIPT_DIR}/../secrets/litellm_master_key.txt" ]; then
+  LITELLM_MASTER_KEY="$(cat "${SCRIPT_DIR}/../secrets/litellm_master_key.txt")"
+fi
+
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-}"
+if [ -z "$POSTGRES_PASSWORD" ] && [ -f /run/secrets/postgres_password ]; then
+  POSTGRES_PASSWORD="$(cat /run/secrets/postgres_password)"
+fi
+if [ -z "$POSTGRES_PASSWORD" ] && [ -f "${SCRIPT_DIR}/../secrets/postgres_password.txt" ]; then
+  POSTGRES_PASSWORD="$(cat "${SCRIPT_DIR}/../secrets/postgres_password.txt")"
+fi
+
 # ---------------------------------------------------------------------------
 # Check helpers.
 # ---------------------------------------------------------------------------
@@ -140,6 +172,60 @@ elif [ "$_key_len" -lt 32 ]; then
 else
   RESULTS+=("INFO|JARVIS_API_KEY|OK|Set (${_key_len} chars, starts: ${JARVIS_API_KEY:0:4}...)")
 fi
+
+# ---------------------------------------------------------------------------
+# Weak/placeholder secret detection helpers.
+# ---------------------------------------------------------------------------
+# _WEAK_SECRET_PATTERNS — known placeholder values to reject in production.
+_is_weak_secret() {
+  local val="$1"
+  case "$val" in
+    ""|changeme|password|secret|test|dev|jarvis_dev|"sk-jarvis-dev-test"|"sk-1234"|"1234"|"admin"|"postgres")
+      return 0 ;;
+    *) ;;
+  esac
+  # Exact partial matches for common skeleton strings (case-insensitive).
+  local lower
+  lower="$(printf '%s' "$val" | tr '[:upper:]' '[:lower:]')"
+  case "$lower" in
+    *changeme*|*placeholder*|*example*|*default*|*replace_me*|*your_*|*"<"*|*fixme*)
+      return 0 ;;
+  esac
+  return 1
+}
+
+# _check_secret NAME VALUE MIN_LEN — mirrors JARVIS_API_KEY idiom.
+_check_secret() {
+  local name="$1"
+  local val="$2"
+  local min_len="$3"
+  local val_len="${#val}"
+
+  if [ -z "$val" ]; then
+    if is_production; then
+      RESULTS+=("HIGH|${name}|FAIL|Not set — a strong secret is required in production")
+    else
+      RESULTS+=("INFO|${name}|WARN|Not set — acceptable in non-production but must be changed before prod deploy")
+    fi
+  elif _is_weak_secret "$val"; then
+    if is_production; then
+      RESULTS+=("HIGH|${name}|FAIL|Placeholder/known-weak value detected — replace before deploying to production")
+    else
+      RESULTS+=("INFO|${name}|WARN|Placeholder value in use (acceptable in dev; must be replaced for production)")
+    fi
+  elif [ "$val_len" -lt "$min_len" ]; then
+    if is_production; then
+      RESULTS+=("HIGH|${name}|FAIL|Secret is ${val_len} chars; minimum ${min_len} required in production")
+    else
+      RESULTS+=("INFO|${name}|WARN|Secret is ${val_len} chars; recommend >= ${min_len}")
+    fi
+  else
+    RESULTS+=("INFO|${name}|OK|Set (${val_len} chars, starts: ${val:0:4}...)")
+  fi
+}
+
+_check_secret "LITELLM_MASTER_KEY" "$LITELLM_MASTER_KEY" 16
+_check_secret "POSTGRES_PASSWORD"  "$POSTGRES_PASSWORD"  12
 
 # Check: SMTP configured (magic links go to stdout if not).
 if [ -z "$SMTP_HOST" ]; then

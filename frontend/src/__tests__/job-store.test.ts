@@ -284,6 +284,7 @@ describe('JobStore', () => {
         authTime: null,
         apiKey: 'test-key',
         user: null,
+        lastError: null,
         login: vi.fn(),
         loginWithSession: vi.fn(),
         checkSession: vi.fn(() => true),

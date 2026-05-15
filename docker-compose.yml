@@ -234,6 +234,21 @@ services:
           exit 1
         fi
         export LITELLM_MASTER_KEY="$(cat /run/secrets/litellm_master_key)"
+        # H-5: Reject known placeholder/weak values in production so a deploy
+        # with an unchanged secrets/litellm_master_key.txt fails fast here
+        # rather than silently running with a public default.
+        if [ "${ENVIRONMENT:-development}" = "production" ]; then
+          case "$LITELLM_MASTER_KEY" in
+            "sk-jarvis-dev-test"|changeme|secret|password|""|"sk-1234")
+              echo 'FATAL: LITELLM_MASTER_KEY is a known placeholder value.' \
+                   'Replace secrets/litellm_master_key.txt before deploying to production.' >&2
+              exit 1 ;;
+          esac
+          if [ "${#LITELLM_MASTER_KEY}" -lt 16 ]; then
+            echo 'FATAL: LITELLM_MASTER_KEY is too short (< 16 chars) for production.' >&2
+            exit 1
+          fi
+        fi
         exec litellm --config /app/config.yaml
     # Loopback binding (127.0.0.1:4000) is kept as defence-in-depth.
     mem_limit: 4g

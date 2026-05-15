@@ -88,6 +88,17 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # the whole UI hangs on the loading spinner.
     if request.url.path.startswith("/api/setup/"):
         return
+    # WS-AUTH-KEY-SESSION: a valid browser session is sufficient to pass this
+    # global front-door gate. SessionMiddleware (ASGI middleware, runs BEFORE
+    # router dependencies) sets request.state.user_id (int) only for a
+    # non-revoked, non-expired session whose user is not deleted; an
+    # expired/revoked/deleted-user session leaves it unset and falls through to
+    # the X-API-Key/403 path below. This gate only decides "allowed past the
+    # front door"; identity/authz is still enforced per-route downstream by
+    # current_user_id_strict / require_admin (which read role/identity
+    # independently — a session passing here confers no ops/admin rights).
+    if getattr(getattr(request, "state", None), "user_id", None) is not None:
+        return
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
         if not hmac.compare_digest(api_key or "", jarvis_api_key):
