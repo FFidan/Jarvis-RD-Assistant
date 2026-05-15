@@ -76,6 +76,23 @@ def auth_required(func: Any) -> Any:
                     chat_id,
                 )
                 return
+            if jarvis_user_id is None:
+                # Authorized chat (env-var or legacy owner_chat_id) but no paired
+                # JARVIS account.  In multi-user mode every command requires a
+                # pairing — fail loudly so the user knows what to do.
+                logger.warning(
+                    "Authorized chat has no paired JARVIS user; blocking command chat_id=%s",
+                    update.effective_chat.id if update.effective_chat else "unknown",
+                )
+                if update.message is not None:
+                    await update.message.reply_text(
+                        "⚠️ Your Telegram account is not yet linked to a JARVIS user.\n\n"
+                        "To pair, open the JARVIS dashboard → <b>Settings → Integrations</b> "
+                        "and follow the Telegram pairing steps. "
+                        "You will receive a deep-link that completes the pairing automatically.",
+                        parse_mode="HTML",
+                    )
+                return
             if context.user_data is not None:
                 context.user_data["jarvis_user_id"] = jarvis_user_id
             return await func(update, context)

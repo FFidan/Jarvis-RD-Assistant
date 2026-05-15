@@ -41,8 +41,13 @@ const { useKeyboardShortcuts } = await import('@/stores/keyboard-shortcuts-store
 
 // --- QueryClient mock ---
 
-const mockQueryClientClear = vi.fn();
-const fakeQueryClient = { clear: mockQueryClientClear } as unknown as import('@tanstack/react-query').QueryClient;
+const cancelOrder: string[] = [];
+const mockQueryClientClear = vi.fn().mockImplementation(() => { cancelOrder.push('clear'); });
+const mockQueryClientCancelQueries = vi.fn().mockImplementation(() => { cancelOrder.push('cancelQueries'); return Promise.resolve(); });
+const fakeQueryClient = {
+  clear: mockQueryClientClear,
+  cancelQueries: mockQueryClientCancelQueries,
+} as unknown as import('@tanstack/react-query').QueryClient;
 
 // --- Helpers ---
 
@@ -74,6 +79,7 @@ function seedStores() {
 describe('logout-hygiene', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    cancelOrder.length = 0;
     sessionStorage.clear();
     localStorage.clear();
 
@@ -156,5 +162,37 @@ describe('logout-hygiene', () => {
     useAuthStore.getState().logout();
     await flushPromises();
     expect(mockQueryClientClear).not.toHaveBeenCalled();
+  });
+
+  it('cancelQueries is called before clear on logout', async () => {
+    useAuthStore.getState().logout();
+    await flushPromises();
+    expect(mockQueryClientCancelQueries).toHaveBeenCalledOnce();
+    expect(mockQueryClientClear).toHaveBeenCalledOnce();
+    // cancelQueries must appear before clear in the call order.
+    expect(cancelOrder).toEqual(['cancelQueries', 'clear']);
+  });
+
+  it('one store _reset failure does not prevent other stores from resetting', async () => {
+    // Seed stores with non-default data.
+    usePomodoroStore.setState({ phase: 'work', startedAt: Date.now() });
+    useKeyboardShortcuts.setState({ isOpen: true });
+
+    // Make job-store's _reset throw to simulate a store reset failure.
+    // This tests that Promise.allSettled in logout() absorbs the rejection and
+    // still allows the remaining stores to complete their resets.
+    const origReset = useJobStore.getState()._reset;
+    const throwingReset = vi.fn().mockImplementation(() => { throw new Error('reset failed'); });
+    useJobStore.setState({ _reset: throwingReset } as Partial<ReturnType<typeof useJobStore.getState>>);
+
+    useAuthStore.getState().logout();
+    await flushPromises();
+
+    // Stores whose _reset did not throw should still be reset.
+    expect(usePomodoroStore.getState().phase).toBe('idle');
+    expect(useKeyboardShortcuts.getState().isOpen).toBe(false);
+
+    // Restore job-store's _reset.
+    useJobStore.setState({ _reset: origReset } as Partial<ReturnType<typeof useJobStore.getState>>);
   });
 });

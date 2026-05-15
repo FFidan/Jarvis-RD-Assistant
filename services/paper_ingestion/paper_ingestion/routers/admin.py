@@ -28,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
 from pydantic import BaseModel, EmailStr, Field
 
@@ -202,6 +203,14 @@ async def invite_user(body: InviteUserBody, request: Request) -> UserRecord:
     except Exception:  # noqa: BLE001 — never expose SMTP errors
         logger.exception("send_magic_link (invite) failed for email=%s", email_norm)
 
+    caller_id = getattr(request.state, "user_id", None)
+    await log_audit(
+        pool,
+        action="admin.user.invite",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
+
     return _row_to_user(user_row)
 
 
@@ -232,6 +241,10 @@ async def update_user_role(user_id: int, body: UpdateRoleBody, request: Request)
                     detail="Cannot demote yourself — you are the last admin",
                 )
 
+        old_role: str | None = await conn.fetchval(
+            "SELECT role FROM users WHERE id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
         row = await conn.fetchrow(
             """
             UPDATE users
@@ -245,6 +258,14 @@ async def update_user_role(user_id: int, body: UpdateRoleBody, request: Request)
 
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    await log_audit(
+        pool,
+        action="admin.user.role_change",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+        metadata={"old_role": old_role, "new_role": body.role},
+    )
 
     return _row_to_user(row)
 
@@ -284,8 +305,61 @@ async def soft_delete_user(user_id: int, request: Request, response: Response) -
     if result == "UPDATE 0":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
 
+    # Soft delete only — the daily data_purge job hard-deletes after the
+    # 30-day grace, and migration 080's ON DELETE CASCADE FKs then collapse
+    # all owned rows.
+    await log_audit(
+        pool,
+        action="admin.user.soft_delete",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
+
     response.status_code = status.HTTP_204_NO_CONTENT
     return response
+
+
+@router.post(
+    "/users/{user_id}/restore",
+    response_model=UserRecord,
+    dependencies=[Depends(require_admin)],
+)
+async def restore_user(user_id: int, request: Request) -> UserRecord:
+    """Clear ``deleted_at`` for a soft-deleted user still within the 30-day grace.
+
+    Raises 404 if the user does not exist, is not soft-deleted, or the grace
+    window has already elapsed (the data_purge job may have hard-deleted them).
+    """
+    pool = request.app.state.db_pool
+    caller_id: int | None = getattr(request.state, "user_id", None)
+
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            UPDATE users
+            SET deleted_at = NULL
+            WHERE id = $1
+              AND deleted_at IS NOT NULL
+              AND deleted_at >= NOW() - INTERVAL '30 days'
+            RETURNING id, email, role, created_at, last_login_at
+            """,
+            user_id,
+        )
+
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found, not deleted, or past the 30-day restore grace",
+        )
+
+    await log_audit(
+        pool,
+        action="admin.user.restore",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
+
+    return _row_to_user(row)
 
 
 __all__ = ["router"]

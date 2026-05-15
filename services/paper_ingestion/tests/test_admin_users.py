@@ -164,6 +164,9 @@ async def test_invite_user_happy_path(monkeypatch) -> None:
         sent.append((email, link))
 
     monkeypatch.setattr(admin_router, "send_magic_link", fake_send)
+    # WS-USER-DELETION added a best-effort audit write; stub it so the
+    # conn.execute count below stays scoped to the invite's own DB activity.
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     pool = _build_mock_pool(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
@@ -267,11 +270,14 @@ async def test_soft_delete_self_blocked() -> None:
 
 
 @pytest.mark.asyncio
-async def test_soft_delete_happy_path() -> None:
+async def test_soft_delete_happy_path(monkeypatch) -> None:
     conn = AsyncMock()
     conn.execute = AsyncMock(return_value="UPDATE 1")
     pool = _build_mock_pool(conn)
     request = _build_request(pool, user_id=1, user_role="admin")
+    # WS-USER-DELETION added a best-effort audit write; stub it so the
+    # asserted execute below is the soft-delete UPDATE, not the audit INSERT.
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
 
     # Should not raise; DELETE returns 204 Response
     result = await admin_router.soft_delete_user(5, request, Response())

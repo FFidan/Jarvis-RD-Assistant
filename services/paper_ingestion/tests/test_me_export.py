@@ -1,0 +1,90 @@
+"""WS-USER-DELETION D4: /api/me/export returns the caller's data only."""
+
+from __future__ import annotations
+
+import io
+import zipfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import paper_ingestion.routers.settings as settings_router
+import pytest
+
+
+class _FakeCursor:
+    """Async-iterable over (json_str,) tuples — mimics asyncpg cursor."""
+
+    def __init__(self, rows: list[str]) -> None:
+        self._rows = rows
+
+    def __aiter__(self):
+        async def gen():
+            for r in self._rows:
+                yield (r,)
+
+        return gen()
+
+
+def _build_conn(rows_by_user: dict[int, list[str]]) -> AsyncMock:
+    conn = AsyncMock()
+
+    def cursor(sql: str, user_id: int):
+        return _FakeCursor(rows_by_user.get(user_id, []))
+
+    conn.cursor = cursor
+    tx = MagicMock()
+    tx.__aenter__ = AsyncMock(return_value=None)
+    tx.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=tx)
+    return conn
+
+
+def _build_pool(conn: AsyncMock) -> MagicMock:
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool
+
+
+def _request(pool: MagicMock) -> SimpleNamespace:
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(db_pool=pool)))
+
+
+async def _drain(resp) -> bytes:
+    chunks = []
+    async for c in resp.body_iterator:
+        chunks.append(c if isinstance(c, bytes) else c.encode())
+    return b"".join(chunks)
+
+
+@pytest.mark.asyncio
+async def test_export_returns_zip_of_caller_data(monkeypatch) -> None:
+    conn = _build_conn({1: ['{"id": 1, "title": "mine"}']})
+    pool = _build_pool(conn)
+    monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
+
+    resp = await settings_router.export_my_data(_request(pool))
+    assert resp.media_type == "application/zip"
+    body = await _drain(resp)
+
+    with zipfile.ZipFile(io.BytesIO(body)) as zf:
+        names = zf.namelist()
+        assert "papers.jsonl" in names
+        assert "cards.jsonl" in names
+        assert b"mine" in zf.read("papers.jsonl")
+
+
+@pytest.mark.asyncio
+async def test_export_excludes_other_users_data(monkeypatch) -> None:
+    # Only user 2 has rows; caller is user 1 → must get empty papers.jsonl.
+    conn = _build_conn({2: ['{"id": 9, "title": "not yours"}']})
+    pool = _build_pool(conn)
+    monkeypatch.setattr(settings_router, "current_user_id_strict", AsyncMock(return_value=1))
+
+    resp = await settings_router.export_my_data(_request(pool))
+    body = await _drain(resp)
+    with zipfile.ZipFile(io.BytesIO(body)) as zf:
+        assert zf.read("papers.jsonl") == b""
+        assert b"not yours" not in zf.read("papers.jsonl")

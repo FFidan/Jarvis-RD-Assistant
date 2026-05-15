@@ -137,6 +137,20 @@ class TestDevModeMetaFlag:
         assert settings.dev_crypto_relaxed is True
         assert settings.dev_auth_bypass is False
 
+    def test_lowercase_explicit_false_wins_over_dev_mode(self, monkeypatch) -> None:
+        """A lowercase env var (dev_auth_bypass=false) must be honoured as an
+        explicit opt-out even when DEV_MODE=true (case-insensitive check)."""
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("DEV_MODE", "true")
+        monkeypatch.setenv("dev_auth_bypass", "false")
+
+        settings = get_core_settings()
+        # Explicit lowercase opt-out must NOT be silently promoted back to True
+        assert settings.dev_auth_bypass is False
+        # Other flags (not explicitly set) are still promoted
+        assert settings.dev_error_detail is True
+        assert settings.dev_cors_open is True
+
 
 # ---------------------------------------------------------------------------
 # Production guard — each flag individually raises

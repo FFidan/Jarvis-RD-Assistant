@@ -117,7 +117,11 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      existing installs (idempotent ADD COLUMN IF NOT EXISTS + UPDATE).
     # 79: JSONB double-encode backfill for audit_log + job_progress — idempotent
     #      UPDATE only, no schema; runtime-applied (mirrors mig 75 pattern).
-    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79}
+    # 80: user-deletion FK ON DELETE CASCADE flip — runtime-applied (idempotent
+    #      DROP/ADD CONSTRAINT guards; pre-flight RAISE on residual NULL rows).
+    # 81: audit_log (action, created_at DESC) index — runtime-applied, idempotent
+    #      CREATE INDEX IF NOT EXISTS.
+    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81}
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (

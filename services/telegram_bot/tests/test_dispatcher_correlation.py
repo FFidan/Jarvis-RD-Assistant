@@ -106,12 +106,18 @@ async def test_dispatcher_sets_correlation_id_per_command():
         captured.append(correlation_id_var.get())
 
     pool = _make_pool()
-    # auth_check looks up owner via pool.fetchval — return the chat_id so auth passes
-    pool.fetchval = AsyncMock(return_value=_TEST_CHAT_ID)
     update = _make_update()
     context = _make_context(pool, _make_config())
+    context.user_data = {"jarvis_user_id": _TEST_CHAT_ID}
 
-    with patch("telegram_bot.handlers.commands._auth.log_event", new_callable=AsyncMock):
+    with (
+        patch("telegram_bot.handlers.commands._auth.log_event", new_callable=AsyncMock),
+        patch(
+            "telegram_bot.handlers.commands._auth.auth_check",
+            new_callable=AsyncMock,
+            return_value=(True, _TEST_CHAT_ID),
+        ),
+    ):
         await _handler(update, context)
         await _handler(update, context)
 

@@ -30,6 +30,7 @@ def _load_script() -> ModuleType:
 _mod = _load_script()
 _imports_unsafe = _mod._imports_unsafe
 _depends_on_unsafe = _mod._depends_on_unsafe
+_missing_resolver = _mod._missing_resolver
 
 
 # ---------------------------------------------------------------------------
@@ -163,3 +164,77 @@ class TestAliasedImportPlusDependsIntegration:
         _import_hits, unsafe_aliases = _imports_unsafe(tree)
         depends_hits = _depends_on_unsafe(tree, unsafe_aliases)
         assert any("current_user_id_or_none" in h[1] for h in depends_hits)
+
+
+# ---------------------------------------------------------------------------
+# _missing_resolver — the no-resolver-at-all class (root cause of B1/B2)
+# ---------------------------------------------------------------------------
+
+
+_REL = "services/x/x/routers/demo.py"
+
+
+class TestMissingResolver:
+    def test_route_with_no_resolver_flagged(self) -> None:
+        """A handler with neither Depends(strict) nor a body call is flagged."""
+        src = (
+            "@router.get('/feedback-summary')\n"
+            "async def feedback_summary(request: Request, db=Depends(get_db_pool)):\n"
+            "    return {}\n"
+        )
+        hits = _missing_resolver(_parse(src), _REL)
+        assert len(hits) == 1
+        assert "GET /feedback-summary" in hits[0][1]
+        assert "feedback_summary" in hits[0][1]
+
+    def test_depends_strict_param_satisfies(self) -> None:
+        src = (
+            "@router.get('/missing-foundational')\n"
+            "async def mf(request: Request, "
+            "user_id: int = Depends(current_user_id_strict)):\n"
+            "    return []\n"
+        )
+        assert _missing_resolver(_parse(src), _REL) == []
+
+    def test_direct_body_call_satisfies(self) -> None:
+        """`await current_user_id_strict(request)` in the body counts."""
+        src = (
+            "@router.post('/scan')\n"
+            "async def scan(request: Request):\n"
+            "    user_id = await current_user_id_strict(request)\n"
+            "    return user_id\n"
+        )
+        assert _missing_resolver(_parse(src), _REL) == []
+
+    def test_route_level_dependencies_satisfies(self) -> None:
+        src = (
+            "@router.get('/x', dependencies=[Depends(require_admin)])\n"
+            "async def x(request: Request):\n"
+            "    return {}\n"
+        )
+        assert _missing_resolver(_parse(src), _REL) == []
+
+    def test_router_level_dependency_satisfies_all(self) -> None:
+        src = (
+            "router = APIRouter("
+            "dependencies=[Depends(current_user_id_strict)])\n"
+            "@router.get('/a')\n"
+            "async def a(request: Request):\n"
+            "    return {}\n"
+        )
+        assert _missing_resolver(_parse(src), _REL) == []
+
+    def test_route_allowlist_exempts(self) -> None:
+        """An exact path in ROUTE_ALLOWLIST is not flagged."""
+        rel = "services/paper_ingestion/paper_ingestion/routers/snapshots.py"
+        src = (
+            "@router.get('/{paper_id}/{page}')\n"
+            "async def get_snapshot(request: Request, paper_id: int, page: int):\n"
+            "    return None\n"
+        )
+        assert _missing_resolver(_parse(src), rel) == []
+
+    def test_non_route_function_ignored(self) -> None:
+        """Helper functions without a route decorator are not checked."""
+        src = "async def helper(conn):\n    return 1\n"
+        assert _missing_resolver(_parse(src), _REL) == []

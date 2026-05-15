@@ -244,12 +244,16 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     chat_id = update.effective_chat.id
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
 
     async def focus_alarm(context: ContextTypes.DEFAULT_TYPE) -> None:
         job = context.job
         if job is None or job.chat_id is None:
             return
-        data_minutes = job.data if isinstance(job.data, int | float) else 0
+        job_minutes, job_user_id = job.data if isinstance(job.data, tuple) else (job.data, None)
+        data_minutes = job_minutes if isinstance(job_minutes, int | float) else 0
         await context.bot.send_message(
             job.chat_id,
             text=f"🍅 Focus session complete ({data_minutes} minutes). Did you finish your task? Want to add any notes?",  # noqa: E501,
@@ -257,13 +261,10 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         try:
             http = get_http(context)
             config = get_config(context)
-            headers: dict[str, str] = {}
-            if config.jarvis_api_key:
-                headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
             await http.post(
                 f"{config.learning_engine_url}/api/executive/focus/log",
                 json={"duration_hours": data_minutes / 60},
-                headers=headers,
+                headers=_owner_headers(config, job_user_id),
                 timeout=10.0,
             )
         except Exception:
@@ -274,7 +275,11 @@ async def focus_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         job.schedule_removal()
 
     context.job_queue.run_once(
-        focus_alarm, minutes * 60, chat_id=chat_id, name=f"focus_{chat_id}", data=minutes
+        focus_alarm,
+        minutes * 60,
+        chat_id=chat_id,
+        name=f"focus_{chat_id}",
+        data=(minutes, jarvis_user_id),
     )
     await update.message.reply_text(
         f"🍅 Focus session started for {minutes} minutes. Notifications are paused.",

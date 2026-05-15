@@ -466,6 +466,11 @@ async def start_scheduler(app, interval_hours: float) -> AsyncIOScheduler:
     except Exception:
         logger.exception("Failed to register purge_system_events job")
 
+    # WS-USER-DELETION: daily hard-purge of soft-deleted users past grace.
+    from paper_ingestion.jobs.data_purge import register_data_purge  # noqa: PLC0415
+
+    register_data_purge(scheduler, app)
+
     scheduler.start()
     logger.info("auto_pipeline scheduler started (interval=%.2fh)", interval_hours)
     return scheduler

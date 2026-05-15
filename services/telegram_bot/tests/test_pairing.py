@@ -240,12 +240,17 @@ async def test_unpair_paired_chat_removes_pairing():
     conn = _make_conn(fetchval_return=42, execute_return="DELETE 1")
     pool = _make_pool(conn)
     update = _make_update(chat_id=12345)
-    # Patch auth_required: the decorator calls auth_check → DB query.
-    # We set telegram_chat_id to match chat_id so auth passes.
     config = _make_config(telegram_chat_id=12345)
     context = _make_context(pool, config=config, args=[])
+    context.user_data = {"jarvis_user_id": 12345}
 
-    await unpair_command(update, context)
+    # Multi-user mode requires a paired user_id; patch auth_check to return one.
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, 12345),
+    ):
+        await unpair_command(update, context)
 
     # Should have called execute at least once with DELETE
     executed_sqls = [c.args[0] for c in conn.execute.await_args_list]

@@ -11,7 +11,7 @@ import asyncpg
 import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import dynamic_update
+from jarvis_common import dynamic_update, log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
 from jarvis_common.crypto import (
     decrypt_secret,
@@ -846,6 +846,12 @@ async def set_config(
                 value=None,
                 encrypted_value=ciphertext_bytes,
             )
+        await log_audit(
+            db_pool,
+            action="secret.rotate",
+            resource=key,
+            user_id=str(caller_user_id) if caller_user_id is not None else None,
+        )
     else:
         async with db_pool.acquire() as conn:
             await _write_config_row(conn, user_id=row_user_id, key=key, value=body.value)
@@ -1225,3 +1231,71 @@ async def test_provider(
     if resp.is_success:
         return ProviderTestResponse(ok=True)
     return ProviderTestResponse(ok=False, error=f"provider returned HTTP {resp.status_code}")
+
+
+# ---------------------------------------------------------------------------
+# WS-USER-DELETION D4 — GDPR data export (structured JSON only)
+# ---------------------------------------------------------------------------
+
+# (table-in-zip name, SQL). Each query is scoped to the calling user via $1.
+# Structured data only: no PDF binaries, no embeddings (paper_chunks.embedding
+# / vectors are excluded — papers carries metadata + abstract, notes carry the
+# user's own annotations). papers is scoped by discovered_by (canonical-corpus
+# owner column, mig 072); everything else by user_id.
+_EXPORT_QUERIES: tuple[tuple[str, str], ...] = (
+    ("papers", "SELECT row_to_json(p) FROM papers p WHERE p.discovered_by = $1"),
+    ("paper_notes", "SELECT row_to_json(t) FROM paper_notes t WHERE t.user_id = $1"),
+    ("paper_summaries", "SELECT row_to_json(t) FROM paper_summaries t WHERE t.user_id = $1"),
+    ("cards", "SELECT row_to_json(t) FROM cards t WHERE t.user_id = $1"),
+    ("decks", "SELECT row_to_json(t) FROM decks t WHERE t.user_id = $1"),
+    ("review_logs", "SELECT row_to_json(t) FROM review_logs t WHERE t.user_id = $1"),
+    ("projects", "SELECT row_to_json(t) FROM projects t WHERE t.user_id = $1"),
+    ("tasks", "SELECT row_to_json(t) FROM tasks t WHERE t.user_id = $1"),
+    ("milestones", "SELECT row_to_json(t) FROM milestones t WHERE t.user_id = $1"),
+    ("journal_entries", "SELECT row_to_json(t) FROM journal_entries t WHERE t.user_id = $1"),
+    ("daily_log", "SELECT row_to_json(t) FROM daily_log t WHERE t.user_id = $1"),
+    ("user_config", "SELECT row_to_json(t) FROM user_config t WHERE t.user_id = $1"),
+)
+
+
+@router.get("/me/export")
+async def export_my_data(request: Request) -> Any:
+    """Stream a ZIP of the calling user's structured data (GDPR export).
+
+    JSON dumps only — no PDF binaries, no embeddings. Scoped to
+    ``current_user_id_strict`` so a caller can never read another user's data.
+    Rows are streamed per-table (asyncpg cursor) so memory stays bounded for
+    large corpora.
+    """
+    import io  # noqa: PLC0415
+    import json  # noqa: PLC0415
+    import zipfile  # noqa: PLC0415
+
+    from fastapi.responses import StreamingResponse  # noqa: PLC0415
+
+    caller_user_id = await current_user_id_strict(request)
+    pool = request.app.state.db_pool
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        async with pool.acquire() as conn, conn.transaction():
+            for name, sql in _EXPORT_QUERIES:
+                lines: list[str] = []
+                async for record in conn.cursor(sql, caller_user_id):
+                    value = record[0]
+                    # row_to_json yields PG `json`; asyncpg returns it as str
+                    # unless a codec decodes it — normalise to a JSON string.
+                    if isinstance(value, str):
+                        lines.append(value)
+                    else:
+                        lines.append(json.dumps(value, default=str))
+                zf.writestr(f"{name}.jsonl", "\n".join(lines))
+    buf.seek(0)
+
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="jarvis-export-user-{caller_user_id}.zip"'
+        },
+    )

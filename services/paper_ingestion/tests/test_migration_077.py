@@ -55,14 +55,16 @@ def test_migration_077_covers_all_18_tables() -> None:
     sql = MIGRATION.read_text(encoding="utf-8")
 
     for table in EXPECTED_TABLES:
+        # `papers.user_id` was renamed to `papers.discovered_by` in mig 072
+        # (canonical-corpus model), so its FK lives on `discovered_by`.
+        col = "discovered_by" if table == "papers" else "user_id"
+
         # 1. Orphan NULL-out for this specific table.
-        assert f"UPDATE {table}\n   SET user_id = NULL" in sql, (
-            f"missing orphan NULL-out for {table}"
-        )
+        assert f"UPDATE {table}\n   SET {col} = NULL" in sql, f"missing orphan NULL-out for {table}"
 
         # 2. The ADD CONSTRAINT statement itself, on the expected table.
         assert f"ALTER TABLE {table}" in sql, f"missing ALTER TABLE for {table}"
-        assert f"ADD CONSTRAINT {table}_user_id_fkey" in sql, f"missing ADD CONSTRAINT for {table}"
+        assert f"ADD CONSTRAINT {table}_{col}_fkey" in sql, f"missing ADD CONSTRAINT for {table}"
 
     # Canonical idempotent guard: one DO $$ BEGIN … EXCEPTION WHEN
     # duplicate_object per table (matches scripts/check-migrations-no-tx.sh

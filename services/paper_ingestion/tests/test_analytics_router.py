@@ -42,7 +42,7 @@ async def test_missing_foundational_returns_ranked_stub_rows(app_with_pool):
     """GET /api/analytics/missing-foundational returns ranked citation stubs."""
     app, _pool, conn = app_with_pool
 
-    async def fetch_missing_foundational(query: str):
+    async def fetch_missing_foundational(query: str, *args):
         assert "WHERE p.metadata->>'stub' = 'true'" in query
         assert "ORDER BY cited_by_library_count DESC" in query
         assert "p.citation_count DESC NULLS LAST" in query
@@ -295,3 +295,57 @@ async def test_feedback_summary_empty_table(app_with_pool):
     data = resp.json()
     assert data["top_positive"] == []
     assert data["top_negative"] == []
+
+
+# ---------------------------------------------------------------------------
+# WS-AUTH cross-user isolation (B1/B2): both aggregates must filter by the
+# caller's user_id and bind it as a query parameter.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_feedback_summary_filters_by_user_id(app_with_pool):
+    """feedback-summary must scope recommendation_feedback to the caller (B1)."""
+    app, _pool, conn = app_with_pool
+    captured: dict[str, object] = {}
+
+    async def _fetch(query: str, *args):
+        captured["query"] = query
+        captured["args"] = args
+        return []
+
+    conn.fetch.side_effect = _fetch
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/analytics/feedback-summary")
+
+    assert resp.status_code == 200, resp.text
+    assert "WHERE rf.user_id = $1" in captured["query"]
+    # conftest resolves the strict resolver to user 1; it must be bound.
+    assert captured["args"] == (1,)
+
+
+@pytest.mark.asyncio
+async def test_missing_foundational_filters_by_user_library(app_with_pool):
+    """missing-foundational must scope the citation aggregate to the caller (B2)."""
+    app, _pool, conn = app_with_pool
+    captured: dict[str, object] = {}
+
+    async def _fetch(query: str, *args):
+        captured["query"] = query
+        captured["args"] = args
+        return []
+
+    conn.fetch.side_effect = _fetch
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/analytics/missing-foundational")
+
+    assert resp.status_code == 200, resp.text
+    assert "user_library" in captured["query"]
+    assert "ul.user_id = $1" in captured["query"]
+    assert captured["args"] == (1,)

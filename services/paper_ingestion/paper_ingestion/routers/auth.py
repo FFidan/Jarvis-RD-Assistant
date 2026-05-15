@@ -27,6 +27,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
+from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
@@ -71,6 +72,21 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _hash_email(email: str) -> str:
+    """Pseudonymise an email for audit ``resource``. Never log the raw value."""
+    return hashlib.sha256(email.lower().encode("utf-8")).hexdigest()
+
+
+def _audit_pool(request: Request):
+    """Best-effort ``app.state.db_pool`` lookup tolerant of test mocks.
+
+    Mirrors ``jarvis_common.auth._request_db_pool``: audit logging must never
+    blow up the auth flow just because a test request stub has no real pool.
+    """
+    state = getattr(getattr(request, "app", None), "state", None)
+    return getattr(state, "db_pool", None) if state is not None else None
+
+
 def _build_magic_link(request: Request, token: str) -> str:
     """Construct the URL the user clicks. Honours X-Forwarded-* via ProxyHeadersMiddleware."""
     from paper_ingestion.config import get_paper_ingestion_settings  # noqa: PLC0415
@@ -106,6 +122,14 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     """
     pool = request.app.state.db_pool
     email_norm = body.email.lower().strip()
+
+    _audit = _audit_pool(request)
+    if _audit is not None:
+        await log_audit(
+            _audit,
+            action="auth.magic_link.request",
+            resource=_hash_email(email_norm),
+        )
 
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -167,51 +191,74 @@ async def verify(
     token_hash = _hash_token(body.token)
     now = datetime.now(UTC)
 
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            token_row = await conn.fetchrow(
-                """
-                SELECT user_id, expires_at, used_at
-                FROM magic_link_tokens
-                WHERE token_hash = $1
-                FOR UPDATE
-                """,
-                token_hash,
-            )
-            if token_row is None:
-                raise HTTPException(status_code=400, detail="Invalid or expired token")
-            if token_row["used_at"] is not None:
-                raise HTTPException(status_code=400, detail="Invalid or expired token")
-            if token_row["expires_at"] <= now:
-                raise HTTPException(status_code=400, detail="Invalid or expired token")
+    _audit = _audit_pool(request)
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                token_row = await conn.fetchrow(
+                    """
+                    SELECT user_id, expires_at, used_at
+                    FROM magic_link_tokens
+                    WHERE token_hash = $1
+                    FOR UPDATE
+                    """,
+                    token_hash,
+                )
+                if token_row is None:
+                    raise HTTPException(status_code=400, detail="Invalid or expired token")
+                if token_row["used_at"] is not None:
+                    raise HTTPException(status_code=400, detail="Invalid or expired token")
+                if token_row["expires_at"] <= now:
+                    raise HTTPException(status_code=400, detail="Invalid or expired token")
 
-            user_id = int(token_row["user_id"])
+                user_id = int(token_row["user_id"])
 
-            user_row = await conn.fetchrow(
-                "SELECT id, email, role, deleted_at FROM users WHERE id = $1",
-                user_id,
-            )
-            if user_row is None or user_row["deleted_at"] is not None:
-                raise HTTPException(status_code=400, detail="Invalid or expired token")
+                user_row = await conn.fetchrow(
+                    "SELECT id, email, role, deleted_at FROM users WHERE id = $1",
+                    user_id,
+                )
+                if user_row is None or user_row["deleted_at"] is not None:
+                    raise HTTPException(status_code=400, detail="Invalid or expired token")
 
-            await conn.execute(
-                "UPDATE magic_link_tokens SET used_at = NOW() WHERE token_hash = $1",
-                token_hash,
-            )
-            await conn.execute(
-                "UPDATE users SET last_login_at = NOW() WHERE id = $1",
-                user_id,
-            )
+                await conn.execute(
+                    "UPDATE magic_link_tokens SET used_at = NOW() WHERE token_hash = $1",
+                    token_hash,
+                )
+                await conn.execute(
+                    "UPDATE users SET last_login_at = NOW() WHERE id = $1",
+                    user_id,
+                )
 
-            session_id = await conn.fetchval(
-                """
-                INSERT INTO sessions (user_id, expires_at)
-                VALUES ($1, $2)
-                RETURNING id
-                """,
-                user_id,
-                now + SESSION_TTL,
+                session_id = await conn.fetchval(
+                    """
+                    INSERT INTO sessions (user_id, expires_at)
+                    VALUES ($1, $2)
+                    RETURNING id
+                    """,
+                    user_id,
+                    now + SESSION_TTL,
+                )
+    except HTTPException:
+        if _audit is not None:
+            ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
+            await log_audit(
+                _audit,
+                action="auth.magic_link.verify.failure",
+                resource="magic_link_token",
+                metadata={
+                    "ip": request.client.host if getattr(request, "client", None) else None,
+                    "ua_prefix": ua[:80],
+                },
             )
+        raise
+
+    if _audit is not None:
+        await log_audit(
+            _audit,
+            action="auth.magic_link.verify.success",
+            resource="magic_link_token",
+            user_id=str(user_id),
+        )
 
     response.set_cookie(
         key=SESSION_COOKIE_NAME,
@@ -258,6 +305,16 @@ async def logout(request: Request, response: Response) -> Response:
                     WHERE id = $1 AND revoked_at IS NULL
                     """,
                     str(session_id),
+                )
+            _audit = _audit_pool(request)
+            if _audit is not None:
+                state = getattr(request, "state", None)
+                uid = getattr(state, "user_id", None) if state is not None else None
+                await log_audit(
+                    _audit,
+                    action="auth.logout",
+                    resource="session",
+                    user_id=str(uid) if isinstance(uid, int) else None,
                 )
 
     response.delete_cookie(

@@ -4,6 +4,26 @@
 # Idempotent: second run with an existing .env prompts before clobbering.
 # macOS-safe: no `sed -i`, no GNU-only flags. Uses tempfile + mv.
 # See docs/superpowers/specs/2026-04-12-setup-simplification-design.md
+#
+# Non-interactive mode (CI / unattended installs):
+#   ./setup.sh --non-interactive [OPTIONS]
+#
+#   --domain <host>           Public hostname (e.g. jarvis.example.com).
+#                             Determines access mode: localhost (when omitted),
+#                             local-https (*.local / bare name), or sets
+#                             TUNNEL_HOSTNAME when --profile=letsencrypt/tunnel.
+#   --admin-email <email>     Used for Let's Encrypt ACME account.
+#   --profile <dev|local-https|letsencrypt>
+#                             dev          — ENVIRONMENT=development, localhost binding
+#                             local-https  — self-signed cert, access mode 1
+#                             letsencrypt  — Caddy + ACME; requires --domain + --admin-email
+#   --smtp-host <host>        SMTP relay hostname.
+#   --smtp-user <user>        SMTP relay username.
+#   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
+#                             (Avoids passing credentials on the command line.)
+#
+# In non-interactive mode every prompt is driven by flags or safe defaults;
+# no stdin reads are attempted.
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -97,6 +117,94 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # -----------------------------------------------------------------------------
+# Flag parsing  (must happen after cd "$SCRIPT_DIR" so relative paths resolve)
+# -----------------------------------------------------------------------------
+NON_INTERACTIVE=0
+NI_DOMAIN=""
+NI_ADMIN_EMAIL=""
+NI_PROFILE="dev"      # dev | local-https | letsencrypt
+NI_SMTP_HOST=""
+NI_SMTP_USER=""
+NI_SMTP_PASS=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --non-interactive)
+      NON_INTERACTIVE=1
+      shift
+      ;;
+    --domain)
+      NI_DOMAIN="$2"
+      shift 2
+      ;;
+    --domain=*)
+      NI_DOMAIN="${1#*=}"
+      shift
+      ;;
+    --admin-email)
+      NI_ADMIN_EMAIL="$2"
+      shift 2
+      ;;
+    --admin-email=*)
+      NI_ADMIN_EMAIL="${1#*=}"
+      shift
+      ;;
+    --profile)
+      NI_PROFILE="$2"
+      shift 2
+      ;;
+    --profile=*)
+      NI_PROFILE="${1#*=}"
+      shift
+      ;;
+    --smtp-host)
+      NI_SMTP_HOST="$2"
+      shift 2
+      ;;
+    --smtp-host=*)
+      NI_SMTP_HOST="${1#*=}"
+      shift
+      ;;
+    --smtp-user)
+      NI_SMTP_USER="$2"
+      shift 2
+      ;;
+    --smtp-user=*)
+      NI_SMTP_USER="${1#*=}"
+      shift
+      ;;
+    --smtp-pass-file)
+      NI_SMTP_PASS="$(head -n 1 "$2" 2>/dev/null || true)"
+      shift 2
+      ;;
+    --smtp-pass-file=*)
+      NI_SMTP_PASS="$(head -n 1 "${1#*=}" 2>/dev/null || true)"
+      shift
+      ;;
+    -h|--help)
+      sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -40
+      exit 0
+      ;;
+    *)
+      die "Unknown flag: $1" "Run: $0 --help"
+      ;;
+  esac
+done
+
+# Validate --profile value.
+case "$NI_PROFILE" in
+  dev|local-https|letsencrypt) ;;
+  *) die "Invalid --profile '$NI_PROFILE'. Expected: dev, local-https, or letsencrypt." \
+         "Run: $0 --help" ;;
+esac
+
+# letsencrypt requires both --domain and --admin-email.
+if [ "$NON_INTERACTIVE" -eq 1 ] && [ "$NI_PROFILE" = "letsencrypt" ]; then
+  [ -n "$NI_DOMAIN" ]      || die "--profile=letsencrypt requires --domain."      "Provide: --domain=jarvis.example.com"
+  [ -n "$NI_ADMIN_EMAIL" ] || die "--profile=letsencrypt requires --admin-email." "Provide: --admin-email=you@example.com"
+fi
+
+# -----------------------------------------------------------------------------
 # 2. Prerequisites
 # -----------------------------------------------------------------------------
 info "Checking prerequisites..."
@@ -157,11 +265,15 @@ fi
 # -----------------------------------------------------------------------------
 if [ -f .env ]; then
   printf '\n%sConfiguration already exists (.env).%s\n' "$C_YELLOW" "$C_RESET"
-  read -rp "Overwrite? (y/N): " reply
-  case "$reply" in
-    [yY]|[yY][eE][sS]) info "Proceeding — existing .env will be replaced." ;;
-    *) ok "Keeping existing .env. Exiting."; exit 0 ;;
-  esac
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    info "Non-interactive mode — overwriting existing .env."
+  else
+    read -rp "Overwrite? (y/N): " reply
+    case "$reply" in
+      [yY]|[yY][eE][sS]) info "Proceeding — existing .env will be replaced." ;;
+      *) ok "Keeping existing .env. Exiting."; exit 0 ;;
+    esac
+  fi
 fi
 
 if [ ! -f .env.example ]; then
@@ -200,15 +312,30 @@ ok "Docker secret files written to secrets/ (mode 600)."
 
 # -----------------------------------------------------------------------------
 # 5. Question 1 — Access mode
+# Non-interactive mode: derive access_mode from --profile and --domain.
+#   dev / local-https with no domain → localhost (mode 1)
+#   letsencrypt with a domain         → tunnel-equivalent (mode 3 path skipped;
+#                                        handled via LETSENCRYPT_* vars below)
 # -----------------------------------------------------------------------------
-printf '\n%sHow do you want to access the dashboard?%s\n' "$C_BOLD" "$C_RESET"
-cat <<'EOF'
+if [ "$NON_INTERACTIVE" -eq 1 ]; then
+  case "$NI_PROFILE" in
+    letsencrypt)
+      access_mode="1"    # LETSENCRYPT_DOMAIN/EMAIL are written below; no Cloudflare
+      ;;
+    *)
+      access_mode="1"    # localhost/local-https always bind locally
+      ;;
+  esac
+else
+  printf '\n%sHow do you want to access the dashboard?%s\n' "$C_BOLD" "$C_RESET"
+  cat <<'EOF'
   1) Localhost only (default, safest)
   2) LAN — reachable from other devices on your network
   3) Global — access from anywhere via Cloudflare Tunnel (free, no ports opened)
 EOF
-read -rp "Choice [1]: " access_mode
-access_mode="${access_mode:-1}"
+  read -rp "Choice [1]: " access_mode
+  access_mode="${access_mode:-1}"
+fi
 
 CLOUDFLARE_TUNNEL_TOKEN=""
 USE_TUNNEL_PROFILE=0
@@ -320,8 +447,18 @@ if [ -n "$OLD_SAN" ] && [ "$OLD_SAN" != "$JARVIS_CERT_SAN" ]; then
   warn "Access mode changed — SSL certificate SAN has changed."
   warn "  Old: ${OLD_SAN}"
   warn "  New: ${JARVIS_CERT_SAN}"
-  read -r -p "Regenerate certificate? This will restart the dashboard container. [y/N] " confirm
-  if [[ "$confirm" =~ ^[Yy]$ ]]; then
+  if [ "$NON_INTERACTIVE" -eq 1 ]; then
+    info "Non-interactive mode — regenerating certificate automatically."
+    _do_regen=1
+  else
+    read -r -p "Regenerate certificate? This will restart the dashboard container. [y/N] " confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+      _do_regen=1
+    else
+      _do_regen=0
+    fi
+  fi
+  if [ "${_do_regen:-0}" -eq 1 ]; then
     docker compose down dashboard 2>/dev/null || true
     # Use 'down -v' scoped to dashboard: Compose resolves the volume name
     # with the correct project prefix (not a hardcoded jarvis_ prefix).
@@ -334,37 +471,53 @@ fi
 
 # -----------------------------------------------------------------------------
 # 6. Question 2 — Telegram
+# In non-interactive mode the token is sourced from the environment variable
+# TELEGRAM_BOT_TOKEN (if set) or skipped silently.
 # -----------------------------------------------------------------------------
 TELEGRAM_BOT_TOKEN=""
 USE_TELEGRAM_PROFILE=0
 
-prompt_telegram() {
-  local token
-  read -rp "(Optional) Telegram bot token — press Enter to skip: " token
-  printf '%s' "$token"
-}
-
-tg_try="$(prompt_telegram)"
-if [ -n "${tg_try// }" ]; then
-  if [[ "$tg_try" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
-    TELEGRAM_BOT_TOKEN="$tg_try"
+if [ "$NON_INTERACTIVE" -eq 1 ]; then
+  # Honour a token pre-set in the environment (e.g. from CI secrets).
+  _ni_tg="${TELEGRAM_BOT_TOKEN:-}"
+  if [ -n "${_ni_tg// }" ] && [[ "$_ni_tg" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
+    TELEGRAM_BOT_TOKEN="$_ni_tg"
     USE_TELEGRAM_PROFILE=1
-    ok "Telegram token accepted."
+    ok "Telegram token accepted (from environment)."
     printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
   else
-    warn "That didn't look like a valid Telegram token (format: <digits>:<20+ chars>). Try again or press Enter to skip."
-    tg_try2="$(prompt_telegram)"
-    if [ -n "${tg_try2// }" ] && [[ "$tg_try2" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
-      TELEGRAM_BOT_TOKEN="$tg_try2"
+    info "No valid TELEGRAM_BOT_TOKEN in environment — skipping Telegram bot."
+    TELEGRAM_BOT_TOKEN=""
+  fi
+else
+  prompt_telegram() {
+    local token
+    read -rp "(Optional) Telegram bot token — press Enter to skip: " token
+    printf '%s' "$token"
+  }
+
+  tg_try="$(prompt_telegram)"
+  if [ -n "${tg_try// }" ]; then
+    if [[ "$tg_try" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
+      TELEGRAM_BOT_TOKEN="$tg_try"
       USE_TELEGRAM_PROFILE=1
       ok "Telegram token accepted."
       printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
     else
-      warn "Skipping Telegram — bot will not start. Add TELEGRAM_BOT_TOKEN to .env later to enable."
+      warn "That didn't look like a valid Telegram token (format: <digits>:<20+ chars>). Try again or press Enter to skip."
+      tg_try2="$(prompt_telegram)"
+      if [ -n "${tg_try2// }" ] && [[ "$tg_try2" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
+        TELEGRAM_BOT_TOKEN="$tg_try2"
+        USE_TELEGRAM_PROFILE=1
+        ok "Telegram token accepted."
+        printf '%s' "$TELEGRAM_BOT_TOKEN" > secrets/telegram_bot_token.txt && chmod 600 secrets/telegram_bot_token.txt
+      else
+        warn "Skipping Telegram — bot will not start. Add TELEGRAM_BOT_TOKEN to .env later to enable."
+      fi
     fi
+  else
+    info "Skipping Telegram bot."
   fi
-else
-  info "Skipping Telegram bot."
 fi
 
 # -----------------------------------------------------------------------------
@@ -397,6 +550,30 @@ sub_value() {
     CORS_ORIGINS)
       if [ -n "$CORS_ORIGINS_OVERRIDE" ]; then
         printf '%s' "$CORS_ORIGINS_OVERRIDE"
+      else
+        return 1
+      fi
+      ;;
+    # Non-interactive: SMTP relay flags
+    SMTP_HOST)
+      [ -n "$NI_SMTP_HOST" ] && printf '%s' "$NI_SMTP_HOST" || return 1 ;;
+    SMTP_USER)
+      [ -n "$NI_SMTP_USER" ] && printf '%s' "$NI_SMTP_USER" || return 1 ;;
+    SMTP_PASS)
+      [ -n "$NI_SMTP_PASS" ] && printf '%s' "$NI_SMTP_PASS" || return 1 ;;
+    # Non-interactive: Let's Encrypt / Caddy profile
+    LETSENCRYPT_DOMAIN)
+      [ -n "$NI_DOMAIN" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_DOMAIN" || return 1 ;;
+    LETSENCRYPT_EMAIL)
+      [ -n "$NI_ADMIN_EMAIL" ] && [ "$NI_PROFILE" = "letsencrypt" ] && printf '%s' "$NI_ADMIN_EMAIL" || return 1 ;;
+    # Non-interactive: ENVIRONMENT based on --profile
+    ENVIRONMENT)
+      if [ "$NON_INTERACTIVE" -eq 1 ]; then
+        case "$NI_PROFILE" in
+          dev)           printf 'development' ;;
+          local-https)   printf 'development' ;;
+          letsencrypt)   printf 'production'  ;;
+        esac
       else
         return 1
       fi
@@ -555,7 +732,7 @@ case "$ACCESS_MODE_LABEL" in
 esac
 
 printf '\n%s================================================================%s\n' "$C_BOLD" "$C_RESET"
-printf '%s   ✅ Setup complete.%s\n' "$C_GREEN" "$C_RESET"
+printf '%s   Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
 # Write the API key to a protected file instead of printing it to the terminal.
@@ -570,4 +747,52 @@ printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'
 printf '  Public TLS: set LETSENCRYPT_DOMAIN and LETSENCRYPT_EMAIL, then run docker compose --profile letsencrypt up -d caddy\n'
+printf '\n'
+
+# -----------------------------------------------------------------------------
+# 13. Production-readiness check
+# Run the readiness script (non-fatal for dev; aborts for letsencrypt/production).
+# -----------------------------------------------------------------------------
+_READINESS_SCRIPT="$SCRIPT_DIR/scripts/production-readiness-check.sh"
+if [ -f "$_READINESS_SCRIPT" ]; then
+  printf '%s--- Production Readiness Check -----------------------------------%s\n' "$C_BOLD" "$C_RESET"
+  # Determine the effective environment from .env.
+  _ENV_VALUE="$(grep '^ENVIRONMENT=' .env 2>/dev/null | cut -d= -f2- || true)"
+  _ENV_VALUE="${_ENV_VALUE:-development}"
+
+  if bash "$_READINESS_SCRIPT"; then
+    ok "Production readiness: all checks passed."
+  else
+    _rc=$?
+    case "$_ENV_VALUE" in
+      production)
+        # In letsencrypt/production profile, HIGH findings are fatal.
+        err "Production readiness check found HIGH issues. Aborting."
+        err "Fix the issues listed above and re-run: ./setup.sh"
+        exit "$_rc"
+        ;;
+      *)
+        warn "Production readiness check found issues (non-fatal in dev profile)."
+        warn "Run 'bash scripts/production-readiness-check.sh' to see details."
+        ;;
+    esac
+  fi
+else
+  warn "scripts/production-readiness-check.sh not found — skipping readiness check."
+fi
+
+# -----------------------------------------------------------------------------
+# 14. Next steps
+# -----------------------------------------------------------------------------
+printf '\n%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+printf '%s   Next steps%s\n' "$C_BOLD" "$C_RESET"
+printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+printf '  1. Open the dashboard: %s\n' "$DASHBOARD_URL"
+printf '  2. Log in with your API key (stored in ~/.config/jarvis/api-key).\n'
+printf '  3. Invite the first admin user:\n'
+printf '       %s/admin/users%s  — use the web UI to add users and set roles.\n' "$DASHBOARD_URL" ""
+printf '  4. Complete the setup wizard (runs automatically on first visit).\n'
+printf '\n'
+printf '  Admin user management: %s/admin/users\n' "$DASHBOARD_URL"
+printf '  Tail logs:             docker compose logs -f\n'
 printf '\n'

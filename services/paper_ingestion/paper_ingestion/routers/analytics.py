@@ -45,6 +45,7 @@ async def get_missing_foundational(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[MissingFoundationalPaper]:
     """Return high-citation citation stubs already discovered from local papers."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -60,12 +61,15 @@ async def get_missing_foundational(
                 COUNT(DISTINCT pc.source_paper_id) AS cited_by_library_count
             FROM papers p
             JOIN paper_citations pc ON pc.cited_paper_id = p.id
+            JOIN user_library ul ON ul.paper_id = pc.source_paper_id
+                                AND ul.user_id = $1
             WHERE p.metadata->>'stub' = 'true'
               AND COALESCE(p.pdf_downloaded, FALSE) = FALSE
             GROUP BY p.id
             ORDER BY cited_by_library_count DESC, p.citation_count DESC NULLS LAST, p.title
             LIMIT 10
-            """
+            """,
+            user_id,
         )
     return [
         MissingFoundationalPaper(
@@ -142,6 +146,7 @@ async def feedback_summary(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> dict:
     """Return per-paper positive and negative recommendation feedback counts."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -152,10 +157,12 @@ async def feedback_summary(
                 COUNT(*) FILTER (WHERE rf.signal = 'negative') AS negative_count
             FROM recommendation_feedback rf
             JOIN papers p ON p.id = rf.paper_id
+            WHERE rf.user_id = $1
             GROUP BY p.id, p.title
             ORDER BY positive_count DESC
             LIMIT 30
-            """
+            """,
+            user_id,
         )
     return {
         "top_positive": [

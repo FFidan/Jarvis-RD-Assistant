@@ -13,6 +13,7 @@ import {
   Network,
   TableProperties,
   ScrollText,
+  ShieldCheck,
   Users,
   ChevronLeft,
   ChevronRight,
@@ -46,6 +47,7 @@ const navItems = [
 const adminNavItems = [
   { path: '/logs', label: 'System Logs', icon: ScrollText },
   { path: '/admin/users', label: 'User Management', icon: Users },
+  { path: '/admin/audit-log', label: 'Audit Log', icon: ShieldCheck },
 ];
 
 export function Sidebar() {

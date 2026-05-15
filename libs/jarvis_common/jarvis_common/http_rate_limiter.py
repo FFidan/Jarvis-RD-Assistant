@@ -90,8 +90,30 @@ def _real_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def create_limiter(default_limits: list[str | Callable[..., str]] | None = None) -> Limiter:
-    """Create a rate limiter using real client IP as key.
+def _user_or_ip_key(request: Request) -> str:
+    """Rate-limit key: ``user:<id>`` for authenticated requests, ``ip:<addr>`` otherwise.
+
+    Authenticated callers (session cookie resolved by SessionMiddleware → an
+    integer ``request.state.user_id``) each get an independent quota bucket so
+    one user cannot exhaust the shared IP bucket that every user behind a
+    reverse proxy would otherwise share.
+
+    Unauthenticated callers (no valid session, e.g. ``/api/auth/*`` endpoints)
+    fall back to the real client IP so anti-enumeration limits are still
+    enforced per-IP.
+    """
+    uid = getattr(request.state, "user_id", None)
+    if isinstance(uid, int):
+        return f"user:{uid}"
+    return f"ip:{_real_ip(request)}"
+
+
+def create_limiter(
+    default_limits: list[str | Callable[..., str]] | None = None,
+    *,
+    user_aware: bool = True,
+) -> Limiter:
+    """Create a rate limiter keyed by user or IP.
 
     Parameters
     ----------
@@ -101,10 +123,15 @@ def create_limiter(default_limits: list[str | Callable[..., str]] | None = None)
         ``SlowAPIMiddleware`` before any route-level auth takes effect,
         providing a first-line defence against unauthenticated brute-force.
         Defaults to ``["600/minute"]`` when not specified.
+    user_aware:
+        When ``True`` (default) the key function returns ``user:<id>`` for
+        authenticated requests and ``ip:<addr>`` for unauthenticated ones.
+        Set to ``False`` to force pure IP-based keying (legacy behaviour).
     """
     if default_limits is None:
         default_limits = ["600/minute"]
-    return Limiter(key_func=_real_ip, default_limits=default_limits)
+    key_func = _user_or_ip_key if user_aware else _real_ip
+    return Limiter(key_func=key_func, default_limits=default_limits)
 
 
 async def rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:

@@ -45,6 +45,25 @@ def _clear_rate_limit_state():  # pyright: ignore[reportUnusedFunction]
     _rate_limit_mod._timestamps.clear()
 
 
+@pytest.fixture(autouse=True)
+def _default_auth_patch():
+    """Default: auth_required resolves the standard chat as paired user_id=1.
+
+    Multi-user mode requires every authorized chat to have a paired JARVIS
+    user_id.  The env-var owner path (telegram_chat_id match) now returns
+    (True, None), which the decorator rejects with a pairing message.
+
+    Tests that need (True, None) or a specific user_id should override with
+    their own ``patch("telegram_bot.handlers.commands._auth.auth_check", ...)``.
+    """
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, 1),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -73,10 +92,10 @@ def _make_update_and_context(args=None, chat_id=_TEST_CHAT_ID):
 
     context = MagicMock()
     context.args = args or []
-    # auth_required decorator stashes the resolved user_id here; default to an
-    # empty dict so tests not exercising per-user scoping behave as the env-var
-    # owner path (jarvis_user_id absent => None).
-    context.user_data = {}
+    # auth_required stashes the resolved user_id here.  Default to user_id=1
+    # so commands that read context.user_data["jarvis_user_id"] get a valid
+    # paired user rather than None (which is now blocked by the B4 guard).
+    context.user_data = {"jarvis_user_id": 1}
 
     config = _make_config()
     mock_db = AsyncMock()
@@ -670,23 +689,23 @@ async def test_briefing_scopes_papers_to_user_library_when_paired():
 
 
 @pytest.mark.asyncio
-async def test_briefing_owner_path_remains_unscoped():
-    """/briefing run by the env-var owner (jarvis_user_id=None) keeps legacy SQL."""
+async def test_briefing_unpaired_owner_gets_pairing_message():
+    """B4: /briefing by an authorized-but-unpaired chat is blocked with pairing instruction."""
     update, context, mock_db, mock_http = _make_update_and_context()
-    mock_db.fetchrow.return_value = {"cnt": 0}
-    mock_db.fetch.side_effect = [[], []]
-    stats_resp = MagicMock()
-    stats_resp.raise_for_status = MagicMock()
-    stats_resp.json.return_value = {"due_now": 0}
-    mock_http.get.return_value = stats_resp
+    update.message.reply_text = AsyncMock()
 
-    await briefing_command(update, context)
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, None),
+    ):
+        await briefing_command(update, context)
 
-    papers_sql = mock_db.fetchrow.await_args.args[0]
-    assert "user_library" not in papers_sql
-    fetch_calls = mock_db.fetch.await_args_list
-    assert "user_id" not in fetch_calls[0].args[0]
-    assert "user_id" not in fetch_calls[1].args[0]
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "pair" in text.lower() or "Settings" in text
+    # No DB queries for the briefing itself should have been issued
+    mock_db.fetchrow.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -754,15 +773,22 @@ async def test_projects_scopes_listing_to_paired_user():
 
 
 @pytest.mark.asyncio
-async def test_projects_owner_path_remains_unscoped():
-    """/projects from the env-var owner keeps legacy unscoped SQL."""
+async def test_projects_unpaired_owner_gets_pairing_message():
+    """B4: /projects by an authorized-but-unpaired chat is blocked with pairing instruction."""
     update, context, mock_db, _ = _make_update_and_context()
-    mock_db.fetch.return_value = []
+    update.message.reply_text = AsyncMock()
 
-    await projects_command(update, context)
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, None),
+    ):
+        await projects_command(update, context)
 
-    sql = mock_db.fetch.await_args.args[0]
-    assert "user_id" not in sql
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "pair" in text.lower() or "Settings" in text
+    mock_db.fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -911,3 +937,80 @@ async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
     headers = mock_http.get.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == "7"
     assert headers.get("X-API-Key") == "test-key"
+
+
+# ---------------------------------------------------------------------------
+# B3: focus_alarm threads X-Owner-User-Id for paired users
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_focus_alarm_sends_owner_user_id_for_paired_user():
+    """B3: focus_alarm callback sends X-Owner-User-Id for the paired user."""
+    update, context, _, mock_http = _make_focus_update_and_context(args=["25"])
+    # Simulate auth_required having stashed the jarvis_user_id
+    context.user_data["jarvis_user_id"] = 42
+
+    captured_callbacks: list = []
+
+    def _capture_run_once(callback, delay, **kwargs):
+        captured_callbacks.append((callback, kwargs.get("data")))
+
+    context.job_queue.run_once.side_effect = _capture_run_once
+
+    with _paired_auth_patch(42):
+        await focus_command(update, context)
+
+    assert captured_callbacks, "run_once was not called"
+    callback, job_data = captured_callbacks[0]
+    assert isinstance(job_data, tuple), "job data must be a (minutes, user_id) tuple"
+    _, user_id_in_data = job_data
+    assert user_id_in_data == 42, f"expected user_id=42 in job data, got {user_id_in_data}"
+
+    # Simulate the alarm firing
+    mock_http.post.return_value = MagicMock(raise_for_status=MagicMock())
+
+    alarm_context = MagicMock()
+    alarm_context.job = MagicMock()
+    alarm_context.job.chat_id = 99999
+    alarm_context.job.data = job_data
+    alarm_context.bot.send_message = AsyncMock()
+    alarm_context.application = context.application
+
+    await callback(alarm_context)
+
+    mock_http.post.assert_awaited_once()
+    headers = mock_http.post.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "42", (
+        f"focus_alarm must send X-Owner-User-Id=42, headers={headers}"
+    )
+    assert headers.get("X-API-Key") == "test-key"
+
+
+# ---------------------------------------------------------------------------
+# B4: authorized-but-unpaired caller gets pairing instruction, no backend call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_auth_required_blocks_unpaired_owner_with_pairing_message():
+    """B4: authorized chat with jarvis_user_id=None gets a pair-instruction reply."""
+    update, context, _, mock_http = _make_update_and_context()
+    update.message.reply_text = AsyncMock()
+
+    # auth_check returns (True, None) — authorized but no jarvis_user_id
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, None),
+    ):
+        await help_command(update, context)
+
+    update.message.reply_text.assert_awaited_once()
+    text = update.message.reply_text.call_args[0][0]
+    assert "pair" in text.lower() or "Settings" in text, (
+        f"Expected pairing instruction in reply, got: {text!r}"
+    )
+    # No backend HTTP call must have been made
+    mock_http.get.assert_not_awaited()
+    mock_http.post.assert_not_awaited()

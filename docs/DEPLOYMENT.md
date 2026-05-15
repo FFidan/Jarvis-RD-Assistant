@@ -507,6 +507,115 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 
 ---
 
+---
+
+## Non-interactive / Automated Installer
+
+`setup.sh` supports a `--non-interactive` mode for CI pipelines, cloud-init
+scripts, and automated provisioning where stdin is not a terminal.
+
+### Flags
+
+| Flag | Required | Description |
+|---|---|---|
+| `--non-interactive` | yes | Enable non-interactive mode. Every prompt is driven by flags or defaults; no `read` calls are attempted. |
+| `--domain <host>` | letsencrypt only | Public hostname (e.g. `jarvis.example.com`). Populates `LETSENCRYPT_DOMAIN` and `TUNNEL_HOSTNAME`. |
+| `--admin-email <email>` | letsencrypt only | Let's Encrypt ACME account email. Populates `LETSENCRYPT_EMAIL`. |
+| `--profile <dev\|local-https\|letsencrypt>` | no (default: `dev`) | `dev` — `ENVIRONMENT=development`, localhost binding. `local-https` — self-signed cert, localhost binding. `letsencrypt` — Caddy + ACME; requires `--domain` + `--admin-email`; sets `ENVIRONMENT=production`. |
+| `--smtp-host <host>` | no | SMTP relay hostname (populates `SMTP_HOST`). |
+| `--smtp-user <user>` | no | SMTP relay username (populates `SMTP_USER`). |
+| `--smtp-pass-file <path>` | no | Path to a file whose first line is the SMTP password. Avoids passing credentials on the command line. |
+
+Telegram is handled via the `TELEGRAM_BOT_TOKEN` **environment variable** in
+non-interactive mode. If the variable holds a valid token
+(`<digits>:<20+ chars>`), the Telegram profile is enabled automatically.
+
+### Copy-paste examples
+
+**Local development / CI smoke test:**
+
+```bash
+./setup.sh --non-interactive --profile=dev
+```
+
+**Self-hosted with self-signed HTTPS (home lab):**
+
+```bash
+./setup.sh --non-interactive \
+  --domain=jarvis.local \
+  --admin-email=admin@example.com \
+  --profile=local-https
+```
+
+**Production with Let's Encrypt (public server):**
+
+```bash
+# Write SMTP password to a protected temp file; never pass on the command line.
+printf '%s' "$MY_SMTP_PASS" > /run/secrets/smtp_pass
+chmod 600 /run/secrets/smtp_pass
+
+./setup.sh --non-interactive \
+  --domain=jarvis.example.com \
+  --admin-email=ops@example.com \
+  --profile=letsencrypt \
+  --smtp-host=smtp.resend.com \
+  --smtp-user=resend \
+  --smtp-pass-file=/run/secrets/smtp_pass
+```
+
+After setup completes, invite the first admin user via the web UI:
+
+```
+https://jarvis.example.com/admin/users
+```
+
+---
+
+## Production Readiness Check
+
+`scripts/production-readiness-check.sh` audits the active configuration
+against a set of HIGH-severity rules. `setup.sh` runs it automatically at the
+end of every install; you can also run it standalone at any time.
+
+```bash
+bash scripts/production-readiness-check.sh
+```
+
+### Checks performed
+
+| Check | HIGH when | WARN when |
+|---|---|---|
+| `ENVIRONMENT` | — | Unrecognised value |
+| `DEV_AUTH_BYPASS` | `true` + `ENVIRONMENT=production` | `true` in non-production |
+| `DEV_ERROR_DETAIL` | `true` + `ENVIRONMENT=production` | `true` in non-production |
+| `DEV_CORS_OPEN` | `true` + `ENVIRONMENT=production` | `true` in non-production |
+| `DEV_SMTP_LOG_ONLY` | `true` + `ENVIRONMENT=production` | `true` in non-production |
+| `DEV_CRYPTO_RELAXED` | `true` + `ENVIRONMENT=production` | `true` in non-production |
+| `JARVIS_API_KEY` | Not set or < 32 chars + `ENVIRONMENT=production` | Not set in non-production |
+| SMTP | — | `SMTP_HOST` not set (magic links go to stdout) |
+| HTTPS | — | No `LETSENCRYPT_DOMAIN` and empty `JARVIS_CERT_SAN` in production |
+
+The script exits **non-zero** when any HIGH finding is present. In
+`--profile=letsencrypt` (i.e. `ENVIRONMENT=production`) `setup.sh` treats a
+non-zero readiness exit as fatal and aborts with a clear message.
+
+**Simulating a HIGH failure:**
+
+```bash
+ENVIRONMENT=production DEV_AUTH_BYPASS=true \
+  bash scripts/production-readiness-check.sh; echo "exit=$?"
+# → prints FAIL row and exits 1
+```
+
+**Clean dev config:**
+
+```bash
+bash scripts/production-readiness-check.sh; echo "exit=$?"
+# → all OK, exits 0
+```
+
+---
+
 ## See also
 
 - [README.md](../README.md) — quick start and high-level orientation.

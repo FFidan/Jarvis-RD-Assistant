@@ -355,6 +355,36 @@ export const updateUserRole = (userId: number, role: 'user' | 'admin') =>
 export const deleteUser = (userId: number) =>
   apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
 
+// --- Admin audit log (WS-ADMIN-AUDIT) ---
+
+export interface AuditLogEntry {
+  id: number;
+  user_id: string | null;
+  action: string;
+  resource: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface AuditLogPage {
+  entries: AuditLogEntry[];
+  next_before_id: number | null;
+}
+
+/** Read the audit log (cursor-paginated, newest first). Requires admin role. */
+export const listAuditLog = (params?: {
+  limit?: number;
+  beforeId?: number | null;
+  actionPrefix?: string;
+}) => {
+  const qs = new URLSearchParams();
+  if (params?.limit != null) qs.set('limit', String(params.limit));
+  if (params?.beforeId != null) qs.set('before_id', String(params.beforeId));
+  if (params?.actionPrefix) qs.set('action_prefix', params.actionPrefix);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiFetch<AuditLogPage>(`/api/admin/audit-log${suffix}`);
+};
+
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
   apiFetch<DashboardMetrics>('/api/dashboard/metrics');

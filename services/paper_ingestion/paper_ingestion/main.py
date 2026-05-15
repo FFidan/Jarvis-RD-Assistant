@@ -460,6 +460,7 @@ from paper_ingestion.routers import (  # noqa: E402
     telegram,
     topics,
 )
+from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import setup as setup_router  # noqa: E402
@@ -501,6 +502,7 @@ app.include_router(telegram.router)
 app.include_router(system.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
+app.include_router(audit_admin_router.router)
 app.include_router(infra_events.router)
 
 

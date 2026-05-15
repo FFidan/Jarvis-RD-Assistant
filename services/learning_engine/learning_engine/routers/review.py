@@ -27,6 +27,9 @@ async def _build_fsrs_manager_from_db(
     NULL-row system defaults (DISTINCT ON keeps the user row first).
     Both keys are read per-review so that live edits take effect immediately
     without a service restart.
+
+    When ``user_id`` is provided, per-user rows take precedence over the
+    NULL-row system defaults (tried first; falls back to NULL row if absent).
     """
     desired_retention = 0.9
     learning_steps: list[timedelta] | None = None

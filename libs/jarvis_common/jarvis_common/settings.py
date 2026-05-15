@@ -94,8 +94,9 @@ class CoreSettings(BaseSettings):
             "dev_smtp_log_only": "DEV_SMTP_LOG_ONLY",
             "dev_crypto_relaxed": "DEV_CRYPTO_RELAXED",
         }
+        env_keys_upper = {k.upper() for k in os.environ}
         for field_name, env_name in _flag_env_names.items():
-            if env_name not in os.environ:
+            if env_name.upper() not in env_keys_upper:
                 object.__setattr__(self, field_name, True)
         return self
 

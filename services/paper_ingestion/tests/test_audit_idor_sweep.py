@@ -230,8 +230,8 @@ async def test_papers_brief_idor_user_id_filter_no_search():
 async def test_papers_brief_idor_user_id_filter_with_search():
     """GET /api/papers/brief?search=X SQL must include user_id guard.
 
-    list_papers_brief calls current_user_id_or_none(request) directly (not via
-    FastAPI Depends), so we must patch at the module level rather than using
+    list_papers_brief calls the strict resolver directly (not via FastAPI
+    Depends), so we must patch at the module level rather than using
     dependency_overrides.
     """
     import httpx

@@ -80,8 +80,10 @@ async def test_request_link_unknown_email_returns_sent_true(monkeypatch) -> None
     )
 
     assert result.sent is True
-    # No magic_link_tokens INSERT should have run
-    conn.execute.assert_not_called()
+    # No magic_link_tokens INSERT should have run (an audit row may still be
+    # written for the request attempt — that's expected).
+    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
+    assert not any("INSERT INTO magic_link_tokens" in s for s in executed_sql)
 
 
 @pytest.mark.asyncio
@@ -108,9 +110,8 @@ async def test_request_link_known_email_inserts_token_and_logs(monkeypatch) -> N
     )
 
     assert result.sent is True
-    conn.execute.assert_awaited_once()
-    insert_sql = conn.execute.await_args.args[0]
-    assert "INSERT INTO magic_link_tokens" in insert_sql
+    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
+    assert any("INSERT INTO magic_link_tokens" in s for s in executed_sql)
     assert len(sent_calls) == 1
     assert sent_calls[0][0] == "ferhat@example.com"
     assert "token=" in sent_calls[0][1]
@@ -277,9 +278,8 @@ async def test_logout_revokes_session_and_clears_cookie(monkeypatch) -> None:
 
     await auth_router.logout.__wrapped__(request, response)
 
-    conn.execute.assert_awaited_once()
-    update_sql = conn.execute.await_args.args[0]
-    assert "UPDATE sessions SET revoked_at" in update_sql
+    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
+    assert any("UPDATE sessions SET revoked_at" in s for s in executed_sql)
     set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
     assert any(b"jarvis_session=" in h for h in set_cookie_headers)
 
@@ -500,3 +500,85 @@ def test_verify_rate_limited(_rate_limit_client) -> None:
 
     resp = client.post("/api/auth/verify", json=payload)
     assert resp.status_code == 429, f"Expected 429 on 11th call, got {resp.status_code}"
+
+
+# ---------------------------------------------------------------------------
+# WS-ADMIN-AUDIT: auth events must write an audit_log row
+# ---------------------------------------------------------------------------
+
+
+def _audit_actions(conn: AsyncMock) -> list[str]:
+    """Extract the ``action`` arg of every audit_log INSERT executed on conn.
+
+    ``log_audit`` runs ``conn.execute("INSERT INTO audit_log ...", user_id,
+    action, resource, metadata)`` — the action is the 3rd positional arg
+    (index 2) of the call after the SQL string.
+    """
+    actions: list[str] = []
+    for call in conn.execute.await_args_list:
+        sql = call.args[0]
+        if "INSERT INTO audit_log" in sql:
+            actions.append(call.args[2])
+    return actions
+
+
+@pytest.mark.asyncio
+async def test_verify_success_writes_audit_row(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "user_id": 7,
+                "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+                "used_at": None,
+            },
+            {"id": 7, "email": "ferhat@example.com", "role": "admin", "deleted_at": None},
+        ]
+    )
+    conn.execute = AsyncMock()
+    conn.fetchval = AsyncMock(return_value="00000000-0000-0000-0000-000000000099")
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    await auth_router.verify.__wrapped__(
+        auth_router.VerifyBody(token="A" * 32),
+        request,
+        Response(),
+    )
+
+    assert "auth.magic_link.verify.success" in _audit_actions(conn)
+
+
+@pytest.mark.asyncio
+async def test_verify_failure_writes_audit_row(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)  # unknown token → HTTP 400
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    with pytest.raises(HTTPException):
+        await auth_router.verify.__wrapped__(
+            auth_router.VerifyBody(token="A" * 32),
+            request,
+            Response(),
+        )
+
+    assert "auth.magic_link.verify.failure" in _audit_actions(conn)
+
+
+@pytest.mark.asyncio
+async def test_logout_writes_audit_row(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool(conn)
+    request = _build_request(
+        pool, cookies={"jarvis_session": "00000000-0000-0000-0000-000000000099"}
+    )
+
+    await auth_router.logout.__wrapped__(request, Response())
+
+    assert "auth.logout" in _audit_actions(conn)

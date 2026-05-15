@@ -49,8 +49,10 @@ def _make_nudge_record(**kwargs) -> dict:
 def _app():
     """Create a minimal paper_ingestion app with mocked DB and auth disabled."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as _settings_mod
 
     # The conftest.py provides _make_pool_and_conn as a shared helper but we
     # inline it here to keep the fixture self-contained.
@@ -70,8 +72,13 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # WS-AUTH: admin-gate the settings endpoints (see test_settings._app).
+    app.dependency_overrides[require_admin] = lambda: None
+    _orig_require_admin = _settings_mod.require_admin
+    _settings_mod.require_admin = AsyncMock(return_value=None)
 
     yield app, conn
+    _settings_mod.require_admin = _orig_require_admin
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 

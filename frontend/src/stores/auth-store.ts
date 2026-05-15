@@ -107,17 +107,31 @@ export const useAuthStore = create<AuthState>()(
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
 
         // Flush the React-Query cache so the next user doesn't see stale data.
-        // Guard against SSR / test environments where the client may not be registered.
-        _queryClient?.clear();
+        // cancelQueries first so in-flight fetches don't repopulate the cache
+        // after clear(). Both are best-effort; a failure must not abort logout.
+        void (async () => {
+          try {
+            if (_queryClient != null) {
+              await _queryClient.cancelQueries();
+              _queryClient.clear();
+            }
+          } catch {
+            // ignore — cache flush is best-effort
+          }
 
-        // Reset in-memory zustand stores that hold user-scoped runtime data.
-        // Importing lazily avoids the circular-dependency that direct top-level
-        // imports would create (those stores don't import auth-store).
-        void import('@/stores/chat-store').then(({ useChatStore }) => useChatStore.getState()._reset());
-        void import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset());
-        void import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset());
-        void import('@/stores/pomodoro-store').then(({ usePomodoroStore }) => usePomodoroStore.getState()._reset());
-        void import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset());
+          // Reset in-memory zustand stores that hold user-scoped runtime data.
+          // Importing lazily avoids the circular-dependency that direct top-level
+          // imports would create (those stores don't import auth-store).
+          // Promise.allSettled ensures a failed chunk load for one store does not
+          // prevent the others from resetting.
+          await Promise.allSettled([
+            import('@/stores/chat-store').then(({ useChatStore }) => useChatStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] chat-store reset failed', e); }),
+            import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] job-store reset failed', e); }),
+            import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset()).catch((e: unknown) => { console.warn('[auth] bulk-selection-store reset failed', e); }),
+            import('@/stores/pomodoro-store').then(({ usePomodoroStore }) => usePomodoroStore.getState()._reset()).catch((e: unknown) => { console.warn('[auth] pomodoro-store reset failed', e); }),
+            import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset()).catch((e: unknown) => { console.warn('[auth] keyboard-shortcuts-store reset failed', e); }),
+          ]);
+        })();
 
         // Notify the active Service Worker to drop runtime-API caches so
         // cached responses from the previous user aren't served to the next.

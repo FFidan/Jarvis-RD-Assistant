@@ -3,6 +3,8 @@
 SEC-001: XFF must be walked right-to-left so a LAN attacker cannot bypass
          rate limiting by prepending a fake IP.
 SEC-006: CF-Connecting-IP is only trusted when JARVIS_TRUST_CF_CONNECTING_IP=true.
+WS-RATE-LIMIT: _user_or_ip_key returns ``user:<id>`` for authenticated callers
+               and ``ip:<addr>`` for unauthenticated ones.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ from unittest.mock import MagicMock
 
 import jarvis_common.http_rate_limiter as ratelimit_mod
 import pytest
-from jarvis_common.http_rate_limiter import _real_ip
+from jarvis_common.http_rate_limiter import _real_ip, _user_or_ip_key
 from starlette.requests import Request
 
 # ---------------------------------------------------------------------------
@@ -161,3 +163,75 @@ def test_cf_connecting_ip_honoured_when_gate_enabled(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", [])
     req = make_request(cf="9.9.9.9", client_host="127.0.0.1")
     assert _real_ip(req) == "9.9.9.9"
+
+
+# ---------------------------------------------------------------------------
+# WS-RATE-LIMIT: _user_or_ip_key — per-user / per-IP bucket selection
+# ---------------------------------------------------------------------------
+
+
+def make_request_with_state(
+    user_id: int | None = None,
+    xff: str | None = None,
+    client_host: str = "203.0.113.1",
+) -> Request:
+    """Build a mock Request that also carries request.state attributes."""
+    req = make_request(xff=xff, client_host=client_host)
+    state = MagicMock()
+    # Simulate the presence or absence of user_id on request.state.
+    if user_id is not None:
+        state.user_id = user_id
+        # getattr(state, 'user_id', None) must return the integer directly.
+        # MagicMock auto-returns a MagicMock for unknown attrs; we override:
+    else:
+        # Ensure getattr returns None (not a MagicMock) when user_id absent.
+        del state.user_id  # remove default auto-attr so getattr returns None
+    req.state = state
+    return req
+
+
+def test_authenticated_request_uses_user_key(monkeypatch: pytest.MonkeyPatch):
+    """WS-RATE-LIMIT (a): authenticated caller gets ``user:<id>`` bucket."""
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", [])
+    req = make_request_with_state(user_id=42, client_host="1.2.3.4")
+    assert _user_or_ip_key(req) == "user:42"
+
+
+def test_two_authenticated_users_get_independent_keys(monkeypatch: pytest.MonkeyPatch):
+    """WS-RATE-LIMIT (a): different user_ids produce distinct ``user:`` keys."""
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", [])
+    req_a = make_request_with_state(user_id=1, client_host="10.0.0.1")
+    req_b = make_request_with_state(user_id=2, client_host="10.0.0.1")
+    key_a = _user_or_ip_key(req_a)
+    key_b = _user_or_ip_key(req_b)
+    assert key_a == "user:1"
+    assert key_b == "user:2"
+    assert key_a != key_b
+
+
+def test_unauthenticated_request_falls_back_to_ip_key(monkeypatch: pytest.MonkeyPatch):
+    """WS-RATE-LIMIT (b): no session → key falls back to ``ip:<addr>``."""
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", [])
+    req = make_request_with_state(user_id=None, client_host="203.0.113.55")
+    assert _user_or_ip_key(req) == "ip:203.0.113.55"
+
+
+def test_auth_endpoint_sessionless_request_is_ip_keyed(monkeypatch: pytest.MonkeyPatch):
+    """WS-RATE-LIMIT (c): /api/auth/*-style request (no session) is ip-keyed.
+
+    Auth endpoints have no session cookie yet; SessionMiddleware leaves
+    request.state.user_id unset.  The key func must fall back to IP so
+    anti-enumeration limits still apply per-IP.
+    """
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", [])
+    # Simulate a request with no session (no user_id on state)
+    req = make_request(client_host="198.51.100.7")
+    # make_request returns a MagicMock; its .state is also a MagicMock where
+    # getattr(req.state, 'user_id', None) returns a MagicMock (not an int).
+    # Patch state so getattr returns None explicitly.
+    state = MagicMock()
+    del state.user_id
+    req.state = state
+    key = _user_or_ip_key(req)
+    assert key.startswith("ip:")
+    assert "198.51.100.7" in key

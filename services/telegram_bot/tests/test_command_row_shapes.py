@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -34,6 +34,7 @@ def _make_update_and_context(args=None):
 
     context = MagicMock()
     context.args = args or []
+    context.user_data = {"jarvis_user_id": 1}
     db = AsyncMock()
     context.application = MagicMock()
     context.application.bot_data = {
@@ -50,6 +51,17 @@ def _clear_rate_limit_state():
     _rate_limit_mod._timestamps.clear()
     yield
     _rate_limit_mod._timestamps.clear()
+
+
+@pytest.fixture(autouse=True)
+def _default_auth_patch():
+    """Paired user auth for all tests in this module (multi-user mode requires pairing)."""
+    with patch(
+        "telegram_bot.handlers.commands._auth.auth_check",
+        new_callable=AsyncMock,
+        return_value=(True, 1),
+    ):
+        yield
 
 
 @pytest.mark.asyncio

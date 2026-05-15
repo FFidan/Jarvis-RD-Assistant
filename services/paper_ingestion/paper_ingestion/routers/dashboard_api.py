@@ -60,7 +60,8 @@ async def get_dashboard_metrics(
                      WHERE ul.user_id = $1
                        AND ps.id IS NULL) AS pending_papers,
                     (SELECT COUNT(*) FROM cards
-                     WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
+                     WHERE due_at IS NOT NULL AND due_at <= NOW()
+                       AND user_id = $1) AS due_cards,
                     (SELECT COUNT(*) FROM projects
                      WHERE status = 'active'
                        AND user_id IS NOT DISTINCT FROM $1) AS active_projects,
@@ -85,7 +86,8 @@ async def get_dashboard_metrics(
                      LEFT JOIN paper_summaries ps ON p.id = ps.paper_id
                      WHERE ps.id IS NULL) AS pending_papers,
                     (SELECT COUNT(*) FROM cards
-                     WHERE due_at IS NOT NULL AND due_at <= NOW()) AS due_cards,
+                     WHERE due_at IS NOT NULL AND due_at <= NOW()
+                       AND user_id IS NULL) AS due_cards,
                     (SELECT COUNT(*) FROM projects
                      WHERE status = 'active'
                        AND user_id IS NULL) AS active_projects,

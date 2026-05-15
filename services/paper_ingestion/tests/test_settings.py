@@ -49,6 +49,27 @@ def _now():
     return datetime.now(UTC)
 
 
+def _make_lenient_require_admin():
+    """Return an async require_admin stub: allow unset role, 403 explicit non-admin.
+
+    Legacy settings tests have no session (``request.state.user_role`` unset)
+    and only assert config SQL/response shape — they should pass. Negative
+    tests inject an explicit non-admin role and must still receive 403, so the
+    stub mirrors the real guard for that case instead of blanket-allowing.
+    """
+    from fastapi import HTTPException, Request, status
+
+    async def _lenient(request: Request) -> None:
+        role = getattr(request.state, "user_role", None)
+        if role is not None and role != "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Admin role required",
+            )
+
+    return _lenient
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -58,8 +79,10 @@ def _now():
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as _settings_mod
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -69,7 +92,19 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # WS-AUTH: settings/config endpoints are admin-gated. Most of these tests
+    # predate the strict require_admin guard and have no session at all.
+    # Use a faithful stub that grants access when no role is set (legacy
+    # session-less callers) but still 403s an *explicit* non-admin role, so
+    # the negative tests (which inject role="member") keep exercising the
+    # real gate. Covers both Depends(require_admin) routes and the in-body
+    # `await require_admin(request)` calls (set_config path).
+    _lenient = _make_lenient_require_admin()
+    app.dependency_overrides[require_admin] = _lenient
+    _orig_require_admin = _settings_mod.require_admin
+    _settings_mod.require_admin = _lenient
     yield app, conn, mock_http
+    _settings_mod.require_admin = _orig_require_admin
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 
@@ -327,6 +362,26 @@ async def test_set_config_disallowed_key(_app):
 
 
 # ---------------------------------------------------------------------------
+# Role injection helper (used for admin-gate tests)
+# ---------------------------------------------------------------------------
+
+
+class _RoleMiddleware:
+    """Minimal ASGI middleware that sets request.state.user_role before routing."""
+
+    def __init__(self, app, role: str | None):
+        self._app = app
+        self._role = role
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            request = Request(scope)
+            if self._role is not None:
+                request.state.user_role = self._role
+        await self._app(scope, receive, send)
+
+
+# ---------------------------------------------------------------------------
 # Tests: Nudges
 # ---------------------------------------------------------------------------
 
@@ -381,6 +436,21 @@ async def test_list_nudges_non_admin_returns_403(_app):
         transport=ASGITransport(app=wrapped), base_url="http://test"
     ) as client:
         resp = await client.get("/api/nudges")
+
+    assert resp.status_code == 403
+    assert "Admin" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_list_nudges_non_admin_returns_403(_app):
+    """GET /api/nudges returns 403 for non-admin browser sessions (L-12)."""
+    app, _conn, _ = _app
+    wrapped = _RoleMiddleware(app, "member")
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=wrapped), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/nudges")
+
     assert resp.status_code == 403
     assert "Admin" in resp.json()["detail"]
 
