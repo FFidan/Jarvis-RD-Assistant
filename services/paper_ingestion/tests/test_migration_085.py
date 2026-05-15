@@ -76,7 +76,9 @@ async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
         await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
 
 
-async def _column_is_nullable(conn: asyncpg.Connection, table: str, column: str) -> bool:
+async def _column_is_nullable(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy, table: str, column: str
+) -> bool:
     row = await conn.fetchrow(
         """
         SELECT is_nullable, data_type

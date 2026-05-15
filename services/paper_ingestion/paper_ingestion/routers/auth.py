@@ -198,7 +198,7 @@ async def verify(
             async with conn.transaction():
                 token_row = await conn.fetchrow(
                     """
-                    SELECT user_id, expires_at, used_at
+                    SELECT user_id, expires_at, used_at, pending_email
                     FROM magic_link_tokens
                     WHERE token_hash = $1
                     FOR UPDATE
@@ -210,6 +210,13 @@ async def verify(
                 if token_row["used_at"] is not None:
                     raise HTTPException(status_code=400, detail="Invalid or expired token")
                 if token_row["expires_at"] <= now:
+                    raise HTTPException(status_code=400, detail="Invalid or expired token")
+                # Email-change confirmation tokens (pending_email set) are NOT
+                # login tokens. Accepting one here would mint a 30-day session
+                # cookie from a token meant only for /account/confirm-email — a
+                # passwordless-login bypass. Symmetric counterpart of the
+                # ``pending_email is None`` guard in confirm_email_change.
+                if token_row["pending_email"] is not None:
                     raise HTTPException(status_code=400, detail="Invalid or expired token")
 
                 user_id = int(token_row["user_id"])

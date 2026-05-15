@@ -48,7 +48,7 @@ def _make_pool_multi(fetchrow_side_effects: list, fetch_side_effects: list) -> t
     return pool, conn
 
 
-_TODAY = datetime.date.today()
+_TODAY = datetime.datetime.now(datetime.UTC).date()
 
 
 # ---------------------------------------------------------------------------

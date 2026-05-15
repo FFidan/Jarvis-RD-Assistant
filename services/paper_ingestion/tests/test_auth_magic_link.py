@@ -199,6 +199,7 @@ async def test_verify_happy_path_sets_cookie_and_returns_user(monkeypatch) -> No
                 "user_id": 7,
                 "expires_at": datetime.now(UTC) + timedelta(minutes=10),
                 "used_at": None,
+                "pending_email": None,
             },
             {"id": 7, "email": "ferhat@example.com", "role": "admin", "deleted_at": None},
         ]
@@ -240,6 +241,7 @@ async def test_verify_secure_cookie_in_prod_mode(monkeypatch) -> None:
                 "user_id": 7,
                 "expires_at": datetime.now(UTC) + timedelta(minutes=10),
                 "used_at": None,
+                "pending_email": None,
             },
             {"id": 7, "email": "u@example.com", "role": "user", "deleted_at": None},
         ]
@@ -258,6 +260,117 @@ async def test_verify_secure_cookie_in_prod_mode(monkeypatch) -> None:
 
     set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
     assert any(b"Secure" in h for h in set_cookie_headers)
+
+
+@pytest.mark.asyncio
+async def test_verify_rejects_pending_email_token_no_session_minted(monkeypatch) -> None:
+    """SECURITY regression: an email-change confirmation token (pending_email
+    set) must NOT be accepted by /auth/verify.
+
+    Such a token is valid/unexpired/unused and belongs to the user, so prior
+    to the fix it minted a 30-day session cookie — a passwordless-login
+    bypass. This test asserts the symmetric counterpart of the
+    ``pending_email is None`` guard in ``account.confirm_email_change``:
+
+    1. /auth/verify REJECTS the email-change token (400, no cookie set).
+    2. A normal login token (pending_email NULL) still works (cookie set).
+    3. ``confirm_email_change`` still ACCEPTS the same email-change token —
+       the rejection is scoped to the login path only.
+    """
+    import paper_ingestion.routers.account as account_router
+
+    monkeypatch.setenv("DEV_MODE", "true")
+
+    # --- (1) email-change token rejected at /auth/verify, no cookie ---------
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        return_value={
+            "user_id": 1,
+            "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+            "used_at": None,
+            "pending_email": "new@example.com",  # <-- email-change token
+        }
+    )
+    conn.execute = AsyncMock()
+    conn.fetchval = AsyncMock(return_value="00000000-0000-0000-0000-000000000099")
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+    response = Response()
+
+    with pytest.raises(HTTPException) as exc:
+        await auth_router.verify.__wrapped__(
+            auth_router.VerifyBody(token="A" * 32),
+            request,
+            response,
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid or expired token"
+    # No session row created and no session cookie issued.
+    conn.fetchval.assert_not_called()
+    set_cookie_headers = [v for k, v in response.raw_headers if k.lower() == b"set-cookie"]
+    assert not any(b"jarvis_session=" in h for h in set_cookie_headers)
+
+    # --- (2) a normal login token (pending_email NULL) still works ---------
+    conn2 = AsyncMock()
+    conn2.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "user_id": 7,
+                "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+                "used_at": None,
+                "pending_email": None,  # <-- normal login token
+            },
+            {"id": 7, "email": "ferhat@example.com", "role": "admin", "deleted_at": None},
+        ]
+    )
+    conn2.execute = AsyncMock()
+    conn2.fetchval = AsyncMock(return_value="00000000-0000-0000-0000-000000000099")
+    pool2 = _build_mock_pool(conn2)
+    request2 = _build_request(pool2)
+    response2 = Response()
+
+    user = await auth_router.verify.__wrapped__(
+        auth_router.VerifyBody(token="B" * 32),
+        request2,
+        response2,
+    )
+    assert user.id == 7
+    login_cookies = [v for k, v in response2.raw_headers if k.lower() == b"set-cookie"]
+    assert any(b"jarvis_session=" in h for h in login_cookies)
+
+    # --- (3) confirm_email_change still ACCEPTS the email-change token -----
+    # (autouse conftest fixture resolves the caller to user 1, which owns it).
+    conn3 = AsyncMock()
+    conn3.fetchrow = AsyncMock(
+        side_effect=[
+            {
+                "user_id": 1,
+                "expires_at": datetime.now(UTC) + timedelta(minutes=10),
+                "used_at": None,
+                "pending_email": "new@example.com",
+            },
+            None,  # confirm-time uniqueness re-check → free
+            {
+                "id": 1,
+                "email": "new@example.com",
+                "role": "admin",
+                "display_name": None,
+                "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+                "last_login_at": None,
+            },
+        ]
+    )
+    conn3.execute = AsyncMock()
+    pool3 = _build_mock_pool(conn3)
+    request3 = _build_request(pool3)
+
+    result = await account_router.confirm_email_change.__wrapped__(
+        account_router.ConfirmEmailChangeBody(token="A" * 32),
+        request3,
+    )
+    assert result.email == "new@example.com"
+    executed = [c.args[0] for c in conn3.execute.await_args_list]
+    assert any("UPDATE users SET email" in s for s in executed)
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +652,7 @@ async def test_verify_success_writes_audit_row(monkeypatch) -> None:
                 "user_id": 7,
                 "expires_at": datetime.now(UTC) + timedelta(minutes=10),
                 "used_at": None,
+                "pending_email": None,
             },
             {"id": 7, "email": "ferhat@example.com", "role": "admin", "deleted_at": None},
         ]

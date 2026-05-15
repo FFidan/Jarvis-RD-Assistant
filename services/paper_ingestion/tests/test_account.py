@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import paper_ingestion.routers.account as account_router
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 
 def _hash(token: str) -> str:
@@ -142,7 +143,11 @@ async def test_get_account_self_scoped_no_path_param() -> None:
     sig = inspect.signature(account_router.get_account.__wrapped__)
     assert list(sig.parameters) == ["request"]
     # Route path carries no user id segment.
-    routes = [r for r in account_router.router.routes if r.path == "/api/account"]
+    routes = [
+        r
+        for r in account_router.router.routes
+        if isinstance(r, APIRoute) and r.path == "/api/account"
+    ]
     assert routes and all("{" not in r.path for r in routes)
 
 
@@ -446,8 +451,8 @@ def test_account_router_prefix_is_isolated_from_admin() -> None:
 
     assert account_router.router.prefix == "/api/account"
     assert admin_router.router.prefix == "/api/admin"
-    acct_paths = {r.path for r in account_router.router.routes}
-    admin_paths = {r.path for r in admin_router.router.routes}
+    acct_paths = {r.path for r in account_router.router.routes if isinstance(r, APIRoute)}
+    admin_paths = {r.path for r in admin_router.router.routes if isinstance(r, APIRoute)}
     # No path overlap, and account exposes no /users management surface.
     assert acct_paths.isdisjoint(admin_paths)
     assert not any("/users" in p for p in acct_paths)

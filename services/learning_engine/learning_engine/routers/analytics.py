@@ -163,7 +163,7 @@ def _compute_streak(rows: list, *, field: str) -> int:
     """
     if not rows:
         return 0
-    today = datetime.date.today()
+    today = datetime.datetime.now(datetime.UTC).date()
     expected = (
         rows[0]["log_date"] if rows[0]["log_date"] == today else today - datetime.timedelta(days=1)
     )
