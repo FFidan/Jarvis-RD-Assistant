@@ -74,6 +74,8 @@ export interface ConfidencePayload {
   per_sentence: { text: string; verified: boolean }[];
 }
 
+const CHAT_INITIAL_STATE = { chats: {} as Record<string, ChatMessage[]> };
+
 interface ChatState {
   chats: Record<string, ChatMessage[]>;
   addMessage: (chatId: string, message: ChatMessage) => void;
@@ -82,10 +84,12 @@ interface ChatState {
   setLastMessageConfidence: (chatId: string, payload: ConfidencePayload) => void;
   removeLastMessageIfEmpty: (chatId: string) => void;
   clearChat: (chatId: string) => void;
+  /** Reset to initial state (called on logout to prevent cross-user leakage). */
+  _reset: () => void;
 }
 
 export const useChatStore = create<ChatState>()((set) => ({
-  chats: {},
+  ...CHAT_INITIAL_STATE,
 
   addMessage(chatId: string, message: ChatMessage) {
     set((state) => ({
@@ -174,5 +178,9 @@ export const useChatStore = create<ChatState>()((set) => ({
       const { [chatId]: _, ...rest } = state.chats;
       return { chats: rest };
     });
+  },
+
+  _reset() {
+    set(CHAT_INITIAL_STATE);
   },
 }));

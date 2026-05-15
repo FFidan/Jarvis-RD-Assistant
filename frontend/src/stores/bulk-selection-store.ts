@@ -1,14 +1,18 @@
 import { create } from 'zustand';
 
+const BULK_INITIAL_STATE = { selectedIds: new Set<number>() };
+
 interface BulkSelectionState {
   selectedIds: Set<number>;
   toggle: (id: number) => void;
   clear: () => void;
   selectMany: (ids: number[]) => void;
+  /** Reset to initial state (called on logout to prevent cross-user leakage). */
+  _reset: () => void;
 }
 
 export const useBulkSelection = create<BulkSelectionState>((set) => ({
-  selectedIds: new Set(),
+  ...BULK_INITIAL_STATE,
 
   toggle(id: number) {
     set((state) => {
@@ -32,5 +36,9 @@ export const useBulkSelection = create<BulkSelectionState>((set) => ({
       ids.forEach((id) => next.add(id));
       return { selectedIds: next };
     });
+  },
+
+  _reset() {
+    set({ selectedIds: new Set<number>() });
   },
 }));

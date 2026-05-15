@@ -46,6 +46,8 @@ interface PomodoroState {
   stopAndLog: () => { durationSeconds: number; taskId?: number; paperId?: number } | null;
   clearCompletedSession: () => void;
   reset: () => void;
+  /** Alias for reset — called on logout to prevent cross-user leakage. */
+  _reset: () => void;
 }
 
 export const usePomodoroStore = create<PomodoroState>()(
@@ -261,6 +263,10 @@ export const usePomodoroStore = create<PomodoroState>()(
           attachedItem: null,
           completedSession: null,
         });
+      },
+
+      _reset() {
+        get().reset();
       },
     }),
     {

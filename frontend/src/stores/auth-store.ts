@@ -1,7 +1,18 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
+import type { QueryClient } from '@tanstack/react-query';
 import { UI_STORE_KEY } from '@/stores/ui-store';
 import { abortAllStreams } from '@/stores/chat-store';
+
+// ---------------------------------------------------------------------------
+// QueryClient holder — registered once by the app's provider tree so logout()
+// can clear the React-Query cache without creating a circular import.
+// ---------------------------------------------------------------------------
+let _queryClient: QueryClient | null = null;
+
+export function registerQueryClient(qc: QueryClient): void {
+  _queryClient = qc;
+}
 
 /**
  * Two coexisting authentication paths:
@@ -87,10 +98,31 @@ export const useAuthStore = create<AuthState>()(
       logout() {
         // Abort any in-flight SSE streams before clearing session state.
         abortAllStreams();
+
         // Clear the UI store's persisted localStorage entry so a fresh login
         // doesn't inherit stale UI state from a previous session.
         localStorage.removeItem(UI_STORE_KEY);
+
+        // Clear auth state first.
         set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+
+        // Flush the React-Query cache so the next user doesn't see stale data.
+        // Guard against SSR / test environments where the client may not be registered.
+        _queryClient?.clear();
+
+        // Reset in-memory zustand stores that hold user-scoped runtime data.
+        // Importing lazily avoids the circular-dependency that direct top-level
+        // imports would create (those stores don't import auth-store).
+        void import('@/stores/chat-store').then(({ useChatStore }) => useChatStore.getState()._reset());
+        void import('@/stores/job-store').then(({ useJobStore }) => useJobStore.getState()._reset());
+        void import('@/stores/bulk-selection-store').then(({ useBulkSelection }) => useBulkSelection.getState()._reset());
+        void import('@/stores/pomodoro-store').then(({ usePomodoroStore }) => usePomodoroStore.getState()._reset());
+        void import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset());
+
+        // Notify the active Service Worker to drop runtime-API caches so
+        // cached responses from the previous user aren't served to the next.
+        navigator.serviceWorker?.controller?.postMessage({ type: 'JARVIS_LOGOUT' });
+
         // Best-effort backend logout: clear the session cookie + revoke the row.
         // Don't await — UI state is already cleared and a network failure
         // shouldn't block the user.

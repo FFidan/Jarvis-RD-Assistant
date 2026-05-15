@@ -110,6 +110,11 @@ export interface Job {
   finished_at: string | null;
 }
 
+const JOB_INITIAL_STATE = {
+  jobs: {} as Record<string, Job>,
+  activeAborts: {} as Record<string, AbortController>,
+};
+
 interface JobStore {
   jobs: Record<string, Job>;
   /** AbortControllers for active SSE subscriptions — NOT persisted. */
@@ -134,6 +139,8 @@ interface JobStore {
   isRunning: (kind: string, payload: Record<string, unknown>) => boolean;
   /** On app mount: re-subscribe to any jobs that are still running. */
   hydrate: () => Promise<void>;
+  /** Reset to initial state (called on logout to prevent cross-user leakage). */
+  _reset: () => void;
 
   // Internal helpers
   _upsertJob: (job: Job) => void;
@@ -143,8 +150,7 @@ interface JobStore {
 export const useJobStore = create<JobStore>()(
   persist(
     (set, get) => ({
-      jobs: {},
-      activeAborts: {},
+      ...JOB_INITIAL_STATE,
 
       _upsertJob(job: Job) {
         set((state) => ({
@@ -428,6 +434,14 @@ export const useJobStore = create<JobStore>()(
         } catch {
           /* best-effort: if server is down, don't crash the app */
         }
+      },
+
+      _reset() {
+        // Abort all active subscriptions before wiping state.
+        for (const ctrl of Object.values(get().activeAborts)) {
+          ctrl.abort();
+        }
+        set(JOB_INITIAL_STATE);
       },
     }),
     {
