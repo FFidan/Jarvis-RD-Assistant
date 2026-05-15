@@ -22,10 +22,10 @@ jobs:
     name: Lint + fast test suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
         with:
           enable-cache: true
 
@@ -46,6 +46,12 @@ jobs:
 
       - name: Guard - agent docs in sync
         run: python3 scripts/check_agent_docs.py
+
+      - name: Guard - migrations no explicit transaction
+        run: bash scripts/check-migrations-no-tx.sh
+
+      - name: Guard - dependency parity
+        run: bash scripts/check-python-deps.sh
 
   cross-user-isolation:
     name: Cross-user isolation (v0.4.0 merge gate)
@@ -68,10 +74,10 @@ jobs:
       PYTHONPATH: >-
         services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86  # v5
         with:
           enable-cache: true
 
@@ -107,10 +113,10 @@ jobs:
     name: Frontend lint + test + build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: "20"
           cache: npm

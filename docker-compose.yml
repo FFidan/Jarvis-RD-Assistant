@@ -278,6 +278,7 @@ services:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
         INSTALL_OPTIONAL: ${INSTALL_OPTIONAL:-false}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     hostname: paper-ingestion-1
     ports:
       - "127.0.0.1:${PAPER_INGESTION_HOST_PORT:-8010}:8000"
@@ -349,6 +350,7 @@ services:
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     hostname: learning-engine-1
     ports:
       - "127.0.0.1:${LEARNING_ENGINE_HOST_PORT:-8011}:8001"
@@ -390,6 +392,7 @@ services:
       args:
         PYTHON_BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12.9-slim}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     hostname: telegram-bot-1
     profiles:
       - telegram
@@ -433,6 +436,7 @@ services:
         NODE_BUILD_IMAGE: ${NODE_BUILD_IMAGE:-node:22.14-alpine3.21}
         NGINX_RUNTIME_IMAGE: ${NGINX_RUNTIME_IMAGE:-nginx:1.27-alpine3.21}
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     ports:
       # Dashboard publishes plain HTTP on host 3001 by default (NOT 3000 — that
       # is reserved for the internal container port). For HTTPS, enable the
@@ -442,6 +446,7 @@ services:
     environment:
       JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
       JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}
+      NGINX_TRUSTED_PROXY_CIDR: ${NGINX_TRUSTED_PROXY_CIDR:-172.19.0.0/16}
     volumes:
       - ./certs:/etc/nginx/certs:ro
     mem_limit: 256m
@@ -654,6 +659,7 @@ services:
     container_name: jarvis_vector
     profiles: [observability]
     restart: unless-stopped
+    security_opt: ["no-new-privileges:true"]
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./infra/vector.toml:/etc/vector/vector.toml:ro
@@ -664,8 +670,9 @@ services:
       - /bin/sh
       - -c
       - |
-        export INFRA_KEY=$(cat /run/secrets/infra_ingest_key)
-        exec vector --config /etc/vector/vector.toml
+        set -euo pipefail
+        INFRA_KEY=$(cat /run/secrets/infra_ingest_key)
+        exec env INFRA_KEY="$INFRA_KEY" vector --config /etc/vector/vector.toml
     secrets:
       - infra_ingest_key
     depends_on:
