@@ -531,7 +531,11 @@ async def test_submit_feedback_rejects_user_initiated_papers():
 
 @pytest.mark.asyncio
 async def test_list_papers_no_filters_uses_limit_offset():
-    """list_papers with no filters should still pass LIMIT/OFFSET as positional params."""
+    """list_papers with no filters scopes to user_library then LIMIT/OFFSET.
+
+    RB-1: user_id is unconditionally bound ($1) so library scoping fires even
+    when no view/topic/source/q filters are active.
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_paper_row()]
 
@@ -549,14 +553,19 @@ async def test_list_papers_no_filters_uses_limit_offset():
 
     fetch_call = conn.fetch.await_args
     sql, *positional = fetch_call.args
-    assert "LIMIT $1" in sql
-    assert "OFFSET $2" in sql
-    assert positional == [5, 10]
+    assert "JOIN user_library ul" in sql
+    assert "ul.user_id = $1" in sql
+    assert "LIMIT $2" in sql
+    assert "OFFSET $3" in sql
+    assert positional == [1, 5, 10]
 
 
 @pytest.mark.asyncio
 async def test_list_papers_topic_filter_correct_param_indices():
-    """list_papers with topic_id should use $1 for topic_id, $2/$3 for LIMIT/OFFSET."""
+    """list_papers with topic_id: $1=topic_id, $2=user_id (library join), $3/$4 LIMIT/OFFSET.
+
+    RB-1: user_library join is inserted after topic_id in param order.
+    """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_paper_row()]
 
@@ -575,18 +584,22 @@ async def test_list_papers_topic_filter_correct_param_indices():
     fetch_call = conn.fetch.await_args
     sql, *positional = fetch_call.args
     assert "pt.topic_id = $1" in sql
-    assert "LIMIT $2" in sql
-    assert "OFFSET $3" in sql
-    assert positional == [42, 20, 0]
+    assert "JOIN user_library ul" in sql
+    assert "ul.user_id = $2" in sql
+    assert "LIMIT $3" in sql
+    assert "OFFSET $4" in sql
+    assert positional == [42, 1, 20, 0]
 
 
 @pytest.mark.asyncio
 async def test_list_papers_view_and_source_type_correct_param_indices():
-    """list_papers with view + source_type binds user_id at $1 (for the LEFT
-    JOIN's user-scoping) and source_type at $2; LIMIT $3, OFFSET $4.
+    """list_papers with view + source_type:
+    $1=user_id (library join), $2=user_id (pus LEFT JOIN), $3=source_type,
+    $4/$5 LIMIT/OFFSET.
 
-    Note: ``view`` itself is a literal substitution from VIEW_PREDICATES
-    and does NOT consume a positional param — the user_id binding does.
+    RB-1: user_library join is unconditionally added before the view's
+    paper_user_state join, so user_id is bound twice (once per join).
+    ``view`` itself is a literal predicate from VIEW_PREDICATES — no extra param.
     """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_paper_row()]
@@ -605,23 +618,28 @@ async def test_list_papers_view_and_source_type_correct_param_indices():
 
     fetch_call = conn.fetch.await_args
     sql, *positional = fetch_call.args
-    # $1 is user_id (real authenticated user), $2 source_type, $3/$4 LIMIT/OFFSET.
     assert "IS NOT DISTINCT FROM" not in sql
-    assert "pus.user_id = $1" in sql
-    assert "p.source_type = $2" in sql
-    assert "LIMIT $3" in sql
-    assert "OFFSET $4" in sql
+    assert "JOIN user_library ul" in sql
+    assert "ul.user_id = $1" in sql
+    assert "LEFT JOIN paper_user_state pus" in sql
+    assert "pus.user_id = $2" in sql
+    assert "p.source_type = $3" in sql
+    assert "LIMIT $4" in sql
+    assert "OFFSET $5" in sql
     assert "COALESCE(pus.state, 'inbox') = 'reading'" in sql
-    assert positional == [1, "arxiv", 10, 5]
+    assert positional == [1, 1, "arxiv", 10, 5]
 
 
 @pytest.mark.asyncio
 async def test_list_papers_all_filters_correct_param_indices():
     """list_papers with topic_id + view + source_type + q binds in order:
 
-    $1=topic_id, $2=user_id (real authenticated user, for LEFT JOIN),
-    $3=source_type.value, $4=q, $5=LIMIT, $6=OFFSET. ``view`` is a literal
-    predicate, no positional binding.
+    $1=topic_id, $2=user_id (library join), $3=user_id (pus LEFT JOIN),
+    $4=source_type.value, $5=q, $6=LIMIT, $7=OFFSET.
+    ``view`` is a literal predicate from VIEW_PREDICATES — no extra param.
+
+    RB-1: user_library join ($2) is added unconditionally between topic_id
+    and the view's paper_user_state join ($3).
     """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_paper_row()]
@@ -642,12 +660,84 @@ async def test_list_papers_all_filters_correct_param_indices():
     sql, *positional = fetch_call.args
     assert "pt.topic_id = $1" in sql
     assert "IS NOT DISTINCT FROM" not in sql
-    assert "pus.user_id = $2" in sql
-    assert "p.source_type = $3" in sql
-    assert "plainto_tsquery" in sql and "$4" in sql
-    assert "LIMIT $5" in sql
-    assert "OFFSET $6" in sql
-    assert positional == [7, 1, "arxiv", "neural", 15, 3]
+    assert "JOIN user_library ul" in sql
+    assert "ul.user_id = $2" in sql
+    assert "pus.user_id = $3" in sql
+    assert "p.source_type = $4" in sql
+    assert "plainto_tsquery" in sql and "$5" in sql
+    assert "LIMIT $6" in sql
+    assert "OFFSET $7" in sql
+    assert positional == [7, 1, 1, "arxiv", "neural", 15, 3]
+
+
+# ---------------------------------------------------------------------------
+# RB-1 — BM25/fallback list_papers scoped to caller's user_library
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_papers_bm25_scoped_to_user(monkeypatch):
+    """RB-1: user B calling the BM25 path (q set, view=None) must NOT receive
+    user A's papers.
+
+    The query SQL must include a JOIN on user_library bound to the caller's
+    user_id, not user A's.  We simulate two calls — one as user A (id=1, the
+    autouse default) and one as user B (id=2) — and verify that:
+
+    1. Both calls contain ``JOIN user_library ul`` in the SQL.
+    2. Each call's user_library param matches the caller's own id (not the
+       other user's id), proving cross-tenant rows are structurally excluded.
+    """
+    # --- call as user A (id=1, the autouse default) ---
+    pool_a, conn_a = _make_pool_and_conn()
+    conn_a.fetch.return_value = [_paper_row(id=10)]
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        view=None,
+        source_type=None,
+        topic_id=None,
+        q="neural",
+        limit=10,
+        offset=0,
+        db_pool=pool_a,
+        embedder=None,
+    )
+
+    sql_a, *params_a = conn_a.fetch.await_args.args
+    assert "JOIN user_library ul" in sql_a, "user_library join must be present for user A"
+    # user_id=1 (user A) must be the param bound to the library join
+    assert params_a[0] == 1, f"Expected user_id=1 for user A, got {params_a[0]}"
+
+    # --- call as user B (id=2) — re-patch the resolver ---
+    async def _user_b(req, *_a, **_kw):
+        return 2
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
+        _user_b,
+    )
+
+    pool_b, conn_b = _make_pool_and_conn()
+    conn_b.fetch.return_value = []  # user B has no papers — cross-tenant leak would add rows
+
+    await papers.list_papers.__wrapped__(
+        SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
+        view=None,
+        source_type=None,
+        topic_id=None,
+        q="neural",
+        limit=10,
+        offset=0,
+        db_pool=pool_b,
+        embedder=None,
+    )
+
+    sql_b, *params_b = conn_b.fetch.await_args.args
+    assert "JOIN user_library ul" in sql_b, "user_library join must be present for user B"
+    # user_id=2 (user B) must be bound — NOT user A's id (1)
+    assert params_b[0] == 2, f"Expected user_id=2 for user B, got {params_b[0]}"
+    assert params_b[0] != 1, "user B must not be scoped to user A's library (cross-tenant leak)"
 
 
 # ---------------------------------------------------------------------------

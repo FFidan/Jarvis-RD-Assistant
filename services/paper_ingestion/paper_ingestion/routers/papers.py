@@ -190,6 +190,13 @@ async def list_papers(
         params.append(topic_id)
         conditions.append(f"pt.topic_id = ${len(params)}")
 
+    if user_id is not None:
+        # RB-1: unconditionally scope to the caller's user_library so papers
+        # from other tenants are never returned, regardless of which filters
+        # are active (view, source_type, topic_id, q, or none at all).
+        params.append(user_id)
+        joins.append(f"JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = ${len(params)}")
+
     if view is not None:
         # Bind the user_id so other users' state rows do not leak into the
         # predicate. Mirrors the LEFT JOIN pattern used by routers/feed.py.

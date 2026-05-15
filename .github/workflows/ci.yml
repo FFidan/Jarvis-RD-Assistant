@@ -50,11 +50,23 @@ jobs:
   cross-user-isolation:
     name: Cross-user isolation (v0.4.0 merge gate)
     runs-on: ubuntu-latest
-    # The live_pg fixture provisions its own throwaway PostgreSQL 16 container
-    # via the Docker CLI (preinstalled on ubuntu-latest); it reads only
-    # JARVIS_RUN_LIVE_PG=1, so no `services:` block is required.
+    # The live_pg fixture provisions its own throwaway PostgreSQL 16 (postgres:16.8)
+    # container via the Docker CLI (preinstalled on ubuntu-latest) and tears it
+    # down after each test.  No `services:` block is required — the fixture owns
+    # the container lifecycle.
+    #
+    # PYTHONPATH must include services/learning_engine (and the other service +
+    # lib roots) so that `pytest.importorskip("learning_engine.main")` at the
+    # top of the test module succeeds.  Without it pytest sees 0 collected /
+    # 1 skipped and exits with code 5 (vacuously green — the bug we're fixing).
+    #
+    # --override-ini="addopts=…" replaces the service-local pytest.ini addopts
+    # which contains `-m "not live_pg and not integration"` — that marker
+    # filter ANDs with the CLI -m flag and makes the test set empty.
     env:
       JARVIS_RUN_LIVE_PG: "1"
+      PYTHONPATH: >-
+        services/paper_ingestion:services/learning_engine:services/telegram_bot:libs/jarvis_common
     steps:
       - uses: actions/checkout@v4
 
@@ -68,8 +80,28 @@ jobs:
 
       - name: Cross-user isolation suite
         run: >-
-          uv run pytest -m "integration and live_pg"
-          services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+          uv run pytest
+          --override-ini="addopts=--import-mode=importlib"
+          -m "integration and live_pg"
+          services/paper_ingestion/tests/integration/test_cross_user_isolation.py
+          -v
+
+      - name: Guard — exit 5 (no tests collected) is a failure
+        if: always()
+        run: |
+          # Re-run collection-only to confirm >0 tests were collected.
+          # If pytest --collect-only exits 5 the gate fails rather than
+          # silently passing with zero assertions.
+          COUNT=$(uv run pytest \
+            --override-ini="addopts=--import-mode=importlib" \
+            -m "integration and live_pg" \
+            services/paper_ingestion/tests/integration/test_cross_user_isolation.py \
+            --collect-only -q 2>&1 | grep -c "test_user_b_cannot_reach" || true)
+          echo "Collected $COUNT cross-user isolation test cases"
+          if [ "$COUNT" -eq 0 ]; then
+            echo "ERROR: zero tests collected — gate would pass vacuously. Fix the pytest invocation."
+            exit 1
+          fi
 
   frontend:
     name: Frontend lint + test + build
