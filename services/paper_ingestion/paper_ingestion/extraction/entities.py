@@ -567,14 +567,44 @@ async def get_knowledge_graph(
     if not entity_ids:
         return {"entities": [], "relationships": []}
 
-    relationships = await conn.fetch(
-        """SELECT id, source_entity_id, target_entity_id, relationship_type,
-                  paper_id, evidence_quote, confidence, metadata, created_at
-           FROM entity_relationships
-           WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
-           ORDER BY confidence DESC""",
-        entity_ids,
-    )
+    if user_id is not None:
+        # Scope edges to caller-visible papers under the canonical-corpus
+        # rule (mirrors list_contradictions' user_library EXISTS +
+        # discovered_by-NULL predicate). Without this an edge whose
+        # ``paper_id`` is another user's explicitly-owned paper would still
+        # be returned whenever both endpoint entities are visible. A NULL
+        # ``paper_id`` (paper deleted → ON DELETE SET NULL) is unattributable
+        # and stays visible.
+        relationships = await conn.fetch(
+            """SELECT id, source_entity_id, target_entity_id, relationship_type,
+                      paper_id, evidence_quote, confidence, metadata, created_at
+               FROM entity_relationships er
+               WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
+                 AND (
+                     er.paper_id IS NULL
+                     OR EXISTS (
+                         SELECT 1 FROM papers p
+                         WHERE p.id = er.paper_id
+                           AND (p.discovered_by IS NULL OR p.discovered_by = $2)
+                     )
+                     OR EXISTS (
+                         SELECT 1 FROM user_library ul
+                         WHERE ul.paper_id = er.paper_id AND ul.user_id = $2
+                     )
+                 )
+               ORDER BY confidence DESC""",
+            entity_ids,
+            user_id,
+        )
+    else:
+        relationships = await conn.fetch(
+            """SELECT id, source_entity_id, target_entity_id, relationship_type,
+                      paper_id, evidence_quote, confidence, metadata, created_at
+               FROM entity_relationships
+               WHERE source_entity_id = ANY($1) AND target_entity_id = ANY($1)
+               ORDER BY confidence DESC""",
+            entity_ids,
+        )
 
     entity_dicts: list[dict[str, Any]] = []
     entity_type_counts: dict[str, int] = {}
@@ -644,6 +674,20 @@ async def query_knowledge_graph(
                              WHERE pe.entity_id = e1.id
                                AND pe.user_id IS NOT DISTINCT FROM $2
                          )
+                         AND (
+                             er.paper_id IS NULL
+                             OR EXISTS (
+                                 SELECT 1 FROM papers p
+                                 WHERE p.id = er.paper_id
+                                   AND (p.discovered_by IS NULL
+                                        OR p.discovered_by = $2)
+                             )
+                             OR EXISTS (
+                                 SELECT 1 FROM user_library ul
+                                 WHERE ul.paper_id = er.paper_id
+                                   AND ul.user_id = $2
+                             )
+                         )
                        ORDER BY er.confidence DESC""",
                     f"%{escape_like(target_name)}%",
                     user_id,
@@ -676,6 +720,20 @@ async def query_knowledge_graph(
                              SELECT 1 FROM paper_entities pe
                              WHERE pe.entity_id = e1.id
                                AND pe.user_id IS NOT DISTINCT FROM $1
+                         )
+                         AND (
+                             er.paper_id IS NULL
+                             OR EXISTS (
+                                 SELECT 1 FROM papers p
+                                 WHERE p.id = er.paper_id
+                                   AND (p.discovered_by IS NULL
+                                        OR p.discovered_by = $1)
+                             )
+                             OR EXISTS (
+                                 SELECT 1 FROM user_library ul
+                                 WHERE ul.paper_id = er.paper_id
+                                   AND ul.user_id = $1
+                             )
                          )
                        ORDER BY er.confidence DESC
                        LIMIT 50""",

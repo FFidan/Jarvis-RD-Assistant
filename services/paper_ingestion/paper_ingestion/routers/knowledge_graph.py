@@ -291,12 +291,39 @@ async def get_entity_detail(
             if not visible:
                 raise HTTPException(404, f"Entity {entity_id} not found")
 
-        rels = await conn.fetch(
-            """SELECT * FROM entity_relationships
-               WHERE source_entity_id = $1 OR target_entity_id = $1
-               ORDER BY confidence DESC""",
-            entity_id,
-        )
+        # Scope edges to caller-visible papers under the canonical-corpus
+        # rule (mirrors list_contradictions' user_library EXISTS +
+        # discovered_by-NULL predicate). Server-to-server callers
+        # (user_id=None) are unscoped, matching the entity/papers branches
+        # above. A NULL ``paper_id`` (paper deleted → ON DELETE SET NULL) is
+        # unattributable and stays visible.
+        if user_id is not None:
+            rels = await conn.fetch(
+                """SELECT * FROM entity_relationships er
+                   WHERE (source_entity_id = $1 OR target_entity_id = $1)
+                     AND (
+                         er.paper_id IS NULL
+                         OR EXISTS (
+                             SELECT 1 FROM papers p
+                             WHERE p.id = er.paper_id
+                               AND (p.discovered_by IS NULL OR p.discovered_by = $2)
+                         )
+                         OR EXISTS (
+                             SELECT 1 FROM user_library ul
+                             WHERE ul.paper_id = er.paper_id AND ul.user_id = $2
+                         )
+                     )
+                   ORDER BY confidence DESC""",
+                entity_id,
+                user_id,
+            )
+        else:
+            rels = await conn.fetch(
+                """SELECT * FROM entity_relationships
+                   WHERE source_entity_id = $1 OR target_entity_id = $1
+                   ORDER BY confidence DESC""",
+                entity_id,
+            )
 
         # Scope the "papers that mention this entity" list to the caller's
         # own paper_entities rows to prevent paper enumeration (M-03).
