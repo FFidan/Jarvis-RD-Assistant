@@ -480,3 +480,28 @@ class MyDayResponse(BaseModel):
     today_focus_hours: float
     focus_streak_days: int
     project_pulse: list[MyDayProjectPulseItem]
+
+
+# --- Analytics Summary Model ---
+
+
+class AnalyticsSummaryResponse(BaseModel):
+    """Response for GET /api/analytics/summary.
+
+    Returns current-period and prior-period totals from daily_log plus
+    consecutive-day streaks for focus and cards review.
+    """
+
+    # Current-period totals (SUM over [today - days, today))
+    papers_read_total: int
+    focus_hours_total: float
+    cards_reviewed_total: int
+
+    # Prior-period totals (SUM over [today - 2*days, today - days))
+    papers_read_prev: int
+    focus_hours_prev: float
+    cards_reviewed_prev: int
+
+    # Consecutive-day streaks
+    focus_streak_days: int  # consecutive days with focus_hours > 0
+    cards_review_streak_days: int  # consecutive days with cards_reviewed > 0

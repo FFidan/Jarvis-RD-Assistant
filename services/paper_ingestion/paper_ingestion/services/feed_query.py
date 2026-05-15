@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import date
+from typing import Any, cast
 
 import asyncpg
 
@@ -331,7 +332,7 @@ _SQL_UNTAGGED_CORPUS = """
 async def fetch_feed_facet_counts(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     user_id: int | None,
-) -> tuple[dict[str, int], list[dict[str, object]], int]:
+) -> tuple[dict[str, int], list[dict[str, Any]], int]:
     """Return (by_source, by_topic_rows, untagged) facet counts.
 
     All three aggregations are scoped to *user_id*'s user_library when
@@ -353,8 +354,12 @@ async def fetch_feed_facet_counts(
         untagged_row = await conn.fetchrow(_SQL_UNTAGGED_CORPUS)
 
     by_source: dict[str, int] = {row["source_type"]: row["cnt"] for row in source_rows}
-    by_topic: list[dict[str, object]] = [
-        {"topic_id": row["topic_id"], "name": row["name"], "count": row["cnt"]}
+    by_topic: list[dict[str, Any]] = [
+        {
+            "topic_id": cast(int, row["topic_id"]),
+            "name": cast(str, row["name"]),
+            "count": cast(int, row["cnt"]),
+        }
         for row in topic_rows
     ]
     untagged: int = untagged_row["cnt"] if untagged_row is not None else 0

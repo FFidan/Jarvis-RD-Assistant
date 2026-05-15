@@ -26,7 +26,7 @@ questions_router = APIRouter(prefix="/api/questions", tags=["project-questions"]
 
 
 async def _assert_project_owner(
-    conn: asyncpg.Connection,
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,
     project_id: int,
     user_id: int,
 ) -> None:

@@ -1,11 +1,19 @@
-"""Analytics router - activity, reviews, retention, LLM cost."""
+"""Analytics router - activity, reviews, retention, LLM cost, summary."""
+
+import datetime
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
 from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
-from learning_engine.models import ActivityItem, LLMCostItem, RetentionItem, ReviewDistributionItem
+from learning_engine.models import (
+    ActivityItem,
+    AnalyticsSummaryResponse,
+    LLMCostItem,
+    RetentionItem,
+    ReviewDistributionItem,
+)
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 
@@ -137,3 +145,116 @@ async def get_llm_cost(
             days,
         )
     return [LLMCostItem(**dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Shared helper
+# ---------------------------------------------------------------------------
+
+
+def _compute_streak(rows: list, *, field: str) -> int:
+    """Count consecutive days (descending from today/yesterday) where *field* > 0.
+
+    Mirrors the focus-streak algorithm in executive.py lines 99-119 exactly:
+    - Fetch rows already filtered to field > 0, ordered by log_date DESC.
+    - Allow the streak to begin on today or yesterday (handles the common case
+      where the user hasn't yet logged today).
+    - Walks rows forward in time (reversed desc), checking each expected date.
+    """
+    if not rows:
+        return 0
+    today = datetime.date.today()
+    expected = (
+        rows[0]["log_date"] if rows[0]["log_date"] == today else today - datetime.timedelta(days=1)
+    )
+    if rows[0]["log_date"] != expected:
+        return 0
+    streak = 0
+    for row in rows:
+        if row["log_date"] == expected:
+            streak += 1
+            expected -= datetime.timedelta(days=1)
+        else:
+            break
+    return streak
+
+
+# ---------------------------------------------------------------------------
+# GET /api/analytics/summary
+# ---------------------------------------------------------------------------
+
+
+@router.get("/summary", response_model=AnalyticsSummaryResponse)
+@limiter.limit("60/minute")
+async def get_analytics_summary(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
+) -> AnalyticsSummaryResponse:
+    """Return KPI summary: current/prior-period totals and streaks, scoped to caller.
+
+    Current period:  [today - days,   today)
+    Previous period: [today - 2*days, today - days)
+    Both windows use CURRENT_DATE arithmetic so month boundaries are handled
+    correctly by PostgreSQL date subtraction.
+    """
+    async with db_pool.acquire() as conn:
+        # --- Current-period totals ---
+        current_row = await conn.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(papers_read), 0)::int     AS papers_read_total,
+                COALESCE(SUM(focus_hours), 0.0)::float AS focus_hours_total,
+                COALESCE(SUM(cards_reviewed), 0)::int  AS cards_reviewed_total
+            FROM daily_log
+            WHERE user_id = $1
+              AND log_date >= CURRENT_DATE - $2::int
+              AND log_date <  CURRENT_DATE
+            """,
+            user_id,
+            days,
+        )
+
+        # --- Prior-period totals ---
+        prev_row = await conn.fetchrow(
+            """
+            SELECT
+                COALESCE(SUM(papers_read), 0)::int     AS papers_read_prev,
+                COALESCE(SUM(focus_hours), 0.0)::float AS focus_hours_prev,
+                COALESCE(SUM(cards_reviewed), 0)::int  AS cards_reviewed_prev
+            FROM daily_log
+            WHERE user_id = $1
+              AND log_date >= CURRENT_DATE - ($2::int * 2)
+              AND log_date <  CURRENT_DATE - $2::int
+            """,
+            user_id,
+            days,
+        )
+
+        # --- Focus streak: consecutive days with focus_hours > 0 ---
+        focus_rows = await conn.fetch(
+            "SELECT log_date FROM daily_log "
+            "WHERE focus_hours > 0 AND user_id = $1 "
+            "ORDER BY log_date DESC LIMIT 365",
+            user_id,
+        )
+
+        # --- Cards-review streak: consecutive days with cards_reviewed > 0 ---
+        review_rows = await conn.fetch(
+            "SELECT log_date FROM daily_log "
+            "WHERE cards_reviewed > 0 AND user_id = $1 "
+            "ORDER BY log_date DESC LIMIT 365",
+            user_id,
+        )
+
+    return AnalyticsSummaryResponse(
+        papers_read_total=current_row["papers_read_total"],
+        focus_hours_total=current_row["focus_hours_total"],
+        cards_reviewed_total=current_row["cards_reviewed_total"],
+        papers_read_prev=prev_row["papers_read_prev"],
+        focus_hours_prev=prev_row["focus_hours_prev"],
+        cards_reviewed_prev=prev_row["cards_reviewed_prev"],
+        focus_streak_days=_compute_streak(focus_rows, field="focus_hours"),
+        cards_review_streak_days=_compute_streak(review_rows, field="cards_reviewed"),
+    )
