@@ -10,6 +10,7 @@ message='magic_link_dev_mode') so the Logs Live tab catches it.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import asyncpg
@@ -35,6 +36,15 @@ def _smtp_configured() -> bool:
 
 def _dev_mode() -> bool:
     return get_core_settings().dev_smtp_log_only
+
+
+def _hash_email(email: str) -> str:
+    """Return a SHA-256 hex digest of the email address for safe logging.
+
+    Use this wherever an email must appear in a log record instead of the raw
+    address (or any derived secret such as a magic-link token).
+    """
+    return hashlib.sha256(email.encode()).hexdigest()
 
 
 _PLAIN_BODY_TEMPLATE = (
@@ -67,14 +77,19 @@ async def send_magic_link(
         the link is also persisted as a ``system_events`` row so the Logs
         Live tab surfaces it. Pass ``app.state.db_pool`` from the request
         handler.
+
+    Security note: the raw ``link`` (and the embedded token) is **never**
+    logged.  Only a SHA-256 hash of the recipient email is recorded so
+    operators can correlate events without the log becoming a bearer-token
+    store.
     """
     if _dev_mode() or not _smtp_configured():
         # Always emit a structured log so docker-compose logs pick it up
         # even when the system_events insert fails (e.g. fresh DB).
+        # NOTE: never log `link` or any fragment of it — it is a bearer token.
         logger.info(
-            "magic_link_dev_mode email=%s link=%s",
-            email,
-            link,
+            "magic_link_dev_mode email_hash=%s link_issued=true",
+            _hash_email(email),
         )
         if pool is not None:
             try:
@@ -84,7 +99,7 @@ async def send_magic_link(
                     category="auth",
                     source="auth",
                     message="magic_link_dev_mode",
-                    context={"email": email, "link": link},
+                    context={"email_hash": _hash_email(email), "link_issued": True},
                 )
             except Exception:  # noqa: BLE001 — best-effort dev affordance
                 logger.debug("system_events emit failed (non-fatal)", exc_info=True)
@@ -122,7 +137,7 @@ async def send_magic_link(
         use_tls=use_tls,
         start_tls=start_tls,
     )
-    logger.info("magic_link_sent email=%s", email)
+    logger.info("magic_link_sent email_hash=%s", _hash_email(email))
 
 
 __all__ = ["send_magic_link"]

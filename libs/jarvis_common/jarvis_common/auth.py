@@ -480,3 +480,26 @@ def validate_production_config() -> None:
             raise RuntimeError(
                 f"JARVIS_CONFIG_KEY must be at least 32 characters (got {len(config_key)})"
             )
+
+        # H-2 — SMTP gate. When DEV_SMTP_LOG_ONLY is false (already enforced
+        # above for production), SMTP is the only delivery path for magic links.
+        # An operator who forgets to configure SMTP silently breaks auth — or
+        # worse, causes the fallback dev-mode path to log tokens. Require all
+        # three minimum SMTP fields so the misconfiguration is caught at boot.
+        secrets = get_secrets_settings()
+        missing_smtp = [
+            field
+            for field, value in (
+                ("SMTP_HOST", secrets.smtp_host),
+                ("SMTP_PORT", secrets.smtp_port),
+                ("SMTP_FROM", secrets.smtp_from),
+            )
+            if value is None
+        ]
+        if missing_smtp:
+            raise RuntimeError(
+                f"SMTP must be fully configured in production "
+                f"(missing: {', '.join(missing_smtp)}). "
+                f"Set SMTP_HOST, SMTP_PORT, and SMTP_FROM, or enable "
+                f"DEV_SMTP_LOG_ONLY only in non-production environments."
+            )
