@@ -71,6 +71,12 @@ async def test_fresh_boot_migration_043_uniqueness_semantics(live_pg_dsn: str) -
                 "SELECT id FROM papers WHERE external_id = $1",
                 "live-pg-043",
             )
+            # Post-migration-077 the user_id columns FK to users(id); the
+            # per-user rows below need a real owner. NULL-owner rows still
+            # exercise migration 043's UNIQUE NULLS NOT DISTINCT semantics.
+            await conn.execute(
+                "INSERT INTO users (id, email) VALUES (42, 'live-pg-043@example.test')"
+            )
 
             await conn.execute(
                 "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, NULL, 'inbox')",

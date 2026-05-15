@@ -102,15 +102,10 @@ CREATE TABLE topics (
 
 COMMENT ON TABLE topics IS 'User-defined research topics with search query terms.';
 
-CREATE TABLE IF NOT EXISTS user_topic_subscriptions (
-    user_id    INTEGER NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
-    topic_id   INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (user_id, topic_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_uts_topic ON user_topic_subscriptions(topic_id);
-CREATE INDEX IF NOT EXISTS idx_uts_user  ON user_topic_subscriptions(user_id);
+-- user_topic_subscriptions is intentionally NOT created here: it has a
+-- mandatory FK to users(id), and `users` is owned by migration 069 (auth).
+-- The table is created at runtime by migration 074, which is NOT premarked
+-- in the schema_migrations bootstrap below, so the runtime runner applies it.
 
 CREATE TABLE papers (
     id              SERIAL PRIMARY KEY,
@@ -321,7 +316,12 @@ CREATE TRIGGER set_updated_at_paper_user_state
     BEFORE UPDATE ON paper_user_state
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
--- Paper recommendations (from migration 017)
+-- Paper recommendations (from migration 017). The multi-tenant `user_id`
+-- column, the `idx_paper_recommendations_user` index, and the swap of
+-- `uq_paper_recommendations_paper_id` -> `uq_paper_recommendations_paper_user_id`
+-- are owned by migration 063 (one of the deferred 63-66 Wave-3 multi-tenant
+-- migrations, NOT premarked below). They are intentionally absent here so the
+-- runtime runner applies 063 cleanly on first boot.
 CREATE TABLE IF NOT EXISTS paper_recommendations (
     id              SERIAL PRIMARY KEY,
     paper_id        INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
@@ -331,12 +331,9 @@ CREATE TABLE IF NOT EXISTS paper_recommendations (
     dismissed       BOOLEAN NOT NULL DEFAULT FALSE,
     clicked         BOOLEAN NOT NULL DEFAULT FALSE,
     recommended_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    user_id         INTEGER NULL,
-    CONSTRAINT uq_paper_recommendations_paper_user_id UNIQUE NULLS NOT DISTINCT (paper_id, user_id)
+    CONSTRAINT uq_paper_recommendations_paper_id UNIQUE (paper_id)
 );
 CREATE INDEX IF NOT EXISTS idx_paper_recommendations_score ON paper_recommendations(score DESC);
-CREATE INDEX IF NOT EXISTS idx_paper_recommendations_user
-    ON paper_recommendations(user_id) WHERE user_id IS NOT NULL;
 
 CREATE TABLE paper_notes (
     id              SERIAL PRIMARY KEY,
