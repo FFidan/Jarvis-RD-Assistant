@@ -19,11 +19,15 @@ vi.mock('@/lib/api', () => ({
   requestMagicLink: (email: string) => requestMagicLinkMock(email),
 }));
 
-vi.mock('@/stores/auth-store', () => ({
-  useAuthStore: () => ({
-    login: loginMock,
-  }),
-}));
+let storeLastError: string | null = null;
+
+vi.mock('@/stores/auth-store', () => {
+  const useAuthStore = () => ({ login: loginMock });
+  // LoginPage reads useAuthStore.getState().lastError after a failed login to
+  // surface the precise backend message (e.g. the 403 multi-tenant message).
+  useAuthStore.getState = () => ({ lastError: storeLastError });
+  return { useAuthStore };
+});
 
 function renderLoginPage() {
   return render(
@@ -36,6 +40,23 @@ function renderLoginPage() {
 describe('LoginPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    storeLastError = null;
+    loginMock.mockResolvedValue(false);
+  });
+
+  it('renders the backend 403 multi-tenant-disabled message instead of bouncing', async () => {
+    const user = userEvent.setup();
+    storeLastError =
+      'API-key login disabled for multi-tenant deployments; use magic-link';
+    loginMock.mockResolvedValueOnce(false);
+    renderLoginPage();
+
+    await user.click(screen.getByRole('button', { name: /use api key instead/i }));
+    const input = screen.getByPlaceholderText(/Enter JARVIS_API_KEY/i);
+    await user.type(input, 'some-api-key-value');
+    await user.click(screen.getByRole('button', { name: /^sign in$/i }));
+
+    expect(await screen.findByText(/use magic-link/i)).toBeInTheDocument();
   });
 
   it('renders the magic-link email input by default', () => {

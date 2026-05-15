@@ -236,7 +236,55 @@ async def test_delete_author_returns_404_for_other_users_author(_app_no_auth_ove
 
 
 # ---------------------------------------------------------------------------
-# 5.  Unauthenticated request → 401
+# 5.  check_tracked_authors scopes recent_papers to caller's user_library
+# ---------------------------------------------------------------------------
+
+
+async def test_check_tracked_authors_scopes_recent_papers_to_user(_app_no_auth_override):
+    """POST /api/authors/check must join user_library and bind the caller's user_id.
+
+    This guards against the cross-tenant leak where the recent_papers query
+    scanned every tenant's papers and could expose another user's paper IDs
+    through author_alert_log inserts.
+    """
+    app, conn = _app_no_auth_override
+
+    author_record = {
+        **_make_author_record(author_id=20, author_name="Carol Scientist", user_id=USER_A),
+        "enabled": True,
+    }
+
+    # First fetch → tracked_authors for USER_A; second fetch → recent_papers (empty fine)
+    conn.fetch.side_effect = [
+        [author_record],  # tracked_authors query
+        [],  # recent_papers query (no papers → no alerts)
+    ]
+
+    with patch(
+        "paper_ingestion.routers.authors.current_user_id_strict",
+        new=AsyncMock(return_value=USER_A),
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post("/api/authors/check")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["authors_checked"] == 1
+    assert data["new_papers"] == 0
+
+    # The second conn.fetch call is the recent_papers query — verify it
+    # joins user_library and binds the caller's user_id.
+    assert conn.fetch.call_count == 2
+    recent_papers_call = conn.fetch.call_args_list[1]
+    sql, *params = recent_papers_call.args
+    assert "user_library" in sql, "recent_papers query must join user_library"
+    assert USER_A in params, "recent_papers query must bind the caller's user_id"
+
+
+# ---------------------------------------------------------------------------
+# 6.  Unauthenticated request → 401
 # ---------------------------------------------------------------------------
 
 

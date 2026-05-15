@@ -29,37 +29,47 @@ describe('auth-store — sessionStorage persistence (W2.4)', () => {
     });
   });
 
-  it('API key is written to sessionStorage (not localStorage) after login', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+  it('session user is written to sessionStorage (not localStorage) after login', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 7, email: 'owner@example.com', role: 'admin' }),
+    });
     await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
 
-    // sessionStorage must contain the persisted auth entry.
+    // sessionStorage must contain the persisted auth entry with the session
+    // user (the cookie is the credential — no raw apiKey is persisted).
     const raw = sessionStorage.getItem('jarvis-auth');
     expect(raw).not.toBeNull();
     const parsed = JSON.parse(raw!);
-    expect(parsed.state.apiKey).toBe('test-api-key-32chars-xxxxxxxxxx');
+    expect(parsed.state.user).toEqual({ id: 7, email: 'owner@example.com', role: 'admin' });
+    expect(parsed.state.apiKey).toBeNull();
 
     // localStorage must NOT contain the auth entry.
     expect(localStorage.getItem('jarvis-auth')).toBeNull();
   });
 
-  it('logout clears the apiKey from sessionStorage', async () => {
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+  it('logout clears the session user from sessionStorage', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 7, email: 'owner@example.com', role: 'admin' }),
+    });
     await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
     expect(sessionStorage.getItem('jarvis-auth')).not.toBeNull();
 
     useAuthStore.getState().logout();
 
-    // After logout the persisted state must have apiKey: null.
+    // After logout the persisted state must have user: null.
     const raw = sessionStorage.getItem('jarvis-auth');
     // The persist middleware may keep the key with null values, or remove it.
     if (raw !== null) {
       const parsed = JSON.parse(raw);
-      expect(parsed.state.apiKey).toBeNull();
+      expect(parsed.state.user).toBeNull();
       expect(parsed.state.isAuthenticated).toBe(false);
     }
     // Either way, the store state must be cleared.
-    expect(useAuthStore.getState().apiKey).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
     expect(useAuthStore.getState().isAuthenticated).toBe(false);
   });
 
@@ -67,7 +77,11 @@ describe('auth-store — sessionStorage persistence (W2.4)', () => {
     // Simulate pre-existing UI state from a previous session.
     localStorage.setItem('jarvis-ui', JSON.stringify({ state: { checklistDismissed: true }, version: 0 }));
 
-    mockFetch.mockResolvedValueOnce({ ok: true, status: 200 });
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 7, email: 'owner@example.com', role: 'admin' }),
+    });
     await useAuthStore.getState().login('test-api-key-32chars-xxxxxxxxxx');
 
     useAuthStore.getState().logout();

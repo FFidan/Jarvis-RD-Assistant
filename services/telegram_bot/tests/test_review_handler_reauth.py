@@ -63,7 +63,7 @@ def _make_callback_update(callback_data: str, chat_id: int = _TEST_CHAT_ID) -> M
     return update
 
 
-def _make_context(user_data: dict | None = None) -> MagicMock:
+def _make_context(user_data: dict | None = None) -> tuple[MagicMock, AsyncMock]:
     context = MagicMock()
     context.user_data = user_data if user_data is not None else {}
     config = _make_config()

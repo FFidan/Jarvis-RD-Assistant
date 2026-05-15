@@ -80,6 +80,15 @@ class CoreSettings(BaseSettings):
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
     # Defaults to loopback + docker-bridge ranges.
     owner_override_allowed_cidrs: str = "127.0.0.0/8,172.16.0.0/12"
+    # WS-AUTH-KEY-SESSION: explicit owner user for the API-key→session mint.
+    # When set, that user id is bound to the minted session. When unset, the
+    # endpoint resolves the lowest-id non-deleted admin user. Never synthesises
+    # or auto-creates a user.
+    owner_user_id: int | None = None
+    # WS-AUTH-KEY-SESSION single-tenant gate opt-in. The endpoint mints only
+    # when exactly one non-deleted user exists OR this flag is explicitly true
+    # (operator opt-in for a small multi-user-but-single-owner deployment).
+    api_key_login_enabled: bool = False
 
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:

@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import author_matches, delete_or_404, dynamic_update, log_audit
+from jarvis_common.auth import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -38,9 +39,14 @@ async def list_tracked_authors(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[TrackedAuthorResponse]:
-    """List all tracked authors."""
+    """List all tracked authors for the current user."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM tracked_authors ORDER BY author_name")
+        rows = await conn.fetch(
+            "SELECT * FROM tracked_authors"
+            " WHERE user_id IS NOT DISTINCT FROM $1 ORDER BY author_name",
+            user_id,
+        )
     return [TrackedAuthorResponse(**dict(r)) for r in rows]
 
 
@@ -51,23 +57,27 @@ async def create_tracked_author(
     body: TrackedAuthorCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TrackedAuthorResponse:
-    """Add a new tracked author."""
+    """Add a new tracked author for the current user."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
-        # Check for duplicates
+        # Check for duplicates scoped to this user
         existing = await conn.fetchrow(
             """SELECT id FROM tracked_authors
-            WHERE author_name = $1 AND s2_author_id IS NOT DISTINCT FROM $2""",
+            WHERE author_name = $1 AND s2_author_id IS NOT DISTINCT FROM $2
+              AND user_id IS NOT DISTINCT FROM $3""",
             body.author_name,
             body.s2_author_id,
+            user_id,
         )
         if existing:
             raise HTTPException(status_code=409, detail="Author already tracked")
 
         row = await conn.fetchrow(
-            """INSERT INTO tracked_authors (author_name, s2_author_id, source)
-            VALUES ($1, $2, 'manual') RETURNING *""",
+            """INSERT INTO tracked_authors (author_name, s2_author_id, source, user_id)
+            VALUES ($1, $2, 'manual', $3) RETURNING *""",
             body.author_name,
             body.s2_author_id,
+            user_id,
         )
     return TrackedAuthorResponse(**dict(row))
 
@@ -81,8 +91,13 @@ async def update_tracked_author(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> TrackedAuthorResponse:
     """Update a tracked author (enable/disable, change S2 ID)."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
-        existing = await conn.fetchrow("SELECT * FROM tracked_authors WHERE id = $1", author_id)
+        existing = await conn.fetchrow(
+            "SELECT * FROM tracked_authors WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            author_id,
+            user_id,
+        )
         if not existing:
             raise HTTPException(404, f"Tracked author {author_id} not found")
 
@@ -108,11 +123,13 @@ async def delete_tracked_author(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
     """Remove a tracked author."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await delete_or_404(
             conn,
-            "DELETE FROM tracked_authors WHERE id = $1",
+            "DELETE FROM tracked_authors WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
             author_id,
+            user_id,
             detail=f"Tracked author {author_id} not found",
         )
     await log_audit(
@@ -139,6 +156,7 @@ async def auto_detect_authors(
     authors to the tracked_authors table with source ``auto_starred``
     or ``auto_rated``.
     """
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT author_name,
@@ -148,9 +166,11 @@ async def auto_detect_authors(
                 SELECT unnest(p.authors) AS author_name, pus.starred, pus.rating
                 FROM papers p
                 JOIN paper_user_state pus ON p.id = pus.paper_id
-                WHERE pus.starred = TRUE OR pus.rating >= 4
+                WHERE (pus.starred = TRUE OR pus.rating >= 4)
+                  AND pus.user_id IS NOT DISTINCT FROM $1
             ) sub
-            GROUP BY author_name"""
+            GROUP BY author_name""",
+            user_id,
         )
 
         added = 0
@@ -164,8 +184,10 @@ async def auto_detect_authors(
 
                 existing = await conn.fetchrow(
                     "SELECT id FROM tracked_authors "
-                    "WHERE author_name = $1 AND s2_author_id IS NULL",
+                    "WHERE author_name = $1 AND s2_author_id IS NULL "
+                    "  AND user_id IS NOT DISTINCT FROM $2",
                     author_name,
+                    user_id,
                 )
                 if existing:
                     already_tracked += 1
@@ -173,12 +195,13 @@ async def auto_detect_authors(
 
                 try:
                     new_row = await conn.fetchrow(
-                        """INSERT INTO tracked_authors (author_name, source)
-                        VALUES ($1, $2)
+                        """INSERT INTO tracked_authors (author_name, source, user_id)
+                        VALUES ($1, $2, $3)
                         ON CONFLICT (author_name, s2_author_id) DO NOTHING
                         RETURNING *""",
                         author_name,
                         source,
+                        user_id,
                     )
                     if new_row:
                         added += 1
@@ -207,16 +230,23 @@ async def check_tracked_authors(
     Matches papers by S2 author ID (if available) or normalized name.
     Logs matches in author_alert_log for deduplication.
     """
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
-        authors = await conn.fetch("SELECT * FROM tracked_authors WHERE enabled = TRUE")
+        authors = await conn.fetch(
+            "SELECT * FROM tracked_authors"
+            " WHERE enabled = TRUE AND user_id IS NOT DISTINCT FROM $1",
+            user_id,
+        )
         if not authors:
             return AuthorCheckResponse(new_papers=0, authors_checked=0)
 
-        # Fetch papers from the last 24 hours
+        # Fetch papers from the last 24 hours scoped to the caller's library
         recent_papers = await conn.fetch(
-            """SELECT id, authors, metadata
-            FROM papers
-            WHERE created_at >= NOW() - INTERVAL '24 hours'"""
+            """SELECT p.id, p.authors, p.metadata
+            FROM papers p
+            JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+            WHERE p.created_at >= NOW() - INTERVAL '24 hours'""",
+            user_id,
         )
 
         total_new = 0

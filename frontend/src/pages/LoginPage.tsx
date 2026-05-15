@@ -59,7 +59,11 @@ export function LoginPage() {
     const success = await login(apiKey.trim());
     setLoading(false);
     if (!success) {
-      setError('Invalid API key or backend unreachable');
+      // Surface the precise backend reason (e.g. the 403 multi-tenant-disabled
+      // message) rather than a generic string so the user knows to use
+      // magic-link instead of retrying a doomed API-key login.
+      const backendError = useAuthStore.getState().lastError;
+      setError(backendError ?? 'Invalid API key or backend unreachable');
       setApiKey('');
     }
   }

@@ -48,6 +48,7 @@ interface AuthState {
   authTime: number | null;
   apiKey: string | null;
   user: SessionUser | null;
+  lastError: string | null;
   login: (apiKey: string) => Promise<boolean>;
   loginWithSession: (user: SessionUser) => void;
   logout: () => void;
@@ -63,19 +64,42 @@ export const useAuthStore = create<AuthState>()(
       authTime: null,
       apiKey: null,
       user: null,
+      lastError: null,
 
       async login(apiKey: string): Promise<boolean> {
+        // WS-AUTH-KEY-SESSION: a valid JARVIS_API_KEY mints a real
+        // owner-scoped jarvis_session cookie. We must use credentials:'include'
+        // so the Set-Cookie sticks, then store the returned owner user via the
+        // SAME path magic-link uses (loginWithSession) so user-data routes
+        // (current_user_id_strict) resolve an identity instead of 401-bouncing.
         try {
-          // Validate the API key against the backend
-          const res = await fetch('/api/topics', {
-            headers: { 'X-API-Key': apiKey },
+          const res = await fetch('/api/auth/api-key-session', {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': apiKey,
+            },
+            body: JSON.stringify({ api_key: apiKey }),
           });
-          if (res.ok || res.status === 200) {
-            set({ isAuthenticated: true, authTime: Date.now(), apiKey, user: null });
+          if (res.ok) {
+            const user = (await res.json()) as SessionUser;
+            get().loginWithSession(user);
             return true;
           }
+          // Surface the backend error (esp. the 403 multi-tenant-disabled
+          // message) instead of a silent bounce to magic-link.
+          let message = 'API-key login failed';
+          try {
+            const data = (await res.json()) as { detail?: string };
+            if (data?.detail) message = data.detail;
+          } catch {
+            // non-JSON body — keep the generic message
+          }
+          set({ lastError: message });
           return false;
         } catch {
+          set({ lastError: 'Network error during API-key login' });
           return false;
         }
       },
@@ -92,6 +116,7 @@ export const useAuthStore = create<AuthState>()(
           authTime: Date.now(),
           apiKey: null,
           user,
+          lastError: null,
         });
       },
 
@@ -104,7 +129,7 @@ export const useAuthStore = create<AuthState>()(
         localStorage.removeItem(UI_STORE_KEY);
 
         // Clear auth state first.
-        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
+        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null, lastError: null });
 
         // Flush the React-Query cache so the next user doesn't see stale data.
         // cancelQueries first so in-flight fetches don't repopulate the cache

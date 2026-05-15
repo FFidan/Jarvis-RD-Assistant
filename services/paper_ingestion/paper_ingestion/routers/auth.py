@@ -20,6 +20,7 @@ dependency) since they ARE the auth bootstrap.
 """
 
 import hashlib
+import hmac
 import logging
 import secrets
 import uuid
@@ -275,6 +276,155 @@ async def verify(
         id=user_id,
         email=user_row["email"],
         role=user_row["role"],
+    )
+
+
+class ApiKeySessionBody(BaseModel):
+    """Body for ``POST /api/auth/api-key-session``.
+
+    The key may also be supplied via the ``X-API-Key`` header (the path the
+    frontend already uses); the body field is optional so either works.
+    """
+
+    api_key: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+
+
+def _submitted_api_key(body: ApiKeySessionBody, request: Request) -> str:
+    """Resolve the submitted key: JSON body first, then ``X-API-Key`` header."""
+    if body.api_key:
+        return body.api_key
+    headers = getattr(request, "headers", None)
+    if headers is not None:
+        return headers.get("X-API-Key", "") or ""
+    return ""
+
+
+@router.post(
+    "/api-key-session",
+    response_model=UserResponse,
+    dependencies=[],  # exempt from verify_api_key (it IS the auth bootstrap)
+)
+@limiter.limit("10/minute")
+async def api_key_session(
+    body: ApiKeySessionBody,
+    request: Request,
+    response: Response,
+) -> UserResponse:
+    """Exchange a valid ``JARVIS_API_KEY`` for a real owner-scoped session.
+
+    WS-AUTH-KEY-SESSION (decision A2). Three non-negotiable guardrails:
+
+    1. Bind to ONE explicit owner — ``OWNER_USER_ID`` setting if present,
+       else the lowest-id non-deleted ``role='admin'`` user. Never a
+       synthetic / shared / auto-created user. No admin → 409 (no creation).
+    2. Audit + rate-limit — ``auth.api_key.session.minted`` on success,
+       ``auth.api_key.session.failure`` on bad key, via the same ``log_audit``
+       helper magic-link uses; ``@limiter.limit`` matches the tighter auth
+       limit (verify = 10/minute).
+    3. Single-tenant gate — mints only when exactly one non-deleted user
+       exists OR ``API_KEY_LOGIN_ENABLED`` is true; otherwise 403 telling the
+       caller to use magic-link.
+    """
+    from jarvis_common.auth import _CACHED_API_KEY  # noqa: PLC0415
+
+    pool = request.app.state.db_pool
+    now = datetime.now(UTC)
+    _audit = _audit_pool(request)
+    submitted = _submitted_api_key(body, request)
+
+    # Guardrail 2 (failure half): validate the key with hmac.compare_digest
+    # exactly as verify_api_key does. No configured key → cannot mint.
+    if not _CACHED_API_KEY or not hmac.compare_digest(submitted, _CACHED_API_KEY):
+        if _audit is not None:
+            ua = request.headers.get("user-agent", "") if hasattr(request, "headers") else ""
+            await log_audit(
+                _audit,
+                action="auth.api_key.session.failure",
+                resource="api_key_session",
+                metadata={
+                    "ip": request.client.host if getattr(request, "client", None) else None,
+                    "ua_prefix": ua[:80],
+                },
+            )
+        raise HTTPException(status_code=403, detail="Invalid or missing API key")
+
+    core = get_core_settings()
+
+    async with pool.acquire() as conn:
+        # Guardrail 3: single-tenant gate.
+        user_count = await conn.fetchval("SELECT count(*) FROM users WHERE deleted_at IS NULL")
+        if int(user_count or 0) != 1 and not core.api_key_login_enabled:
+            raise HTTPException(
+                status_code=403,
+                detail=("API-key login disabled for multi-tenant deployments; use magic-link"),
+            )
+
+        # Guardrail 1: resolve the single explicit owner. Never create one.
+        if core.owner_user_id is not None:
+            owner = await conn.fetchrow(
+                "SELECT id, email, role FROM users WHERE id = $1 AND deleted_at IS NULL",
+                int(core.owner_user_id),
+            )
+            if owner is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "OWNER_USER_ID references a missing or deleted user; "
+                        "no session minted (no user is created)"
+                    ),
+                )
+        else:
+            owner = await conn.fetchrow(
+                "SELECT id, email, role FROM users "
+                "WHERE role = 'admin' AND deleted_at IS NULL "
+                "ORDER BY id ASC LIMIT 1"
+            )
+            if owner is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "No admin user exists; cannot mint an API-key session "
+                        "(no user is created — provision an admin first)"
+                    ),
+                )
+
+        owner_id = int(owner["id"])
+        session_id = await conn.fetchval(
+            """
+            INSERT INTO sessions (user_id, expires_at)
+            VALUES ($1, $2)
+            RETURNING id
+            """,
+            owner_id,
+            now + SESSION_TTL,
+        )
+
+    if _audit is not None:
+        await log_audit(
+            _audit,
+            action="auth.api_key.session.minted",
+            resource="api_key_session",
+            user_id=str(owner_id),
+            metadata={
+                "ip": request.client.host if getattr(request, "client", None) else None,
+            },
+        )
+
+    response.set_cookie(
+        key=SESSION_COOKIE_NAME,
+        value=str(session_id),
+        max_age=int(SESSION_TTL.total_seconds()),
+        expires=int((now + SESSION_TTL).timestamp()),
+        httponly=True,
+        secure=_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
+
+    return UserResponse(
+        id=owner_id,
+        email=owner["email"],
+        role=owner["role"],
     )
 
 

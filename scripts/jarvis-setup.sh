@@ -124,6 +124,14 @@ if [ -x scripts/init-dirs.sh ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# init-secrets (Docker secret files — idempotent, no-ops on existing files)
+# ---------------------------------------------------------------------------
+if [ -x scripts/init-secrets.sh ]; then
+  info "Generating Docker secret files"
+  bash scripts/init-secrets.sh
+fi
+
+# ---------------------------------------------------------------------------
 # mkcert (best-effort; skipped silently when absent)
 # ---------------------------------------------------------------------------
 if command -v mkcert >/dev/null 2>&1; then

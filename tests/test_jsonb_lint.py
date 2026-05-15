@@ -154,5 +154,5 @@ def test_linter_passes_on_current_services_tree() -> None:
     exit_code = mod.main([services, libs])
     assert exit_code == 0, (
         "JSONB double-encode violation found in services/ or libs/ — "
-        "run scripts/check-no-jsonb-double-encode.sh for details"
+        "run scripts/check-no-jsonb-double-encode.py for details"
     )

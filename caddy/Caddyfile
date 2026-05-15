@@ -18,5 +18,7 @@
 	# See docs/plans/2026-05-07-deep-audit-security-review-v2.md W2-25.
 	# HSTS belongs at the TLS terminator only, not at the inner nginx listener.
 	header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
-	reverse_proxy http://dashboard:3000
+	reverse_proxy http://dashboard:3000 {
+		header_up Host localhost
+	}
 }
