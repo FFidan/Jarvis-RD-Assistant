@@ -467,6 +467,7 @@ from paper_ingestion.routers import (  # noqa: E402
     snapshots,
     system,
     telegram,
+    threads,
     topics,
 )
 from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E402
@@ -495,6 +496,7 @@ app.include_router(knowledge_graph.router)
 app.include_router(dashboard_api.router)
 app.include_router(analyze.router)
 app.include_router(my_day.router)
+app.include_router(threads.router)
 app.include_router(notes.router)
 app.include_router(priority.router)
 app.include_router(recommendations.router)
