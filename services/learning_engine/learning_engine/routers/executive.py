@@ -3,7 +3,7 @@ from typing import Any
 
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.paper_state import upsert_paper_user_state as _upsert_paper_user_state
 from pydantic import BaseModel, Field
 
@@ -37,9 +37,9 @@ async def get_my_day(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
     limit_recommendations: int = Query(3, ge=1, le=10),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> MyDayResponse:
     """Fetch aggregated daily execution plan (tasks, cards, recommended papers)."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # Tasks: Todo (due today/overdue) + completed today, with project context.
         # WS-2D: scope by user_id (Wave-3B added tasks.user_id).
@@ -49,7 +49,7 @@ async def get_my_day(
                    t.completed_at, p.name AS project_name, p.color AS project_color
             FROM tasks t
             LEFT JOIN projects p ON p.id = t.project_id
-            WHERE t.user_id IS NOT DISTINCT FROM $1
+            WHERE t.user_id = $1
               AND ((t.status = 'todo'
                      AND (t.deadline IS NULL OR t.deadline < CURRENT_DATE + INTERVAL '1 day'))
                  OR (t.status = 'done' AND t.completed_at::date = CURRENT_DATE)
@@ -66,19 +66,19 @@ async def get_my_day(
             SELECT COUNT(*)
             FROM cards
             WHERE due_at <= NOW()
-              AND user_id IS NOT DISTINCT FROM $1
+              AND user_id = $1
             """,
             user_id,
         )
 
-        # Recommended papers — WS-2D: scope by user_id (Wave-3A added the column).
+        # Recommended papers
         recommendations = await conn.fetch(
             """
             SELECT pr.id as recommendation_id, pr.paper_id, pr.score, p.title, p.authors
             FROM paper_recommendations pr
             JOIN papers p ON pr.paper_id = p.id
             WHERE pr.dismissed = FALSE
-              AND pr.user_id IS NOT DISTINCT FROM $1
+              AND pr.user_id = $1
             ORDER BY pr.score DESC
             LIMIT $2
             """,
@@ -90,7 +90,7 @@ async def get_my_day(
         today_focus_hours = (
             await conn.fetchval(
                 "SELECT COALESCE(focus_hours, 0) FROM daily_log "
-                "WHERE log_date = CURRENT_DATE AND user_id IS NOT DISTINCT FROM $1",
+                "WHERE log_date = CURRENT_DATE AND user_id = $1",
                 user_id,
             )
             or 0.0
@@ -99,7 +99,7 @@ async def get_my_day(
         # Focus streak: consecutive days with focus_hours > 0
         streak_rows = await conn.fetch(
             "SELECT log_date FROM daily_log "
-            "WHERE focus_hours > 0 AND user_id IS NOT DISTINCT FROM $1 "
+            "WHERE focus_hours > 0 AND user_id = $1 "
             "ORDER BY log_date DESC LIMIT 365",
             user_id,
         )
@@ -133,9 +133,9 @@ async def get_my_day(
                     ORDER BY m.deadline ASC NULLS LAST LIMIT 1) AS next_milestone_deadline
             FROM projects p
             LEFT JOIN tasks t ON t.project_id = p.id
-                AND t.user_id IS NOT DISTINCT FROM $1
+                AND t.user_id = $1
             WHERE p.status = 'active'
-              AND p.user_id IS NOT DISTINCT FROM $1
+              AND p.user_id = $1
             GROUP BY p.id
             ORDER BY p.name
             """,
@@ -158,14 +158,14 @@ async def quick_add_task(
     request: Request,
     payload: QuickAddTaskRequest,
     db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> dict[str, Any]:
     """Quick-add a task, optionally linked to a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if payload.project_id is not None:
             # WS-2D: scope project lookup by owner — IDOR otherwise.
             project_exists = await conn.fetchval(
-                "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
                 payload.project_id,
                 user_id,
             )
@@ -190,13 +190,13 @@ async def log_focus_session(
     request: Request,
     payload: FocusSessionRequest,
     db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> FocusSessionResponse:
     """Log a completed focus session.
 
     Validation and mutations run inside a single transaction using SELECT FOR UPDATE
     to eliminate the TOCTOU race between existence checks and DML (LE-009).
     """
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # Validate and lock referenced rows inside the transaction (LE-009: FOR UPDATE
@@ -205,8 +205,7 @@ async def log_focus_session(
             # against user B's task.
             if payload.task_id is not None:
                 task_row = await conn.fetchrow(
-                    "SELECT id FROM tasks WHERE id = $1 "
-                    "AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                    "SELECT id FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE",
                     payload.task_id,
                     user_id,
                 )
@@ -227,7 +226,7 @@ async def log_focus_session(
                 await conn.execute(
                     "UPDATE tasks SET actual_hours = COALESCE(actual_hours, 0) + $1, "
                     "updated_at = NOW() WHERE id = $2 "
-                    "AND user_id IS NOT DISTINCT FROM $3",
+                    "AND user_id = $3",
                     payload.duration_hours,
                     payload.task_id,
                     user_id,
@@ -240,14 +239,12 @@ async def log_focus_session(
                     state="reading",
                     on_conflict="update_state_when_inbox_or_to_read",
                 )
-            # Atomic upsert — ON CONFLICT handles concurrent inserts safely.
-            _user_id = user_id
             await conn.execute(
                 """INSERT INTO daily_log (user_id, log_date, focus_hours)
                 VALUES ($1, CURRENT_DATE, $2)
                 ON CONFLICT (user_id, log_date)
                 DO UPDATE SET focus_hours = daily_log.focus_hours + $2""",
-                _user_id,
+                user_id,
                 payload.duration_hours,
             )
 

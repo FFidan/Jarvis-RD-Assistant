@@ -2,7 +2,7 @@
 
 from asyncpg import Pool
 from fastapi import APIRouter, Depends, Request
-from jarvis_common.auth import current_user_id_or_none, verify_api_key
+from jarvis_common.auth import current_user_id_strict, verify_api_key
 from pydantic import BaseModel, Field
 
 from learning_engine.deps import get_db_pool
@@ -30,9 +30,9 @@ class IntentBody(BaseModel):
 async def get_intent_today(
     request: Request,
     db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> IntentRow:
     """Return today's intent text for the current user."""
-    user_id = await current_user_id_or_none(request)
     return await _get_intent_today(db_pool, user_id)
 
 
@@ -41,9 +41,9 @@ async def save_intent_today(
     request: Request,
     payload: IntentBody,
     db_pool: Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> IntentRow:
     """Upsert today's intent. Empty string clears (DELETE) the intent."""
-    user_id = await current_user_id_or_none(request)
     text = payload.intent.strip()
     if not text:
         await _delete_intent_today(db_pool, user_id)

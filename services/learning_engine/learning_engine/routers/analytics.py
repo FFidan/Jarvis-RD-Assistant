@@ -2,7 +2,7 @@
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import ActivityItem, LLMCostItem, RetentionItem, ReviewDistributionItem
@@ -21,15 +21,15 @@ async def get_activity(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ActivityItem]:
     """Return daily_log entries for the last N days, scoped to the calling user."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT log_date, tasks_completed, cards_reviewed, papers_read, focus_hours, notes
             FROM daily_log
-            WHERE user_id IS NOT DISTINCT FROM $1
+            WHERE user_id = $1
               AND log_date >= CURRENT_DATE - $2::int
             ORDER BY log_date ASC
             """,
@@ -50,15 +50,15 @@ async def get_reviews(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ReviewDistributionItem]:
     """Return review rating distribution for the last N days, scoped to the calling user."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
             SELECT rating, COUNT(*) AS count
             FROM review_logs
-            WHERE user_id IS NOT DISTINCT FROM $1
+            WHERE user_id = $1
               AND reviewed_at >= NOW() - make_interval(days => $2)
             GROUP BY rating
             ORDER BY rating
@@ -80,9 +80,9 @@ async def get_retention(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[RetentionItem]:
     """Return retention trend (Good+Easy % per day) for the last N days, scoped to caller."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -95,7 +95,7 @@ async def get_retention(
                     1
                 ) AS retention_pct
             FROM review_logs
-            WHERE user_id IS NOT DISTINCT FROM $1
+            WHERE user_id = $1
               AND reviewed_at >= NOW() - make_interval(days => $2)
             GROUP BY (reviewed_at AT TIME ZONE 'UTC')::date
             ORDER BY review_date
@@ -117,9 +117,9 @@ async def get_llm_cost(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[LLMCostItem]:
     """Return daily LLM cost breakdown by workflow for the last N days, scoped to caller."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -128,7 +128,7 @@ async def get_llm_cost(
                 SUM(cost_usd)::float AS total_cost,
                 workflow
             FROM llm_usage_log
-            WHERE user_id IS NOT DISTINCT FROM $1
+            WHERE user_id = $1
               AND created_at >= NOW() - make_interval(days => $2)
             GROUP BY (created_at AT TIME ZONE 'UTC')::date, workflow
             ORDER BY day

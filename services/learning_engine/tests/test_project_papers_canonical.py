@@ -53,6 +53,7 @@ async def test_link_paper_uses_canonical_ownership_and_enqueues_for_caller(monke
             project_id=5,
             paper_id=10,
             db_pool=pool,
+            user_id=42,
         )
 
     assert result == {"project_id": 5, "paper_id": 10}

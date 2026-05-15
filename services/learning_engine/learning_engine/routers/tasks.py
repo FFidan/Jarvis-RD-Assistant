@@ -5,7 +5,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -44,6 +44,7 @@ async def list_tasks(
     project_id: int,
     status: str | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[TaskResponse]:
     """List tasks for a project, optionally filtered by status."""
     if status is not None and status not in _VALID_TASK_STATUSES:
@@ -51,11 +52,10 @@ async def list_tasks(
             status_code=400,
             detail=f"Invalid status: {status}. Valid values: {sorted(_VALID_TASK_STATUSES)}",
         )
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # Verify project exists and belongs to the caller (same conn as data query — avoid TOCTOU)
         project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -66,7 +66,7 @@ async def list_tasks(
             rows = await conn.fetch(
                 """SELECT * FROM tasks
                    WHERE project_id = $1 AND status = $2
-                     AND user_id IS NOT DISTINCT FROM $3
+                     AND user_id = $3
                    ORDER BY sort_order, created_at""",
                 project_id,
                 status,
@@ -76,7 +76,7 @@ async def list_tasks(
             rows = await conn.fetch(
                 """SELECT * FROM tasks
                    WHERE project_id = $1
-                     AND user_id IS NOT DISTINCT FROM $2
+                     AND user_id = $2
                    ORDER BY sort_order, created_at""",
                 project_id,
                 user_id,
@@ -96,13 +96,13 @@ async def create_task(
     project_id: int,
     body: TaskCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> TaskResponse:
     """Create a task in a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # Verify project exists and belongs to the caller (same conn as insert — avoid TOCTOU)
         project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -149,13 +149,13 @@ async def update_task(
     task_id: int,
     body: TaskUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> TaskResponse:
     """Update a task. Auto-sets completed_at when status changes to done."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT * FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                "SELECT * FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 task_id,
                 user_id,
             )
@@ -197,12 +197,12 @@ async def delete_task(
     request: Request,
     task_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Delete a task."""
-    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        "DELETE FROM tasks WHERE id = $1 AND user_id = $2",
         task_id,
         user_id,
         detail="Task not found",
@@ -211,7 +211,7 @@ async def delete_task(
         db_pool,
         action="delete",
         resource=f"task:{task_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )
 
 
@@ -227,13 +227,13 @@ async def link_paper_to_task(
     task_id: int,
     body: TaskPaperLinkCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict[str, Any]:
     """Link a paper to a task."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             task = await conn.fetchval(
-                "SELECT id FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 task_id,
                 user_id,
             )
@@ -270,13 +270,13 @@ async def unlink_paper_from_task(
     task_id: int,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Remove a paper link from a task."""
-    user_id = await current_user_id_or_none(request)
     # Verify task ownership before deleting the link
     async with db_pool.acquire() as conn:
         task = await conn.fetchval(
-            "SELECT id FROM tasks WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
             task_id,
             user_id,
         )
@@ -293,5 +293,5 @@ async def unlink_paper_from_task(
         db_pool,
         action="delete",
         resource=f"task:{task_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )

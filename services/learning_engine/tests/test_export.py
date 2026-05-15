@@ -74,6 +74,7 @@ async def test_export_anki_passes_user_id_to_deck_query() -> None:
             deck_id=7,
             db_pool=pool,
             anki_exporter=fake_anki,
+            user_id=42,
         )
 
     # Verify the SQL call carried user_id=42 as the second bind arg.
@@ -82,7 +83,7 @@ async def test_export_anki_passes_user_id_to_deck_query() -> None:
     positional_args = call_args.args
     assert positional_args[1] == 7, "first bind arg should be deck_id"
     assert positional_args[2] == 42, "second bind arg should be user_id"
-    assert "IS NOT DISTINCT FROM" in positional_args[0]
+    assert "user_id = $2" in positional_args[0]
 
 
 @pytest.mark.asyncio

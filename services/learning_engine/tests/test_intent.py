@@ -64,6 +64,7 @@ def _make_pool_and_conn():
 def intent_app():
     """Minimal app with mocked DB and disabled auth + rate limiting."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from learning_engine.deps import get_db_pool
     from learning_engine.main import app
 
@@ -73,6 +74,7 @@ def intent_app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
 
     yield app, conn
 

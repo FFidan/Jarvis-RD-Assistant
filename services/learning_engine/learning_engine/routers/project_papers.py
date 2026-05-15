@@ -7,7 +7,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from jarvis_common import assert_paper_ownership, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 from jarvis_common.library import add_to_library
 
 from learning_engine.deps import get_db_pool, limiter
@@ -24,13 +24,13 @@ async def list_project_papers(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[dict]:
     """List papers linked to a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # WS-2D: scope project lookup by owner — IDOR otherwise.
         project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -62,28 +62,27 @@ async def link_paper(
     project_id: int,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> dict | JSONResponse:
     """Link a paper to a project."""
     should_push_zotero = False
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # WS-2D: scope by owner. Cannot link a paper into another user's project.
             project = await conn.fetchrow(
-                "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
                 project_id,
                 user_id,
             )
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             await assert_paper_ownership(conn, paper_id, user_id)
-            if user_id is not None:
-                await add_to_library(
-                    conn,
-                    user_id=user_id,
-                    paper_id=paper_id,
-                    added_via="manual_save",
-                )
+            await add_to_library(
+                conn,
+                user_id=user_id,
+                paper_id=paper_id,
+                added_via="manual_save",
+            )
             result = await conn.execute(
                 "INSERT INTO project_papers (project_id, paper_id) "
                 "VALUES ($1, $2) ON CONFLICT DO NOTHING",
@@ -112,7 +111,7 @@ async def link_paper(
                 SELECT pus.starred, p.zotero_item_key
                 FROM papers p
                 LEFT JOIN paper_user_state pus
-                  ON pus.paper_id = p.id AND pus.user_id IS NOT DISTINCT FROM $2
+                  ON pus.paper_id = p.id AND pus.user_id = $2
                 WHERE p.id = $1
                 """,
                 paper_id,
@@ -156,15 +155,15 @@ async def unlink_paper(
     project_id: int,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Unlink a paper from a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # WS-2D: prevent IDOR — only delete links whose project belongs to caller.
         result = await conn.execute(
             "DELETE FROM project_papers pp USING projects p "
             "WHERE pp.project_id = $1 AND pp.paper_id = $2 "
-            "AND p.id = pp.project_id AND p.user_id IS NOT DISTINCT FROM $3",
+            "AND p.id = pp.project_id AND p.user_id = $3",
             project_id,
             paper_id,
             user_id,
@@ -175,5 +174,5 @@ async def unlink_paper(
         db_pool,
         action="delete",
         resource=f"project_paper:{project_id}:{paper_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )

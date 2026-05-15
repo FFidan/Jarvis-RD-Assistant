@@ -3,7 +3,7 @@
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import MilestoneCreate, MilestoneResponse, MilestoneUpdate
@@ -24,12 +24,12 @@ async def list_milestones(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[MilestoneResponse]:
     """List milestones for a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -39,7 +39,7 @@ async def list_milestones(
         rows = await conn.fetch(
             """SELECT * FROM milestones
                WHERE project_id = $1
-                 AND user_id IS NOT DISTINCT FROM $2
+                 AND user_id = $2
                ORDER BY deadline ASC NULLS LAST, created_at""",
             project_id,
             user_id,
@@ -63,12 +63,12 @@ async def create_milestone(
     project_id: int,
     body: MilestoneCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> MilestoneResponse:
     """Create a milestone in a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         project = await conn.fetchval(
-            "SELECT id FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT id FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -102,15 +102,13 @@ async def update_milestone(
     milestone_id: int,
     body: MilestoneUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> MilestoneResponse:
     """Update a milestone. Auto-sets completed_at when completed becomes True."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT * FROM milestones"
-                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2"
-                " FOR UPDATE",
+                "SELECT * FROM milestones WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 milestone_id,
                 user_id,
             )
@@ -152,12 +150,12 @@ async def delete_milestone(
     request: Request,
     milestone_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Delete a milestone."""
-    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM milestones WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        "DELETE FROM milestones WHERE id = $1 AND user_id = $2",
         milestone_id,
         user_id,
         detail="Milestone not found",
@@ -166,5 +164,5 @@ async def delete_milestone(
         db_pool,
         action="delete",
         resource=f"milestone:{milestone_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )

@@ -33,6 +33,7 @@ def _make_pool_and_conn():
 def _app():
     """Minimal learning_engine app with mocked DB and disabled auth/rate-limit."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import current_user_id_strict
     from learning_engine.deps import get_db_pool
     from learning_engine.main import app
 
@@ -42,6 +43,7 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict] = lambda: 10
 
     yield app, conn
 
@@ -67,7 +69,7 @@ async def test_link_paper_to_task_rejects_unowned_paper(_app, monkeypatch):
     - assert_paper_ownership raises 403 → endpoint returns 403.
     """
     monkeypatch.setattr(
-        "learning_engine.routers.tasks.current_user_id_or_none",
+        "learning_engine.routers.tasks.current_user_id_strict",
         _async_user_10,
     )
 

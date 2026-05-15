@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.streak import compute_streak
 
 from learning_engine.converters import row_to_card_response
@@ -87,13 +87,13 @@ async def get_next_review(
     request: Request,
     limit: int = Query(default=1, ge=1, le=50),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> list[CardResponse]:
     """Get next due card(s) for review."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT * FROM cards WHERE due_at <= NOW() "
-            "AND user_id IS NOT DISTINCT FROM $1 "
+            "AND user_id = $1 "
             "ORDER BY due_at ASC LIMIT $2",
             user_id,
             limit,
@@ -108,17 +108,17 @@ async def submit_review(
     card_id: int,
     body: ReviewRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> ReviewResponse:
     """Submit a review for a card. Atomic: updates FSRS state and logs review.
 
     Builds a fresh FSRSManager per request so that live edits to
     fsrs.desired_retention and fsrs.learning_steps take effect immediately.
     """
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             row = await conn.fetchrow(
-                "SELECT * FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 card_id,
                 user_id,
             )
@@ -164,13 +164,11 @@ async def submit_review(
 async def get_stats(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
 ) -> RetentionStats:
     """Get retention and review statistics."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
-            # Single CTE query for card counts and rating breakdown.
-            # WS-2D: scope every aggregate by caller's user_id (NULL-tolerant).
             stats_row = await conn.fetchrow(
                 """
                 WITH card_stats AS (
@@ -178,7 +176,7 @@ async def get_stats(
                         COUNT(*) AS total_cards,
                         COUNT(*) FILTER (WHERE due_at <= NOW()) AS due_now
                     FROM cards
-                    WHERE user_id IS NOT DISTINCT FROM $1
+                    WHERE user_id = $1
                 ),
                 today_stats AS (
                     SELECT COUNT(*) AS reviewed_today
@@ -225,7 +223,7 @@ async def get_stats(
                 """
                 SELECT DISTINCT (reviewed_at AT TIME ZONE 'UTC')::date AS review_date
                 FROM review_logs
-                WHERE user_id IS NOT DISTINCT FROM $1
+                WHERE user_id = $1
                 ORDER BY review_date DESC LIMIT 365
                 """,
                 user_id,

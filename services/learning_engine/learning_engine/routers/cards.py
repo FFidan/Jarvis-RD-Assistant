@@ -5,7 +5,7 @@ from datetime import datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership, dynamic_update
 
 from learning_engine.card_store import insert_card
@@ -35,9 +35,9 @@ async def create_card(
     body: CardCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     fsrs_manager: FSRSManager = Depends(get_fsrs_manager),
+    user_id: int = Depends(current_user_id_strict),
 ) -> CardResponse:
     """Create a flashcard manually."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if body.paper_id is not None:
             await assert_paper_ownership(conn, body.paper_id, user_id)
@@ -75,15 +75,13 @@ async def list_cards(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[CardResponse]:
     """List cards with optional filters."""
-    user_id = await current_user_id_or_none(request)
     conditions: list[str] = []
     params: list = []
 
-    # WS-2D: scope to caller's user_id (NULL-tolerant: matches both system rows
-    # and the caller's own rows in single-tenant mode).
-    conditions.append(f"user_id IS NOT DISTINCT FROM ${len(params) + 1}")
+    conditions.append(f"user_id = ${len(params) + 1}")
     params.append(user_id)
 
     if deck_id is not None:
@@ -112,14 +110,14 @@ async def update_card(
     card_id: int,
     body: CardUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> CardResponse:
     """Update a card's content (does not affect FSRS state)."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             # WS-2D: scope by user_id to prevent IDOR — user A must not edit user B's card.
             existing = await conn.fetchrow(
-                "SELECT * FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2 FOR UPDATE",
+                "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 card_id,
                 user_id,
             )
@@ -159,13 +157,13 @@ async def delete_card(
     request: Request,
     card_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Delete a card."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         # WS-2D: scope by user_id to prevent IDOR delete.
         result = await conn.execute(
-            "DELETE FROM cards WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "DELETE FROM cards WHERE id = $1 AND user_id = $2",
             card_id,
             user_id,
         )
@@ -175,5 +173,5 @@ async def delete_card(
         db_pool,
         action="delete",
         resource=f"card:{card_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )

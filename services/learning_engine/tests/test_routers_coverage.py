@@ -123,6 +123,10 @@ def _make_milestone_row(**overrides):
 def _app():
     """Minimal app fixture with mocked DB, disabled auth + rate-limiter."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import (
+        current_user_id_strict,
+        current_user_id_strict_with_owner_override,
+    )
     from learning_engine.deps import (
         get_anki_exporter,
         get_card_generator,
@@ -154,6 +158,8 @@ def _app():
     app.dependency_overrides[get_fsrs_manager] = lambda: mock_fsrs
     app.dependency_overrides[get_card_generator] = lambda: mock_generator
     app.dependency_overrides[get_anki_exporter] = lambda: mock_exporter
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
 
     yield app, conn, mock_pool
     app.dependency_overrides.clear()

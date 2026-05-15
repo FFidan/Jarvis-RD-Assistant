@@ -65,6 +65,9 @@ def _make_pool_and_conn():
 def exec_app():
     """Minimal app with mocked dependencies and disabled auth + rate limiting."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import (
+        current_user_id_strict_with_owner_override,
+    )
     from learning_engine.deps import get_db_pool
     from learning_engine.main import app
 
@@ -74,6 +77,7 @@ def exec_app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
 
     yield app, conn
 
@@ -297,8 +301,8 @@ async def test_focus_log_with_paper_id(exec_app):
     conn.execute.return_value = "INSERT 1"
 
     with patch(
-        "learning_engine.routers.executive.current_user_id_or_none",
-        new=AsyncMock(return_value=None),
+        "learning_engine.routers.executive.current_user_id_strict_with_owner_override",
+        new=AsyncMock(return_value=5),
     ):
         async with httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test"

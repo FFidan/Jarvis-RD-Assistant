@@ -67,6 +67,7 @@ async def test_create_deck_passes_user_id_to_insert():
         req,
         body=MagicMock(name="Physics", description=None, topic_id=None),
         db_pool=pool,
+        user_id=42,
     )
 
     assert result.id == 10
@@ -96,34 +97,33 @@ async def test_list_decks_scopes_to_caller():
     pool_a, conn_a = _make_pool_and_conn()
     conn_a.fetch.return_value = [_make_deck_row(id=1, name="A's Deck")]
     req_a = SimpleNamespace(state=SimpleNamespace(user_id=1))
-    rows_a = await decks.list_decks.__wrapped__(req_a, db_pool=pool_a)
+    rows_a = await decks.list_decks.__wrapped__(req_a, db_pool=pool_a, user_id=1)
 
     assert len(rows_a) == 1
     sql_a, *params_a = conn_a.fetch.await_args.args
-    assert "user_id IS NOT DISTINCT FROM $1" in sql_a
+    assert "user_id = $1" in sql_a
     assert params_a == [1]
 
     # --- User B ---
     pool_b, conn_b = _make_pool_and_conn()
     conn_b.fetch.return_value = []  # DB returns nothing for user B
     req_b = SimpleNamespace(state=SimpleNamespace(user_id=2))
-    rows_b = await decks.list_decks.__wrapped__(req_b, db_pool=pool_b)
+    rows_b = await decks.list_decks.__wrapped__(req_b, db_pool=pool_b, user_id=2)
 
     assert len(rows_b) == 0
     sql_b, *params_b = conn_b.fetch.await_args.args
-    assert "user_id IS NOT DISTINCT FROM $1" in sql_b
+    assert "user_id = $1" in sql_b
     assert params_b == [2]
 
 
 @pytest.mark.asyncio
-async def test_list_decks_single_user_mode_passes_none():
-    """In single-user mode (user_id=None), NULL is forwarded; IS NOT DISTINCT
-    FROM NULL still correctly matches only rows where user_id IS NULL."""
+async def test_list_decks_scopes_to_integer_user_id():
+    """list_decks passes the authenticated user's integer id as $1."""
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
-    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
-    await decks.list_decks.__wrapped__(req, db_pool=pool)
+    req = SimpleNamespace(state=SimpleNamespace(user_id=3))
+    await decks.list_decks.__wrapped__(req, db_pool=pool, user_id=3)
 
     sql, *params = conn.fetch.await_args.args
-    assert "user_id IS NOT DISTINCT FROM $1" in sql
-    assert params == [None]
+    assert "user_id = $1" in sql
+    assert params == [3]

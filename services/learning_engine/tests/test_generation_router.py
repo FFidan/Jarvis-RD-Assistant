@@ -228,12 +228,12 @@ async def test_generate_cards_endpoint_returns_job_id():
     mock_card_generate_task = MagicMock()
     mock_defer = AsyncMock()
     mock_card_generate_task.defer_async = mock_defer
-    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     with patch.dict(task_registry.KIND_TO_TASK, {"card.generate": mock_card_generate_task}):
         response = await generation.generate_cards.__wrapped__(
-            req,
+            SimpleNamespace(state=SimpleNamespace(user_id=7)),
             body=GenerateCardsRequest(paper_id=101, deck_id=1),
             db_pool=pool,
+            user_id=7,
         )
 
     assert response.status == "queued"
@@ -244,7 +244,7 @@ async def test_generate_cards_endpoint_returns_job_id():
     assert call_kwargs.kwargs["paper_id"] == 101
     assert call_kwargs.kwargs["deck_id"] == 1
     assert call_kwargs.kwargs["job_id"] == response.job_id
-    assert call_kwargs.kwargs["user_id"] is None
+    assert call_kwargs.kwargs["user_id"] == 7
 
 
 @pytest.mark.asyncio
@@ -295,14 +295,14 @@ async def test_batch_generate_cards_returns_202_with_job_id():
     mock_card_generate_batch_task = MagicMock()
     mock_defer = AsyncMock()
     mock_card_generate_batch_task.defer_async = mock_defer
-    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
     with patch.dict(
         task_registry.KIND_TO_TASK, {"card.generate_batch": mock_card_generate_batch_task}
     ):
         response = await generation.batch_generate_cards.__wrapped__(
-            req,
+            SimpleNamespace(state=SimpleNamespace(user_id=3)),
             body=BatchGenerateRequest(deck_id=1),
             db_pool=pool,
+            user_id=3,
         )
 
     assert response.status == "queued"
@@ -312,7 +312,7 @@ async def test_batch_generate_cards_returns_202_with_job_id():
     assert call_kwargs is not None
     assert call_kwargs.kwargs["deck_id"] == 1
     assert call_kwargs.kwargs["job_id"] == response.job_id
-    assert call_kwargs.kwargs["user_id"] is None
+    assert call_kwargs.kwargs["user_id"] == 3
 
 
 # ---------------------------------------------------------------------------

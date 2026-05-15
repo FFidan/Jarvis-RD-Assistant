@@ -2,7 +2,7 @@
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.converters import row_to_deck_response
 from learning_engine.deps import get_db_pool, limiter
@@ -17,9 +17,9 @@ async def create_deck(
     request: Request,
     body: DeckCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> DeckResponse:
     """Create a new flashcard deck."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -40,9 +40,9 @@ async def create_deck(
 async def list_decks(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[DeckResponse]:
     """List all decks with card and due counts."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """
@@ -51,7 +51,7 @@ async def list_decks(
                    COUNT(c.id) FILTER (WHERE c.due_at <= NOW()) AS due_count
             FROM decks d
             LEFT JOIN cards c ON c.deck_id = d.id
-            WHERE d.user_id IS NOT DISTINCT FROM $1
+            WHERE d.user_id = $1
             GROUP BY d.id
             ORDER BY d.created_at DESC
             """,

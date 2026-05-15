@@ -108,15 +108,14 @@ async def test_create_card_success_uses_evidence_payload():
 async def test_list_cards_builds_query_with_filters():
     """list_cards includes deck and due filters in the generated SQL.
 
-    WS-2D: list_cards now always prefixes a ``user_id IS NOT DISTINCT FROM $1``
-    predicate (even in single-tenant mode where user_id is None) to enforce
-    multi-user isolation.
+    WS-CROSS: list_cards always prefixes a ``user_id = $1`` predicate to
+    enforce multi-user isolation; user_id is always a real int post-migration.
     """
     pool, conn = _make_pool_and_conn()
     due_before = _now()
     conn.fetch.return_value = [_make_card_row()]
 
-    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
+    req = SimpleNamespace(state=SimpleNamespace(user_id=1))
     rows = await cards.list_cards.__wrapped__(
         req,
         deck_id=3,
@@ -124,16 +123,17 @@ async def test_list_cards_builds_query_with_filters():
         limit=10,
         offset=5,
         db_pool=pool,
+        user_id=1,
     )
 
     assert len(rows) == 1
     sql = conn.fetch.await_args.args[0]
     params = conn.fetch.await_args.args[1:]
-    # WS-2D: $1 is now user_id, deck_id shifts to $2, due_before to $3.
-    assert "user_id IS NOT DISTINCT FROM $1" in sql
+    # user_id = $1, deck_id shifts to $2, due_before to $3.
+    assert "user_id = $1" in sql
     assert "deck_id = $2" in sql
     assert "due_at <= $3" in sql
-    assert params == (None, 3, due_before, 10, 5)
+    assert params == (1, 3, due_before, 10, 5)
 
 
 @pytest.mark.asyncio
@@ -146,7 +146,7 @@ async def test_update_card_returns_existing_row_when_body_is_empty():
     conn.fetchrow.return_value = card_row
 
     response = await cards.update_card.__wrapped__(
-        MagicMock(),
+        SimpleNamespace(state=SimpleNamespace(user_id=1)),
         card_id=9,
         body=CardUpdate(),
         db_pool=pool,
@@ -165,7 +165,7 @@ async def test_update_card_raises_404_when_missing():
 
     with pytest.raises(HTTPException, match="Card not found") as exc_info:
         await cards.update_card.__wrapped__(
-            MagicMock(),
+            SimpleNamespace(state=SimpleNamespace(user_id=1)),
             card_id=999,
             body=CardUpdate(front="Updated"),
             db_pool=pool,
@@ -187,7 +187,7 @@ async def test_update_card_uses_dynamic_update():
         "learning_engine.routers.cards.dynamic_update", AsyncMock(return_value=updated_row)
     ) as mock_du:
         response = await cards.update_card.__wrapped__(
-            MagicMock(),
+            SimpleNamespace(state=SimpleNamespace(user_id=1)),
             card_id=7,
             body=CardUpdate(front="New front", back="New back"),
             db_pool=pool,
@@ -211,7 +211,7 @@ async def test_delete_card_raises_404_when_row_missing():
 
     with pytest.raises(HTTPException, match="Card not found") as exc_info:
         await cards.delete_card.__wrapped__(
-            MagicMock(),
+            SimpleNamespace(state=SimpleNamespace(user_id=1)),
             card_id=999,
             db_pool=pool,
         )
@@ -234,7 +234,7 @@ async def test_create_card_raises_404_on_fk_violation_deck():
     with patch.object(cards, "insert_card", AsyncMock(side_effect=exc)):
         with pytest.raises(HTTPException, match="Deck not found") as exc_info:
             await cards.create_card.__wrapped__(
-                MagicMock(),
+                SimpleNamespace(state=SimpleNamespace(user_id=1)),
                 body=CardCreate(
                     deck_id=99,
                     card_type=CardType.CONCEPT,
@@ -250,15 +250,15 @@ async def test_create_card_raises_404_on_fk_violation_deck():
 
 @pytest.mark.asyncio
 async def test_list_cards_no_filters_includes_user_predicate_only():
-    """list_cards without any filter still scopes by user_id (WS-2D).
+    """list_cards without any filter still scopes by user_id.
 
-    Pre-WS-2D this returned a plain SELECT with no WHERE; post-WS-2D the
-    user_id predicate is unconditional even when no other filters are set.
+    The user_id = $1 predicate is unconditional even when no other filters
+    are set.
     """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = []
 
-    req = SimpleNamespace(state=SimpleNamespace(user_id=None))
+    req = SimpleNamespace(state=SimpleNamespace(user_id=7))
     result = await cards.list_cards.__wrapped__(
         req,
         deck_id=None,
@@ -270,8 +270,8 @@ async def test_list_cards_no_filters_includes_user_predicate_only():
 
     assert result == []
     sql = conn.fetch.await_args.args[0]
-    # WS-2D: WHERE is now always present (user_id predicate).
-    assert "WHERE user_id IS NOT DISTINCT FROM $1" in sql
+    # WHERE is always present (user_id predicate).
+    assert "WHERE user_id = $1" in sql
     # No deck_id / due_at clauses.
     assert "deck_id" not in sql
     assert "due_at <=" not in sql
@@ -310,6 +310,7 @@ async def test_create_card_asserts_paper_ownership():
                 ),
                 db_pool=pool,
                 fsrs_manager=fsrs_manager,
+                user_id=2,
             )
 
     assert exc_info.value.status_code == 403

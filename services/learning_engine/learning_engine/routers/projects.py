@@ -3,7 +3,7 @@
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.models import (
@@ -30,6 +30,7 @@ async def list_projects(
     request: Request,
     status: str | None = Query(default=None),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> list[ProjectResponse]:
     """List all projects, optionally filtered by status."""
     if status and status not in _VALID_STATUSES:
@@ -38,13 +39,12 @@ async def list_projects(
             status_code=400,
             detail=f"Invalid status '{status}'. Must be one of: {valid}",
         )
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         if status:
             rows = await conn.fetch(
                 """SELECT * FROM projects
                    WHERE status = $1
-                     AND user_id IS NOT DISTINCT FROM $2
+                     AND user_id = $2
                    ORDER BY created_at DESC""",
                 status,
                 user_id,
@@ -52,7 +52,7 @@ async def list_projects(
         else:
             rows = await conn.fetch(
                 """SELECT * FROM projects
-                   WHERE user_id IS NOT DISTINCT FROM $1
+                   WHERE user_id = $1
                    ORDER BY created_at DESC""",
                 user_id,
             )
@@ -70,9 +70,9 @@ async def create_project(
     request: Request,
     body: ProjectCreate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ProjectResponse:
     """Create a new project."""
-    user_id = await current_user_id_or_none(request)
     row = await db_pool.fetchrow(
         """
         INSERT INTO projects (name, description, status, deadline, color, user_id)
@@ -100,12 +100,12 @@ async def get_project(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ProjectDetailResponse:
     """Get a project with task and milestone counts."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            "SELECT * FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+            "SELECT * FROM projects WHERE id = $1 AND user_id = $2",
             project_id,
             user_id,
         )
@@ -154,15 +154,13 @@ async def update_project(
     project_id: int,
     body: ProjectUpdate,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> ProjectResponse:
     """Update a project."""
-    user_id = await current_user_id_or_none(request)
     async with db_pool.acquire() as conn:
         async with conn.transaction():
             existing = await conn.fetchrow(
-                "SELECT * FROM projects"
-                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2"
-                " FOR UPDATE",
+                "SELECT * FROM projects WHERE id = $1 AND user_id = $2 FOR UPDATE",
                 project_id,
                 user_id,
             )
@@ -197,12 +195,12 @@ async def delete_project(
     request: Request,
     project_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict),
 ) -> None:
     """Delete a project (cascades to tasks and milestones)."""
-    user_id = await current_user_id_or_none(request)
     await delete_or_404(
         db_pool,
-        "DELETE FROM projects WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        "DELETE FROM projects WHERE id = $1 AND user_id = $2",
         project_id,
         user_id,
         detail="Project not found",
@@ -211,5 +209,5 @@ async def delete_project(
         db_pool,
         action="delete",
         resource=f"project:{project_id}",
-        user_id=str(user_id) if user_id is not None else None,
+        user_id=str(user_id),
     )

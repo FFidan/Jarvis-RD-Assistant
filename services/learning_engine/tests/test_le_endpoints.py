@@ -113,6 +113,10 @@ def _make_card_row(**overrides):
 def _app():
     """Create a minimal app instance with mocked dependencies and disabled auth."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import (
+        current_user_id_strict,
+        current_user_id_strict_with_owner_override,
+    )
     from learning_engine.deps import (
         get_anki_exporter,
         get_card_generator,
@@ -159,6 +163,8 @@ def _app():
     app.dependency_overrides[get_fsrs_manager] = override_fsrs_manager
     app.dependency_overrides[get_card_generator] = override_card_generator
     app.dependency_overrides[get_anki_exporter] = override_anki_exporter
+    app.dependency_overrides[current_user_id_strict] = lambda: 1
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
 
     yield app, conn, mock_http, mock_fsrs, mock_generator, mock_exporter
     app.dependency_overrides.clear()
