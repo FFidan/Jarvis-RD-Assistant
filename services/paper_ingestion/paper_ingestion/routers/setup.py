@@ -35,7 +35,7 @@ admin is logged in. Both can coexist.
 import logging
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
@@ -76,6 +76,7 @@ _CLOUD_LLM_KEY_MAP = {
 
 class SetupStatusResponse(BaseModel):
     configured: bool
+    setup_mode: Literal["single", "multi"] = "single"
 
 
 class ServiceStatus(BaseModel):
@@ -183,14 +184,15 @@ async def get_status(request: Request) -> SetupStatusResponse:
     boot, so it must never 401/403/500 on a fresh DB.
     """
     pool = request.app.state.db_pool
+    mode = get_core_settings().jarvis_setup_mode
     try:
         admins = await _admin_count(pool)
     except Exception:
         logger.exception("setup status: admin count query failed")
         # Fail-open: report unconfigured so the wizard can run / the operator
         # can recover. The DB error itself will surface in /api/setup/system-check.
-        return SetupStatusResponse(configured=False)
-    return SetupStatusResponse(configured=admins > 0)
+        return SetupStatusResponse(configured=False, setup_mode=mode)
+    return SetupStatusResponse(configured=admins > 0, setup_mode=mode)
 
 
 @router.post(
