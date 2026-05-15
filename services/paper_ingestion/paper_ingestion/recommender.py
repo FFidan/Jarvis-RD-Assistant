@@ -15,6 +15,7 @@ from paper_ingestion.ingestion.recommender import (
     _filter_unread,
     _get_starred_ids,
     _read_weights,
+    _refresh_recommendations_for_user,
     _safe_float,
     refresh_recommendations,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "_filter_unread",
     "_get_starred_ids",
     "_read_weights",
+    "_refresh_recommendations_for_user",
     "_safe_float",
     "refresh_recommendations",
 ]

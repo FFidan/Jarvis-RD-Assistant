@@ -12,7 +12,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models.papers import (
@@ -48,9 +48,11 @@ async def list_recommendation_feedback(
     Optional ``paper_id`` query param narrows results to a single paper.
     """
     _ = request  # required by @limiter.limit; not used in body
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
-        where_clauses = ["rf.user_id IS NOT DISTINCT FROM $1"]
+        where_clauses = ["rf.user_id = $1"]
         params: list[object] = [user_id]
         if paper_id is not None:
             params.append(paper_id)
@@ -94,16 +96,18 @@ async def delete_recommendation_feedback_by_topic(
 ) -> DeleteFeedbackResponse:
     """Bulk-delete all recommendation_feedback rows for the given topic.
 
-    Scoped to the current user (``user_id IS NOT DISTINCT FROM`` —
-    matches NULL for anonymous mode). Returns the number of rows deleted.
+    Scoped to the current user (``user_id = $2``). Returns the number of
+    rows deleted.
     """
     _ = request  # required by @limiter.limit; not used in body
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         result = await conn.execute(
             """DELETE FROM recommendation_feedback
                 WHERE topic_id = $1
-                  AND user_id IS NOT DISTINCT FROM $2""",
+                  AND user_id = $2""",
             topic_id,
             user_id,
         )

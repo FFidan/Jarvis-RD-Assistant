@@ -16,7 +16,8 @@ from unittest.mock import MagicMock
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from jarvis_common import current_user_id, current_user_id_or_none, verify_api_key
+from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -24,14 +25,18 @@ from tests.conftest import FakeRecord, _make_pool_and_conn
 # ---------------------------------------------------------------------------
 
 
-def _make_client(user_id_override=None):
+def _make_client(user_id_override=7):
     """Return (TestClient, pool, conn) with limiter disabled and auth stubbed.
 
     Parameters
     ----------
     user_id_override:
-        Value that both ``current_user_id`` and ``current_user_id_or_none``
-        dependencies will return.  Defaults to None (single-tenant stub mode).
+        Authenticated user id the pulse resolver returns. WS-CROSS-USER:
+        pulse routes use ``current_user_id_strict_with_owner_override``
+        (hard-401 when sessionless), so this is always a concrete int.
+        Registered both as a FastAPI dependency override (for the
+        ``Depends`` form on ``explain_card``) and as a module attribute
+        (for routes that call the resolver inline).
     """
     from paper_ingestion.deps import limiter
     from paper_ingestion.routers import pulse as pulse_router
@@ -49,8 +54,10 @@ def _make_client(user_id_override=None):
 
     # Stub auth
     app.dependency_overrides[verify_api_key] = lambda: None
-    app.dependency_overrides[current_user_id] = lambda: user_id_override
-    app.dependency_overrides[current_user_id_or_none] = lambda: user_id_override
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: user_id_override
+    pulse_router.current_user_id_strict_with_owner_override = AsyncMock(
+        return_value=user_id_override
+    )
 
     tc = TestClient(app, raise_server_exceptions=False)
     return tc, pool, conn, app
@@ -62,12 +69,12 @@ def _make_client(user_id_override=None):
 
 
 def test_explain_card_filters_by_user_id_in_not_distinct_form():
-    """GET /explain/{card_id} must pass user_id via IS NOT DISTINCT FROM.
+    """GET /explain/{card_id} must scope by an exact user_id match.
 
     The SQL captured by conn.fetchrow must include the ownership filter so that
     sequential card-id enumeration (IDOR) is blocked.
     """
-    tc, pool, conn, app = _make_client(user_id_override=None)
+    tc, pool, conn, app = _make_client(user_id_override=7)
 
     conn.fetchrow.return_value = FakeRecord(
         {
@@ -95,18 +102,21 @@ def test_explain_card_filters_by_user_id_in_not_distinct_form():
     assert call_args is not None
 
     sql: str = call_args.args[0]
-    assert "IS NOT DISTINCT FROM" in sql, (
-        f"Expected 'IS NOT DISTINCT FROM' in explain_card SQL but got:\n{sql!r}"
+    assert "IS NOT DISTINCT FROM" not in sql, (
+        f"explain_card SQL must not use the permissive NULL-matching predicate:\n{sql!r}"
+    )
+    assert "user_id = $" in sql, (
+        f"Expected an exact 'user_id = $' match in explain_card SQL but got:\n{sql!r}"
     )
 
-    # user_id (None in stub mode) must be passed as $2 parameter
+    # user_id must be passed as the $2 parameter (now always a real int)
     params = call_args.args[1:]  # (card_id, user_id)
     assert len(params) == 2, (
         f"Expected 2 positional params (card_id, user_id), got {len(params)}: {params}"
     )
     card_id_param, user_id_param = params
     assert card_id_param == 7
-    assert user_id_param is None  # stub mode returns None
+    assert user_id_param == 7
 
 
 def test_explain_card_filters_by_real_user_id():
@@ -147,12 +157,12 @@ def test_explain_card_filters_by_real_user_id():
 
 
 def test_rate_card_deck_guard_filters_by_user_id():
-    """POST /rate deck-membership guard must include pd.user_id IS NOT DISTINCT FROM.
+    """POST /rate deck-membership guard must scope pd.user_id by an exact match.
 
     Without this filter any user_id could rate any other user's deck-paper (IDOR).
     The SQL captured by conn.fetchval must include the ownership predicate.
     """
-    tc, pool, conn, app = _make_client(user_id_override=None)
+    tc, pool, conn, app = _make_client(user_id_override=7)
 
     # fetchval returns truthy value → paper is in the deck; execute is a no-op
     conn.fetchval.return_value = 1
@@ -176,10 +186,12 @@ def test_rate_card_deck_guard_filters_by_user_id():
     assert call_args is not None
 
     sql: str = call_args.args[0]
-    assert "IS NOT DISTINCT FROM" in sql, (
-        f"Expected 'IS NOT DISTINCT FROM' in deck-guard SQL but got:\n{sql!r}"
+    assert "IS NOT DISTINCT FROM" not in sql, (
+        f"deck-guard SQL must not use the permissive NULL-matching predicate:\n{sql!r}"
     )
-    assert "pd.user_id" in sql, f"Expected 'pd.user_id' in deck-guard SQL but got:\n{sql!r}"
+    assert "pd.user_id = $" in sql, (
+        f"Expected exact 'pd.user_id = $' match in deck-guard SQL but got:\n{sql!r}"
+    )
 
     # The guard query must pass (paper_id, user_id) — $1 and $2
     params = call_args.args[1:]
@@ -188,7 +200,7 @@ def test_rate_card_deck_guard_filters_by_user_id():
     )
     paper_id_param, user_id_param = params
     assert paper_id_param == 42
-    assert user_id_param is None  # stub mode
+    assert user_id_param == 7
 
 
 def test_rate_card_deck_guard_with_real_user_id():
@@ -205,7 +217,7 @@ def test_rate_card_deck_guard_with_real_user_id():
     conn.execute.return_value = "INSERT 0 1"
 
     with patch(
-        "paper_ingestion.routers.pulse.current_user_id_or_none",
+        "paper_ingestion.routers.pulse.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=7),
     ):
         try:
@@ -239,7 +251,7 @@ def test_rate_card_deck_guard_with_real_user_id():
 from unittest.mock import AsyncMock, patch  # noqa: E402 — grouped with other imports above
 
 
-def _rate(rating: str, paper_id: int = 1, user_id=None):
+def _rate(rating: str, paper_id: int = 1, user_id=7):
     """Issue a POST /api/pulse/rate and return (resp, app) for cleanup."""
     tc, pool, conn, app = _make_client(user_id_override=user_id)
     conn.fetchval.return_value = 1  # deck membership guard passes
@@ -361,7 +373,7 @@ def test_rate_card_membership_guard_returns_404_when_paper_not_in_deck():
 
 def test_rate_card_open_returns_ok_status():
     """rating='open' returns HTTP 200 with status='ok' (logging-only path)."""
-    tc, pool, conn, app = _make_client(user_id_override=None)
+    tc, pool, conn, app = _make_client(user_id_override=7)
     conn.fetchval.return_value = 1
     try:
         resp = tc.post("/api/pulse/rate", json={"paper_id": 5, "rating": "open"})

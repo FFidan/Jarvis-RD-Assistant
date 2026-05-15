@@ -37,12 +37,12 @@ def _app():
     app.state.limiter.enabled = False
 
     # Inject a real user_id via current_user_id_or_none.
-    orig = topics_router.current_user_id_or_none
-    topics_router.current_user_id_or_none = AsyncMock(return_value=42)
+    orig = topics_router.current_user_id_strict
+    topics_router.current_user_id_strict = AsyncMock(return_value=42)
 
     yield app, conn
 
-    topics_router.current_user_id_or_none = orig
+    topics_router.current_user_id_strict = orig
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 
@@ -60,12 +60,12 @@ def _unauthed_app():
     app.dependency_overrides[verify_api_key] = lambda: None
     app.state.limiter.enabled = False
 
-    orig = topics_router.current_user_id_or_none
-    topics_router.current_user_id_or_none = AsyncMock(return_value=None)
+    orig = topics_router.current_user_id_strict
+    topics_router.current_user_id_strict = AsyncMock(return_value=None)
 
     yield app, conn
 
-    topics_router.current_user_id_or_none = orig
+    topics_router.current_user_id_strict = orig
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 

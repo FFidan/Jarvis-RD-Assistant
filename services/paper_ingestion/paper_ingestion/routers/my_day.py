@@ -13,7 +13,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models.journal import (
@@ -39,12 +39,12 @@ async def get_journal_entry(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JournalEntryResponse:
     """Fetch a journal entry for the given date (404 if not found)."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             "SELECT id, date, prompts, created_at, updated_at "
             "FROM journal_entries "
-            "WHERE user_id IS NOT DISTINCT FROM $1 AND date = $2",
+            "WHERE user_id = $1 AND date = $2",
             user_id,
             date,
         )
@@ -72,7 +72,7 @@ async def upsert_journal_entry(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JournalEntryResponse:
     """Create or update a journal entry for the given date."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     prompts_dict = body.prompts.model_dump(exclude_none=True)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(

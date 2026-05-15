@@ -129,7 +129,7 @@ async def test_fetch_and_process_local_pdf_promotes_stub_and_enqueues_process(ap
     conn.execute.assert_awaited_once()
     assert "UPDATE papers" in conn.execute.await_args.args[0]
     assert conn.execute.await_args.args[1] == 42
-    defer_async.assert_awaited_once_with(job_id=ANY, user_id=None, paper_id=42)
+    defer_async.assert_awaited_once_with(job_id=ANY, user_id=1, paper_id=42)
 
 
 @pytest.mark.asyncio
@@ -165,7 +165,7 @@ async def test_fetch_and_process_pdf_url_promotes_stub_and_enqueues_analyze(app_
     assert data["job_id"] is not None
     assert data["message"] is None
     conn.execute.assert_awaited_once()
-    defer_async.assert_awaited_once_with(job_id=ANY, user_id=None, paper_id=43)
+    defer_async.assert_awaited_once_with(job_id=ANY, user_id=1, paper_id=43)
 
 
 @pytest.mark.asyncio

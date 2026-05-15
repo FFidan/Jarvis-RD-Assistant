@@ -8,7 +8,7 @@ from jarvis_common import (
     ErrorResponse,
     JobCreateResponse,
     assert_paper_ownership,
-    current_user_id_or_none,
+    current_user_id_strict,
 )
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -55,7 +55,7 @@ async def scan_contradictions(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue a bounded cross-paper contradiction scan."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     payload = body.model_dump() if body else {"paper_id": None, "limit": 25}
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["contradictions.scan"].defer_async(
@@ -77,7 +77,7 @@ async def scan_paper_contradictions(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue a contradiction scan focused on one paper."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     limit = body.limit if body else 25

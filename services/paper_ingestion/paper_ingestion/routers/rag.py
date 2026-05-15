@@ -10,7 +10,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
-from jarvis_common.auth import current_user_id_or_none, current_user_id_with_owner_override
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
@@ -68,7 +68,9 @@ async def summarize_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobCreateResponse:
     """Enqueue LLM summary generation with quote verification."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
@@ -105,28 +107,22 @@ async def batch_summarize_papers(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    # Sprint B: select only papers in the caller's user_library; in
-    # single-user mode (user_id=None) fall back to the canonical corpus.
-    user_id = await current_user_id_or_none(request)
+    # Sprint B: select only papers in the caller's user_library. WS-CROSS-USER:
+    # the resolver hard-401s sessionless callers, so the previous unscoped
+    # corpus fallback (which leaked every user's papers) is removed.
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
-        if user_id is not None:
-            rows = await conn.fetch(
-                """SELECT p.id FROM papers p
-                   JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
-                   WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
-                     AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
-                   ORDER BY p.created_at DESC LIMIT $1""",
-                limit,
-                user_id,
-            )
-        else:
-            rows = await conn.fetch(
-                """SELECT p.id FROM papers p
-                   WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
-                     AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
-                   ORDER BY p.created_at DESC LIMIT $1""",
-                limit,
-            )
+        rows = await conn.fetch(
+            """SELECT p.id FROM papers p
+               JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $2
+               WHERE EXISTS (SELECT 1 FROM paper_chunks pc WHERE pc.paper_id = p.id)
+                 AND NOT EXISTS (SELECT 1 FROM paper_summaries ps WHERE ps.paper_id = p.id)
+               ORDER BY p.created_at DESC LIMIT $1""",
+            limit,
+            user_id,
+        )
     paper_ids = [row["id"] for row in rows]
     job_id: str | None = None
     if paper_ids:
@@ -175,7 +171,9 @@ async def ask_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     messages, raw_sources = await prepare_single_paper_rag(
@@ -259,7 +257,9 @@ async def ask_paper_stream(
     body : AskRequest
         Question and optional max_chunks parameter.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     try:
@@ -331,7 +331,9 @@ async def ask_cross_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client, user_id=user_id)
 
     # Short-circuit when no chunks were found
@@ -411,7 +413,9 @@ async def ask_cross_paper_stream(
     body : CrossPaperAskRequest
         Question, max_chunks, max_papers, and decompose parameters.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     try:
         result = await prepare_cross_paper_rag(
             embedder, db_pool, body, http_client, user_id=user_id
@@ -479,7 +483,7 @@ async def get_weekly_digest(
     ``unverified_themes`` (ephemeral — not persisted to DB).
 
     Phase 2 WS-2D: ``user_id`` is resolved from the session via
-    ``current_user_id_or_none`` rather than accepted as a query parameter
+    ``current_user_id_strict_with_owner_override`` rather than accepted as a query parameter
     (which was an IDOR vector pre-WS-2A — any authenticated user could pass
     any user_id and read another user's digest).
 
@@ -496,7 +500,9 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
-    user_id = await current_user_id_with_owner_override(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     return await generate_weekly_summary(
         db_pool,
         days=days,
@@ -525,7 +531,9 @@ async def enqueue_weekly_digest(
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["digest.weekly"].defer_async(
         job_id=jarvis_job_id, days=days, user_id=user_id

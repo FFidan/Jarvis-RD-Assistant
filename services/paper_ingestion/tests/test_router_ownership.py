@@ -70,8 +70,13 @@ def _app():
 
 
 @pytest.mark.asyncio
-async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch):
-    """POST /api/summarize/{paper_id} returns 202 in single-user mode."""
+async def test_rag_summarize_paper_passes_for_owned_paper(_app, monkeypatch):
+    """POST /api/summarize/{paper_id} returns 202 for a paper the caller owns.
+
+    WS-CROSS-USER: there is no permissive single-user mode anymore — the
+    resolver yields a real user and ownership is always enforced. A canonical
+    (NULL ``discovered_by``) paper fast-grants, so the endpoint still queues.
+    """
     app, conn = _app
 
     # Stub out paper.summarize task so we don't need a real DB / procrastinate
@@ -83,8 +88,9 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry.KIND_TO_TASK, "paper.summarize", mock_task)
 
-    # In single-user mode (current_user_id_or_none returns None) the
-    # ownership helper short-circuits and never calls fetchrow.
+    # Ownership probe: canonical paper (NULL discovered_by) → fast-grant.
+    conn.fetchrow.return_value = {"discovered_by": None}
+
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -93,8 +99,8 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "queued"
-    # Ownership check skipped entirely in single-user mode → no fetchrow call
-    conn.fetchrow.assert_not_called()
+    # Ownership IS enforced now (the leak is closed): the probe ran.
+    conn.fetchrow.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -103,8 +109,12 @@ async def test_rag_summarize_paper_passes_in_single_user_mode(_app, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkeypatch):
-    """POST /api/papers/{paper_id}/extract returns 202 in single-user mode."""
+async def test_extractions_extract_paper_passes_for_owned_paper(_app, monkeypatch):
+    """POST /api/papers/{paper_id}/extract returns 202 for an owned paper.
+
+    WS-CROSS-USER: ownership is always enforced; a canonical paper
+    (NULL ``discovered_by``) fast-grants so the job still queues.
+    """
     from unittest.mock import AsyncMock, MagicMock
 
     import jarvis_common.task_registry as task_registry
@@ -114,6 +124,8 @@ async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkey
     mock_task = MagicMock()
     mock_task.defer_async = AsyncMock()
     monkeypatch.setitem(task_registry.KIND_TO_TASK, "extraction.single", mock_task)
+
+    conn.fetchrow.return_value = {"discovered_by": None}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -126,7 +138,7 @@ async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkey
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "queued"
-    conn.fetchrow.assert_not_called()
+    conn.fetchrow.assert_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -135,13 +147,16 @@ async def test_extractions_extract_paper_passes_in_single_user_mode(_app, monkey
 
 
 @pytest.mark.asyncio
-async def test_search_relevance_score_passes_in_single_user_mode(_app):
-    """POST /api/relevance-score returns 200 in single-user mode + healthy embedder."""
+async def test_search_relevance_score_passes_for_owned_paper(_app):
+    """POST /api/relevance-score returns 200 for an owned paper + healthy embedder.
+
+    WS-CROSS-USER: ownership is always enforced; the first fetchrow is the
+    ownership probe (canonical paper → fast-grant), then paper + topic.
+    """
     app, conn = _app
 
-    # fetchrow is called for paper + topic lookups (NOT for the ownership
-    # check, which short-circuits in single-user mode).
     conn.fetchrow.side_effect = [
+        {"discovered_by": None},  # ownership probe → canonical, fast-grant
         FakeRecord(title="Test Paper", abstract="An abstract."),
         FakeRecord(query_terms=["agents"]),
     ]

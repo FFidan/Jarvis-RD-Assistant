@@ -17,15 +17,36 @@ _MAX_RECOMMENDATIONS = 50
 
 
 async def refresh_recommendations(app: Any, user_id: int | None = None) -> int:
-    """Compute and upsert recommendations. Returns count saved.
+    """Compute and upsert recommendations. Returns total count saved.
 
     Parameters
     ----------
     user_id:
-        When provided, recommendations are scoped to that user's starred
-        papers and read/archived/dismissed state.  Pass ``None`` to use
-        legacy tenant-agnostic behaviour (all rows, user_id IS NULL).
+        When provided, recommendations are computed for that single user.
+        When ``None`` (the nightly-cron path), iterate every non-deleted
+        user and run the per-user logic once each — no more NULL-owned
+        recommendation writes that leaked across tenants.
     """
+    if user_id is not None:
+        return await _refresh_recommendations_for_user(app, user_id)
+
+    db_pool = app.state.db_pool
+    async with db_pool.acquire() as conn:
+        user_ids = [
+            r["id"] for r in await conn.fetch("SELECT id FROM users WHERE deleted_at IS NULL")
+        ]
+    total = 0
+    for uid in user_ids:
+        try:
+            total += await _refresh_recommendations_for_user(app, uid)
+        except Exception:
+            _logger.exception("recommendation refresh failed for user %d", uid)
+    return total
+
+
+async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
+    """Compute and upsert recommendations for a single user. Returns count saved."""
+    assert user_id is not None, "per-user recommendation refresh requires a real user_id"
     db_pool = app.state.db_pool
     embedder = app.state.embedder
 
@@ -153,11 +174,9 @@ async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
     return liked, project, enabled
 
 
-async def _get_starred_ids(conn: asyncpg.Connection, user_id: int | None) -> list[int]:
+async def _get_starred_ids(conn: asyncpg.Connection, user_id: int) -> list[int]:
     rows = await conn.fetch(
-        "SELECT paper_id FROM paper_user_state"
-        " WHERE COALESCE(starred, FALSE)"
-        "   AND user_id IS NOT DISTINCT FROM $1",
+        "SELECT paper_id FROM paper_user_state WHERE COALESCE(starred, FALSE)   AND user_id = $1",
         user_id,
     )
     return [r["paper_id"] for r in rows]
@@ -182,9 +201,7 @@ def _compute_score(
     return liked * liked_weight + project * project_weight
 
 
-async def _filter_unread(
-    conn: asyncpg.Connection, paper_ids: list[int], user_id: int | None
-) -> set[int]:
+async def _filter_unread(conn: asyncpg.Connection, paper_ids: list[int], user_id: int) -> set[int]:
     # Hard-exclude papers whose lifecycle state is 'trash' or 'done',
     # and papers with a negative recommendation_feedback signal in the last 60 days.
     # Papers with no user_state row (COALESCE to 'inbox') remain eligible.
@@ -196,7 +213,7 @@ async def _filter_unread(
                  AND NOT EXISTS (
                    SELECT 1 FROM paper_user_state pus
                     WHERE pus.paper_id = p.id
-                      AND pus.user_id IS NOT DISTINCT FROM $2
+                      AND pus.user_id = $2
                       AND COALESCE(pus.state, 'inbox') IN ('trash', 'done')
                  )
                  AND NOT EXISTS (
@@ -204,7 +221,7 @@ async def _filter_unread(
                     WHERE rf.paper_id = p.id
                       AND rf.signal = 'negative'
                       AND rf.created_at > NOW() - INTERVAL '60 days'
-                      AND rf.user_id IS NOT DISTINCT FROM $2
+                      AND rf.user_id = $2
                  )""",
         paper_ids,
         user_id,

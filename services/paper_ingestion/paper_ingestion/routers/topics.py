@@ -5,7 +5,7 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import TopicCreate, TopicResponse, TopicUpdate
@@ -35,7 +35,7 @@ async def list_my_subscriptions(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[int]:
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:
@@ -53,7 +53,7 @@ async def subscribe_to_topic(
     topic_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:
@@ -75,7 +75,7 @@ async def unsubscribe_from_topic(
     topic_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> None:
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     if user_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
     async with db_pool.acquire() as conn:

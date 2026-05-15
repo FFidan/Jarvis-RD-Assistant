@@ -25,7 +25,7 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.library import add_to_library
 
@@ -234,7 +234,9 @@ async def search_papers(
     # Upsert into DB (per original /api/search behavior).
     # Sprint B canonical-corpus: insert canonical, then add to the caller's
     # user_library so the manually-searched paper appears in *their* feed.
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     saved_results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         for paper in deduped:
@@ -356,7 +358,9 @@ async def search_papers_preview(
         interleaved = _round_robin_merge(per_source)
         deduped = _dedup_papers(interleaved)
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     library_indexes, title_year_candidates = await _load_local_library_matches(
         db_pool, deduped, user_id
     )
@@ -419,7 +423,9 @@ async def search_hybrid(
             detail="Qdrant unavailable for hybrid search",
         )
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     results = await embedder.hybrid_search(
         body.query, db_pool, limit=body.max_results, user_id=user_id
     )
@@ -441,7 +447,9 @@ async def compute_relevance(
     embedder: Embedder | None = Depends(get_embedder),
 ) -> dict[str, int | float]:
     """Compute and store relevance score between a paper and a topic."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         # Fetch paper and topic data in one round-trip

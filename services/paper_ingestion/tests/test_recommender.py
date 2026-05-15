@@ -23,6 +23,7 @@ from paper_ingestion.recommender import (  # noqa: E402
     _compute_score,
     _filter_unread,
     _get_starred_ids,
+    _refresh_recommendations_for_user,
     refresh_recommendations,
 )
 
@@ -383,13 +384,16 @@ class TestFilterUnread:
 
     @pytest.mark.asyncio
     async def test_filter_unread_sql_contains_user_id_guard(self) -> None:
-        """SQL must contain 'user_id IS NOT DISTINCT FROM' to scope per-tenant."""
+        """SQL must scope both EXISTS sub-queries by an exact user_id match."""
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=None)
+        await _filter_unread(conn, [1], user_id=7)
         sql = conn.fetch.call_args.args[0]
-        assert "user_id IS NOT DISTINCT FROM" in sql, (
-            "SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely"
+        assert "IS NOT DISTINCT FROM" not in sql, (
+            "WS-CROSS-USER: must not use the permissive NULL-matching predicate"
+        )
+        assert "pus.user_id = $2" in sql and "rf.user_id = $2" in sql, (
+            f"both per-user EXISTS guards must use an exact match; got:\n{sql!r}"
         )
 
     @pytest.mark.asyncio
@@ -484,13 +488,16 @@ class TestGetStarredIds:
 
     @pytest.mark.asyncio
     async def test_sql_contains_user_id_guard(self) -> None:
-        """SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely."""
+        """SQL must scope starred lookups by an exact user_id match."""
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _get_starred_ids(conn, user_id=None)
+        await _get_starred_ids(conn, user_id=7)
         sql = conn.fetch.call_args.args[0]
-        assert "user_id IS NOT DISTINCT FROM" in sql, (
-            "SQL must use IS NOT DISTINCT FROM to handle NULL user_id safely"
+        assert "IS NOT DISTINCT FROM" not in sql, (
+            "WS-CROSS-USER: must not use the permissive NULL-matching predicate"
+        )
+        assert "user_id = $1" in sql, (
+            f"_get_starred_ids must scope by an exact user_id match; got:\n{sql!r}"
         )
 
     @pytest.mark.asyncio
@@ -644,14 +651,14 @@ class TestRefreshRecommendations:
         """When recommendation.enabled=false in config, returns 0 without querying embedder."""
         config_rows = [FakeRecord({"key": "recommendation.enabled", "value": False})]
         app = _build_app(config_rows=config_rows)
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 0
 
     @pytest.mark.asyncio
     async def test_no_signals_returns_zero(self) -> None:
         """No starred papers and no active projects → 0 recommendations."""
         app = _build_app(starred_ids=[], projects=[])
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 0
 
     @pytest.mark.asyncio
@@ -663,7 +670,7 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=[],
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 0
 
     @pytest.mark.asyncio
@@ -675,7 +682,7 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=[99],
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 1
         # Verify executemany was called with the right paper_id
         exec_call = (
@@ -695,7 +702,7 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=[42],
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 0
 
     @pytest.mark.asyncio
@@ -708,7 +715,7 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=[],  # paper 55 is filtered out
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 0
 
     @pytest.mark.asyncio
@@ -720,7 +727,7 @@ class TestRefreshRecommendations:
             search_results=[{"paper_id": 77, "score": 0.9}],
             unread_ids=[77],
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == 1
 
     @pytest.mark.asyncio
@@ -733,7 +740,7 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=[10],
         )
-        await refresh_recommendations(app)
+        await _refresh_recommendations_for_user(app, user_id=1)
         conn = app.state.db_pool.acquire.return_value.__aenter__.return_value
         rows = conn.executemany.call_args.args[1]
         # WS-2D: row tuple is now (paper_id, user_id, score, modes, explanation).
@@ -751,7 +758,7 @@ class TestRefreshRecommendations:
             search_results=[{"paper_id": 20, "score": 0.7}],
             unread_ids=[20],
         )
-        await refresh_recommendations(app)
+        await _refresh_recommendations_for_user(app, user_id=1)
         conn = app.state.db_pool.acquire.return_value.__aenter__.return_value
         rows = conn.executemany.call_args.args[1]
         # WS-2D: row tuple is now (paper_id, user_id, score, modes, explanation).
@@ -772,5 +779,48 @@ class TestRefreshRecommendations:
             projects=[],
             unread_ids=unread,
         )
-        count = await refresh_recommendations(app)
+        count = await _refresh_recommendations_for_user(app, user_id=1)
         assert count == n
+
+
+class TestRefreshRecommendationsFanout:
+    """WS-CROSS-USER: the nightly (user_id=None) path iterates real users."""
+
+    @pytest.mark.asyncio
+    async def test_per_user_function_rejects_none_user(self) -> None:
+        """The per-user core asserts a concrete user_id (no NULL-owned writes)."""
+        app = _build_app()
+        with pytest.raises(AssertionError):
+            await _refresh_recommendations_for_user(app, user_id=None)
+
+    @pytest.mark.asyncio
+    async def test_nightly_path_fans_out_over_non_deleted_users(self, monkeypatch) -> None:
+        """refresh_recommendations(app) runs the per-user logic once per user."""
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        ctx = MagicMock()
+        ctx.__aenter__ = AsyncMock(return_value=conn)
+        ctx.__aexit__ = AsyncMock(return_value=False)
+        pool = MagicMock()
+        pool.acquire.return_value = ctx
+        app = SimpleNamespace(state=SimpleNamespace(db_pool=pool, embedder=AsyncMock()))
+
+        seen: list[int] = []
+
+        async def _fake_per_user(_app, user_id):
+            seen.append(user_id)
+            return 3
+
+        monkeypatch.setattr(
+            "paper_ingestion.ingestion.recommender._refresh_recommendations_for_user",
+            _fake_per_user,
+        )
+
+        total = await refresh_recommendations(app)
+
+        users_sql = conn.fetch.await_args.args[0]
+        assert "FROM users" in users_sql and "deleted_at IS NULL" in users_sql, (
+            f"nightly path must enumerate non-deleted users; got:\n{users_sql!r}"
+        )
+        assert seen == [1, 2]
+        assert total == 6

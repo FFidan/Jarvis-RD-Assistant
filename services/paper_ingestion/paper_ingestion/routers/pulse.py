@@ -18,7 +18,7 @@ from datetime import date
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, current_user_id_or_none, log_audit
+from jarvis_common import ErrorResponse, current_user_id_strict_with_owner_override, log_audit
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.settings import get_core_settings
@@ -84,7 +84,9 @@ async def generate_pulse(
     is per-payload, whereas we want a per-kind+user lock that spans the full
     multi-minute pipeline run.
     """
-    current_uid = await current_user_id_or_none(request)
+    current_uid = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     key1 = _kind_lock_key("pulse.generate")
     key2 = current_uid or 0
 
@@ -155,7 +157,9 @@ async def get_today(
     HTTPException(404)
         When no deck has been generated for today at all.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     deck = await load_today(db_pool, user_id=user_id)
     if deck is None:
         raise HTTPException(status_code=404, detail="No Pulse deck for today")
@@ -173,7 +177,7 @@ async def get_today(
                 """
                 SELECT source_type, last_status, cooldown_until, consecutive_failures
                 FROM source_health
-                WHERE user_id IS NOT DISTINCT FROM $1
+                WHERE user_id = $1
                 """,
                 user_id,
             )
@@ -210,7 +214,9 @@ async def get_history(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[PulseDeckResponse]:
     """Return Pulse decks from the last *days* days, newest first."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     return await load_history(db_pool, days=days, user_id=user_id)
 
 
@@ -239,13 +245,15 @@ async def rate_card(
     Guard: paper must be a member of the requesting user's pulse deck (404 if not).
     """
     _ = request  # required by slowapi limiter — pyright suppression idiom (plan §2 constraint 7)
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         in_deck = await conn.fetchval(
             """SELECT 1 FROM pulse_cards pc
                JOIN pulse_decks pd ON pc.deck_id = pd.id
                WHERE pc.paper_id = $1
-                 AND pd.user_id IS NOT DISTINCT FROM $2
+                 AND pd.user_id = $2
                LIMIT 1""",
             body.paper_id,
             user_id,
@@ -282,15 +290,13 @@ async def rate_card(
 async def explain_card(
     request: Request,
     card_id: int,
-    user_id: int | None = Depends(current_user_id_or_none),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseExplainResponse:
     """Return the reasoning + signal breakdown for a single Pulse card.
 
-    Ownership is enforced via a JOIN to pulse_decks filtered by user_id so that
-    sequential-id enumeration (IDOR) is prevented.  ``IS NOT DISTINCT FROM``
-    matches NULL-user decks in single-tenant stub mode and real user_id values
-    once multi-tenant auth is active.
+    Ownership is enforced via a JOIN to pulse_decks filtered by an exact
+    ``user_id`` match so that sequential-id enumeration (IDOR) is prevented.
     """
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
@@ -299,7 +305,7 @@ async def explain_card(
             FROM pulse_cards pc
             JOIN pulse_decks pd ON pc.deck_id = pd.id
             WHERE pc.id = $1
-              AND pd.user_id IS NOT DISTINCT FROM $2
+              AND pd.user_id = $2
             """,
             card_id,
             user_id,
@@ -328,7 +334,9 @@ async def get_stats(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> PulseStatsResponse:
     """Aggregate Pulse run stats over the past *days* days."""
-    caller_id = await current_user_id_or_none(request)
+    caller_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -342,7 +350,7 @@ async def get_stats(
                     SELECT stats->>'last_error'
                     FROM pulse_decks
                     WHERE generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id IS NOT DISTINCT FROM $2
+                      AND user_id = $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS last_error,
@@ -350,13 +358,13 @@ async def get_stats(
                     SELECT degraded_reason
                     FROM pulse_decks
                     WHERE generated_at >= NOW() - make_interval(days => $1)
-                      AND user_id IS NOT DISTINCT FROM $2
+                      AND user_id = $2
                     ORDER BY generated_at DESC
                     LIMIT 1
                 ) AS degraded_reason
             FROM pulse_decks
             WHERE generated_at >= NOW() - make_interval(days => $1)
-              AND user_id IS NOT DISTINCT FROM $2
+              AND user_id = $2
             """,
             days,
             caller_id,
@@ -398,14 +406,16 @@ async def debug_pulse(
     """
     if not _is_dev_mode():
         raise HTTPException(status_code=404)
-    caller_id = await current_user_id_or_none(request)
+    caller_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         # Fetch the most recent deck row for this caller
         deck_row = await conn.fetchrow(
             """
             SELECT id, deck_date, card_count, generated_at, stats, degraded_reason
             FROM pulse_decks
-            WHERE user_id IS NOT DISTINCT FROM $1
+            WHERE user_id = $1
             ORDER BY generated_at DESC
             LIMIT 1
             """,
@@ -441,7 +451,7 @@ async def debug_pulse(
         # NOTE: user_config pulse.* / topic.* keys are intentionally global
         # single-tenant (one operator per JARVIS instance). Wave-4 multi-tenant:
         # re-key as `pulse.<user_id>.weights`, `topic.<user_id>.<n>.embedding`,
-        # etc. and add a `WHERE user_id IS NOT DISTINCT FROM $1` filter here.
+        # etc. and add a `WHERE user_id = $1` filter here.
         embed_rows = await conn.fetch(
             """
             SELECT key, value
@@ -556,13 +566,15 @@ async def get_source_health(
         Fields: source_type, last_request_at, last_success_at, last_status,
                 cooldown_until, consecutive_failures.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     rows = await db_pool.fetch(
         """
         SELECT source_type, last_request_at, last_success_at, last_status,
                cooldown_until, consecutive_failures
         FROM source_health
-        WHERE user_id IS NOT DISTINCT FROM $1
+        WHERE user_id = $1
         ORDER BY source_type
         """,
         user_id,
@@ -596,12 +608,14 @@ async def get_source_history(
     days : int
         Include runs started in the last *days* days (default 7).
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     rows = await db_pool.fetch(
         """
         SELECT source_type, started_at, finished_at, status, candidate_count, duration_ms
         FROM source_run_history
-        WHERE user_id IS NOT DISTINCT FROM $1
+        WHERE user_id = $1
           AND started_at > NOW() - ($2::int || ' days')::interval
         ORDER BY source_type, started_at DESC
         """,

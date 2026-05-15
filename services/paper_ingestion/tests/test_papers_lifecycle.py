@@ -66,7 +66,15 @@ async def test_hard_delete_requires_trash_state():
     # _assert_paper_in_state fetches state via fetchval; None → COALESCE → 'inbox'
     conn.fetchval.return_value = None
 
-    with pytest.raises(HTTPException) as exc_info:
+    # WS-CROSS-USER: ownership now always runs; this test asserts the trash
+    # state precondition (ownership covered elsewhere) — pass it through.
+    with (
+        patch(
+            "paper_ingestion.routers.papers.assert_paper_ownership",
+            new=AsyncMock(return_value=None),
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
         await papers.hard_delete_paper.__wrapped__(
             _mock_request(),
             paper_id=10,

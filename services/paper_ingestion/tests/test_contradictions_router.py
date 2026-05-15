@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
+
 from tests.conftest import FakeRecord
 
 
@@ -107,7 +108,7 @@ async def test_scan_contradictions_endpoint_enqueues_job(app_with_pool):
 
     assert resp.status_code == 202
     assert resp.json() == {"job_id": "job-contradictions", "status": "queued"}
-    defer.assert_awaited_once_with(job_id="job-contradictions", user_id=None, paper_id=5, limit=9)
+    defer.assert_awaited_once_with(job_id="job-contradictions", user_id=1, paper_id=5, limit=9)
 
 
 @pytest.mark.asyncio
@@ -132,5 +133,5 @@ async def test_scan_paper_contradictions_endpoint_enqueues_scoped_job(app_with_p
     assert resp.status_code == 202
     assert resp.json() == {"job_id": "job-paper-contradictions", "status": "queued"}
     defer.assert_awaited_once_with(
-        job_id="job-paper-contradictions", user_id=None, paper_id=7, limit=12
+        job_id="job-paper-contradictions", user_id=1, paper_id=7, limit=12
     )

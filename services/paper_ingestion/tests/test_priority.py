@@ -189,7 +189,7 @@ def test_compute_paper_priority_rejects_unowned_paper():
     try:
         with (
             patch(
-                "paper_ingestion.routers.priority.current_user_id_or_none",
+                "paper_ingestion.routers.priority.current_user_id_strict",
                 new=AsyncMock(return_value=2),
             ),
             patch(
@@ -245,7 +245,7 @@ def test_compute_paper_priority_passes_for_owner():
     try:
         with (
             patch(
-                "paper_ingestion.routers.priority.current_user_id_or_none",
+                "paper_ingestion.routers.priority.current_user_id_strict",
                 new=AsyncMock(return_value=1),
             ),
             patch(
@@ -296,7 +296,7 @@ def test_compute_paper_priority_single_user_mode_skips_ownership():
     try:
         with (
             patch(
-                "paper_ingestion.routers.priority.current_user_id_or_none",
+                "paper_ingestion.routers.priority.current_user_id_strict",
                 new=AsyncMock(return_value=None),
             ),
             patch(

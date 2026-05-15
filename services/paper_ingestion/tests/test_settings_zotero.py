@@ -55,6 +55,7 @@ def _app():
     from jarvis_common import verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as settings_router
 
     mock_pool, conn = _make_pool_and_conn()
     app.state.db_pool = mock_pool
@@ -64,7 +65,12 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # WS-CROSS-USER: settings routes now hard-401 sessionless callers.
+    # Inject a concrete authenticated user for the duration of the test.
+    _orig_resolver = settings_router.current_user_id_strict
+    settings_router.current_user_id_strict = AsyncMock(return_value=1)
     yield app, conn
+    settings_router.current_user_id_strict = _orig_resolver
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 

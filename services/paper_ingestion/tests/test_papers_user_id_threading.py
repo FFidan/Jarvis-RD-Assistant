@@ -42,10 +42,10 @@ async def test_submit_feedback_threads_user_id_to_insert():
     """C2: submit_feedback INSERT must include user_id as $2 (signal/source/reason after it).
 
     Writes to recommendation_feedback with binds ($1=paper_id, $2=user_id,
-    $3=signal, $4=source, $5=reason, $6=topic_id). In single-user mode
-    ``user_id=None`` and ``assert_paper_ownership`` short-circuits, so the only
-    DB calls observed are ``fetchrow`` (discovery_origin check for pulse-only
-    sources, Group B) + ``fetchval`` (topic lookup) + ``execute`` (INSERT).
+    $3=signal, $4=source, $5=reason, $6=topic_id). WS-CROSS-USER: the
+    resolver yields a real user, so ``assert_paper_ownership`` runs (1
+    fetchrow, canonical fast-grant) in addition to the Group B
+    discovery_origin fetchrow.
     """
     pool, conn = _make_pool_and_conn()
     # Group B: source='feed_thumbs' is pulse-only; fetchrow validates discovery_origin.
@@ -63,9 +63,9 @@ async def test_submit_feedback_threads_user_id_to_insert():
     assert result.paper_id == 7
     assert result.signal == "positive"
 
-    # In single-user mode (user_id=None), assert_paper_ownership short-circuits (no fetchrow).
-    # Group B adds exactly 1 fetchrow for the discovery_origin validation.
-    assert conn.fetchrow.await_count == 1
+    # WS-CROSS-USER: assert_paper_ownership now runs (1 fetchrow, canonical
+    # fast-grant) plus the Group B discovery_origin fetchrow.
+    assert conn.fetchrow.await_count == 2
     # INSERT goes through conn.execute (no RETURNING) after a topic_id fetchval.
     assert conn.execute.await_count == 1
     execute_args = conn.execute.await_args.args
@@ -84,7 +84,7 @@ async def test_submit_feedback_threads_user_id_to_insert():
         f"got {len(positional_binds)}: {positional_binds}"
     )
     assert positional_binds[0] == 7  # paper_id
-    assert positional_binds[1] is None  # user_id (stub mode → None)
+    assert positional_binds[1] == 1  # user_id (real authenticated user)
     assert positional_binds[2] == "positive"  # signal
     assert positional_binds[3] == "feed_thumbs"  # source
     assert positional_binds[4] is None  # reason
@@ -95,9 +95,8 @@ async def test_submit_feedback_threads_user_id_to_select():
     """C2: submit_feedback INSERT uses ON CONFLICT keyed on (paper_id, user_id, source).
 
     Verifies that user_id appears in the conflict target SQL so repeat submissions
-    by different users never overwrite each other.  In single-user mode user_id=None
-    is bound at $2 — the ON CONFLICT predicate still matches NULL rows correctly
-    (PostgreSQL NULL IS NOT DISTINCT FROM NULL).
+    by different users never overwrite each other.  WS-CROSS-USER: a real
+    user_id is bound at $2 (no NULL-shared rows).
     Group B: source='pulse_thumbs' is pulse-only, so fetchrow validates discovery_origin.
     """
     pool, conn = _make_pool_and_conn()
@@ -121,9 +120,9 @@ async def test_submit_feedback_threads_user_id_to_select():
     assert "ON CONFLICT" in insert_sql, f"Expected 'ON CONFLICT' in INSERT SQL, got:\n{insert_sql}"
     assert "user_id" in insert_sql
 
-    # Positional bind $2 must be user_id (None in stub mode)
+    # Positional bind $2 must be the real authenticated user_id
     positional_binds = execute_args[1:]
-    assert positional_binds[1] is None  # user_id at $2 (stub mode → None)
+    assert positional_binds[1] == 1  # user_id at $2 (real user)
 
 
 async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatched():
@@ -141,13 +140,13 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     ]
     conn.fetchval.return_value = None  # no topic mapping
 
-    async def _user_42(_request):
+    async def _user_42(_request, *_args, **_kwargs):
         return 42
 
     import paper_ingestion.routers.papers as papers_module
 
-    original = papers_module.current_user_id_or_none
-    papers_module.current_user_id_or_none = _user_42
+    original = papers_module.current_user_id_strict_with_owner_override
+    papers_module.current_user_id_strict_with_owner_override = _user_42
     try:
         result = await papers.submit_feedback.__wrapped__(
             MagicMock(),
@@ -156,7 +155,7 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
             db_pool=pool,
         )
     finally:
-        papers_module.current_user_id_or_none = original
+        papers_module.current_user_id_strict_with_owner_override = original
 
     assert result.signal == "positive"
     assert result.paper_id == 10

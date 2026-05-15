@@ -5,7 +5,7 @@ from typing import Literal
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common import assert_paper_ownership, current_user_id_strict
 from jarvis_common.task_registry import KIND_TO_TASK
 from pydantic import BaseModel
 
@@ -90,7 +90,7 @@ async def fetch_and_process_foundational(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> FetchAndProcessResponse:
     """Promote a citation stub and enqueue processing only when a PDF exists."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         paper = await conn.fetchrow(
             """

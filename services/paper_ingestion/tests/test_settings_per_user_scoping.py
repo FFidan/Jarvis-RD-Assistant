@@ -353,7 +353,7 @@ async def test_zotero_library_scope_change_resets_user_cursor(monkeypatch):
     from paper_ingestion.routers import settings
 
     pool, conn = _make_pool_and_conn()
-    monkeypatch.setattr(settings, "current_user_id_or_none", AsyncMock(return_value=42))
+    monkeypatch.setattr(settings, "current_user_id_strict", AsyncMock(return_value=42))
 
     await settings.set_config.__wrapped__(
         MagicMock(),

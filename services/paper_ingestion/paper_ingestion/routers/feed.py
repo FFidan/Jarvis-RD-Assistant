@@ -9,7 +9,7 @@ from datetime import date
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 
 from paper_ingestion.converters import row_to_feed_paper
 from paper_ingestion.deps import get_db_pool, limiter
@@ -101,7 +101,9 @@ async def list_feed_papers(
             status_code=422,
             detail=f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']",
         )
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     query_parts = build_feed_queries(
         unread_only=unread_only,
         sort=sort,

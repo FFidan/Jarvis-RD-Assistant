@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership
-from jarvis_common.auth import current_user_id_or_none, require_admin
+from jarvis_common.auth import current_user_id_strict, require_admin
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import (
@@ -39,7 +39,7 @@ async def compute_paper_priority(
     dict
         ``{paper_id, priority_score, priority_level}``
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         paper = await conn.fetchrow(

@@ -152,9 +152,12 @@ def _mock_pool() -> tuple[MagicMock, AsyncMock]:
 def _app():
     """Create a minimal app instance with mocked state for testing notes endpoints."""
     # Defer import so env vars / mocks apply
+    from unittest.mock import AsyncMock
+
     from jarvis_common.auth import verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
+    from paper_ingestion.routers import notes as notes_router
 
     pool, conn = _mock_pool()
     app.state.db_pool = pool
@@ -163,7 +166,15 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # WS-CROSS-USER: the resolver now always yields a real user, so
+    # assert_paper_ownership runs (it previously short-circuited on the
+    # None caller). These notes tests exercise CRUD/promote behaviour, not
+    # ownership; default it to a pass-through. Ownership-rejection tests
+    # re-patch ``notes_router.assert_paper_ownership`` themselves.
+    _orig_ownership = notes_router.assert_paper_ownership
+    notes_router.assert_paper_ownership = AsyncMock(return_value=None)
     yield app, conn
+    notes_router.assert_paper_ownership = _orig_ownership
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True
 
@@ -240,7 +251,8 @@ async def test_list_notes_filters_by_source(_app):
     assert resp.json()[0]["source"] == "zotero"
     fetch_sql = conn.fetch.await_args.args[0]
     assert "source = $2" in fetch_sql
-    assert "user_id IS NOT DISTINCT FROM" in fetch_sql
+    assert "IS NOT DISTINCT FROM" not in fetch_sql
+    assert "user_id = $3" in fetch_sql
     # args: paper_id, source, user_id (now 3 params)
     assert conn.fetch.await_args.args[1] == 1
     assert conn.fetch.await_args.args[2] == "zotero"
@@ -666,7 +678,7 @@ async def test_promote_falls_back_to_all_chunks_when_window_misses(_app):
 # ---------------------------------------------------------------------------
 
 
-async def _async_user_99(_request):
+async def _async_user_99(_request, *_args, **_kwargs):
     return 99
 
 
@@ -677,8 +689,17 @@ async def test_promote_note_403_for_other_user(_app, monkeypatch):
     not contain paper → 403. The helper reads ``discovered_by`` (with legacy
     ``user_id`` fallback) then probes ``user_library`` via fetchval.
     """
-    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_99)
+    from jarvis_common import assert_paper_ownership as _real_assert_ownership
+
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_99
+    )
     app, conn = _app
+    # _app pass-throughs ownership by default; this test exercises the real
+    # canonical-corpus ownership guard, so restore it.
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.assert_paper_ownership", _real_assert_ownership
+    )
     # First fetchrow = SELECT * FROM paper_notes WHERE id=$1 (zotero source).
     # Second fetchrow = ownership SELECT discovered_by FROM papers (mock still
     # ships ``user_id`` for backward-compat — the helper falls back to it).
@@ -709,11 +730,11 @@ async def test_promote_note_403_for_other_user(_app, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def _async_user_7(_request):
+async def _async_user_7(_request, *_args, **_kwargs):
     return 7
 
 
-async def _async_user_8(_request):
+async def _async_user_8(_request, *_args, **_kwargs):
     return 8
 
 
@@ -721,10 +742,12 @@ async def test_list_notes_scopes_to_author(_app, monkeypatch):
     """DOM-A-14: list_notes scopes to the caller's user_id.
 
     User 7 creates 2 notes (user_id=7).  User 8 calls list_notes — the SQL
-    includes ``user_id IS NOT DISTINCT FROM $2`` so the mock returns an empty
+    includes an exact ``user_id = $2`` scope so the mock returns an empty
     list because the conn.fetch stub returns [].
     """
-    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
+    )
     app, conn = _app
     # assert_paper_ownership: single fetchrow for paper lookup (user_id=8 → None discovery → allow)
     conn.fetchrow.return_value = {"discovered_by": None}
@@ -738,18 +761,21 @@ async def test_list_notes_scopes_to_author(_app, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json() == []
-    # Confirm the SQL carries the user_id scoping parameter
+    # Confirm the SQL carries an exact user_id scoping parameter
     fetch_sql = conn.fetch.await_args.args[0]
-    assert "user_id IS NOT DISTINCT FROM" in fetch_sql
+    assert "IS NOT DISTINCT FROM" not in fetch_sql
+    assert "user_id = $2" in fetch_sql
 
 
 async def test_update_note_rejects_non_author(_app, monkeypatch):
     """DOM-A-05: update_note returns 404 when caller is not the note author.
 
     Note was created by user 7. User 8 attempts to update it.  The authorship
-    SELECT (id + user_id IS NOT DISTINCT FROM) returns None → 404.
+    SELECT (id + exact user_id match) returns None → 404.
     """
-    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
+    )
     app, conn = _app
     # First fetchval: source check → "user" (not zotero)
     conn.fetchval.return_value = "user"
@@ -770,7 +796,9 @@ async def test_delete_note_rejects_non_author(_app, monkeypatch):
     Note was created by user 7. User 8 attempts to delete it.  The authorship
     SELECT returns None → 404.
     """
-    monkeypatch.setattr("paper_ingestion.routers.notes.current_user_id_or_none", _async_user_8)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
+    )
     app, conn = _app
     # First fetchval: source check → "user" (not zotero)
     conn.fetchval.return_value = "user"

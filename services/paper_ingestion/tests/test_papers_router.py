@@ -159,8 +159,15 @@ async def test_list_papers_search_query_uses_bm25_clause():
 
 
 @pytest.mark.asyncio
-async def test_get_paper_detail_raises_404_when_missing():
-    """get_paper_detail returns 404 when the paper row is absent."""
+async def test_get_paper_detail_raises_404_when_missing(monkeypatch):
+    """get_paper_detail returns 404 when the paper row is absent.
+
+    Ownership is covered by dedicated tests; here it is a pass-through so the
+    route's own missing-paper 404 is exercised.
+    """
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.assert_paper_ownership", AsyncMock(return_value=None)
+    )
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = None
 
@@ -224,6 +231,7 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     )
 
     with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
         patch.object(papers, "row_to_paper_response", return_value=paper_model) as paper_conv,
         patch.object(papers, "row_to_summary_response", return_value=summary_model) as summary_conv,
         patch.object(
@@ -289,7 +297,10 @@ async def test_get_paper_detail_starred_independent_of_state():
         created_at=datetime.now(UTC),
     )
 
-    with patch.object(papers, "row_to_paper_response", return_value=paper_model):
+    with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+    ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
             paper_id=42,
@@ -324,7 +335,10 @@ async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
         created_at=datetime.now(UTC),
     )
 
-    with patch.object(papers, "row_to_paper_response", return_value=paper_model):
+    with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+    ):
         result = await papers.get_paper_detail.__wrapped__(
             MagicMock(),
             paper_id=4,
@@ -591,22 +605,23 @@ async def test_list_papers_view_and_source_type_correct_param_indices():
 
     fetch_call = conn.fetch.await_args
     sql, *positional = fetch_call.args
-    # $1 is user_id (None in single-user mode), $2 is source_type, then $3/$4 for LIMIT/OFFSET.
-    assert "$1::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $1" in sql
+    # $1 is user_id (real authenticated user), $2 source_type, $3/$4 LIMIT/OFFSET.
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "pus.user_id = $1" in sql
     assert "p.source_type = $2" in sql
     assert "LIMIT $3" in sql
     assert "OFFSET $4" in sql
     assert "COALESCE(pus.state, 'inbox') = 'reading'" in sql
-    assert positional == [None, "arxiv", 10, 5]
+    assert positional == [1, "arxiv", 10, 5]
 
 
 @pytest.mark.asyncio
 async def test_list_papers_all_filters_correct_param_indices():
     """list_papers with topic_id + view + source_type + q binds in order:
 
-    $1=topic_id, $2=user_id (for LEFT JOIN), $3=source_type.value,
-    $4=q, $5=LIMIT, $6=OFFSET. ``view`` is a literal predicate, no
-    positional binding.
+    $1=topic_id, $2=user_id (real authenticated user, for LEFT JOIN),
+    $3=source_type.value, $4=q, $5=LIMIT, $6=OFFSET. ``view`` is a literal
+    predicate, no positional binding.
     """
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_paper_row()]
@@ -626,12 +641,13 @@ async def test_list_papers_all_filters_correct_param_indices():
     fetch_call = conn.fetch.await_args
     sql, *positional = fetch_call.args
     assert "pt.topic_id = $1" in sql
-    assert "$2::int IS NULL OR pus.user_id IS NOT DISTINCT FROM $2" in sql
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "pus.user_id = $2" in sql
     assert "p.source_type = $3" in sql
     assert "plainto_tsquery" in sql and "$4" in sql
     assert "LIMIT $5" in sql
     assert "OFFSET $6" in sql
-    assert positional == [7, None, "arxiv", "neural", 15, 3]
+    assert positional == [7, 1, "arxiv", "neural", 15, 3]
 
 
 # ---------------------------------------------------------------------------
@@ -640,7 +656,7 @@ async def test_list_papers_all_filters_correct_param_indices():
 # ---------------------------------------------------------------------------
 
 
-async def _async_user_99(_request):
+async def _async_user_99(_request, *_args, **_kwargs):
     del _request
     return 99
 
@@ -648,7 +664,9 @@ async def _async_user_99(_request):
 @pytest.mark.asyncio
 async def test_get_paper_detail_403_for_other_user(monkeypatch):
     """Sprint B: paper discovered_by=42, caller=99 + not in library → 403."""
-    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
+    )
     pool, conn = _make_pool_and_conn()
     # First fetchrow is the ownership check on `papers` table — return the
     # legacy ``user_id`` key (the helper falls back to it when
@@ -750,7 +768,8 @@ async def test_star_paper_sets_starred_true_does_not_change_state():
     conn.fetchval.return_value = 0
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)
+    with patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)):
+        result = await papers.star_paper.__wrapped__(request, 42, db_pool=pool)
 
     assert result == {"status": "ok", "paper_id": 42}
     # Group B: upsert is now via conn.fetchrow (CTE WITH RETURNING), not conn.execute.
@@ -1282,7 +1301,9 @@ async def test_bulk_partial_failure_records_savepoint_isolation(monkeypatch):
     """Per-paper savepoints must isolate failures: paper 2 raises, papers
     1 and 3 still succeed (the outer txn commits, only paper 2's
     savepoint rolls back)."""
-    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
+    )
     pool, conn = _make_pool_and_conn()
 
     # Sprint B: assert_paper_ownership now reads ``discovered_by`` (audit) +
@@ -1481,8 +1502,9 @@ async def test_star_paper_idempotent_recall():
     conn.fetchval.return_value = 0  # project_papers COUNT — no zotero.push needed
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    result1 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
-    result2 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
+    with patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)):
+        result1 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
+        result2 = await papers.star_paper.__wrapped__(request, 1, db_pool=pool)
 
     assert result1 == {"status": "ok", "paper_id": 1}
     assert result2 == {"status": "ok", "paper_id": 1}
@@ -1547,14 +1569,18 @@ async def test_unstar_paper_404():
 async def test_annotate_paper_404_when_paper_missing():
     """PUT /annotations/{paper_id} raises 404 when paper FK constraint fires.
 
-    In single-user mode the ownership check is skipped; the INSERT into
-    paper_user_state raises ForeignKeyViolationError which is mapped to 404.
+    Ownership is covered elsewhere; here it is a pass-through so the INSERT
+    into paper_user_state raises ForeignKeyViolationError which is mapped
+    to 404.
     """
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.side_effect = asyncpg.ForeignKeyViolationError("missing paper")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    with pytest.raises(HTTPException) as exc_info:
+    with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        pytest.raises(HTTPException) as exc_info,
+    ):
         await papers.annotate_paper.__wrapped__(
             request,
             99999,
@@ -1572,7 +1598,9 @@ async def test_annotate_paper_unauthorized_user(monkeypatch):
     Mirrors the pattern in test_get_paper_detail_403_for_other_user: the paper
     is owned by user 42, the caller is user 99 → assert_paper_ownership raises 403.
     """
-    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
+    )
     pool, conn = _make_pool_and_conn()
     # Sprint B: assert_paper_ownership reads discovered_by (with legacy
     # user_id fallback for fixtures), then checks user_library membership.
@@ -1619,7 +1647,9 @@ async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
     the succeeded/failed partition — NOT a 207 (the bulk endpoint always
     returns 200 in this implementation).
     """
-    monkeypatch.setattr("paper_ingestion.routers.papers.current_user_id_or_none", _async_user_99)
+    monkeypatch.setattr(
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
+    )
     pool, conn = _make_pool_and_conn()
 
     async def _fetchrow(sql: str, *args, **kwargs):
@@ -1665,7 +1695,7 @@ async def test_get_recommendation_feedback_404_for_nonexistent_paper_filter():
     conn.fetchval.return_value = 0
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await rf_router.list_recommendation_feedback.__wrapped__(
@@ -1693,7 +1723,7 @@ async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic
     conn.execute.return_value = "DELETE 0"
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await rf_router.delete_recommendation_feedback_by_topic.__wrapped__(
@@ -1722,8 +1752,8 @@ async def test_delete_paper_feedback_returns_204_for_existing_row():
     conn.execute.return_value = "DELETE 1"
 
     with patch(
-        "paper_ingestion.routers.papers.current_user_id_or_none",
-        new=AsyncMock(return_value=None),
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
+        new=AsyncMock(return_value=7),
     ):
         result = await papers.delete_paper_feedback.__wrapped__(
             request=MagicMock(),
@@ -1740,11 +1770,12 @@ async def test_delete_paper_feedback_returns_204_for_existing_row():
     sql = call_args.args[0]
     assert "DELETE FROM recommendation_feedback" in sql
     assert "paper_id = $1" in sql
-    assert "user_id IS NOT DISTINCT FROM $2" in sql
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "user_id = $2" in sql
     assert "source = $3" in sql
     positional = list(call_args.args[1:])
     assert positional[0] == 42
-    assert positional[1] is None  # user_id = None (DEV mode)
+    assert positional[1] == 7  # exact user scope (no NULL-shared rows)
     assert positional[2] == "pulse_thumbs"
 
 
@@ -1755,7 +1786,7 @@ async def test_delete_paper_feedback_returns_204_for_nonexistent_row():
     conn.execute.return_value = "DELETE 0"  # no row matched
 
     with patch(
-        "paper_ingestion.routers.papers.current_user_id_or_none",
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await papers.delete_paper_feedback.__wrapped__(
@@ -1770,19 +1801,20 @@ async def test_delete_paper_feedback_returns_204_for_nonexistent_row():
 
 
 @pytest.mark.asyncio
-async def test_delete_paper_feedback_user_scoped_null_user_id():
-    """DELETE uses IS NOT DISTINCT FROM to correctly match NULL user_id rows.
+async def test_delete_paper_feedback_scoped_to_exact_user():
+    """WS-CROSS-USER: DELETE scopes recommendation_feedback by exact user_id.
 
-    When current_user_id_or_none() returns None (DEV / single-user mode),
-    the SQL predicate ``user_id IS NOT DISTINCT FROM NULL`` must be used so
-    that rows stored with NULL user_id are matched and deleted.
+    The pre-WS-CROSS-USER behaviour matched NULL-owner rows via
+    ``IS NOT DISTINCT FROM`` — a cross-user deletion vector for API-key-only
+    callers. The resolver now always yields a real user and the DELETE binds
+    that user with an exact ``user_id = $2`` predicate.
     """
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 1"
 
     with patch(
-        "paper_ingestion.routers.papers.current_user_id_or_none",
-        new=AsyncMock(return_value=None),
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
+        new=AsyncMock(return_value=13),
     ):
         await papers.delete_paper_feedback.__wrapped__(
             request=MagicMock(),
@@ -1792,9 +1824,11 @@ async def test_delete_paper_feedback_user_scoped_null_user_id():
         )
 
     call_args = conn.execute.await_args
+    sql = call_args.args[0]
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "user_id = $2" in sql
     positional = list(call_args.args[1:])
-    # user_id must be None so IS NOT DISTINCT FROM matches NULL-owner rows
-    assert positional[1] is None
+    assert positional[1] == 13
 
 
 @pytest.mark.asyncio
@@ -1806,7 +1840,7 @@ async def test_delete_paper_feedback_different_user_id_not_deleted(monkeypatch):
     (The DB enforces scoping; we verify we pass the correct user_id arg.)
     """
     monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_or_none",
+        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
         _async_user_99,
     )
     pool, conn = _make_pool_and_conn()
@@ -1896,7 +1930,7 @@ async def test_process_batch_happy_path_returns_job_id():
     with (
         patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task}),
         patch(
-            "paper_ingestion.routers.papers.current_user_id_or_none",
+            "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
             new=AsyncMock(return_value=None),
         ),
     ):

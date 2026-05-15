@@ -9,7 +9,7 @@ import uuid
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common import assert_paper_ownership, current_user_id_strict
 from jarvis_common.auth import require_admin
 
 from paper_ingestion.deps import (
@@ -99,17 +99,10 @@ async def extract_entities(
     qdrant=Depends(get_optional_qdrant),
 ) -> EntityExtractionResponse:
     """Trigger entity extraction for a single paper."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
-        # Fall back to the paper's discovered_by when the caller is the
-        # server-to-server / admin owner path (user_id is None) so the row
-        # is still attributed to the paper's owning user.
-        if user_id is None:
-            owner = await conn.fetchval("SELECT discovered_by FROM papers WHERE id = $1", paper_id)
-            attribution_user_id: int | None = owner
-        else:
-            attribution_user_id = user_id
+        attribution_user_id: int = user_id
     try:
         return await extract_entities_for_paper(
             http_client,
@@ -152,7 +145,7 @@ async def get_graph(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         data = await get_knowledge_graph(conn, entity_type, min_paper_count, user_id=user_id)
 
@@ -208,7 +201,7 @@ async def list_entities(
             detail=f"Invalid entity_type: {entity_type}. Valid types: {sorted(VALID_ENTITY_TYPES)}",
         )
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         if entity_type:
             if user_id is not None:
@@ -278,7 +271,7 @@ async def get_entity_detail(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> EntityDetailResponse:
     """Get entity detail with relationships and papers."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         entity = await conn.fetchrow("SELECT * FROM entities WHERE id = $1", entity_id)
         if not entity:
@@ -364,7 +357,7 @@ async def kg_query(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> KGQueryResponse:
     """Query the knowledge graph with natural language."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         results = await query_knowledge_graph(conn, q, user_id=user_id)
     return KGQueryResponse(results=results, query=q)

@@ -9,7 +9,7 @@ Covers:
 """
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # conftest.py has already installed tiktoken / qdrant_client / qdrant_client.models stubs.
 import httpx
@@ -269,10 +269,16 @@ async def test_paper_detail_user_state_null_when_absent(_app):
     conn.fetchval.return_value = 0  # project_link_count
     conn.fetch.return_value = []
 
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/papers/1")
+    # WS-CROSS-USER: ownership now always runs; this test asserts detail
+    # shape, not ownership (covered elsewhere) — pass it through.
+    with patch(
+        "paper_ingestion.routers.papers.assert_paper_ownership",
+        new=AsyncMock(return_value=None),
+    ):
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/papers/1")
 
     assert resp.status_code == 200
     body = resp.json()

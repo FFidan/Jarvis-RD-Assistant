@@ -15,7 +15,7 @@ from fastapi import (
     Request,
     UploadFile,
 )
-from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_or_none
+from jarvis_common import JobCreateResponse, assert_paper_ownership, current_user_id_strict
 from jarvis_common.library import add_to_library
 from jarvis_common.settings import get_core_settings
 
@@ -64,7 +64,7 @@ async def download_pdf(
     """
     import httpx
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
 
     # Phase 1: load and validate (short transaction — no lock held during I/O)
     async with db_pool.acquire() as conn:
@@ -152,7 +152,7 @@ async def process_pdf(
 
         from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-        user_id = await current_user_id_or_none(request)
+        user_id = await current_user_id_strict(request)
         async with db_pool.acquire() as conn:
             await assert_paper_ownership(conn, paper_id, user_id)
         jarvis_job_id = str(uuid.uuid4())
@@ -162,7 +162,7 @@ async def process_pdf(
         return {"job_id": jarvis_job_id, "status": "queued"}
 
     # Synchronous path (sync=True) — original blocking behaviour
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
         await assert_paper_ownership(conn, paper_id, user_id)
@@ -271,7 +271,7 @@ async def upload_pdf(
 
         file_hash = hasher.hexdigest()
         external_id = f"local:{file_hash[:16]}"
-        user_id = await current_user_id_or_none(request)
+        user_id = await current_user_id_strict(request)
 
         # Check for duplicate
         async with db_pool.acquire() as conn:
@@ -358,7 +358,7 @@ async def scan_local_pdfs(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
     # Phase 2 WS-2D: thread caller user_id for audit-trail attribution. The
     # scan itself is filesystem-wide; per-user PDF dirs are deferred until
@@ -411,7 +411,7 @@ async def batch_process_papers(
 
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         if user_id is not None:
             if force:

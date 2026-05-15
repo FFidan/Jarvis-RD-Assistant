@@ -111,6 +111,10 @@ async def _collect_events(
 
     with (
         patch("paper_ingestion.routers.analyze.Path") as MockPath,  # noqa: N806
+        patch(
+            "paper_ingestion.routers.analyze.assert_paper_ownership",
+            new=AsyncMock(return_value=None),
+        ),
     ):
         mock_path_instance = MagicMock()
         mock_path_instance.resolve.return_value.is_relative_to.return_value = True
@@ -199,16 +203,22 @@ async def test_analyze_stream_paper_not_found():
     mock_request, mock_pool, deps = _make_mock_request(None)
 
     events_raw = []
-    async for event in _analyze_stream(
-        mock_request,
-        999,
-        mock_pool,
-        deps["http_client"],
-        deps["pdf_processor"],
-        deps["embedder"],
-        deps["verifier"],
+    # Ownership is covered by dedicated tests; pass-through so the stream's
+    # own missing-paper error event is exercised.
+    with patch(
+        "paper_ingestion.routers.analyze.assert_paper_ownership",
+        new=AsyncMock(return_value=None),
     ):
-        events_raw.append(event)
+        async for event in _analyze_stream(
+            mock_request,
+            999,
+            mock_pool,
+            deps["http_client"],
+            deps["pdf_processor"],
+            deps["embedder"],
+            deps["verifier"],
+        ):
+            events_raw.append(event)
     events = _parse_sse_events(events_raw)
 
     assert len(events) == 3

@@ -741,7 +741,7 @@ async def test_extract_entities_rejects_unowned_paper(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
@@ -881,7 +881,7 @@ async def test_get_graph_scopes_entities_to_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
 
@@ -972,7 +972,7 @@ async def test_list_entities_scopes_to_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
 
@@ -1014,7 +1014,7 @@ async def test_list_entities_unscoped_when_no_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=None),  # no session
     )
 
@@ -1062,7 +1062,7 @@ async def test_get_entity_detail_rejects_entity_not_owned_by_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
 
@@ -1101,7 +1101,7 @@ async def test_get_entity_detail_papers_scoped_to_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
 
@@ -1154,7 +1154,7 @@ async def test_kg_query_scopes_generic_search_to_user(monkeypatch):
 
     monkeypatch.setattr(
         kg_router,
-        "current_user_id_or_none",
+        "current_user_id_strict",
         AsyncMock(return_value=2),  # user B
     )
     monkeypatch.setattr(

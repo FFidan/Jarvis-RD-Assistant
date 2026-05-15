@@ -10,7 +10,7 @@ from typing import Annotated
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.task_registry import KIND_TO_TASK
 
@@ -38,7 +38,7 @@ async def get_citation_graph(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> CitationGraphResponse:
     """Build a citation graph for the given paper IDs."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         # Strict-fail: raise 403/404 on first paper the caller does not own.
         # Per-id loop is O(n) DB round-trips but correct and simple (YAGNI).
@@ -58,7 +58,7 @@ async def batch_fetch_citations(
     The job is durable and visible in the jobs table.  The handler runs in the
     paper_ingestion worker loop (``citations_jobs.py``).
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
     # Phase 2 WS-2D: pass caller user_id for audit-trail attribution. The job
     # body is still system-wide discovery (batched across all papers), but the
@@ -76,7 +76,7 @@ async def fetch_citations_for_paper(
     s2_source: SemanticScholarSource = Depends(get_s2_source),
 ) -> CitationFetchResponse:
     """Trigger citation fetch from S2 for a single paper."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     # Pass pool so S2 API calls happen outside DB connection scope (PI-014)
@@ -91,7 +91,7 @@ async def get_paper_citations(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[CitationRelation]:
     """Get stored citation relationships for a paper."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 

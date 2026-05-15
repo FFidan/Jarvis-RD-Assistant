@@ -79,7 +79,7 @@ async def test_test_zotero_connection_reads_current_user_config(monkeypatch):
     """Credential tests should prefer the browser user's Zotero config row."""
     from paper_ingestion.routers import zotero
 
-    monkeypatch.setattr(zotero, "current_user_id_or_none", AsyncMock(return_value=42))
+    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=42))
     get_config = AsyncMock(
         return_value={"api_key": "key", "user_id": "123", "library_type": "user"}
     )
@@ -114,7 +114,7 @@ async def test_get_paper_zotero_state_checks_ownership(monkeypatch):
         "zotero_citation_key": "Smith2026",
         "zotero_last_pushed_at": None,
     }
-    monkeypatch.setattr(zotero, "current_user_id_or_none", AsyncMock(return_value=42))
+    monkeypatch.setattr(zotero, "current_user_id_strict", AsyncMock(return_value=42))
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
     ownership = AsyncMock(side_effect=deny)
     monkeypatch.setattr(zotero, "assert_paper_ownership", ownership)
@@ -179,7 +179,7 @@ async def test_poll_now_enqueues_job(_app):
     mock_defer.assert_awaited_once()
     call_kwargs = mock_defer.call_args.kwargs
     assert "job_id" in call_kwargs
-    assert call_kwargs.get("user_id") is None
+    assert call_kwargs.get("user_id") == 1  # real authenticated user (no NULL-owned jobs)
 
 
 @pytest.mark.asyncio

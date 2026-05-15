@@ -5,7 +5,7 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import assert_paper_ownership, delete_or_404, dynamic_update
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_strict_with_owner_override
 from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.converters import row_to_chunk_response
@@ -51,13 +51,15 @@ async def list_notes(
     if source not in {None, "user", "zotero"}:
         raise HTTPException(status_code=422, detail="source must be 'user' or 'zotero'")
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         if source is None:
             rows = await conn.fetch(
                 "SELECT * FROM paper_notes"
-                " WHERE paper_id = $1 AND user_id IS NOT DISTINCT FROM $2"
+                " WHERE paper_id = $1 AND user_id = $2"
                 " ORDER BY created_at DESC",
                 paper_id,
                 user_id,
@@ -65,7 +67,7 @@ async def list_notes(
         else:
             rows = await conn.fetch(
                 "SELECT * FROM paper_notes"
-                " WHERE paper_id = $1 AND source = $2 AND user_id IS NOT DISTINCT FROM $3"
+                " WHERE paper_id = $1 AND source = $2 AND user_id = $3"
                 " ORDER BY created_at DESC",
                 paper_id,
                 source,
@@ -100,7 +102,9 @@ async def create_note(
     NoteResponse
         The newly created note.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         paper = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -148,7 +152,9 @@ async def update_note(
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
@@ -157,8 +163,7 @@ async def update_note(
         # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
         if user_id is not None:
             note_row = await conn.fetchrow(
-                "SELECT paper_id FROM paper_notes"
-                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                "SELECT paper_id FROM paper_notes WHERE id = $1 AND user_id = $2",
                 note_id,
                 user_id,
             )
@@ -195,7 +200,9 @@ async def promote_zotero_note(
     during lifespan startup).  Per-request instantiation of ``QuoteVerifier``
     was wasteful and prevented test injection.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
         if note is None:
@@ -300,7 +307,9 @@ async def delete_note(
     note_id : int
         Database ID of the note to delete.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict_with_owner_override(
+        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+    )
     async with db_pool.acquire() as conn:
         note_source = await conn.fetchval("SELECT source FROM paper_notes WHERE id = $1", note_id)
         if note_source == "zotero":
@@ -309,8 +318,7 @@ async def delete_note(
         # Also assert_paper_ownership for the parent paper (short-circuits in single-tenant mode).
         if user_id is not None:
             note_row = await conn.fetchrow(
-                "SELECT paper_id FROM paper_notes"
-                " WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+                "SELECT paper_id FROM paper_notes WHERE id = $1 AND user_id = $2",
                 note_id,
                 user_id,
             )

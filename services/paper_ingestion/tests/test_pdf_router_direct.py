@@ -144,7 +144,7 @@ async def test_download_pdf_rejects_unowned_paper(monkeypatch):
     )
     pool = _make_pool(conn)
     processor = AsyncMock()
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
     ownership = AsyncMock(side_effect=deny)
     monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
@@ -213,7 +213,7 @@ async def test_process_pdf_sync_rejects_unowned_paper(tmp_path, monkeypatch):
     pool = _make_pool(conn)
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
     deny = HTTPException(status_code=403, detail="paper not owned by current user")
     ownership = AsyncMock(side_effect=deny)
     monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
@@ -305,7 +305,7 @@ async def test_process_pdf_async_enqueues_job():
 
     assert result["job_id"] == fake_uuid
     assert result["status"] == "queued"
-    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_id=42, force=False)
+    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=1, paper_id=42, force=False)
 
 
 @pytest.mark.asyncio
@@ -391,7 +391,7 @@ async def test_batch_process_papers_skips_invalid_and_missing_paths(tmp_path, mo
         "skipped_missing_pdf": 2,
         "job_id": fake_uuid,
     }
-    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=None, paper_ids=[10], force=False)
+    mock_defer.assert_awaited_once_with(job_id=fake_uuid, user_id=1, paper_ids=[10], force=False)
 
 
 # ---------------------------------------------------------------------------
@@ -432,7 +432,7 @@ async def test_batch_process_papers_scopes_to_user_library(tmp_path, monkeypatch
     request = _request_with_state(pdf_processor=MagicMock(), embedder=MagicMock())
 
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=7))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=7))
 
     fake_uuid = "job-scoped-123"
     mock_defer = AsyncMock()
@@ -548,7 +548,7 @@ async def test_upload_pdf_authenticated_user_stamps_discoverer_and_library(tmp_p
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=42))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=42))
     add_to_library = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
 
@@ -607,7 +607,7 @@ async def test_upload_pdf_single_user_mode_does_not_write_library(tmp_path, monk
     storage_dir = tmp_path / "pdfs"
     storage_dir.mkdir()
     monkeypatch.setattr(pdf, "PDF_STORAGE_PATH", str(storage_dir))
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=None))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=None))
     add_to_library = AsyncMock()
     monkeypatch.setattr(pdf, "add_to_library", add_to_library, raising=False)
 
@@ -718,7 +718,7 @@ async def test_assert_paper_ownership_runs_after_null_row_guard_in_pdf_router(mo
     # Ownership must never be called for a non-existent paper
     ownership = AsyncMock()
     monkeypatch.setattr(pdf, "assert_paper_ownership", ownership)
-    monkeypatch.setattr(pdf, "current_user_id_or_none", AsyncMock(return_value=99))
+    monkeypatch.setattr(pdf, "current_user_id_strict", AsyncMock(return_value=99))
 
     processor = AsyncMock()
 

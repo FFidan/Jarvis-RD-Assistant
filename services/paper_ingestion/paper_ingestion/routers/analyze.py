@@ -6,7 +6,7 @@ from pathlib import Path
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common import assert_paper_ownership, current_user_id_strict
 from jarvis_common.sse import SSE_DONE, sse_event
 from starlette.responses import StreamingResponse
 
@@ -56,7 +56,7 @@ async def _analyze_stream(
     # Belt-and-braces ownership check: assert before yielding any data.
     # The primary check lives in analyze_paper (above the if async_mode branch),
     # but this guard protects any future caller that invokes _analyze_stream directly.
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
@@ -226,7 +226,7 @@ async def analyze_paper(
     With ``?async=true``: enqueues a ``paper.analyze`` job and returns
     ``{"job_id": "...", "status": "queued"}`` immediately.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 

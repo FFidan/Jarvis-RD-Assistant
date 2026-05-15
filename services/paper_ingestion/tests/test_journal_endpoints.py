@@ -58,7 +58,7 @@ async def test_get_journal_entry_found():
         "updated_at": now,
     }
     with patch(
-        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        "paper_ingestion.routers.my_day.current_user_id_strict",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -83,7 +83,7 @@ async def test_get_journal_entry_not_found():
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = None
     with patch(
-        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        "paper_ingestion.routers.my_day.current_user_id_strict",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -117,7 +117,7 @@ async def test_upsert_journal_entry_creates():
     }
     body = JournalEntryCreate(date=today, prompts=JournalPrompts(first_move="Ship it"))
     with patch(
-        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        "paper_ingestion.routers.my_day.current_user_id_strict",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -151,7 +151,7 @@ async def test_upsert_journal_entry_empty_prompts():
     }
     body = JournalEntryCreate(date=today, prompts=JournalPrompts())
     with patch(
-        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        "paper_ingestion.routers.my_day.current_user_id_strict",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -193,7 +193,7 @@ async def test_upsert_journal_entry_passes_raw_dict_not_json_string():
     }
     body = JournalEntryCreate(date=today, prompts=JournalPrompts(first_move="Regression guard"))
     with patch(
-        "paper_ingestion.routers.my_day.current_user_id_or_none",
+        "paper_ingestion.routers.my_day.current_user_id_strict",
         new_callable=AsyncMock,
         return_value=None,
     ):

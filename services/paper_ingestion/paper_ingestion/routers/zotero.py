@@ -8,7 +8,7 @@ import uuid
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from jarvis_common import assert_paper_ownership, current_user_id_or_none
+from jarvis_common import assert_paper_ownership, current_user_id_strict
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, get_http_client, limiter
@@ -45,7 +45,7 @@ async def test_zotero_connection(
     from paper_ingestion.integrations.zotero_client import ZoteroClient
     from paper_ingestion.integrations.zotero_service import _get_zotero_config
 
-    user_id_for_config = await current_user_id_or_none(request)
+    user_id_for_config = await current_user_id_strict(request)
     cfg = await _get_zotero_config(db_pool, user_id=user_id_for_config)
 
     api_key = cfg.get("api_key", "")
@@ -89,7 +89,7 @@ async def push_paper_to_zotero(
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -122,7 +122,7 @@ async def get_paper_zotero_state(
     Returns ``{"zotero_item_key", "zotero_citation_key", "zotero_last_pushed_at"}``
     (all fields may be ``null`` if the paper has not been pushed).
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow(
@@ -159,7 +159,7 @@ async def resync_paper_to_zotero(
 
     Returns ``{"job_id": "...", "status": "queued"}``.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -192,7 +192,7 @@ async def sync_annotations_for_paper(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JobEnqueuedResponse:
     """Enqueue Zotero annotation import for a linked paper."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         exists = await conn.fetchval("SELECT id FROM papers WHERE id = $1", paper_id)
         if not exists:
@@ -227,7 +227,7 @@ async def poll_now(
     from jarvis_common.task_registry import KIND_TO_TASK
 
     logger.info("zotero.poll: enqueueing sync job")
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     jarvis_job_id = str(uuid.uuid4())
     # Phase 2 WS-2D: thread caller user_id so per-user paper attribution works
     # in multi-user mode. (Pre-WS-2A this was annotated `system-wide cron` but

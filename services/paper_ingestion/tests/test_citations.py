@@ -497,7 +497,7 @@ async def test_batch_fetch_citations_enqueues_job():
     mock_defer.assert_awaited_once()
     call_kwargs = mock_defer.call_args.kwargs
     assert "job_id" in call_kwargs
-    assert call_kwargs["user_id"] is None
+    assert call_kwargs["user_id"] == 1  # real authenticated user (no NULL-owned jobs)
     assert result.message == f"Job {call_kwargs['job_id']} queued"
     assert result.queued == 1
 
@@ -544,7 +544,7 @@ class FakeRecord(dict):
         return super().keys()
 
 
-async def _user_b(_request):
+async def _user_b(_request, *_args, **_kwargs):
     """Simulate a caller with user_id=2 (does not own paper owned by user 1)."""
     del _request
     return 2
@@ -575,7 +575,7 @@ async def test_single_paper_citation_endpoints_403_for_other_user(
     from paper_ingestion.routers import citations as citations_router
 
     monkeypatch.setattr(
-        "paper_ingestion.routers.citations.current_user_id_or_none",
+        "paper_ingestion.routers.citations.current_user_id_strict",
         _user_b,
     )
 
@@ -609,7 +609,7 @@ async def test_get_citation_graph_403_for_unowned_paper(monkeypatch):
     from paper_ingestion.routers import citations as citations_router
 
     monkeypatch.setattr(
-        "paper_ingestion.routers.citations.current_user_id_or_none",
+        "paper_ingestion.routers.citations.current_user_id_strict",
         _user_b,
     )
 
@@ -640,7 +640,7 @@ async def test_get_citation_graph_filters_unauthorized_ids(monkeypatch):
     from paper_ingestion.routers import citations as citations_router
 
     monkeypatch.setattr(
-        "paper_ingestion.routers.citations.current_user_id_or_none",
+        "paper_ingestion.routers.citations.current_user_id_strict",
         _user_b,
     )
 

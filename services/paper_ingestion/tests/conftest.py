@@ -130,6 +130,46 @@ def _make_pool_and_conn():
     return pool, conn
 
 
+@pytest.fixture(autouse=True)
+def _default_authenticated_user():
+    """WS-CROSS-USER: default every router's strict user-id resolver to user 1.
+
+    The strict resolvers (``current_user_id_strict`` /
+    ``current_user_id_strict_with_owner_override``) hard-401 sessionless
+    callers. The vast majority of unit tests call route bodies directly with
+    a stub request and only assert SQL/response shape — they predate auth and
+    have no session. This fixture patches each router module's resolver symbol
+    to return a concrete test user so those tests exercise the real isolation
+    SQL path.
+
+    Auth/IDOR tests that need a specific user (or 401) re-patch the same
+    module attribute inside their own ``with patch(...)`` / ``monkeypatch``
+    scope, which takes precedence for the duration of the test body.
+    """
+    import importlib
+    import pkgutil
+    from unittest.mock import AsyncMock
+
+    import paper_ingestion.routers as routers_pkg
+
+    resolver_names = (
+        "current_user_id_strict",
+        "current_user_id_strict_with_owner_override",
+    )
+    saved: list[tuple[object, str, object]] = []
+    for mod_info in pkgutil.iter_modules(routers_pkg.__path__):
+        module = importlib.import_module(f"paper_ingestion.routers.{mod_info.name}")
+        for name in resolver_names:
+            if hasattr(module, name):
+                saved.append((module, name, getattr(module, name)))
+                setattr(module, name, AsyncMock(return_value=1))
+    try:
+        yield
+    finally:
+        for module, name, original in saved:
+            setattr(module, name, original)
+
+
 @pytest.fixture()
 def mock_db():
     """Yield (pool, conn) tuple with mocked asyncpg pool."""

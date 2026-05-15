@@ -12,7 +12,7 @@ import httpx
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update
-from jarvis_common.auth import current_user_id_or_none, require_admin, verify_api_key
+from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
 from jarvis_common.crypto import (
     decrypt_secret,
     encrypt_secret,
@@ -695,7 +695,7 @@ async def list_config(
     Browser users only receive personal settings unless they are admins.
     API-key-only callers preserve the legacy single-tenant view.
     """
-    caller_user_id = await current_user_id_or_none(request)
+    caller_user_id = await current_user_id_strict(request)
     browser_session = _has_browser_session(request)
     role = getattr(request.state, "user_role", None)
     personal_keys = sorted(PERSONAL_KEYS)
@@ -739,7 +739,7 @@ async def get_config(
         raise HTTPException(404, f"Config key '{key}' not found")
     if _classify_config_key(key) == "system" and _has_browser_session(request):
         await require_admin(request)
-    caller_user_id = await current_user_id_or_none(request)
+    caller_user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         row = await _fetch_effective_config_row(conn, key, caller_user_id, is_admin=is_admin)
@@ -766,7 +766,7 @@ async def set_config(
     # enforcement — they run as the implicit single-tenant owner.
     if _classify_config_key(key) == "system":
         await require_admin(request)
-    caller_user_id = await current_user_id_or_none(request)
+    caller_user_id = await current_user_id_strict(request)
     row_user_id = caller_user_id if _classify_config_key(key) == "personal" else None
 
     # Dynamic-key validators (num_ctx and thinking_disabled patterns).
@@ -1103,7 +1103,7 @@ async def papers_by_source(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return paper counts grouped by source type."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         if user_id is None or is_admin:
@@ -1132,7 +1132,7 @@ async def papers_by_status(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> list[dict]:
     """Return paper counts grouped by user-state status."""
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         if user_id is None or is_admin:
@@ -1152,7 +1152,7 @@ async def papers_by_status(
                 FROM papers p
                 JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
                 LEFT JOIN paper_user_state pus
-                  ON p.id = pus.paper_id AND pus.user_id IS NOT DISTINCT FROM $1
+                  ON p.id = pus.paper_id AND pus.user_id = $1
                 GROUP BY COALESCE(pus.state::TEXT, 'inbox')
                 ORDER BY count DESC
                 """,
@@ -1179,7 +1179,7 @@ async def test_provider(
         raise HTTPException(status_code=400, detail="unsupported provider")
 
     config_key = f"llm.{provider}.api_key"
-    caller_user_id = await current_user_id_or_none(request)
+    caller_user_id = await current_user_id_strict(request)
     is_admin = getattr(request.state, "user_role", None) == "admin"
     async with db_pool.acquire() as conn:
         row = await _fetch_effective_config_row(conn, config_key, caller_user_id, is_admin=is_admin)

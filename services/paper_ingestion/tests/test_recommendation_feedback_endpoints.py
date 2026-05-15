@@ -61,7 +61,7 @@ async def test_get_returns_paginated_list_with_topic_join():
     conn.fetchval.return_value = 2
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
@@ -86,7 +86,7 @@ async def test_get_filters_by_paper_id():
     conn.fetchval.return_value = 1
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
@@ -109,14 +109,14 @@ async def test_get_filters_by_paper_id():
 
 @pytest.mark.asyncio
 async def test_get_scopes_by_user_id():
-    """The SQL sent to conn.fetch must contain the IS NOT DISTINCT FROM clause."""
+    """The SQL sent to conn.fetch must scope by an exact user_id match."""
     pool, conn = _make_pool_and_conn()
     conn.fetch.return_value = [_row()]
     conn.fetchval.return_value = 1
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
-        new=AsyncMock(return_value=None),
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
+        new=AsyncMock(return_value=7),
     ):
         await recommendation_feedback.list_recommendation_feedback.__wrapped__(
             request=MagicMock(),
@@ -127,7 +127,8 @@ async def test_get_scopes_by_user_id():
         )
 
     sql = conn.fetch.call_args.args[0]
-    assert "IS NOT DISTINCT FROM" in sql
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "rf.user_id = $1" in sql
 
 
 @pytest.mark.asyncio
@@ -138,7 +139,7 @@ async def test_get_pagination_default():
     conn.fetchval.return_value = 0
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
@@ -178,7 +179,7 @@ async def test_get_topic_name_join():
     conn.fetchval.return_value = 1
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
@@ -212,7 +213,7 @@ async def test_delete_removes_user_scoped_rows_for_topic():
     conn.execute.return_value = "DELETE 3"
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
@@ -232,7 +233,7 @@ async def test_delete_returns_zero_when_no_rows():
     conn.execute.return_value = "DELETE 0"
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
         new=AsyncMock(return_value=None),
     ):
         result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
@@ -247,13 +248,13 @@ async def test_delete_returns_zero_when_no_rows():
 
 @pytest.mark.asyncio
 async def test_delete_scopes_by_user_id():
-    """The SQL passed to conn.execute must include the user_id IS NOT DISTINCT FROM clause."""
+    """The DELETE SQL must scope recommendation_feedback by an exact user_id."""
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"
 
     with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_or_none",
-        new=AsyncMock(return_value=None),
+        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
+        new=AsyncMock(return_value=7),
     ):
         await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
             request=MagicMock(),
@@ -262,7 +263,8 @@ async def test_delete_scopes_by_user_id():
         )
 
     sql = conn.execute.call_args.args[0]
-    assert "user_id IS NOT DISTINCT FROM" in sql
+    assert "IS NOT DISTINCT FROM" not in sql
+    assert "user_id = $2" in sql
 
 
 # ---------------------------------------------------------------------------

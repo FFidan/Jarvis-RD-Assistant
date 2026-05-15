@@ -13,6 +13,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -63,6 +64,12 @@ def client():
         return None
 
     app.dependency_overrides[verify_api_key] = override_api_key
+    # WS-CROSS-USER: pulse routes resolve via
+    # current_user_id_strict_with_owner_override (hard-401 sessionless).
+    # explain_card injects it via Depends, so override by the function object.
+    from jarvis_common import current_user_id_strict_with_owner_override
+
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
 
     with TestClient(app, raise_server_exceptions=False, backend_options={"use_uvloop": True}) as tc:
         yield tc, pool, conn

@@ -8,7 +8,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, Request
-from jarvis_common import current_user_id_or_none
+from jarvis_common import current_user_id_strict
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import DashboardMetrics
@@ -34,7 +34,7 @@ async def get_dashboard_metrics(
 
     Mirrors the SQL previously embedded in ``dashboard/app.py``.
     """
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_strict(request)
     async with pool.acquire() as conn:
         # Sprint B canonical-corpus: paper-count metrics scope through
         # ``user_library`` (the caller's library) instead of the legacy
