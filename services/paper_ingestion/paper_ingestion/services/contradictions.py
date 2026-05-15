@@ -614,14 +614,26 @@ async def scan_contradictions(
 async def list_contradictions(
     conn: ConnLike,
     *,
+    user_id: int,
     paper_id: int | None = None,
     status: str | None = "verified",
     limit: int = 20,
 ) -> tuple[list[PaperContradictionResponse], int]:
-    """List persisted contradictions with paper titles."""
+    """List persisted contradictions scoped to the caller's library."""
     conditions: list[str] = []
     params: list[Any] = []
     idx = 1
+    # Scope to papers in the caller's user_library (both sides of contradiction).
+    conditions.append(
+        f"("
+        f"EXISTS (SELECT 1 FROM user_library ul"
+        f" WHERE ul.paper_id = pc.paper_a_id AND ul.user_id = ${idx})"
+        f" OR EXISTS (SELECT 1 FROM user_library ul"
+        f" WHERE ul.paper_id = pc.paper_b_id AND ul.user_id = ${idx})"
+        f")"
+    )
+    params.append(user_id)
+    idx += 1
     if paper_id is not None:
         conditions.append(f"(pc.paper_a_id = ${idx} OR pc.paper_b_id = ${idx})")
         params.append(paper_id)

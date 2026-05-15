@@ -37,9 +37,11 @@ async def get_contradictions(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> ContradictionListResponse:
     """List persisted quote-verified contradictions."""
+    user_id = await current_user_id_strict(request)
     async with db_pool.acquire() as conn:
         contradictions, total = await list_contradictions(
             conn,
+            user_id=user_id,
             paper_id=paper_id,
             status=status,
             limit=limit,

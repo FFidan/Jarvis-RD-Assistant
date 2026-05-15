@@ -18,6 +18,7 @@ from paper_ingestion.services.contradictions import (
     list_contradictions,
     scan_contradictions,
 )
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
@@ -362,7 +363,7 @@ async def test_list_contradictions_maps_rows():
         )
     ]
 
-    rows, total = await list_contradictions(conn, paper_id=1)
+    rows, total = await list_contradictions(conn, user_id=1, paper_id=1)
 
     assert total == 1
     assert rows[0].id == 7

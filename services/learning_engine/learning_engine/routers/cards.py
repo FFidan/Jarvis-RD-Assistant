@@ -42,6 +42,14 @@ async def create_card(
         if body.paper_id is not None:
             await assert_paper_ownership(conn, body.paper_id, user_id)
 
+        deck = await conn.fetchval(
+            "SELECT id FROM decks WHERE id = $1 AND user_id = $2",
+            body.deck_id,
+            user_id,
+        )
+        if not deck:
+            raise HTTPException(status_code=404, detail="Deck not found")
+
         fsrs_state, due_at = fsrs_manager.create_new_card()
         evidence = body.evidence.model_dump() if body.evidence else {}
 

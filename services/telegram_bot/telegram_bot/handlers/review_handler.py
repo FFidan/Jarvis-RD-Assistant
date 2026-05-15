@@ -117,9 +117,14 @@ async def review_start(
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         return ConversationHandler.END
+
+    # Refresh the cached user identity so subsequent intra-session calls
+    # (e.g. _fetch_next_card, rate_card) use the current pairing, not a
+    # potentially stale value from a previous pair.
+    context.user_data["jarvis_user_id"] = jarvis_user_id
 
     context.user_data["cards_reviewed"] = 0
     context.user_data["review_start_time"] = utc_now_iso()
@@ -149,9 +154,13 @@ async def show_answer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         return ConversationHandler.END
+
+    # Keep cached identity current in case pairing changed mid-session.
+    context.user_data["jarvis_user_id"] = jarvis_user_id
+
     await query.answer()
 
     card = context.user_data.get("current_card")
@@ -180,9 +189,14 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         return ConversationHandler.END
+
+    # Refresh cached identity — use the freshly resolved id for this request
+    # rather than whatever was stored from a potentially stale prior session.
+    context.user_data["jarvis_user_id"] = jarvis_user_id
+
     await query.answer()
 
     rating = int(query.data.split("_")[1])
@@ -202,9 +216,6 @@ async def rate_card(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Submit rating to learning engine
     http = get_http(context)
-    jarvis_user_id: int | None = (
-        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
-    )
     next_review_str = "unknown"
     review_ok = True
     try:

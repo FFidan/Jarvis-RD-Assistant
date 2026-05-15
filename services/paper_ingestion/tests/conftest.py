@@ -22,6 +22,34 @@ import apscheduler.triggers.cron  # noqa: F401
 import pytest
 
 # ---------------------------------------------------------------------------
+# Cache-isolation fixture
+#
+# The root conftest at the repo root defines _clear_secrets_cache, but pytest
+# resolves rootdir to services/paper_ingestion/ (due to the local pytest.ini),
+# so the repo-root conftest is never loaded for these tests.  This fixture
+# replicates the same behaviour locally: clear both the get_secrets_settings
+# lru_cache AND the module-level _CACHED_API_KEY in jarvis_common.auth before
+# and after every test.  Without it, a test that calls get_secrets_settings()
+# with one set of env vars poisons the cache for subsequent tests that rely on
+# a different env (e.g. JARVIS_API_KEY="x"*32 leaked into a test expecting
+# JARVIS_API_KEY="short").
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _clear_settings_caches():
+    """Clear all lru_cache'd settings + the module-level API-key cache."""
+    from jarvis_common.auth import refresh_api_key_cache
+    from jarvis_common.settings import get_secrets_settings
+
+    get_secrets_settings.cache_clear()
+    refresh_api_key_cache()
+    yield
+    get_secrets_settings.cache_clear()
+    refresh_api_key_cache()
+
+
+# ---------------------------------------------------------------------------
 # Live PostgreSQL fixture
 # ---------------------------------------------------------------------------
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-
 import jarvis_common.auth as auth_mod
 import pytest
 from jarvis_common.auth import validate_production_config
@@ -47,7 +45,7 @@ def _clear_env(monkeypatch) -> None:
 
 
 class TestDevAuthBypassStandalone:
-    def test_dev_auth_bypass_allows_without_key(self, monkeypatch) -> None:
+    async def test_dev_auth_bypass_allows_without_key(self, monkeypatch) -> None:
         """DEV_AUTH_BYPASS=true with DEV_MODE unset still bypasses verify_api_key
         when no API key is configured."""
         _clear_env(monkeypatch)
@@ -56,9 +54,9 @@ class TestDevAuthBypassStandalone:
         monkeypatch.setattr(auth_mod, "_CACHED_API_KEY", None)
         request = _make_request()
         # Should not raise
-        asyncio.get_event_loop().run_until_complete(auth_mod.verify_api_key(request, None))
+        await auth_mod.verify_api_key(request, None)
 
-    def test_dev_auth_bypass_false_raises_401_without_key(self, monkeypatch) -> None:
+    async def test_dev_auth_bypass_false_raises_401_without_key(self, monkeypatch) -> None:
         """With no key and no bypass, verify_api_key raises 401."""
         from fastapi import HTTPException
 
@@ -68,7 +66,7 @@ class TestDevAuthBypassStandalone:
         monkeypatch.setattr(auth_mod, "_CACHED_API_KEY", None)
         request = _make_request()
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(auth_mod.verify_api_key(request, None))
+            await auth_mod.verify_api_key(request, None)
         assert exc_info.value.status_code == 401
 
     # (b) DEV_AUTH_BYPASS=true + ENVIRONMENT=production crashes validate_production_config

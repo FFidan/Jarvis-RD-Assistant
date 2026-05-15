@@ -21,7 +21,7 @@ class TestCachedApiKey:
         # The attribute must exist on the module, regardless of its value.
         assert hasattr(auth_mod, "_CACHED_API_KEY")
 
-    def test_cached_value_not_reread_on_subsequent_calls(self, monkeypatch) -> None:
+    async def test_cached_value_not_reread_on_subsequent_calls(self, monkeypatch) -> None:
         """JC-005: verify_api_key reads _CACHED_API_KEY, not get_secrets_settings on each call.
 
         We patch _CACHED_API_KEY directly and confirm the handler uses that
@@ -34,9 +34,6 @@ class TestCachedApiKey:
         monkeypatch.setattr(auth_mod, "_CACHED_API_KEY", "cached-test-key-1234567890abcdef")
         # Confirm get_secrets_settings is NOT called during verify_api_key.
         with patch.object(settings_mod, "get_secrets_settings") as mock_read:
-            # Run verify_api_key synchronously via asyncio.
-            import asyncio
-
             from starlette.requests import Request
 
             scope = {
@@ -49,15 +46,11 @@ class TestCachedApiKey:
             request = Request(scope)
 
             # Correct key — should pass without raising.
-            asyncio.get_event_loop().run_until_complete(
-                auth_mod.verify_api_key(request, "cached-test-key-1234567890abcdef")
-            )
+            await auth_mod.verify_api_key(request, "cached-test-key-1234567890abcdef")
             mock_read.assert_not_called()
 
-    def test_wrong_key_raises_403_using_cache(self, monkeypatch) -> None:
+    async def test_wrong_key_raises_403_using_cache(self, monkeypatch) -> None:
         """verify_api_key raises 403 on wrong key using the cached value."""
-        import asyncio
-
         import jarvis_common.auth as auth_mod
         from fastapi import HTTPException
         from starlette.requests import Request
@@ -72,15 +65,11 @@ class TestCachedApiKey:
         }
         request = Request(scope)
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
-                auth_mod.verify_api_key(request, "wrong-key")
-            )
+            await auth_mod.verify_api_key(request, "wrong-key")
         assert exc_info.value.status_code == 403
 
-    def test_no_cached_key_dev_mode_passes(self, monkeypatch) -> None:
+    async def test_no_cached_key_dev_mode_passes(self, monkeypatch) -> None:
         """When _CACHED_API_KEY is None and DEV_MODE=true, auth is bypassed."""
-        import asyncio
-
         import jarvis_common.auth as auth_mod
         from starlette.requests import Request
 
@@ -96,7 +85,7 @@ class TestCachedApiKey:
         }
         request = Request(scope)
         # Should complete without raising.
-        asyncio.get_event_loop().run_until_complete(auth_mod.verify_api_key(request, None))
+        await auth_mod.verify_api_key(request, None)
 
 
 # ---------------------------------------------------------------------------
