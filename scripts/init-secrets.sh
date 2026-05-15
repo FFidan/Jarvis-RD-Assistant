@@ -81,6 +81,12 @@ sync_secret JARVIS_API_KEY     jarvis_api_key.txt     "openssl rand -hex 32"
 sync_secret LITELLM_MASTER_KEY litellm_master_key.txt "openssl rand -hex 32"
 sync_secret POSTGRES_PASSWORD  postgres_password.txt  "openssl rand -hex 24"
 sync_secret QDRANT_API_KEY     qdrant_api_key.txt     "openssl rand -hex 24"
+# INFRA_INGEST_KEY authenticates the Vector log-shipper sidecar to POST /infra-events.
+# Mounted by paper_ingestion and vector services via Docker Secret.
+sync_secret INFRA_INGEST_KEY   infra_ingest_key.txt   "openssl rand -hex 32"
+# VECTOR_WRITER_PASSWORD is declared in the compose secrets block; generate it
+# so docker compose up never fails with a missing file error.
+sync_secret VECTOR_WRITER_PASSWORD vector_writer_password.txt "openssl rand -hex 32"
 
 # JARVIS_CONFIG_KEY is the Fernet write-key for the user_config table.
 # sync_secret preserves any existing .env value verbatim; rotating this key

@@ -296,19 +296,9 @@ JARVIS_CONFIG_KEY="$(openssl rand -base64 32)"
 LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
 ok "Secrets generated."
 
-# Write secret files used by Docker Secrets mounts.
-# These are gitignored (secrets/*.txt). setup.sh is idempotent — re-running
-# overwrites and re-chmodds all files.
-mkdir -p secrets
-printf '%s' "$POSTGRES_PASSWORD"   > secrets/postgres_password.txt    && chmod 600 secrets/postgres_password.txt
-printf '%s' "$JARVIS_API_KEY"      > secrets/jarvis_api_key.txt        && chmod 600 secrets/jarvis_api_key.txt
-# LITELLM_MASTER_KEY: canonical store is secrets/litellm_master_key.txt;
-# secrets/*.txt is the single source of truth for all Docker Secrets at runtime.
-printf '%s' "$LITELLM_MASTER_KEY"  > secrets/litellm_master_key.txt    && chmod 600 secrets/litellm_master_key.txt
-# Generate and write Qdrant API key secret (used by both Qdrant service and app services via _FILE)
+# Docker secret files are written by scripts/init-secrets.sh (single source of
+# truth) after .env is fully populated.  See section 7a below.
 QDRANT_API_KEY="$(openssl rand -hex 24)"
-printf '%s' "$QDRANT_API_KEY"      > secrets/qdrant_api_key.txt        && chmod 600 secrets/qdrant_api_key.txt
-ok "Docker secret files written to secrets/ (mode 600)."
 
 # -----------------------------------------------------------------------------
 # 5. Question 1 — Access mode
@@ -541,6 +531,7 @@ sub_value() {
     N8N_ENCRYPTION_KEY)       printf '%s' "$N8N_ENCRYPTION_KEY" ;;
     N8N_JWT_SECRET)           printf '%s' "$N8N_JWT_SECRET" ;;
     LITELLM_MASTER_KEY)        printf '%s' "$LITELLM_MASTER_KEY" ;;
+    QDRANT_API_KEY)           printf '%s' "$QDRANT_API_KEY" ;;
     CLOUDFLARE_TUNNEL_TOKEN)  printf '%s' "$CLOUDFLARE_TUNNEL_TOKEN" ;;
     TELEGRAM_BOT_TOKEN)       printf '%s' "$TELEGRAM_BOT_TOKEN" ;;
     TUNNEL_HOSTNAME)          printf '%s' "$TUNNEL_HOSTNAME" ;;
@@ -613,6 +604,17 @@ done < .env.example
 mv "$TMP_ENV" .env
 chmod 600 .env
 ok ".env written (mode 600)."
+
+# -----------------------------------------------------------------------------
+# 7a. Write Docker secret files — delegate to init-secrets.sh (single source of
+#     truth).  .env is now fully populated, so init-secrets.sh can read all
+#     values and create every secrets/*.txt the compose stack requires.
+#     init-secrets.sh is idempotent: existing files whose content already matches
+#     .env are left untouched.
+# -----------------------------------------------------------------------------
+info "Writing Docker secret files via scripts/init-secrets.sh..."
+bash "${SCRIPT_DIR}/scripts/init-secrets.sh"
+ok "Docker secret files ready in secrets/ (mode 600)."
 
 # Enforce 600 mode on any secret files that already exist
 if [ -d secrets ]; then
