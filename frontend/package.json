@@ -14,6 +14,7 @@
     "test:e2e:live-smoke": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --grep @live-smoke",
     "test:e2e:live-readonly": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/auth.spec.ts e2e/home.spec.ts e2e/navigation.spec.ts e2e/analytics.spec.ts e2e/learning-cards.spec.ts e2e/extractions.spec.ts",
     "test:e2e:live-mutating": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test e2e/feed/discovery.spec.ts e2e/projects.spec.ts e2e/settings/authors.spec.ts e2e/settings/automation.spec.ts e2e/settings/ingestion.spec.ts e2e/settings/sources.spec.ts e2e/settings/templates.spec.ts e2e/settings/topics.spec.ts",
+    "test:e2e:cross-user": "PLAYWRIGHT_BASE_URL=${PLAYWRIGHT_BASE_URL:-http://127.0.0.1:3001} playwright test --grep @cross-user",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "lint": "eslint .",
     "codegen:paper": "openapi-typescript http://localhost:${PAPER_INGESTION_HOST_PORT:-8010}/openapi.json -o src/types/paper-ingestion.gen.ts",

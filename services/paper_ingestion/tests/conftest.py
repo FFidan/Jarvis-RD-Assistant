@@ -131,7 +131,7 @@ def _make_pool_and_conn():
 
 
 @pytest.fixture(autouse=True)
-def _default_authenticated_user():
+def _default_authenticated_user(request):
     """WS-CROSS-USER: default every router's strict user-id resolver to user 1.
 
     The strict resolvers (``current_user_id_strict`` /
@@ -145,7 +145,16 @@ def _default_authenticated_user():
     Auth/IDOR tests that need a specific user (or 401) re-patch the same
     module attribute inside their own ``with patch(...)`` / ``monkeypatch``
     scope, which takes precedence for the duration of the test body.
+
+    Tests marked ``@pytest.mark.real_auth`` opt OUT of this stub entirely:
+    they exercise the genuine ``SessionMiddleware`` -> ``request.state.user_id``
+    -> strict-resolver path against a real ``jarvis_session`` cookie. The
+    opt-out is inert (no behaviour change) when the marker is absent.
     """
+    if request.node.get_closest_marker("real_auth") is not None:
+        yield
+        return
+
     import importlib
     import pkgutil
     from unittest.mock import AsyncMock
@@ -406,3 +415,292 @@ async def test_db_pool(live_pg_dsn):
             await conn.execute(f"DROP TABLE IF EXISTS {table} CASCADE")
 
     await pool.close()
+
+
+# ---------------------------------------------------------------------------
+# 6. Two-user cross-isolation fixture (WS-NEGATIVE-TESTS)
+# ---------------------------------------------------------------------------
+
+
+class TwoUsers:
+    """Handle exposing two real DB users plus their seeded, owned resources.
+
+    Every ``*_a`` attribute is owned by ``user_a_id``; the negative test acts
+    as user B (``cookie_b``) and asserts it can neither read nor mutate any
+    of A's rows. ``cookie_*`` are ready-to-use ``jarvis_session`` cookie
+    values (the session row's UUID id).
+    """
+
+    def __init__(self, **kw: object) -> None:
+        self.__dict__.update(kw)
+
+    user_a_id: int
+    user_b_id: int
+    cookie_a: str
+    cookie_b: str
+    paper_id_a: int
+    note_id_a: int
+    card_id_a: int
+    deck_id_a: int
+    project_id_a: int
+    task_id_a: int
+    journal_id_a: int
+    topic_id_a: int
+    pulse_deck_id_a: int
+    pulse_card_id_a: int
+    pool: object  # asyncpg.Pool — live schema, used for app wiring + re-checks
+
+
+# Marker strings the test asserts are NEVER visible to user B.
+A_PAPER_TITLE = "ZZZ-ISOLATION-A-PAPER Quantum Entanglement of Owls"
+A_NOTE_TEXT = "ZZZ-ISOLATION-A-NOTE private annotation alpha"
+A_PROJECT_NAME = "ZZZ-ISOLATION-A-PROJECT secret roadmap"
+A_TASK_TITLE = "ZZZ-ISOLATION-A-TASK confidential milestone"
+A_CARD_FRONT = "ZZZ-ISOLATION-A-CARD front side alpha"
+
+
+async def _seed_user(conn, email: str) -> tuple[int, str]:
+    """Insert one active user + one valid session; return (user_id, cookie)."""
+    user_id = await conn.fetchval(
+        "INSERT INTO users (email, role) VALUES ($1, 'user') RETURNING id",
+        email,
+    )
+    session_id = await conn.fetchval(
+        """INSERT INTO sessions (user_id, expires_at)
+           VALUES ($1, NOW() + INTERVAL '1 day')
+           RETURNING id""",
+        user_id,
+    )
+    return int(user_id), str(session_id)
+
+
+async def _seed_resources(conn, user_id: int, tag: str) -> dict:
+    """Seed one owned row per DB-backed table the endpoints read."""
+    # Sprint-B canonical-corpus model (migration 072): papers are global;
+    # ownership = `papers.discovered_by` OR `user_library` membership
+    # (see jarvis_common.db_helpers.assert_paper_ownership). So the paper is
+    # owned by this user via discovered_by, and we also record explicit
+    # library membership for realism.
+    paper_id = await conn.fetchval(
+        """INSERT INTO papers (external_id, source_type, title, authors, url, discovered_by)
+           VALUES ($1, 'arxiv', $2, ARRAY['A. Author'], 'https://example.test/a', $3)
+           RETURNING id""",
+        f"iso-ext-{tag}",
+        A_PAPER_TITLE if tag == "a" else f"paper-{tag}",
+        user_id,
+    )
+    await conn.execute(
+        """INSERT INTO user_library (user_id, paper_id, added_via)
+           VALUES ($1, $2, 'manual_save')""",
+        user_id,
+        paper_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_user_state (paper_id, user_id, state, starred)
+           VALUES ($1, $2, 'to_read', TRUE)""",
+        paper_id,
+        user_id,
+    )
+    note_id = await conn.fetchval(
+        """INSERT INTO paper_notes (paper_id, user_note, user_id)
+           VALUES ($1, $2, $3) RETURNING id""",
+        paper_id,
+        A_NOTE_TEXT if tag == "a" else f"note-{tag}",
+        user_id,
+    )
+    # decks/cards carry a user_id column (migration 070). Ownership is
+    # router-enforced by that column: decks.py:53 `WHERE d.user_id = $1`
+    # and cards.py:119 `SELECT * FROM cards WHERE id = $1 AND user_id = $2`.
+    # Seed the owning user_id so cross-user access is genuinely denied
+    # (NULL would let both users read the rows -> false-green).
+    deck_id = await conn.fetchval(
+        "INSERT INTO decks (name, user_id) VALUES ($1, $2) RETURNING id",
+        f"deck-{tag}",
+        user_id,
+    )
+    card_id = await conn.fetchval(
+        """INSERT INTO cards (deck_id, paper_id, card_type, front, back, user_id)
+           VALUES ($1, $2, 'concept', $3, 'back', $4) RETURNING id""",
+        deck_id,
+        paper_id,
+        A_CARD_FRONT if tag == "a" else f"card-{tag}",
+        user_id,
+    )
+    project_id = await conn.fetchval(
+        """INSERT INTO projects (name, user_id) VALUES ($1, $2) RETURNING id""",
+        A_PROJECT_NAME if tag == "a" else f"project-{tag}",
+        user_id,
+    )
+    task_id = await conn.fetchval(
+        """INSERT INTO tasks (project_id, title, user_id)
+           VALUES ($1, $2, $3) RETURNING id""",
+        project_id,
+        A_TASK_TITLE if tag == "a" else f"task-{tag}",
+        user_id,
+    )
+    journal_id = await conn.fetchval(
+        """INSERT INTO journal_entries (user_id, date, prompts)
+           VALUES ($1, CURRENT_DATE, '{"win": "secret"}'::jsonb)
+           RETURNING id""",
+        user_id,
+    )
+    topic_id = await conn.fetchval(
+        """INSERT INTO topics (name, query_terms) VALUES ($1, ARRAY['q'])
+           RETURNING id""",
+        f"topic-{tag}",
+    )
+    await conn.execute(
+        """INSERT INTO user_topic_subscriptions (user_id, topic_id)
+           VALUES ($1, $2)""",
+        user_id,
+        topic_id,
+    )
+    await conn.execute(
+        """INSERT INTO paper_recommendations (paper_id, score, user_id)
+           VALUES ($1, 0.9, $2)""",
+        paper_id,
+        user_id,
+    )
+    pulse_deck_id = await conn.fetchval(
+        """INSERT INTO pulse_decks (deck_date, card_count, user_id)
+           VALUES (CURRENT_DATE, 1, $1) RETURNING id""",
+        user_id,
+    )
+    pulse_card_id = await conn.fetchval(
+        """INSERT INTO pulse_cards (deck_id, paper_id, rank, score, user_id)
+           VALUES ($1, $2, 1, 0.9, $3) RETURNING id""",
+        pulse_deck_id,
+        paper_id,
+        user_id,
+    )
+    return {
+        "paper_id": paper_id,
+        "note_id": note_id,
+        "card_id": card_id,
+        "deck_id": deck_id,
+        "project_id": project_id,
+        "task_id": task_id,
+        "journal_id": journal_id,
+        "topic_id": topic_id,
+        "pulse_deck_id": pulse_deck_id,
+        "pulse_card_id": pulse_card_id,
+    }
+
+
+@pytest.fixture()
+async def two_users(live_pg_dsn):
+    """Two real users, each with a valid session cookie and owned rows.
+
+    Builds its OWN asyncpg pool against the disposable ``live_pg_dsn``
+    container and provisions a complete schema.
+
+    Provisioning has to work around a *pre-existing* repo schema-drift
+    defect (the canonical fresh-init test ``test_migrations_live`` is
+    itself red on master for the same reason; ``test_db_pool``'s tolerant
+    ``;``-splitter merely swallows it into a half-built schema). Concretely:
+
+      1. ``init.sql`` references ``users(id)`` (``user_topic_subscriptions``
+         FK) but never creates ``users``/``sessions`` — those live only in
+         migration 069. So apply the idempotent 069 auth DDL first.
+      2. ``init.sql`` is *mostly* the post-migration steady state but
+         genuinely lags a handful of migrations whose per-user columns the
+         endpoints query (070 ``cards/decks.user_id``; 072 ``papers``
+         ``user_id``->``discovered_by`` rename + ``user_library``).
+      3. Re-running the full migration set on top of init.sql conflicts on
+         objects init.sql already has (e.g. 063's
+         ``uq_paper_recommendations`` unique index → "relation already
+         exists", which 063's ``EXCEPTION WHEN duplicate_object`` does NOT
+         catch).
+
+    Strategy that yields a correct, complete schema:
+      * apply 069 auth DDL + ``init.sql`` whole;
+      * pre-mark *every* migration version applied, then run the real
+        runner — its ``_repair_false_applied_migrations`` probe replays
+        only the genuinely-missing probe-covered ones (33/49/50/63/77…)
+        and skips everything init.sql already has (no conflicts);
+      * finally, explicitly re-apply the *idempotent* migrations init.sql
+        is known to lag (070 then 072) so the per-user scoping columns the
+        routers SELECT actually exist. Both are guarded
+        (``ADD COLUMN IF NOT EXISTS`` / ``DO $$ … EXCEPTION``) so a second
+        application is a safe no-op.
+
+    The container is torn down by ``live_pg_dsn`` after the test, so no
+    row-level cleanup is required — the DB is disposable per test.
+    """
+    from pathlib import Path
+
+    import asyncpg
+    from jarvis_common.db_helpers import init_pg_connection
+    from jarvis_common.migrations import run_migrations
+
+    db_dir = Path(__file__).parent.parent.parent.parent / "db"
+    init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
+    migrations_dir = db_dir / "migrations"
+    auth_ddl = (migrations_dir / "069_auth.sql").read_text(encoding="utf-8")
+    all_versions = sorted(
+        int(p.name.split("_")[0])
+        for p in migrations_dir.glob("*.sql")
+        if p.name.split("_")[0].isdigit()
+    )
+    # Migrations init.sql lags whose columns the endpoints query. Applied
+    # in version order after the runner; all are fully idempotent
+    # (ADD COLUMN IF NOT EXISTS / guarded DO $$ blocks) so re-applying what
+    # the runner already did is a safe no-op:
+    #   034 — pulse_cards.reasoning_verified/_confidence (pulse/today query)
+    #   070 — cards/decks.user_id (cards/decks scoping queries)
+    #   072 — papers user_id->discovered_by rename + user_library
+    lagged_migrations = (
+        migrations_dir / "034_pulse_reasoning_verification.sql",
+        migrations_dir / "070_multi_tenant_user_id_columns.sql",
+        migrations_dir / "072_canonical_corpus.sql",
+    )
+
+    # init=init_pg_connection registers the JSON/JSONB codec exactly like the
+    # app's lifespan-built pool, so JSONB columns deserialize to dicts (the
+    # response models require dict, not str).
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection)
+    assert pool is not None
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(auth_ddl)  # users + sessions (IF NOT EXISTS)
+            await conn.execute(init_sql)  # everything else, FK now resolvable
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS schema_migrations (
+                    version INTEGER PRIMARY KEY,
+                    applied_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+            await conn.executemany(
+                "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
+                [(v,) for v in all_versions],
+            )
+        await run_migrations(pool, migrations_dir=migrations_dir)
+        async with pool.acquire() as conn:
+            for mig in lagged_migrations:
+                await conn.execute(mig.read_text(encoding="utf-8"))
+
+        async with pool.acquire() as conn:
+            user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.test")
+            user_b_id, cookie_b = await _seed_user(conn, "iso-user-b@example.test")
+            res_a = await _seed_resources(conn, user_a_id, "a")
+            await _seed_resources(conn, user_b_id, "b")
+
+        yield TwoUsers(
+            user_a_id=user_a_id,
+            user_b_id=user_b_id,
+            cookie_a=cookie_a,
+            cookie_b=cookie_b,
+            paper_id_a=res_a["paper_id"],
+            note_id_a=res_a["note_id"],
+            card_id_a=res_a["card_id"],
+            deck_id_a=res_a["deck_id"],
+            project_id_a=res_a["project_id"],
+            task_id_a=res_a["task_id"],
+            journal_id_a=res_a["journal_id"],
+            topic_id_a=res_a["topic_id"],
+            pulse_deck_id_a=res_a["pulse_deck_id"],
+            pulse_card_id_a=res_a["pulse_card_id"],
+            pool=pool,
+        )
+    finally:
+        await pool.close()

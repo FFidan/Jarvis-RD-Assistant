@@ -39,6 +39,7 @@ paper-ingestion = [
     "pyyaml>=6.0",
     "qdrant-client>=1.12.0,<2.0.0",
     "rapidfuzz>=3.0.0",
+    "sentry-sdk>=2.0.0",
     "slowapi>=0.1.9",
     "tiktoken>=0.7.0",
     "transformers>=4.45.2,<4.52.0",
@@ -62,6 +63,7 @@ learning-engine = [
     "httpx>=0.27.0",
     "orjson>=3.10.0",
     "pydantic>=2.0,<3.0.0",
+    "sentry-sdk>=2.0.0",
     "slowapi>=0.1.9",
     "uvicorn[standard]>=0.30.0",
     "uvloop>=0.19,<1",
@@ -127,6 +129,7 @@ markers = [
     "live_pg: requires Docker-backed PostgreSQL and JARVIS_RUN_LIVE_PG=1",
     "integration: integration tests that may need explicit opt-in dependencies",
     "slow: slower tests excluded from ordinary host runs",
+    "real_auth: opt out of the autouse user-id stub; exercise the real session resolver",
 ]
 # Service + library roots on sys.path so each package resolves by its unique
 # name (paper_ingestion, learning_engine, telegram_bot, jarvis_common).

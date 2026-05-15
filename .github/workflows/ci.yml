@@ -1,0 +1,105 @@
+name: CI
+
+# Public-launch CI. The `cross-user-isolation` job is the v0.4.0 merge gate.
+#
+# BRANCH PROTECTION: mark the terminal `gate` job (defined at the bottom of
+# this file) as the ONLY required status check. It `needs:` all real jobs,
+# so requiring `gate` transitively requires lint-test + cross-user-isolation
+# + frontend. Requiring individual jobs directly is fragile (a renamed job
+# silently drops the gate); `gate` makes the requirement self-enforcing.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-test:
+    name: Lint + fast test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Ruff
+        run: uv run ruff check services/ libs/ scripts/
+
+      - name: Fast test suite
+        run: uv run pytest
+
+      - name: Guard - no unsafe user-id resolver
+        run: python3 scripts/check-no-unsafe-resolver.py
+
+      - name: Guard - no JSONB double-encode
+        run: python3 scripts/check-no-jsonb-double-encode.py
+
+      - name: Guard - agent docs in sync
+        run: python3 scripts/check_agent_docs.py
+
+  cross-user-isolation:
+    name: Cross-user isolation (v0.4.0 merge gate)
+    runs-on: ubuntu-latest
+    # The live_pg fixture provisions its own throwaway PostgreSQL 16 container
+    # via the Docker CLI (preinstalled on ubuntu-latest); it reads only
+    # JARVIS_RUN_LIVE_PG=1, so no `services:` block is required.
+    env:
+      JARVIS_RUN_LIVE_PG: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --group dev
+
+      - name: Cross-user isolation suite
+        run: >-
+          uv run pytest -m "integration and live_pg"
+          services/paper_ingestion/tests/integration/test_cross_user_isolation.py -v
+
+  frontend:
+    name: Frontend lint + test + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm --prefix frontend ci
+
+      - name: Lint
+        run: npm --prefix frontend run lint
+
+      - name: Unit tests
+        run: npm --prefix frontend run test -- --run
+
+      - name: Build
+        run: npm --prefix frontend run build
+
+  gate:
+    name: CI gate (required status check)
+    runs-on: ubuntu-latest
+    needs: [lint-test, cross-user-isolation, frontend]
+    steps:
+      - name: All required jobs passed
+        run: echo "lint-test + cross-user-isolation + frontend all green"
