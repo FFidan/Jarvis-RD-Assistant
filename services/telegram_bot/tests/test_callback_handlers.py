@@ -807,3 +807,82 @@ async def test_start_review_unauthed_acks_before_returning():
         await start_review_callback(update, context)
 
     assert update.callback_query.answer.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# WS-CROSS-USER: X-Owner-User-Id forwarded from paired callbacks
+# ---------------------------------------------------------------------------
+
+_PAIRED_CHAT_ID = 55555
+_PAIRED_USER_ID = 42
+
+
+def _make_paired_callback(callback_data: str) -> tuple:
+    """Build (update, context, mock_db, mock_http) for a paired multi-tenant chat.
+
+    The chat_id does not match the env-var config, so auth_check will query
+    telegram_user_pairings.  We set mock_db.fetchrow to return a row with
+    user_id=_PAIRED_USER_ID so auth_check grants access as a paired user.
+    """
+    update, context, mock_db, mock_http = _make_callback_update_and_context(
+        callback_data, chat_id=_PAIRED_CHAT_ID
+    )
+    # auth_check path 1 (env var): no match — chat_id != _TEST_CHAT_ID
+    # auth_check path 2 (user_config owner): fetchval returns None
+    mock_db.fetchval.return_value = None
+    # auth_check path 3 (telegram_user_pairings): return paired row
+    mock_db.fetchrow.return_value = {"user_id": _PAIRED_USER_ID}
+    return update, context, mock_db, mock_http
+
+
+@pytest.mark.asyncio
+async def test_paper_detail_callback_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: paper_detail_callback includes X-Owner-User-Id for a paired user."""
+    update, context, _, mock_http = _make_paired_callback("paper_detail_42")
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "paper": {"title": "Test", "authors": [], "published_date": None, "url": None},
+        "summary": None,
+    }
+    mock_http.get.return_value = mock_resp
+
+    await paper_detail_callback(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-API-Key") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_paper_action_callback_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: paper_action_callback includes X-Owner-User-Id for a paired user."""
+    update, context, _, _ = _make_paired_callback("paper:save:7")
+    mock_http = _make_action_mock_http()
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_action_callback(update, context)
+
+    mock_http.request.assert_awaited_once()
+    headers = mock_http.request.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-API-Key") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: paper_feedback_callback includes X-Owner-User-Id for a paired user."""
+    update, context, _, _ = _make_paired_callback("paper:feedback_pos:7:pulse_thumbs")
+    mock_http = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+    context.application.bot_data["http_client"] = mock_http
+
+    await paper_feedback_callback(update, context)
+
+    mock_http.post.assert_awaited_once()
+    headers = mock_http.post.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
+    assert headers.get("X-API-Key") == "test-key"

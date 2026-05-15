@@ -16,7 +16,7 @@ from telegram_bot.formatters import (
     format_review_stats,
 )
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import get_config, get_db, get_http
+from telegram_bot.handlers.helpers import _owner_headers, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -70,9 +70,10 @@ async def papers_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     http = get_http(context)
     config = get_config(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
+    headers = _owner_headers(config, jarvis_user_id)
 
     if query:
         # Search via paper_ingestion API
@@ -142,13 +143,13 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     http = get_http(context)
     config = get_config(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/stats",
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -173,10 +174,6 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     user_id: int | None = (
         context.user_data.get("jarvis_user_id") if context.user_data is not None else None
     )
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-
     # New papers in last 24 hours — scoped to the user's library when paired.
     since = datetime.now(UTC) - timedelta(hours=24)
     if user_id is not None:
@@ -196,7 +193,7 @@ async def briefing_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         resp = await http.get(
             f"{config.learning_engine_url}/api/stats",
-            headers=headers,
+            headers=_owner_headers(config, user_id),
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -257,15 +254,14 @@ async def next_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     http = get_http(context)
     config = get_config(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
-
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/pulse/today",
             params={"limit": 1},
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=30.0,
         )
         resp.raise_for_status()
@@ -330,14 +326,14 @@ async def inbox_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     http = get_http(context)
     config = get_config(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/feed",
             params={"view": "inbox", "limit": 10},
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=30.0,
         )
         resp.raise_for_status()

@@ -44,6 +44,21 @@ def get_http(context: ContextTypes.DEFAULT_TYPE) -> httpx.AsyncClient:
     return context.application.bot_data["http_client"]
 
 
+def _owner_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
+    """Build the standard backend auth headers for a bot→backend HTTP call.
+
+    Always includes ``X-API-Key`` when configured. Adds ``X-Owner-User-Id``
+    when *user_id* is not ``None`` so the backend can scope the response to
+    the correct paired user.
+    """
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    if user_id is not None:
+        headers["X-Owner-User-Id"] = str(user_id)
+    return headers
+
+
 async def auth_check(
     update: Update,
     config: BotConfig,

@@ -40,19 +40,40 @@ ALLOWLIST = frozenset(
 )
 
 
-def _imports_unsafe(tree: ast.Module) -> list[tuple[int, str]]:
-    """Return (lineno, name) for every import of an unsafe resolver."""
+def _imports_unsafe(tree: ast.Module) -> tuple[list[tuple[int, str]], frozenset[str]]:
+    """Return import violations and the set of local alias names for unsafe resolvers.
+
+    The second return value collects every local name that aliases an unsafe
+    resolver (e.g. ``from jarvis_common.auth import current_user_id_or_none as uid``
+    yields ``"uid"``).  The caller passes this set to :func:`_depends_on_unsafe`
+    so that ``Depends(uid)`` is caught even though ``"uid"`` is not in
+    :data:`UNSAFE_NAMES`.
+    """
     hits: list[tuple[int, str]] = []
+    unsafe_aliases: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
             for alias in node.names:
                 if alias.name in UNSAFE_NAMES:
                     hits.append((node.lineno, f"import {alias.name}"))
-    return hits
+                    # Track local alias (or the original name if no alias).
+                    local_name = alias.asname if alias.asname else alias.name
+                    unsafe_aliases.add(local_name)
+    return hits, frozenset(unsafe_aliases)
 
 
-def _depends_on_unsafe(tree: ast.Module) -> list[tuple[int, str]]:
-    """Return (lineno, name) for every ``Depends(<unsafe>)`` call."""
+def _depends_on_unsafe(
+    tree: ast.Module,
+    unsafe_aliases: frozenset[str] = frozenset(),
+) -> list[tuple[int, str]]:
+    """Return (lineno, name) for every ``Depends(<unsafe>)`` call.
+
+    Flags:
+    * ``Depends(current_user_id_or_none)`` — bare name in :data:`UNSAFE_NAMES`
+    * ``Depends(uid)`` — local alias discovered by :func:`_imports_unsafe`
+    * ``Depends(auth.current_user_id_or_none)`` — attribute-form access
+    """
+    all_unsafe_names = UNSAFE_NAMES | unsafe_aliases
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
@@ -60,8 +81,11 @@ def _depends_on_unsafe(tree: ast.Module) -> list[tuple[int, str]]:
         if node.func.id != "Depends" or not node.args:
             continue
         arg = node.args[0]
-        if isinstance(arg, ast.Name) and arg.id in UNSAFE_NAMES:
+        if isinstance(arg, ast.Name) and arg.id in all_unsafe_names:
             hits.append((node.lineno, f"Depends({arg.id})"))
+        elif isinstance(arg, ast.Attribute) and arg.attr in UNSAFE_NAMES:
+            # e.g. Depends(auth.current_user_id_or_none)
+            hits.append((node.lineno, f"Depends(…{arg.attr})"))
     return hits
 
 
@@ -78,7 +102,8 @@ def main() -> int:
             print(f"{rel}: could not parse ({exc})", file=sys.stderr)
             failed = True
             continue
-        violations = _imports_unsafe(tree) + _depends_on_unsafe(tree)
+        import_hits, unsafe_aliases = _imports_unsafe(tree)
+        violations = import_hits + _depends_on_unsafe(tree, unsafe_aliases)
         if violations:
             failed = True
             print(f"{rel}: uses permissive user-id resolver (use current_user_id_strict):")

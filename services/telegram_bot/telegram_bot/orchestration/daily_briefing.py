@@ -12,6 +12,16 @@ from telegram_bot.formatters import format_morning_briefing
 logger = logging.getLogger(__name__)
 
 
+def _build_headers(config: BotConfig, user_id: int | None) -> dict[str, str]:
+    """Build backend auth headers (X-API-Key + optional X-Owner-User-Id)."""
+    headers: dict[str, str] = {}
+    if config.jarvis_api_key:
+        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    if user_id is not None:
+        headers["X-Owner-User-Id"] = str(user_id)
+    return headers
+
+
 async def _run_briefing_for_chat(
     http_client: httpx.AsyncClient,
     db_pool: asyncpg.Pool,
@@ -105,13 +115,10 @@ async def _run_briefing_for_chat(
 
     # Due cards from learning engine
     due_cards = 0
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http_client.get(
             f"{config.learning_engine_url}/api/stats",
-            headers=headers,
+            headers=_build_headers(config, user_id),
         )
         resp.raise_for_status()
         stats = resp.json()

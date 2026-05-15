@@ -22,7 +22,7 @@ from telegram import Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes
 
 from telegram_bot.formatters import format_paper_detail, format_project_status
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 from telegram_bot.handlers.review_handler import review_start
 from telegram_bot.project_manager import ProjectManager
@@ -85,7 +85,7 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         await query.answer()  # H1: ack even on auth failure so Telegram stops the spinner
         return
@@ -97,13 +97,10 @@ async def paper_detail_callback(update: Update, context: ContextTypes.DEFAULT_TY
     paper_id = int(match.group(1))
 
     http = get_http(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.get(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}",
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -135,7 +132,7 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
@@ -150,14 +147,11 @@ async def paper_action_callback(update: Update, context: ContextTypes.DEFAULT_TY
     label = _PAPER_ACTION_LABELS[action]
 
     http = get_http(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.request(
             method,
             f"{config.paper_ingestion_url}/api/papers/{paper_id}/{suffix}",
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=15.0,
         )
         resp.raise_for_status()
@@ -184,7 +178,7 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
 
     config = get_config(context)
     db_pool = get_db(context)
-    authorized, _ = await auth_check(update, config, db_pool)
+    authorized, jarvis_user_id = await auth_check(update, config, db_pool)
     if not authorized:
         await query.answer()  # H1: every path answers exactly once
         return
@@ -199,14 +193,11 @@ async def paper_feedback_callback(update: Update, context: ContextTypes.DEFAULT_
     label = "👍 Recorded" if sign == "pos" else "👎 Recorded"
 
     http = get_http(context)
-    headers: dict[str, str] = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
     try:
         resp = await http.post(
             f"{config.paper_ingestion_url}/api/papers/{paper_id}/feedback",
             json={"signal": signal, "source": source},
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=15.0,
         )
         resp.raise_for_status()

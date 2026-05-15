@@ -781,3 +781,133 @@ async def test_newproject_passes_user_id_to_create_project():
         await newproject_command(update, context)
 
     pm_instance.create_project.assert_awaited_once_with("Alpha", user_id=7)
+
+
+# ---------------------------------------------------------------------------
+# WS-CROSS-USER: X-Owner-User-Id forwarded by paper commands for paired users
+# ---------------------------------------------------------------------------
+
+
+from telegram_bot.handlers.commands.paper_commands import (  # noqa: E402
+    inbox_command,
+    next_command,
+)
+from telegram_bot.handlers.commands.system_commands import pulse_now_command  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_papers_command_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: /papers sends X-Owner-User-Id when invoked by a paired user."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7, args=[])
+    context.user_data["jarvis_user_id"] = 7
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"papers": [], "total": 0}
+    mock_http.get.return_value = mock_resp
+
+    with _paired_auth_patch(7):
+        await papers_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-API-Key") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_stats_command_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: /stats sends X-Owner-User-Id when invoked by a paired user."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "total_cards": 0,
+        "due_now": 0,
+        "reviewed_today": 0,
+        "average_retention": 0.0,
+        "streak_days": 0,
+    }
+    mock_http.get.return_value = mock_resp
+
+    with _paired_auth_patch(7):
+        await stats_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-API-Key") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_next_command_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: /next sends X-Owner-User-Id when invoked by a paired user."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"cards": []}
+    mock_http.get.return_value = mock_resp
+
+    with _paired_auth_patch(7):
+        await next_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+
+
+@pytest.mark.asyncio
+async def test_inbox_command_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: /inbox sends X-Owner-User-Id when invoked by a paired user."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"papers": []}
+    mock_http.get.return_value = mock_resp
+
+    with _paired_auth_patch(7):
+        await inbox_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+
+
+@pytest.mark.asyncio
+async def test_pulse_now_command_sends_owner_user_id_for_paired_user():
+    """WS-CROSS-USER: /pulse_now sends X-Owner-User-Id when invoked by a paired user."""
+    update, context, _, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_http.post.return_value = mock_resp
+
+    with _paired_auth_patch(7):
+        await pulse_now_command(update, context)
+
+    mock_http.post.assert_awaited_once()
+    headers = mock_http.post.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+
+
+@pytest.mark.asyncio
+async def test_briefing_command_sends_owner_user_id_to_stats_endpoint():
+    """WS-CROSS-USER: /briefing sends X-Owner-User-Id on the /api/stats HTTP call."""
+    update, context, mock_db, mock_http = _make_paired_update_and_context(jarvis_user_id=7)
+    context.user_data["jarvis_user_id"] = 7
+    mock_db.fetchrow.return_value = {"cnt": 0}
+    mock_db.fetch.side_effect = [[], []]
+    stats_resp = MagicMock()
+    stats_resp.raise_for_status = MagicMock()
+    stats_resp.json.return_value = {"due_now": 0}
+    mock_http.get.return_value = stats_resp
+
+    with _paired_auth_patch(7):
+        await briefing_command(update, context)
+
+    mock_http.get.assert_awaited_once()
+    headers = mock_http.get.await_args[1]["headers"]
+    assert headers.get("X-Owner-User-Id") == "7"
+    assert headers.get("X-API-Key") == "test-key"

@@ -12,7 +12,7 @@ from telegram.ext import ContextTypes
 
 from telegram_bot.formatters import format_help
 from telegram_bot.handlers.commands._auth import auth_required
-from telegram_bot.handlers.helpers import auth_check, get_config, get_db, get_http
+from telegram_bot.handlers.helpers import _owner_headers, auth_check, get_config, get_db, get_http
 from telegram_bot.handlers.rate_limit import rate_limit
 
 logger = logging.getLogger(__name__)
@@ -191,13 +191,13 @@ async def pulse_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
     http = get_http(context)
     config = get_config(context)
-    headers = {}
-    if config.jarvis_api_key:
-        headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    jarvis_user_id: int | None = (
+        context.user_data.get("jarvis_user_id") if context.user_data is not None else None
+    )
     try:
         resp = await http.post(
             f"{config.paper_ingestion_url}/api/pulse/generate",
-            headers=headers,
+            headers=_owner_headers(config, jarvis_user_id),
             timeout=15.0,
         )
         resp.raise_for_status()
