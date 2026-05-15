@@ -196,6 +196,7 @@ from learning_engine.routers import (  # noqa: E402
     jobs,
     milestones,
     project_papers,
+    project_questions,
     projects,
     review,
     tasks,
@@ -206,6 +207,8 @@ app.include_router(tasks.router)
 app.include_router(milestones.router)
 app.include_router(analytics.router)
 app.include_router(project_papers.router)
+app.include_router(project_questions.router)
+app.include_router(project_questions.questions_router)
 app.include_router(decks.router)
 app.include_router(cards.router)
 app.include_router(review.router)

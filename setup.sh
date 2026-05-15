@@ -17,12 +17,6 @@
 #                             dev          — ENVIRONMENT=development, localhost binding
 #                             local-https  — self-signed cert, access mode 1
 #                             letsencrypt  — Caddy + ACME; requires --domain + --admin-email
-#   --mode <single|multi>     Install mode written to JARVIS_SETUP_MODE in .env.
-#                             single (default) — personal instance, API-key login.
-#                             multi            — team instance, email/magic-link login.
-#   --check                   Doctor / preflight check (read-only). Exits 0 if all
-#                             requirements are met, 1 if any are missing. Does NOT
-#                             generate .env or start services.
 #   --smtp-host <host>        SMTP relay hostname.
 #   --smtp-user <user>        SMTP relay username.
 #   --smtp-pass-file <path>   Path to a file whose first line is the SMTP password.
@@ -56,26 +50,6 @@ die() {
   err "$1"
   printf '        %s%s%s\n' "$C_YELLOW" "$2" "$C_RESET" >&2
   exit 1
-}
-
-os_install_hint() {  # $1 = tool name (informational)
-  case "$(uname -s 2>/dev/null)" in
-    Darwin) printf 'macOS: install Docker Desktop — https://docs.docker.com/desktop/install/mac-install/' ;;
-    Linux)  printf 'Linux: https://docs.docker.com/engine/install/ (then: sudo usermod -aG docker $USER && newgrp docker)' ;;
-    *)      printf 'See https://docs.docker.com/engine/install/' ;;
-  esac
-}
-
-run_doctor() {
-  local fail=0
-  printf '%s--- setup.sh --check (read-only) -------------------------------%s\n' "$C_BOLD" "$C_RESET"
-  if command -v docker >/dev/null 2>&1; then ok "docker present"; else err "docker missing — $(os_install_hint docker)"; fail=1; fi
-  if docker compose version >/dev/null 2>&1; then ok "docker compose v2 present"; else err "docker compose v2 missing"; fail=1; fi
-  if command -v openssl >/dev/null 2>&1; then ok "openssl present"; else err "openssl missing"; fail=1; fi
-  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then ok "GPU detected"; else info "no GPU — Ollama on CPU (slower, OK)"; fi
-  if [ -f .env ]; then info ".env exists (re-run setup.sh to regenerate)"; else info ".env not yet generated"; fi
-  if [ "$fail" -eq 0 ]; then ok "PREFLIGHT: PASS"; else err "PREFLIGHT: FAIL — fix the items above and re-run ./setup.sh --check"; fi
-  return "$fail"
 }
 
 # require_langfuse_secrets — precondition guard for --profile observability.
@@ -149,9 +123,6 @@ NON_INTERACTIVE=0
 NI_DOMAIN=""
 NI_ADMIN_EMAIL=""
 NI_PROFILE="dev"      # dev | local-https | letsencrypt
-NI_MODE="single"      # single | multi
-NI_MODE_EXPLICIT=0
-RUN_DOCTOR=0
 NI_SMTP_HOST=""
 NI_SMTP_USER=""
 NI_SMTP_PASS=""
@@ -210,12 +181,6 @@ while [ $# -gt 0 ]; do
       NI_SMTP_PASS="$(head -n 1 "${1#*=}" 2>/dev/null || true)"
       shift
       ;;
-    --mode)
-      NI_MODE="$2"; NI_MODE_EXPLICIT=1; shift 2 ;;
-    --mode=*)
-      NI_MODE="${1#*=}"; NI_MODE_EXPLICIT=1; shift ;;
-    --check)
-      RUN_DOCTOR=1; shift ;;
     -h|--help)
       sed -n '/^# setup.sh/,/^set -euo/{ /^#/!d; s/^# \{0,1\}//p; }' "$0" | head -40
       exit 0
@@ -233,18 +198,11 @@ case "$NI_PROFILE" in
          "Run: $0 --help" ;;
 esac
 
-case "$NI_MODE" in
-  single|multi) ;;
-  *) die "Invalid --mode '$NI_MODE'. Expected: single or multi." "Run: $0 --help" ;;
-esac
-
 # letsencrypt requires both --domain and --admin-email.
 if [ "$NON_INTERACTIVE" -eq 1 ] && [ "$NI_PROFILE" = "letsencrypt" ]; then
   [ -n "$NI_DOMAIN" ]      || die "--profile=letsencrypt requires --domain."      "Provide: --domain=jarvis.example.com"
   [ -n "$NI_ADMIN_EMAIL" ] || die "--profile=letsencrypt requires --admin-email." "Provide: --admin-email=you@example.com"
 fi
-
-if [ "$RUN_DOCTOR" -eq 1 ]; then run_doctor; exit $?; fi
 
 # -----------------------------------------------------------------------------
 # 2. Prerequisites
@@ -253,12 +211,12 @@ info "Checking prerequisites..."
 
 command -v docker >/dev/null 2>&1 \
   || die "Docker not found in PATH." \
-         "$(os_install_hint docker)"
+         "Install Docker Engine: https://docs.docker.com/engine/install/"
 
 # docker compose v2 (space form). `docker-compose` (hyphen) is v1 and unsupported.
 if ! docker compose version >/dev/null 2>&1; then
   die "Docker Compose v2 is required (the 'docker compose' plugin)." \
-      "$(os_install_hint docker)"
+      "Install it: https://docs.docker.com/compose/install/"
 fi
 COMPOSE_VER="$(docker compose version --short 2>/dev/null || echo 'unknown')"
 case "$COMPOSE_VER" in
@@ -268,7 +226,7 @@ esac
 
 command -v openssl >/dev/null 2>&1 \
   || die "openssl required for secret generation." \
-         "$(os_install_hint docker)"
+         "Install openssl (usually pre-installed). On Debian/Ubuntu: sudo apt install openssl"
 
 # GPU is informational — not fatal.
 if command -v nvidia-smi >/dev/null 2>&1; then
@@ -367,15 +325,6 @@ else
 EOF
   read -rp "Choice [1]: " access_mode
   access_mode="${access_mode:-1}"
-fi
-
-if [ "$NON_INTERACTIVE" -eq 0 ] && [ "$NI_MODE_EXPLICIT" -eq 0 ]; then
-  printf '\n%sWho will use this instance?%s\n' "$C_BOLD" "$C_RESET"
-  cat <<'EOF'
-1) Just me (single-user — log in with your API key, no email setup needed)
-2) A team (multi-user — email/magic-link login, SMTP required)
-EOF
-  read -rp "Choice [1]: " _m; case "${_m:-1}" in 2) NI_MODE="multi" ;; *) NI_MODE="single" ;; esac
 fi
 
 CLOUDFLARE_TUNNEL_TOKEN=""
@@ -620,8 +569,6 @@ sub_value() {
         return 1
       fi
       ;;
-    JARVIS_SETUP_MODE) printf '%s' "$NI_MODE" ;;
-    API_KEY_LOGIN_ENABLED) [ "$NI_MODE" = "single" ] && printf 'true' || printf 'false' ;;
     *) return 1 ;;
   esac
   return 0

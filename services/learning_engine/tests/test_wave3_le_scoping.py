@@ -176,7 +176,12 @@ async def test_get_project_count_queries_include_user_id() -> None:
         updated_at=_now,
     )
     counts_row = _FakeRecord(
-        total_tasks=3, done_tasks=1, total_milestones=2, completed_milestones=0
+        total_tasks=3,
+        done_tasks=1,
+        total_milestones=2,
+        completed_milestones=0,
+        paper_count=0,
+        open_question_count=0,
     )
 
     conn = AsyncMock()

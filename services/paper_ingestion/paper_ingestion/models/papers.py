@@ -618,8 +618,20 @@ class BulkActionRequest(BaseModel):
     ]
 
 
+class TopicFacetCount(BaseModel):
+    """Per-topic count for the feed facet rail (§ Topic section)."""
+
+    topic_id: int
+    name: str
+    count: int
+
+
 class FeedCountsResponse(BaseModel):
-    """Response for GET /api/papers/feed/counts (10 named views per spec §6)."""
+    """Response for GET /api/papers/feed/counts (10 named views per spec §6).
+
+    UI v3 additive facets (by_source, by_topic, untagged) are scoped to the
+    caller's user_library exactly as the named-view counts above.
+    """
 
     inbox: int
     library: int
@@ -631,6 +643,10 @@ class FeedCountsResponse(BaseModel):
     active: int
     kept: int
     all_non_trash: int
+    # UI v3 facet rail — additive, always present (empty when no library).
+    by_source: dict[str, int] = Field(default_factory=dict)
+    by_topic: list[TopicFacetCount] = Field(default_factory=list)
+    untagged: int = 0
 
 
 class AnnotationsRequest(BaseModel):

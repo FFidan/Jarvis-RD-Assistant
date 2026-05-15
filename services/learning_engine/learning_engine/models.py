@@ -204,6 +204,35 @@ class ProjectResponse(BaseModel):
     color: str | None = None
     created_at: datetime
     updated_at: datetime
+    # Projects IA redesign §3.6/§4c — chapter-rail row counts. LEFT JOIN
+    # aggregations in list_projects; 0 when nothing linked.
+    paper_count: int = 0
+    open_question_count: int = 0
+
+
+class ProjectQuestionCreate(BaseModel):
+    """Request body for POST /api/projects/{project_id}/questions."""
+
+    body: str = Field(..., min_length=1, max_length=2000)
+
+
+class ProjectQuestionResponse(BaseModel):
+    """A single open research question (Projects § OPEN QUESTIONS)."""
+
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    project_id: int
+    body: str
+    created_at: datetime
+
+
+class ProjectActivityItem(BaseModel):
+    """A single row from GET /api/projects/{project_id}/activity (UNION feed)."""
+
+    model_config = ConfigDict(from_attributes=True)
+    kind: Literal["added_paper", "completed_task", "completed_milestone"]
+    ts: datetime
+    label: str
 
 
 class TaskCreate(BaseModel):
@@ -314,6 +343,9 @@ class ProjectDetailResponse(BaseModel):
     done_tasks: int = 0
     total_milestones: int = 0
     completed_milestones: int = 0
+    # Projects IA redesign §4c — parity with the widened list response.
+    paper_count: int = 0
+    open_question_count: int = 0
 
 
 class TaskPaperLinkResponse(BaseModel):

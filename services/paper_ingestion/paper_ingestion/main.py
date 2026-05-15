@@ -41,7 +41,6 @@ from jarvis_common.app_factory import (
 from jarvis_common.app_factory import (
     shutdown_procrastinate_worker as shutdown_procrastinate_worker_common,
 )
-from jarvis_common.cached_transport import CachingTransport
 from jarvis_common.health import make_litellm_probe, make_postgres_probe
 from jarvis_common.settings import get_core_settings
 from jarvis_common.verify import QuoteVerifier
@@ -382,7 +381,6 @@ _lifespan_config = ServiceLifespanConfig(
         # paper_ingestion needs a longer read timeout (300s) than the shared
         # default (120s) because PDF downloads + extraction can run long.
         "timeout": httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0),
-        "transport": CachingTransport(httpx.AsyncHTTPTransport()),
     },
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),

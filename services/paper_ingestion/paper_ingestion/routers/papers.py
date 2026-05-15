@@ -38,6 +38,7 @@ from paper_ingestion.models import (
     ProcessBatchRequest,
     RecentFeedback,
     SourceType,
+    TopicFacetCount,
     UserStateResponse,
 )
 from paper_ingestion.queries.predicates import VIEW_PREDICATES
@@ -45,6 +46,7 @@ from paper_ingestion.routers._paper_helpers import (
     _upsert_recommendation_feedback,
     _upsert_state_and_starred,
 )
+from paper_ingestion.services.feed_query import fetch_feed_facet_counts
 from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
@@ -530,7 +532,11 @@ async def get_feed_counts(
             row = await conn.fetchrow(sql, user_id)
         else:
             row = await conn.fetchrow(sql)
-    assert row is not None  # aggregate query always returns one row
+        assert row is not None  # aggregate query always returns one row
+
+        # UI v3 facet rail: by_source / by_topic / untagged — same user_library scope.
+        by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(conn, user_id)
+
     return FeedCountsResponse(
         inbox=row["inbox"],
         library=row["library"],
@@ -542,6 +548,9 @@ async def get_feed_counts(
         active=row["active"],
         kept=row["kept"],
         all_non_trash=row["all_non_trash"],
+        by_source=by_source,
+        by_topic=[TopicFacetCount(**t) for t in by_topic_rows],
+        untagged=untagged,
     )
 
 

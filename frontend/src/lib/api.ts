@@ -457,7 +457,7 @@ export const getSetupStatus = () =>
 // --- WS-2F first-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
-export interface FirstRunStatus { configured: boolean; setup_mode?: 'single' | 'multi' }
+export interface FirstRunStatus { configured: boolean }
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
 export interface FirstRunSmtpBody {

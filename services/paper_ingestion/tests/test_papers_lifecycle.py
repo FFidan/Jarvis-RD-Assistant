@@ -323,20 +323,31 @@ async def test_bulk_action_error_returns_safe_code(exc, expected_code):
 
 @pytest.mark.asyncio
 async def test_feed_counts_basic():
-    """GET /feed/counts returns FeedCountsResponse with correct 10-bucket field names."""
+    """GET /feed/counts returns FeedCountsResponse with correct 10-bucket field names.
+
+    The handler also calls fetch_feed_facet_counts (UI v3 additive facets), which
+    issues two conn.fetch calls (by_source, by_topic) and one extra conn.fetchrow
+    (untagged).  We stub both to keep this test focused on the 10-bucket fields.
+    """
     pool, conn = _make_pool_and_conn()
-    conn.fetchrow.return_value = {
-        "inbox": 3,
-        "library": 5,
-        "reading_list": 2,
-        "reading": 1,
-        "done": 2,
-        "starred": 2,
-        "trash": 1,
-        "active": 6,
-        "kept": 5,
-        "all_non_trash": 11,
-    }
+    # First fetchrow → 10-bucket aggregate; second fetchrow → untagged count (facets).
+    conn.fetchrow.side_effect = [
+        {
+            "inbox": 3,
+            "library": 5,
+            "reading_list": 2,
+            "reading": 1,
+            "done": 2,
+            "starred": 2,
+            "trash": 1,
+            "active": 6,
+            "kept": 5,
+            "all_non_trash": 11,
+        },
+        {"cnt": 0},  # untagged — from fetch_feed_facet_counts
+    ]
+    # by_source and by_topic facet queries return empty lists for this test.
+    conn.fetch.return_value = []
 
     result = await papers.get_feed_counts.__wrapped__(
         _mock_request(),

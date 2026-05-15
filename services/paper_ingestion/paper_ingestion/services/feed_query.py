@@ -274,3 +274,89 @@ async def fetch_feed_rows(
 def derive_feed_search_mode(q: str | None) -> str:
     """Return the frontend search-mode marker for a feed response."""
     return "bm25" if q else "filtered"
+
+
+# ---------------------------------------------------------------------------
+# UI v3 facet-count helpers (§ Source / § Topic in the facet rail)
+# ---------------------------------------------------------------------------
+
+_SQL_BY_SOURCE_USER = """
+    SELECT p.source_type, COUNT(*)::int AS cnt
+      FROM papers p
+      JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+     GROUP BY p.source_type
+"""
+
+_SQL_BY_SOURCE_CORPUS = """
+    SELECT p.source_type, COUNT(*)::int AS cnt
+      FROM papers p
+     GROUP BY p.source_type
+"""
+
+_SQL_BY_TOPIC_USER = """
+    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
+      FROM topics t
+      JOIN paper_topics pt ON pt.topic_id = t.id
+      JOIN user_library ul ON ul.paper_id = pt.paper_id AND ul.user_id = $1
+     GROUP BY t.id, t.name
+     ORDER BY cnt DESC, t.name
+"""
+
+_SQL_BY_TOPIC_CORPUS = """
+    SELECT t.id AS topic_id, t.name, COUNT(DISTINCT pt.paper_id)::int AS cnt
+      FROM topics t
+      JOIN paper_topics pt ON pt.topic_id = t.id
+     GROUP BY t.id, t.name
+     ORDER BY cnt DESC, t.name
+"""
+
+_SQL_UNTAGGED_USER = """
+    SELECT COUNT(*)::int AS cnt
+      FROM papers p
+      JOIN user_library ul ON ul.paper_id = p.id AND ul.user_id = $1
+     WHERE NOT EXISTS (
+         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
+     )
+"""
+
+_SQL_UNTAGGED_CORPUS = """
+    SELECT COUNT(*)::int AS cnt
+      FROM papers p
+     WHERE NOT EXISTS (
+         SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.id
+     )
+"""
+
+
+async def fetch_feed_facet_counts(
+    conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
+    user_id: int | None,
+) -> tuple[dict[str, int], list[dict[str, object]], int]:
+    """Return (by_source, by_topic_rows, untagged) facet counts.
+
+    All three aggregations are scoped to *user_id*'s user_library when
+    user_id is not None; they fall back to the canonical corpus otherwise
+    (single-user / no-auth mode), mirroring the pattern in get_feed_counts.
+
+    Returns:
+        by_source  — ``{source_type: count}`` mapping.
+        by_topic   — list of ``{topic_id, name, count}`` dicts, desc by count.
+        untagged   — count of library papers with no paper_topics row.
+    """
+    if user_id is not None:
+        source_rows = await conn.fetch(_SQL_BY_SOURCE_USER, user_id)
+        topic_rows = await conn.fetch(_SQL_BY_TOPIC_USER, user_id)
+        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_USER, user_id)
+    else:
+        source_rows = await conn.fetch(_SQL_BY_SOURCE_CORPUS)
+        topic_rows = await conn.fetch(_SQL_BY_TOPIC_CORPUS)
+        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_CORPUS)
+
+    by_source: dict[str, int] = {row["source_type"]: row["cnt"] for row in source_rows}
+    by_topic: list[dict[str, object]] = [
+        {"topic_id": row["topic_id"], "name": row["name"], "count": row["cnt"]}
+        for row in topic_rows
+    ]
+    untagged: int = untagged_row["cnt"] if untagged_row is not None else 0
+
+    return by_source, by_topic, untagged

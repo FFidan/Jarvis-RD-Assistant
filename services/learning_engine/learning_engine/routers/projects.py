@@ -18,6 +18,18 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 _PROJECT_ALLOWED_COLUMNS: set[str] = {"name", "description", "status", "deadline", "color"}
 _VALID_STATUSES = frozenset({"active", "paused", "completed", "archived"})
 
+# §3.6/§4c: chapter-rail rows need paper_count + open_question_count.
+# LEFT JOIN LATERAL aggregations keep this single-round-trip and yield 0
+# (via COALESCE) when nothing is linked. Both list branches must carry them.
+_COUNTS_JOIN = """
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS c FROM project_papers pp WHERE pp.project_id = p.id
+    ) pc ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT COUNT(*) AS c FROM project_questions pq WHERE pq.project_id = p.id
+    ) qc ON TRUE
+"""
+
 
 # ---------------------------------------------------------------------------
 # GET /api/projects
@@ -42,18 +54,26 @@ async def list_projects(
     async with db_pool.acquire() as conn:
         if status:
             rows = await conn.fetch(
-                """SELECT * FROM projects
-                   WHERE status = $1
-                     AND user_id = $2
-                   ORDER BY created_at DESC""",
+                f"""SELECT p.*,
+                          COALESCE(pc.c, 0) AS paper_count,
+                          COALESCE(qc.c, 0) AS open_question_count
+                   FROM projects p
+                   {_COUNTS_JOIN}
+                   WHERE p.status = $1
+                     AND p.user_id = $2
+                   ORDER BY p.created_at DESC""",
                 status,
                 user_id,
             )
         else:
             rows = await conn.fetch(
-                """SELECT * FROM projects
-                   WHERE user_id = $1
-                   ORDER BY created_at DESC""",
+                f"""SELECT p.*,
+                          COALESCE(pc.c, 0) AS paper_count,
+                          COALESCE(qc.c, 0) AS open_question_count
+                   FROM projects p
+                   {_COUNTS_JOIN}
+                   WHERE p.user_id = $1
+                   ORDER BY p.created_at DESC""",
                 user_id,
             )
     return [ProjectResponse(**dict(row)) for row in rows]
@@ -117,7 +137,9 @@ async def get_project(
             SELECT COALESCE(t.total, 0) AS total_tasks,
                    COALESCE(t.done, 0)  AS done_tasks,
                    COALESCE(m.total, 0) AS total_milestones,
-                   COALESCE(m.done, 0)  AS completed_milestones
+                   COALESCE(m.done, 0)  AS completed_milestones,
+                   COALESCE(pp.c, 0)    AS paper_count,
+                   COALESCE(pq.c, 0)    AS open_question_count
             FROM (SELECT 1) AS _
             LEFT JOIN LATERAL (
                 SELECT COUNT(*) AS total,
@@ -129,6 +151,14 @@ async def get_project(
                        COUNT(*) FILTER (WHERE completed = TRUE) AS done
                 FROM milestones WHERE project_id = $1 AND user_id = $2
             ) m ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS c
+                FROM project_papers WHERE project_id = $1
+            ) pp ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT COUNT(*) AS c
+                FROM project_questions WHERE project_id = $1
+            ) pq ON TRUE
             """,
             project_id,
             user_id,
@@ -140,6 +170,8 @@ async def get_project(
         done_tasks=counts["done_tasks"],
         total_milestones=counts["total_milestones"],
         completed_milestones=counts["completed_milestones"],
+        paper_count=counts["paper_count"],
+        open_question_count=counts["open_question_count"],
     )
 
 
