@@ -336,7 +336,10 @@ def configure_middleware_and_errors(
 
     # 3. CORSMiddleware
     if cors_origins is None:
-        cors_origins = get_jarvis_common_settings().cors_origins_list
+        if get_core_settings().dev_cors_open:
+            cors_origins = ["*"]
+        else:
+            cors_origins = get_jarvis_common_settings().cors_origins_list
     # allow_credentials=True is incompatible with allow_origins=["*"]
     # (Starlette raises a warning and the browser rejects the response).
     # When the caller explicitly passes ["*"] — or the env var is set to "*" —

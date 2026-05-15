@@ -34,7 +34,7 @@ def _smtp_configured() -> bool:
 
 
 def _dev_mode() -> bool:
-    return get_core_settings().dev_mode
+    return get_core_settings().dev_smtp_log_only
 
 
 _PLAIN_BODY_TEMPLATE = (

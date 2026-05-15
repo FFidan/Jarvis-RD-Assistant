@@ -23,6 +23,7 @@ Notes
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -55,6 +56,15 @@ class CoreSettings(BaseSettings):
     model_config = _COMMON_CONFIG
 
     dev_mode: bool = False
+    # Granular dev flags — each defaults False and can be set independently.
+    # When dev_mode=True and an individual flag was NOT explicitly set in the
+    # environment, the model_validator below promotes it to True so that
+    # DEV_MODE=true alone preserves v0.3 behaviour (all five effectively true).
+    dev_auth_bypass: bool = False
+    dev_error_detail: bool = False
+    dev_cors_open: bool = False
+    dev_smtp_log_only: bool = False
+    dev_crypto_relaxed: bool = False
     # Wrapped in SecretStr so accidental ``repr(settings)`` / structured-log
     # serialisations print ``SecretStr('**********')`` instead of the raw
     # value. Call sites must use ``.get_secret_value()`` to obtain the
@@ -70,6 +80,24 @@ class CoreSettings(BaseSettings):
     # Comma-separated CIDRs allowed to use X-Owner-User-Id override.
     # Defaults to loopback + docker-bridge ranges.
     owner_override_allowed_cidrs: str = "127.0.0.0/8,172.16.0.0/12"
+
+    @model_validator(mode="after")
+    def _promote_dev_flags(self) -> CoreSettings:
+        """When dev_mode=True, promote any granular flag that was NOT explicitly
+        set in the environment to True.  An explicit env var always wins."""
+        if not self.dev_mode:
+            return self
+        _flag_env_names = {
+            "dev_auth_bypass": "DEV_AUTH_BYPASS",
+            "dev_error_detail": "DEV_ERROR_DETAIL",
+            "dev_cors_open": "DEV_CORS_OPEN",
+            "dev_smtp_log_only": "DEV_SMTP_LOG_ONLY",
+            "dev_crypto_relaxed": "DEV_CRYPTO_RELAXED",
+        }
+        for field_name, env_name in _flag_env_names.items():
+            if env_name not in os.environ:
+                object.__setattr__(self, field_name, True)
+        return self
 
     @property
     def trusted_proxy_hosts_list(self) -> list[str]:

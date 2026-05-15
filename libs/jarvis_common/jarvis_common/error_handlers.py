@@ -14,8 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 def _is_dev_mode() -> bool:
-    """Return True when DEV_MODE=true (case-insensitive)."""
-    return get_core_settings().dev_mode
+    return get_core_settings().dev_error_detail
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:

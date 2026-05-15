@@ -65,7 +65,7 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     the secret on every request.
     """
     jarvis_api_key = _CACHED_API_KEY
-    dev_mode = get_core_settings().dev_mode
+    core = get_core_settings()
     if request.url.path in _HEALTH_PATHS:
         return
     # /infra-events authenticates via X-Infra-Key (separate secret from
@@ -115,10 +115,10 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
                 logger.debug("auth event log_event failed (non-fatal)", exc_info=True)
             raise HTTPException(status_code=403, detail="Invalid or missing API key")
         return
-    # No key configured — fall back to DEV_MODE check
-    if dev_mode:
+    # No key configured — fall back to dev_auth_bypass check
+    if core.dev_auth_bypass:
         logger.warning(
-            "DEV_MODE=true AND no JARVIS_API_KEY set — ALL authentication "
+            "DEV_AUTH_BYPASS=true AND no JARVIS_API_KEY set — ALL authentication "
             "bypassed on %s. DO NOT USE IN PRODUCTION.",
             request.url.path,
         )
@@ -419,6 +419,18 @@ def validate_production_config() -> None:
 
     if env == "production" and dev_mode:
         raise RuntimeError("DEV_MODE=true is not allowed in ENVIRONMENT=production")
+
+    if env == "production":
+        _dev_flag_names = {
+            "dev_auth_bypass": core.dev_auth_bypass,
+            "dev_error_detail": core.dev_error_detail,
+            "dev_cors_open": core.dev_cors_open,
+            "dev_smtp_log_only": core.dev_smtp_log_only,
+            "dev_crypto_relaxed": core.dev_crypto_relaxed,
+        }
+        for flag_name, flag_value in _dev_flag_names.items():
+            if flag_value:
+                raise RuntimeError(f"{flag_name}=true is not allowed in ENVIRONMENT=production")
 
     if not dev_mode:
         if not api_key or api_key == "CHANGE_ME_REQUIRED":

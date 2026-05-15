@@ -210,7 +210,8 @@ JARVIS_API_KEY=<at least 32 random chars from: openssl rand -hex 32>
 DASHBOARD_PASSWORD=<strong password>
 ```
 
-- `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured (verified in `libs/jarvis_common/jarvis_common/auth.py`); the flag only helps unauthenticated local development.
+- `DEV_MODE=true` does **not** bypass auth when a `JARVIS_API_KEY` is configured; the flag only helps unauthenticated local development.
+- `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
 - `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
 ### Encrypted config key rotation

@@ -168,7 +168,7 @@ async def validate_encrypted_config_rows(
         Number of encrypted rows checked.
     """
     if dev_mode is None:
-        dev_mode = get_core_settings().dev_mode
+        dev_mode = get_core_settings().dev_crypto_relaxed
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
