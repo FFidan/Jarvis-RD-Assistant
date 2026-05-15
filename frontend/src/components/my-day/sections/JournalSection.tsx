@@ -11,6 +11,7 @@ export function JournalSection() {
   const [saving, setSaving] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveAbortController = useRef<AbortController | null>(null);
+  const hasInitialized = useRef(false);
 
   // Use TanStack Query for initial load — forwards the query's AbortSignal so
   // the in-flight fetch is cancelled when the component unmounts (M-12).
@@ -19,11 +20,13 @@ export function JournalSection() {
     queryFn: ({ signal }) => getJournalEntry(today, { signal }),
   });
 
-  // Populate local state when the query result arrives.
-  // TanStack Query v5 removed the onSuccess callback; use useEffect instead.
+  // Populate local state when the query result arrives for the first time.
+  // Guard with hasInitialized so TanStack refetches (on focus/reconnect/invalidate)
+  // do not overwrite text the user has typed since the initial load (N3 fix).
   useEffect(() => {
-    if (journalEntry) {
+    if (journalEntry && !hasInitialized.current) {
       setPrompts(journalEntry.prompts);
+      hasInitialized.current = true;
       // Auto-expand if reflection fields have content
       if (journalEntry.prompts.worked || journalEntry.prompts.blocked) {
         setExpanded(true);

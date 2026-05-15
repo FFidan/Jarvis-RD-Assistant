@@ -17,15 +17,17 @@
 -- (project convention from 042/070: NULL user_id = visible to all users).
 
 -- ===== papers =====
+-- mig 072 renamed papers.user_id -> papers.discovered_by (canonical_corpus model)
+-- so the FK lives on discovered_by, not user_id.
 UPDATE papers
-   SET user_id = NULL
- WHERE user_id IS NOT NULL
-   AND user_id NOT IN (SELECT id FROM users);
+   SET discovered_by = NULL
+ WHERE discovered_by IS NOT NULL
+   AND discovered_by NOT IN (SELECT id FROM users);
 
 DO $$ BEGIN
     ALTER TABLE papers
-        ADD CONSTRAINT papers_user_id_fkey
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
+        ADD CONSTRAINT papers_discovered_by_fkey
+        FOREIGN KEY (discovered_by) REFERENCES users(id) ON DELETE SET NULL;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
 

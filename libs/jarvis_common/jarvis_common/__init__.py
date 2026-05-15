@@ -5,14 +5,16 @@ from jarvis_common.app_factory import (
     build_database_url,
     configure_lifespan,
     configure_middleware_and_errors,
-    warn_multitenant_stub,
 )
 from jarvis_common.audit import log_audit
 from jarvis_common.auth import (
-    assert_multi_tenant_not_implemented,
     current_user_id,
     current_user_id_or_none,
+    current_user_id_strict,
+    current_user_id_strict_with_owner_override,
     current_user_id_with_owner_override,
+    require_admin,
+    require_admin_or_api_key,
     validate_production_config,
     verify_api_key,
 )
@@ -91,7 +93,6 @@ __all__ = [
     "build_database_url",
     "configure_lifespan",
     "configure_middleware_and_errors",
-    "warn_multitenant_stub",
     # DOM-J-03: shared health-check routes
     "HealthCheck",
     "HealthProbe",
@@ -102,8 +103,11 @@ __all__ = [
     "validate_production_config",
     "current_user_id",
     "current_user_id_or_none",
+    "current_user_id_strict",
+    "current_user_id_strict_with_owner_override",
     "current_user_id_with_owner_override",
-    "assert_multi_tenant_not_implemented",
+    "require_admin",
+    "require_admin_or_api_key",
     # DRY-003: crypto helpers re-exported from jarvis_common top-level
     "encrypt_secret",
     "decrypt_secret",

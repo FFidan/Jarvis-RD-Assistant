@@ -42,6 +42,7 @@ test-service:
 lint:
 	bash scripts/check-migrations-no-tx.sh
 	bash scripts/check-no-jsonb-double-encode.sh
+	python3 scripts/check-no-unsafe-resolver.py
 	uv run ruff check services/ libs/ scripts/
 
 ## Format all Python code

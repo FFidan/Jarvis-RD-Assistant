@@ -4,9 +4,13 @@
  *
  * SECURITY: Every request includes the X-API-Key header from the auth store.
  * nginx does NOT inject API keys — the browser must send them.
- * On 401/403, the user is automatically logged out.
+ * On 401 (auth invalid / expired), the user is logged out + toasted. 403
+ * (permission denied for an authenticated user) does NOT trigger logout —
+ * it surfaces as a per-request error so role-gated routes don't bounce the
+ * whole session.
  */
 
+import { toast } from 'sonner';
 import { useAuthStore } from '@/stores/auth-store';
 
 /** Build auth headers from the current session API key. */
@@ -15,11 +19,19 @@ function authHeaders(): Record<string, string> {
   return apiKey ? { 'X-API-Key': apiKey } : {};
 }
 
-/** Auto-logout on authentication failure. */
+let _sessionExpiredToastShownAt = 0;
+
+/** Auto-logout on genuine auth failure (401 only). */
 function handleAuthFailure(status: number): void {
-  if (status === 401 || status === 403) {
-    useAuthStore.getState().logout();
+  if (status !== 401) return;
+  if (!useAuthStore.getState().isAuthenticated) return;
+  // Debounce: a burst of parallel requests can all 401 at once; show one toast.
+  const now = Date.now();
+  if (now - _sessionExpiredToastShownAt > 5000) {
+    _sessionExpiredToastShownAt = now;
+    toast.error('Session expired — please sign in again.', { duration: 6000 });
   }
+  useAuthStore.getState().logout();
 }
 
 export class ApiError extends Error {

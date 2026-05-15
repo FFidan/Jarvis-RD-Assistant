@@ -234,9 +234,11 @@ async def test_pairing_rate_limit_triggers():
         "6th attempt should have been rate-limited before reaching DB"
     )
     reply_text = update.message.reply_text.call_args[0][0]
-    assert "Too many pairing attempts" in reply_text or "wait" in reply_text.lower(), (
-        f"Expected rate-limit message, got: {reply_text!r}"
-    )
+    assert (
+        "Rate limit exceeded" in reply_text
+        or "Too many pairing" in reply_text
+        or "wait" in reply_text.lower()
+    ), f"Expected rate-limit message, got: {reply_text!r}"
 
 
 @pytest.mark.asyncio

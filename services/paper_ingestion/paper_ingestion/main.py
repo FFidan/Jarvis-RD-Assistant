@@ -34,7 +34,6 @@ from jarvis_common import (
     configure_middleware_and_errors,
     register_health_routes,
     verify_api_key,
-    warn_multitenant_stub,
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
@@ -377,7 +376,6 @@ _lifespan_config = ServiceLifespanConfig(
     },
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),
-        warn_multitenant_stub,
         _validate_bbt_url_hook,
         _run_migrations_hook,
         _migrate_plaintext_secrets_hook,
@@ -391,7 +389,6 @@ _lifespan_config = ServiceLifespanConfig(
     # Index-aligned with custom_init_tasks; None = no teardown counterpart.
     custom_teardown_tasks=[
         None,  # init_langfuse_hook (Langfuse SDK auto-flushes on process exit)
-        None,  # warn_multitenant_stub
         None,  # _validate_bbt_url_hook
         None,  # _run_migrations_hook
         None,  # _migrate_plaintext_secrets_hook

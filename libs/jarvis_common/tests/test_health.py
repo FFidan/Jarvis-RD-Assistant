@@ -249,38 +249,6 @@ class TestRegisterHealthRoutes:
 
 
 # ---------------------------------------------------------------------------
-# warn_multitenant_stub (DOM-J-02)
-# ---------------------------------------------------------------------------
-
-
-class TestWarnMultitenantStub:
-    @pytest.mark.asyncio
-    async def test_no_warn_when_multitenant_disabled(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        monkeypatch.delenv("MULTITENANT_ENABLED", raising=False)
-        from jarvis_common.app_factory import warn_multitenant_stub
-
-        caplog.set_level("CRITICAL")
-        await warn_multitenant_stub(MagicMock())
-        critical_records = [r for r in caplog.records if r.levelname == "CRITICAL"]
-        assert critical_records == []
-
-    @pytest.mark.asyncio
-    async def test_warns_critical_when_multitenant_enabled(
-        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        monkeypatch.setenv("MULTITENANT_ENABLED", "true")
-        from jarvis_common.app_factory import warn_multitenant_stub
-
-        caplog.set_level("CRITICAL")
-        await warn_multitenant_stub(MagicMock())
-        critical_records = [r for r in caplog.records if r.levelname == "CRITICAL"]
-        assert critical_records, "expected a CRITICAL log line when MULTITENANT_ENABLED=true"
-        assert "stub" in critical_records[0].getMessage().lower()
-
-
-# ---------------------------------------------------------------------------
 # Shared probe factories (L-10)
 # ---------------------------------------------------------------------------
 

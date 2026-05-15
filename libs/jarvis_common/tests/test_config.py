@@ -35,7 +35,6 @@ class TestJarvisCommonSettings:
         assert s.trusted_proxy_cidrs == ""
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
-        assert s.multitenant_enabled is False
 
     def test_database_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host/db")
@@ -134,7 +133,6 @@ class TestPaperIngestionSettings:
         assert s.bbt_base_url == "http://host.docker.internal:23119"
         assert s.app_base_url is None
         assert s.auto_fetch_interval_hours == 0.0
-        assert s.multitenant_enabled is False
         assert s.pulse_stage2_model == "fast"
         assert s.pulse_stage2_max_retries == 1
         assert s.semantic_scholar_api_key is None
@@ -160,13 +158,6 @@ class TestPaperIngestionSettings:
         assert s.qdrant_api_key is not None
         assert "qdrant-secret" not in repr(s.qdrant_api_key)
         assert s.qdrant_api_key.get_secret_value() == "qdrant-secret"
-
-    def test_multitenant_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from paper_ingestion.config import PaperIngestionSettings
-
-        monkeypatch.setenv("MULTITENANT_ENABLED", "true")
-        s = PaperIngestionSettings()
-        assert s.multitenant_enabled is True
 
     def test_embedding_dimension_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from paper_ingestion.config import PaperIngestionSettings
@@ -212,7 +203,6 @@ class TestLearningEngineSettings:
 
         s = LearningEngineSettings()
         assert s.snapshot_storage_path == "/data/snapshots"
-        assert s.multitenant_enabled is False
 
     def test_inherits_common_fields(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from learning_engine.config import LearningEngineSettings
@@ -227,13 +217,6 @@ class TestLearningEngineSettings:
         monkeypatch.setenv("SNAPSHOT_STORAGE_PATH", "/mnt/snapshots")
         s = LearningEngineSettings()
         assert s.snapshot_storage_path == "/mnt/snapshots"
-
-    def test_multitenant_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from learning_engine.config import LearningEngineSettings
-
-        monkeypatch.setenv("MULTITENANT_ENABLED", "1")
-        s = LearningEngineSettings()
-        assert s.multitenant_enabled is True
 
     def test_factory_uncached(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from learning_engine.config import get_learning_engine_settings

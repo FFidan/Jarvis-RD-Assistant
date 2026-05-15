@@ -19,7 +19,6 @@ from paper_ingestion.pulse.training import (
     load_active_classifier,
     train_classifier_model,
 )
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 

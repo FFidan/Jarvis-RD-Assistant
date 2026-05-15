@@ -9,7 +9,7 @@ from typing import Any
 import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from jarvis_common import JobCreateResponse, current_user_id
+from jarvis_common import JobCreateResponse, current_user_id, require_admin_or_api_key
 from jarvis_common.model_catalog import Role
 from jarvis_common.serialization import _coerce_bool
 from pydantic import BaseModel
@@ -213,7 +213,11 @@ async def get_setup_status(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/models", response_model=SystemModelsResponse)
+@router.get(
+    "/models",
+    response_model=SystemModelsResponse,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
 @limiter.limit("30/minute")
 async def get_system_models(request: Request) -> SystemModelsResponse:
     """Return installed Ollama models + hardware info + current assignments."""

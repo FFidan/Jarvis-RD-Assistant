@@ -193,17 +193,6 @@ class TestCurrentUserIdSec108:
         result = await current_user_id_or_none(self._make_request(user_id=42))
         assert result == 42
 
-    def test_assert_multi_tenant_not_implemented_raises(self) -> None:
-        """Guard still raises — semantics tightened from "not implemented" to "no session"."""
-        from jarvis_common.auth import assert_multi_tenant_not_implemented
-
-        with pytest.raises(NotImplementedError):
-            assert_multi_tenant_not_implemented()
-
-    def test_assert_multi_tenant_guard_exported_from_top_level(self) -> None:
-        """assert_multi_tenant_not_implemented must be importable from jarvis_common."""
-        from jarvis_common import assert_multi_tenant_not_implemented  # noqa: F401
-
     def test_current_user_id_or_none_exported_from_top_level(self) -> None:
         """current_user_id_or_none must be importable from jarvis_common."""
         from jarvis_common import current_user_id_or_none  # noqa: F401

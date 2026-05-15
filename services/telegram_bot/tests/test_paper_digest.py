@@ -194,3 +194,47 @@ async def test_run_paper_digest_warns_when_api_returns_no_data():
 
     # No message should be sent when API returns no data
     send_chunked.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paper_digest_per_pairing_user_scope():
+    """Each paired user gets their own API call with X-Owner-User-Id scoping (N1 fix).
+
+    Two pairings → two _fetch_digest_from_api calls with different user_ids,
+    so the backend scopes the digest to each user's data independently.
+    """
+    bot = AsyncMock()
+    http_client = AsyncMock(spec=httpx.AsyncClient)
+    db_pool = AsyncMock()
+    config = _make_config()
+
+    from telegram_bot.owner import UserPairing
+
+    fetch_calls: list[tuple[int | None]] = []
+
+    async def _capturing_fetch(_http_client, _config, user_id: int | None = None) -> dict:
+        fetch_calls.append((user_id,))
+        return {"topics": [{"name": "AI"}], "total_papers": 1}
+
+    with (
+        patch(
+            "telegram_bot.owner.list_user_pairings",
+            AsyncMock(
+                return_value=[
+                    UserPairing(user_id=10, chat_id=1000),
+                    UserPairing(user_id=20, chat_id=2000),
+                ]
+            ),
+        ),
+        patch.object(paper_digest, "_fetch_digest_from_api", side_effect=_capturing_fetch),
+        patch.object(paper_digest, "format_weekly_digest", return_value="digest line"),
+        patch.object(paper_digest, "_send_chunked", AsyncMock()),
+    ):
+        await paper_digest.run_paper_digest(http_client, db_pool, bot, config)
+
+    # API must be called once per pairing — not once shared across all users
+    assert len(fetch_calls) == 2, f"Expected 2 API calls, got {len(fetch_calls)}"
+
+    # Each call must carry the correct user_id for its pairing
+    user_ids_sent = {call[0] for call in fetch_calls}
+    assert user_ids_sent == {10, 20}, f"Expected user_ids {{10, 20}}, got {user_ids_sent}"

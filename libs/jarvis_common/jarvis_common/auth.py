@@ -8,6 +8,7 @@ import asyncpg
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import APIKeyHeader
 
+from jarvis_common.audit import log_audit
 from jarvis_common.event_log import log_event
 from jarvis_common.settings import get_core_settings
 
@@ -15,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness"})
+
+
+def _request_db_pool(request: Request) -> asyncpg.Pool | None:
+    """Best-effort ``app.state.db_pool`` lookup tolerant of test mocks."""
+    state = getattr(getattr(request, "app", None), "state", None)
+    return getattr(state, "db_pool", None) if state is not None else None
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
 
 
 def _load_api_key() -> str | None:
@@ -68,24 +79,37 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
     # WS-2A: these endpoints have their own validation (token TTL + single-use).
     if request.url.path.startswith("/api/auth/"):
         return
+    # /api/setup/* IS the first-run bootstrap surface — the FirstRunGate polls
+    # /api/setup/status on every boot with no credentials in hand, and the
+    # wizard's create-first-admin / system-check / configure-smtp routes run
+    # before any session or API-key is established in the browser. Route-level
+    # `require_unconfigured_or_admin` is the real gate: open until an admin
+    # exists, admin-only after. Without this exemption, FirstRunGate 403s and
+    # the whole UI hangs on the loading spinner.
+    if request.url.path.startswith("/api/setup/"):
+        return
     # If a real key is configured, always enforce it (even in DEV_MODE)
     if jarvis_api_key:
         if not hmac.compare_digest(api_key or "", jarvis_api_key):
             # Emit an auth-failure event; failures indicate a potential probe or
             # misconfigured client. Successes are NOT logged (too noisy per-request).
             try:
-                _pool = getattr(getattr(request, "app", None), "state", None)
-                _pool = getattr(_pool, "db_pool", None) if _pool is not None else None
+                _pool = _request_db_pool(request)
                 if _pool is not None:
+                    _ip = _client_ip(request)
                     await log_event(
                         pool=_pool,
                         level="warning",
                         category="auth",
                         source="verify_api_key",
                         message="invalid_api_key",
-                        context={
-                            "ip": request.client.host if request.client else None,
-                        },
+                        context={"ip": _ip},
+                    )
+                    await log_audit(
+                        _pool,
+                        action="auth.api_key.invalid",
+                        resource=request.url.path,
+                        metadata={"ip": _ip},
                     )
             except Exception:  # noqa: BLE001
                 logger.debug("auth event log_event failed (non-fatal)", exc_info=True)
@@ -106,22 +130,39 @@ async def verify_api_key(request: Request, api_key: str | None = Depends(_api_ke
 
 
 async def require_admin(request: Request) -> None:
-    """FastAPI dependency — raise 403 for non-admin browser sessions.
+    """FastAPI dependency — admin-only. Requires an explicit admin session.
 
     Reads ``request.state.user_role`` set by
     :class:`jarvis_common.session_middleware.SessionMiddleware` when a valid
     session cookie is present.
 
-    Design: when no session cookie is present (API-key-only callers such as the
-    Telegram bot, cron jobs, or DEV_MODE single-tenant) ``user_role`` is absent.
-    Those callers are allowed through so the legacy single-tenant path continues
-    to work without role infra.  Only browser sessions with an explicit
-    ``role != 'admin'`` are rejected with 403.
+    WS-AUTH: API-key-only callers (no session ⇒ ``user_role`` absent) are NOT
+    admins. The JARVIS_API_KEY is an ops credential, not an admin bearer. Only
+    a browser session with ``role == 'admin'`` passes; everything else — no
+    session, or a non-admin session — gets 403. For ops endpoints the bot/cron
+    legitimately reach with only X-API-Key, use
+    :func:`require_admin_or_api_key`.
 
     Raises
     ------
     fastapi.HTTPException
-        403 if the caller has a browser session with a non-admin role.
+        403 unless the caller has a session with ``role == 'admin'``.
+    """
+    role = getattr(request.state, "user_role", None)
+    if role != "admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
+async def require_admin_or_api_key(request: Request) -> None:
+    """FastAPI dependency — admin session OR ops API-key caller.
+
+    The previous (lax) ``require_admin`` semantics: callers with no session
+    role present (API-key-only: Telegram bot, cron) pass through; only a
+    browser session with an explicit non-admin role is rejected with 403.
+
+    Use ONLY on ops endpoints that the bot/cron hit with X-API-Key alone
+    (``verify_api_key`` still gates the key itself). User-data routes must
+    never depend on this — use :func:`current_user_id_strict` there.
     """
     role = getattr(request.state, "user_role", None)
     if role is not None and role != "admin":
@@ -178,22 +219,32 @@ async def current_user_id_or_none(request: Request) -> int | None:
     return _resolve_request_user_id(request)
 
 
-def assert_multi_tenant_not_implemented() -> None:
-    """Raise ``NotImplementedError`` to guard code paths requiring real user IDs.
+async def current_user_id_strict(request: Request) -> int:
+    """Return the authenticated user's integer ID, or raise 401.
 
-    Retained for callers that hard-block on a real identity. With WS-2A live
-    this is now reachable only when no session is present AND the caller
-    explicitly invoked the guard — so it doubles as a "not authenticated"
-    signal.
+    Same resolution as :func:`current_user_id` (``request.state.user_id`` via
+    :func:`_resolve_request_user_id`) but never returns ``None``: an absent
+    identity is a hard 401. Use on user-data routes so an API-key-only caller
+    cannot fall through as a permissionless shared user.
 
-    Raises
-    ------
-    NotImplementedError
-        When called from a code path with no resolved user identity.
+    Best-effort audit of the failure (``auth.session.missing``); the 401 is
+    raised even if the audit insert fails.
     """
-    raise NotImplementedError(
-        "no authenticated user available; route requires a session or owner identity"
-    )
+    uid = _resolve_request_user_id(request)
+    if uid is None:
+        try:
+            pool = _request_db_pool(request)
+            if pool is not None:
+                await log_audit(
+                    pool,
+                    action="auth.session.missing",
+                    resource=request.url.path,
+                    metadata={"ip": _client_ip(request)},
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug("auth.session.missing audit failed (non-fatal)", exc_info=True)
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return uid
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +386,22 @@ async def current_user_id_with_owner_override(
         ) from None
 
     return override_uid
+
+
+async def current_user_id_strict_with_owner_override(
+    request: Request,
+    api_key: str | None = Depends(_api_key_header),
+) -> int:
+    """Like :func:`current_user_id_with_owner_override` but 401 instead of None.
+
+    Reuses the existing guard logic verbatim (session → X-Owner-User-Id with
+    the three guards). When neither a session nor a valid owner override
+    resolves an identity, raise 401 rather than returning ``None``.
+    """
+    uid = await current_user_id_with_owner_override(request, api_key=api_key)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return uid
 
 
 # allow-user-id-none: legacy Telegram single-tenant path

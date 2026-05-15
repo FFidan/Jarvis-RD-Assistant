@@ -89,6 +89,7 @@ logger = logging.getLogger(__name__)
 async def _fetch_digest_from_api(
     http_client: httpx.AsyncClient,
     config: BotConfig,
+    user_id: int | None = None,
 ) -> dict | None:
     """Call the paper_ingestion digest endpoint.
 
@@ -98,6 +99,9 @@ async def _fetch_digest_from_api(
         Shared HTTP client.
     config : BotConfig
         Bot configuration (for service URL and API key).
+    user_id : int or None
+        DB user PK.  When set, adds ``X-Owner-User-Id`` header so the backend
+        scopes the digest to that user's paper_user_state rows.
 
     Returns
     -------
@@ -107,6 +111,8 @@ async def _fetch_digest_from_api(
     headers: dict[str, str] = {}
     if config.jarvis_api_key:
         headers["X-API-Key"] = config.jarvis_api_key.get_secret_value()
+    if user_id is not None:
+        headers["X-Owner-User-Id"] = str(user_id)
     try:
         resp = await http_client.get(
             f"{config.paper_ingestion_url}/api/digest/weekly",
@@ -228,8 +234,8 @@ async def run_paper_digest(
         )
         return
 
-    digest = await _fetch_digest_from_api(http_client, config)
     for pairing in pairings:
+        digest = await _fetch_digest_from_api(http_client, config, user_id=pairing.user_id)
         if digest and digest.get("topics"):
             text = format_weekly_digest(digest)
             lines = text.split("\n")
@@ -240,13 +246,15 @@ async def run_paper_digest(
             )
             await _send_chunked(bot, pairing.chat_id, lines)
             logger.info(
-                "LLM digest sent to chat_id=%d: %d papers in %d topics",
+                "LLM digest sent to chat_id=%d (user_id=%s): %d papers in %d topics",
                 pairing.chat_id,
+                pairing.user_id,
                 digest.get("total_papers", 0),
                 len(digest.get("topics", [])),
             )
         else:
             logger.warning(
-                "paper_digest: API returned no data for chat_id=%d — skipping (was fallback)",
+                "paper_digest: API returned no data for chat_id=%d (user_id=%s) — skipping",
                 pairing.chat_id,
+                pairing.user_id,
             )

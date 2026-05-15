@@ -10,7 +10,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
-from jarvis_common.auth import current_user_id_or_none
+from jarvis_common.auth import current_user_id_or_none, current_user_id_with_owner_override
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
@@ -496,7 +496,7 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
-    user_id = await current_user_id_or_none(request)
+    user_id = await current_user_id_with_owner_override(request)
     return await generate_weekly_summary(
         db_pool,
         days=days,

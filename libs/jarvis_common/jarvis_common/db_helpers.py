@@ -308,6 +308,11 @@ async def assert_paper_ownership(
             discovered_by = None
 
     # Fast-grant: same owner, OR NULL discovered_by in single-tenant mode.
+    # TODO(WS-AUTH): the ``multitenant_enabled`` parameter is now dormant
+    # (no production caller passes True; the MULTITENANT_ENABLED setting was
+    # retired). Collapsing it would flip canonical-corpus ownership semantics
+    # for every caller — deferred to WS-CROSS-USER, which owns the per-user
+    # scoping migration.
     if str(discovered_by) == str(user_id) or (discovered_by is None and not multitenant_enabled):
         return
 

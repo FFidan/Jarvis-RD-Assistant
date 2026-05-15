@@ -24,7 +24,6 @@ from jarvis_common import (
     configure_middleware_and_errors,
     register_health_routes,
     verify_api_key,
-    warn_multitenant_stub,
 )
 from jarvis_common.app_factory import (
     make_init_langfuse_hook,
@@ -138,7 +137,6 @@ _lifespan_config = ServiceLifespanConfig(
     service_name="Learning Engine Service",
     custom_init_tasks=[
         make_init_langfuse_hook(_set_openai_client),
-        warn_multitenant_stub,
         _init_fsrs_and_generators,
         _start_procrastinate_worker,
         _log_le_started,
@@ -147,7 +145,6 @@ _lifespan_config = ServiceLifespanConfig(
     # Langfuse SDK auto-flushes on process exit — no explicit teardown needed.
     custom_teardown_tasks=[
         None,  # init_langfuse_hook
-        None,  # warn_multitenant_stub
         None,  # _init_fsrs_and_generators
         _shutdown_procrastinate_worker,  # _start_procrastinate_worker
         None,  # _log_le_started

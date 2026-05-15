@@ -342,7 +342,7 @@ def configure_middleware_and_errors(
     # When the caller explicitly passes ["*"] — or the env var is set to "*" —
     # we omit the flag so the server at least returns a usable (non-credentialed)
     # CORS response rather than an invalid one.
-    use_credentials = cors_origins != ["*"]
+    use_credentials = "*" not in cors_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -422,27 +422,10 @@ def make_init_langfuse_hook(
     return _hook
 
 
-async def warn_multitenant_stub(app: FastAPI) -> None:
-    """Log WARNING when ``MULTITENANT_ENABLED=true`` to confirm active auth resolver.
-
-    DOM-J-02: shared lifespan hook used by both ``paper_ingestion`` and
-    ``learning_engine``.  Reads ``multitenant_enabled`` from the shared
-    :class:`jarvis_common.config.JarvisCommonSettings` (both service Settings
-    classes inherit it).  Signature matches :data:`LifespanHook`, so it can
-    drop straight into ``ServiceLifespanConfig.custom_init_tasks``.
-    """
-    if get_jarvis_common_settings().multitenant_enabled:
-        logger.warning(
-            "MULTITENANT_ENABLED=true and SessionMiddleware-based auth is active; "
-            "per-user scoping enforced at query sites where multitenant_enabled=True is threaded."
-        )
-
-
 __all__ = [
     "ServiceLifespanConfig",
     "configure_lifespan",
     "configure_middleware_and_errors",
     "init_langfuse_hook",
     "make_init_langfuse_hook",
-    "warn_multitenant_stub",
 ]

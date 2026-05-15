@@ -157,11 +157,68 @@ describe('JournalSection — useQuery abort on unmount (M-12)', () => {
     await waitFor(() => expect(vi.mocked(getJournalEntry)).toHaveBeenCalled());
 
     const callArgs = vi.mocked(getJournalEntry).mock.calls[0];
-    expect(callArgs).toBeDefined();
+    if (!callArgs) throw new Error('getJournalEntry was not called');
     // Second argument should be options object with a signal
-    expect(callArgs[1]).toBeDefined();
-    expect(callArgs[1]!.signal).toBeInstanceOf(AbortSignal);
+    const opts = callArgs[1];
+    expect(opts).toBeDefined();
+    expect(opts!.signal).toBeInstanceOf(AbortSignal);
 
     unmount();
+  });
+});
+
+describe('JournalSection — typed text survives refetch (N3)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(upsertJournalEntry).mockResolvedValue(undefined as any);
+  });
+
+  it('preserves typed text when TanStack refetches after user edit', async () => {
+    const user = userEvent.setup();
+
+    // Initial server state: empty prompts
+    vi.mocked(getJournalEntry).mockResolvedValue({
+      date: '2026-01-01',
+      prompts: { first_move: '' },
+    } as any);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <JournalSection />
+      </QueryClientProvider>,
+    );
+
+    // Wait for initial data to populate
+    const textarea = await screen.findByPlaceholderText(
+      "What's the one thing you'll do first tomorrow?",
+    );
+
+    // User types something
+    await user.type(textarea, 'Ship the hotfix');
+    expect((textarea as HTMLTextAreaElement).value).toContain('Ship the hotfix');
+
+    // Simulate a TanStack refetch by changing the server response and
+    // invalidating the query — without a hasInitialized guard the effect would
+    // overwrite the textarea with the stale server snapshot.
+    vi.mocked(getJournalEntry).mockResolvedValue({
+      date: '2026-01-01',
+      prompts: { first_move: 'old server value' },
+    } as any);
+
+    await act(async () => {
+      queryClient.invalidateQueries({ queryKey: ['journalEntry'] });
+    });
+
+    // Wait for the refetch to settle
+    await waitFor(() =>
+      expect(vi.mocked(getJournalEntry)).toHaveBeenCalledTimes(2),
+    );
+
+    // Typed text must still be present — the refetch must NOT overwrite it
+    expect((textarea as HTMLTextAreaElement).value).toContain('Ship the hotfix');
+    expect((textarea as HTMLTextAreaElement).value).not.toBe('old server value');
   });
 });

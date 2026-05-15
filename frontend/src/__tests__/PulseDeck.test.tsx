@@ -241,11 +241,14 @@ describe('PulseDeck', () => {
     expect(saveButtonsBefore[1]).not.toBeDisabled();
 
     // Click Save on Paper One — mutation starts, stays in flight
-    await user.click(saveButtonsBefore[0]);
+    const card1SaveButton = saveButtonsBefore[0];
+    if (!card1SaveButton) throw new Error('Paper One save button not found');
+    await user.click(card1SaveButton);
 
     // Paper Two's Save button must NOT be disabled while Paper One is saving
     await waitFor(() => {
-      const card2SaveButton = screen.getAllByRole('button', { name: /^save$/i }).at(-1);
+      const buttons = screen.getAllByRole('button', { name: /^save$/i });
+      const card2SaveButton = buttons[buttons.length - 1];
       expect(card2SaveButton).not.toBeDisabled();
     });
   });
