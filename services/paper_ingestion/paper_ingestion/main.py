@@ -439,6 +439,7 @@ app.add_middleware(SessionMiddleware)
 # Router registration
 # ---------------------------------------------------------------------------
 
+from paper_ingestion.routers import account as account_router  # noqa: E402
 from paper_ingestion.routers import admin as admin_router  # noqa: E402
 from paper_ingestion.routers import (  # noqa: E402
     analytics,
@@ -515,6 +516,9 @@ app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(audit_admin_router.router)
 app.include_router(infra_events.router)
+# UI_v3 §I Account — self-service current-user profile (GET/PATCH /api/account
+# + verified email change). Distinct from admin user-mgmt (/api/admin/*).
+app.include_router(account_router.router)
 
 
 # ---------------------------------------------------------------------------
