@@ -111,54 +111,18 @@ class PersistentSourceRateLimiter:
     async def acquire(self) -> None:
         """Wait until it is safe to issue the next request.
 
-        Reads ``last_request_at`` from ``source_health`` (SELECT FOR UPDATE)
-        and sleeps for the remainder of ``min_interval_seconds`` if the last
-        request was too recent.
+        Atomically claims the rate-limit slot in ``source_health`` using an
+        ``INSERT … ON CONFLICT DO UPDATE … WHERE … RETURNING`` statement.
+        Only one concurrent worker can claim the slot per ``min_interval_seconds``;
+        the other(s) read the current ``last_request_at``, sleep for the
+        remaining interval, and retry the claim once.
 
-        Does **not** write back — call :meth:`update_last_request` after the
-        HTTP call completes.
+        Also honours ``cooldown_until`` (hard API cooldown) — both workers sleep.
 
         Falls back to the in-memory fallback (or a bare sleep) on DB error.
         """
         try:
-            async with self._pool.acquire() as conn:
-                async with conn.transaction():
-                    row = await conn.fetchrow(
-                        """
-                        SELECT last_request_at, cooldown_until
-                          FROM source_health
-                         WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
-                           AND source_type = $2
-                         FOR UPDATE
-                        """,
-                        self._user_id,
-                        self._source_type,
-                    )
-            if row is not None:
-                cooldown_until: datetime | None = row["cooldown_until"]
-                if cooldown_until is not None:
-                    now = datetime.now(tz=UTC)
-                    if cooldown_until > now:
-                        wait = (cooldown_until - now).total_seconds()
-                        _logger.debug(
-                            "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
-                            self._source_type,
-                            wait,
-                        )
-                        await asyncio.sleep(wait)
-                        return
-
-                last_req: datetime | None = row["last_request_at"]
-                if last_req is not None:
-                    elapsed = (datetime.now(tz=UTC) - last_req).total_seconds()
-                    if elapsed < self._min_interval:
-                        wait = self._min_interval - elapsed
-                        _logger.debug(
-                            "PersistentSourceRateLimiter[%s] throttling; sleeping %.1fs",
-                            self._source_type,
-                            wait,
-                        )
-                        await asyncio.sleep(wait)
+            await self._acquire_with_retry()
         except Exception as exc:
             _logger.warning(
                 "PersistentSourceRateLimiter[%s] DB acquire failed (%s); using fallback",
@@ -170,6 +134,94 @@ class PersistentSourceRateLimiter:
                 await self._fallback.acquire()
             else:
                 await asyncio.sleep(self._min_interval)
+
+    async def _acquire_with_retry(self) -> None:
+        """Inner acquire: check cooldown, then atomic slot claim (one retry)."""
+        # ── 1. Cooldown check (read-only; both workers should respect this) ──
+        async with self._pool.acquire() as conn:
+            cooldown_row = await conn.fetchrow(
+                """
+                SELECT cooldown_until
+                  FROM source_health
+                 WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                   AND source_type = $2
+                """,
+                self._user_id,
+                self._source_type,
+            )
+        if cooldown_row is not None:
+            cooldown_until: datetime | None = cooldown_row["cooldown_until"]
+            if cooldown_until is not None:
+                now = datetime.now(tz=UTC)
+                if cooldown_until > now:
+                    wait = (cooldown_until - now).total_seconds()
+                    _logger.debug(
+                        "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
+                        self._source_type,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
+                    return
+
+        # ── 2. Atomic slot claim (up to 2 attempts) ──────────────────────────
+        # The INSERT path handles the first-ever request for this source (no
+        # existing row); ON CONFLICT targets the UNIQUE(user_id, source_type)
+        # constraint.  The WHERE clause on DO UPDATE makes the update
+        # conditional: it only fires (and returns a row) when the slot is free.
+        # A concurrent worker that already updated last_request_at within the
+        # interval will cause the WHERE to be false → no row returned → slot
+        # is taken.
+        for attempt in range(2):
+            async with self._pool.acquire() as conn:
+                claimed_row = await conn.fetchrow(
+                    """
+                    INSERT INTO source_health
+                        (user_id, source_type, last_request_at, updated_at)
+                    VALUES ($1, $2, now(), now())
+                    ON CONFLICT (user_id, source_type) DO UPDATE
+                       SET last_request_at = now(),
+                           updated_at      = now()
+                     WHERE source_health.last_request_at IS NULL
+                        OR source_health.last_request_at
+                               < now() - ($3 || ' seconds')::interval
+                    RETURNING last_request_at
+                    """,
+                    self._user_id,
+                    self._source_type,
+                    str(self._min_interval),
+                )
+
+            if claimed_row is not None:
+                # Slot claimed — proceed immediately.
+                return
+
+            if attempt == 0:
+                # Slot taken by another worker; read its last_request_at and
+                # sleep for the remaining interval before retrying.
+                async with self._pool.acquire() as conn:
+                    wait_row = await conn.fetchrow(
+                        """
+                        SELECT last_request_at
+                          FROM source_health
+                         WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                           AND source_type = $2
+                        """,
+                        self._user_id,
+                        self._source_type,
+                    )
+                if wait_row is not None and wait_row["last_request_at"] is not None:
+                    elapsed = (datetime.now(tz=UTC) - wait_row["last_request_at"]).total_seconds()
+                    wait = max(0.0, self._min_interval - elapsed)
+                else:
+                    wait = self._min_interval
+                _logger.debug(
+                    "PersistentSourceRateLimiter[%s] slot taken; sleeping %.1fs",
+                    self._source_type,
+                    wait,
+                )
+                await asyncio.sleep(wait)
+            # attempt == 1: second claim attempt after sleeping; if it also
+            # fails (unlikely), fall through and return — don't block forever.
 
     async def update_last_request(
         self,

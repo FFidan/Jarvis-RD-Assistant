@@ -121,7 +121,32 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      DROP/ADD CONSTRAINT guards; pre-flight RAISE on residual NULL rows).
     # 81: audit_log (action, created_at DESC) index — runtime-applied, idempotent
     #      CREATE INDEX IF NOT EXISTS.
-    deferred = {33, 52, 53, 62, 63, 64, 65, 66, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81}
+    # 82: user_id FK gap on 7 tables missed by 077/080 (H-3) — runtime-applied,
+    #      idempotent DROP/ADD CONSTRAINT guards + pre-flight RAISE on orphan rows.
+    deferred = {
+        33,
+        52,
+        53,
+        62,
+        63,
+        64,
+        65,
+        66,
+        69,
+        70,
+        71,
+        72,
+        73,
+        74,
+        75,
+        76,
+        77,
+        78,
+        79,
+        80,
+        81,
+        82,
+    }
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions
     assert not missing, (
