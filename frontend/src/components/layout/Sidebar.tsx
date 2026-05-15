@@ -15,6 +15,7 @@ import {
   ScrollText,
   ShieldCheck,
   Users,
+  Activity,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -48,6 +49,7 @@ const adminNavItems = [
   { path: '/logs', label: 'System Logs', icon: ScrollText },
   { path: '/admin/users', label: 'User Management', icon: Users },
   { path: '/admin/audit-log', label: 'Audit Log', icon: ShieldCheck },
+  { path: '/admin/system-health', label: 'System Health', icon: Activity },
 ];
 
 export function Sidebar() {

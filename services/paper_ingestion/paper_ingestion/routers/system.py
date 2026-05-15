@@ -4,7 +4,7 @@ import logging
 import re
 import time
 import uuid
-from typing import Any
+from typing import Any, Literal
 
 import asyncpg
 import httpx
@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import JobCreateResponse, current_user_id, require_admin_or_api_key
 from jarvis_common.model_catalog import Role
 from jarvis_common.serialization import _coerce_bool
+from jarvis_common.settings import get_core_settings, get_secrets_settings
 from pydantic import BaseModel
 
 from paper_ingestion.config import get_paper_ingestion_settings
@@ -432,3 +433,119 @@ async def delete_system_model(tag: str, request: Request) -> Response:
     if resp.status_code >= 400:
         raise HTTPException(status_code=502, detail="Ollama model delete failed")
     return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/system/readiness
+# ---------------------------------------------------------------------------
+
+ReadinessStatus = Literal["green", "amber", "red"]
+
+# Ordered worst-to-best so aggregate selection is a simple max-by-rank.
+_STATUS_RANK: dict[str, int] = {"green": 0, "amber": 1, "red": 2}
+
+
+class ReadinessCheck(BaseModel):
+    """One pre-public-launch readiness probe result."""
+
+    name: str
+    status: ReadinessStatus
+    detail: str
+
+
+class ReadinessResponse(BaseModel):
+    """Aggregate readiness report. ``status`` is the worst of ``checks``."""
+
+    status: ReadinessStatus
+    checks: list[ReadinessCheck]
+
+
+# Granular dev-flag attribute names on CoreSettings. Each must be False for a
+# production deployment; True means a safety bypass is active → red.
+_DEV_FLAG_NAMES: tuple[str, ...] = (
+    "dev_auth_bypass",
+    "dev_error_detail",
+    "dev_cors_open",
+    "dev_smtp_log_only",
+    "dev_crypto_relaxed",
+)
+
+
+@router.get(
+    "/readiness",
+    response_model=ReadinessResponse,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("30/minute")
+async def get_system_readiness(request: Request) -> ReadinessResponse:
+    """Pre-public-launch readiness report: dev flags, env, secrets, HTTPS, audit log."""
+    core = get_core_settings()
+    secrets = get_secrets_settings()
+    checks: list[ReadinessCheck] = []
+
+    # Granular dev flags — each must be off for production.
+    for flag_name in _DEV_FLAG_NAMES:
+        enabled = bool(getattr(core, flag_name))
+        checks.append(
+            ReadinessCheck(
+                name=flag_name,
+                status="red" if enabled else "green",
+                detail="enabled" if enabled else "disabled",
+            )
+        )
+
+    # Environment.
+    env_value = core.environment
+    checks.append(
+        ReadinessCheck(
+            name="environment",
+            status="green" if env_value == "production" else "amber",
+            detail=env_value,
+        )
+    )
+
+    # API key — presence + minimum length, never echoed.
+    api_key = secrets.jarvis_api_key
+    if api_key is None:
+        checks.append(ReadinessCheck(name="api_key", status="red", detail="missing"))
+    elif len(api_key.get_secret_value()) >= 32:
+        checks.append(
+            ReadinessCheck(name="api_key", status="green", detail="configured (>=32 chars)")
+        )
+    else:
+        checks.append(ReadinessCheck(name="api_key", status="red", detail="too short"))
+
+    # SMTP — magic links fall back to stdout when unset.
+    smtp_configured = secrets.smtp_host is not None
+    checks.append(
+        ReadinessCheck(
+            name="smtp",
+            status="green" if smtp_configured else "amber",
+            detail=(
+                "configured" if smtp_configured else "not configured — magic links go to stdout"
+            ),
+        )
+    )
+
+    # HTTPS — inferred from the request / proxy header (no settings field).
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").lower()
+    scheme = forwarded_proto or request.url.scheme
+    checks.append(
+        ReadinessCheck(
+            name="https",
+            status="green" if scheme == "https" else "amber",
+            detail=scheme,
+        )
+    )
+
+    # Audit log — count rows; informational only.
+    try:
+        async with request.app.state.db_pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT COUNT(*) AS n FROM audit_log")
+        n = row["n"] if row is not None else 0
+        checks.append(ReadinessCheck(name="audit_log", status="green", detail=f"{n} rows"))
+    except Exception as exc:  # noqa: BLE001 — surface class name, not raw message
+        checks.append(ReadinessCheck(name="audit_log", status="amber", detail=type(exc).__name__))
+
+    aggregate = max(checks, key=lambda c: _STATUS_RANK[c.status]).status
+    return ReadinessResponse(status=aggregate, checks=checks)

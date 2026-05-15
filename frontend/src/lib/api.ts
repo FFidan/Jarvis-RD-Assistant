@@ -385,6 +385,23 @@ export const listAuditLog = (params?: {
   return apiFetch<AuditLogPage>(`/api/admin/audit-log${suffix}`);
 };
 
+// --- System readiness (WS-PRE-PUBLIC-CHECKLIST) ---
+
+export interface ReadinessCheck {
+  name: string;
+  status: 'green' | 'amber' | 'red';
+  detail: string;
+}
+
+export interface ReadinessResponse {
+  status: 'green' | 'amber' | 'red';
+  checks: ReadinessCheck[];
+}
+
+/** Read overall system readiness. Requires admin role. */
+export const getSystemReadiness = () =>
+  apiFetch<ReadinessResponse>('/api/system/readiness');
+
 // --- Dashboard ---
 export const fetchDashboardMetrics = () =>
   apiFetch<DashboardMetrics>('/api/dashboard/metrics');
