@@ -17,7 +17,6 @@ from unittest.mock import MagicMock
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------

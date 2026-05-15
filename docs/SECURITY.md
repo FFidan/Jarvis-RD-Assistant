@@ -113,7 +113,7 @@ The audit log is readable by admins at `GET /api/admin/audit-log`
 If you discover a security vulnerability in JARVIS RD Assistant, please report
 it responsibly:
 
-**Contact:** ferhat.fidan94@googlemail.com
+**Contact:** ferhat.fidan@tuhh.de
 
 **Process:**
 1. Email the contact address with a description of the vulnerability, steps to

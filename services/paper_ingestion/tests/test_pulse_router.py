@@ -13,7 +13,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from jarvis_common import verify_api_key
 from paper_ingestion.models import PulseCardResponse, PulseDeckResponse
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 

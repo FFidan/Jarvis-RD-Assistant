@@ -442,20 +442,6 @@ async def test_list_nudges_non_admin_returns_403(_app):
 
 
 @pytest.mark.asyncio
-async def test_list_nudges_non_admin_returns_403(_app):
-    """GET /api/nudges returns 403 for non-admin browser sessions (L-12)."""
-    app, _conn, _ = _app
-    wrapped = _RoleMiddleware(app, "member")
-    async with httpx.AsyncClient(
-        transport=ASGITransport(app=wrapped), base_url="http://test"
-    ) as client:
-        resp = await client.get("/api/nudges")
-
-    assert resp.status_code == 403
-    assert "Admin" in resp.json()["detail"]
-
-
-@pytest.mark.asyncio
 async def test_update_nudge_found(_app):
     """PUT /api/nudges/{id} updates the nudge when found."""
     app, conn, _ = _app

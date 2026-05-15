@@ -141,7 +141,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
         # No-op: don't leak account existence. Constant-time-ish: skip the DB
         # write entirely (it's faster than a real path), but the token-issuing
         # path is dominated by the email/log call which we can't safely fake.
-        logger.info("auth_request_link_unknown_email email=%s", email_norm)
+        logger.info("auth_request_link_unknown_email email_hash=%s", _hash_email(email_norm))
         return RequestLinkResponse(sent=True)
 
     user_id = int(row["id"])
@@ -164,7 +164,7 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
     try:
         await send_magic_link(email_norm, link, pool=pool)
     except Exception:  # noqa: BLE001 — never leak SMTP detail to the response
-        logger.exception("send_magic_link failed for email=%s", email_norm)
+        logger.exception("send_magic_link failed for email_hash=%s", _hash_email(email_norm))
         # Still return sent=true: the user can re-request, and we don't want
         # the response to advertise SMTP outage to unauthenticated callers.
 

@@ -202,11 +202,31 @@ def _strip_outer_transaction_control(sql: str) -> str:
     pieces: list[str] = []
     in_dollar = False
     i = 0
-    while i < len(sql):
-        dollar_idx = sql.find("$$", i)
+    n = len(sql)
+    while i < n:
+        # Find the next ``$$`` that is a real delimiter. A ``$$`` sitting inside
+        # a ``--`` line comment (e.g. migration 080's "DO $$ ... guard" doc
+        # comment) is NOT a delimiter — counting it would invert the in_dollar
+        # polarity and cause a real DO block to be parsed as outer SQL, stripping
+        # its standalone ``BEGIN``. Comment-skipping only applies outside a
+        # dollar block: once inside one, the next ``$$`` always closes it.
+        dollar_idx = -1
+        j = i
+        while j < n:
+            if not in_dollar and sql.startswith("--", j):
+                nl = sql.find("\n", j)
+                if nl == -1:
+                    j = n
+                    break
+                j = nl + 1
+                continue
+            if sql.startswith("$$", j):
+                dollar_idx = j
+                break
+            j += 1
         if dollar_idx == -1:
             chunk = sql[i:]
-            i = len(sql)
+            i = n
         else:
             chunk = sql[i:dollar_idx]
             i = dollar_idx + 2
