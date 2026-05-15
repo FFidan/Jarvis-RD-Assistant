@@ -164,7 +164,7 @@ async def test_get_knowledge_graph_hides_other_users_relationship():
     from paper_ingestion.extraction.entities import get_knowledge_graph
 
     conn = _ScopingFakeConn(user_id=2)
-    result = await get_knowledge_graph(conn, user_id=2)
+    result = await get_knowledge_graph(conn, user_id=2)  # type: ignore[arg-type]
 
     rel_ids = sorted(r["id"] for r in result["relationships"])
     paper_ids = sorted(r["paper_id"] for r in result["relationships"])

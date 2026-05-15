@@ -18,7 +18,6 @@ from paper_ingestion.services.contradictions import (
     list_contradictions,
     scan_contradictions,
 )
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 
