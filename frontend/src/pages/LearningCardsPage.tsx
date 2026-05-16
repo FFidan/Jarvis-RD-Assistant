@@ -7,20 +7,24 @@
  *
  * Route default: shows Review if due_now > 0; Library otherwise.
  *
- * P2 OFFLINE SEAM (Wave 3 / functional-track):
+ * P2 OFFLINE SEAM (Wave 3) — WIRED:
  * The `submitReviewFn` threaded into <ReviewMode> is the single boundary for
- * the submit-review call. To wire offline-review + sync:
- *   1. Implement `useOfflineReviewQueue()` → returns an outbox-backed submit fn.
- *   2. Replace `submitReview` below with the hook's returned fn.
- *   3. No other file needs changing — the seam is here, deliberately.
- * See docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md §Offline.
+ * the submit-review call. `useOfflineReviewQueue()` returns an outbox-backed
+ * submit fn that: ONLINE → delegates to the real `submitReview` UNCHANGED;
+ * OFFLINE → appends to an IndexedDB outbox + resolves so the session advances;
+ * on offline→online → drains the outbox idempotently and shows a single
+ * reconcile toast. No other file needed changing — the seam is here.
+ * See docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md §Offline
+ * and docs/superpowers/specs/2026-05-16-offline-review-sync-endpoint-contract.md.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Sparkles } from 'lucide-react';
+import { Plus, Sparkles, CloudOff } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
-import { getStats, fetchDecks, submitReview } from '@/lib/api';
+import { getStats, fetchDecks } from '@/lib/api';
+import { useOnlineStatus } from '@/hooks/use-online-status';
+import { useOfflineReviewQueue } from '@/components/cards/use-offline-review-queue';
 import { Button } from '@/components/ui/button';
 import { StatsHeader } from '@/components/cards/StatsHeader';
 import { ReviewMode } from '@/components/cards/ReviewMode';
@@ -43,6 +47,11 @@ export function LearningCardsPage() {
   const [showGenerate, setShowGenerate] = useState(false);
   const [sessionDeckId, setSessionDeckId] = useState<number | null>(null);
   const [sessionEnded, setSessionEnded] = useState(false);
+
+  // P2 OFFLINE SEAM: outbox-backed submit fn (online → real submitReview
+  // unchanged; offline → enqueue + optimistic advance; reconnect → drain).
+  const { submitReviewFn } = useOfflineReviewQueue();
+  const { online } = useOnlineStatus();
 
   // Fetch stats to determine default mode (review if due_now > 0).
   const { data: stats } = useQuery({
@@ -176,6 +185,14 @@ export function LearningCardsPage() {
         onNavigateToLibrary={navigateToLibrary}
       />
 
+      {/* Subtle offline state — reviews are queued, not lost */}
+      {!online && !sessionEnded && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <CloudOff className="h-3.5 w-3.5" />
+          <span>Offline — ratings are queued and will sync when you&rsquo;re back online.</span>
+        </div>
+      )}
+
       {/* Progress bar — hidden when session complete (no more cards) */}
       {!sessionEnded && (
         <SessionProgressBar
@@ -194,7 +211,7 @@ export function LearningCardsPage() {
         <ReviewMode
           sessionCardIndex={sessionReviewed + 1}
           deckId={sessionDeckId}
-          submitReviewFn={submitReview}   // P2 OFFLINE SEAM: swap this in Wave 3
+          submitReviewFn={submitReviewFn}   // P2 OFFLINE SEAM: outbox-backed (online unchanged)
           onReviewSuccess={onReviewSuccess}
           onSessionEnd={handleSessionEnd}
         />

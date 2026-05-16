@@ -1403,25 +1403,18 @@ describe('ResearchFeedPage', () => {
 
     // Now it's safe to advance the stream to succeeded — this triggers
     // invalidateQueries which causes the second linkage poll.
-    { const fs = await import('fs'); fs.appendFileSync('/tmp/zotero-diag.log', `[DIAG] before push succeeded: calls=${vi.mocked(zoteroGetLinkage).mock.calls.length} jobStatus=${JSON.stringify(useJobStore.getState().jobs['job-zotero-success']?.status)} fetchStatus=${JSON.stringify(appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus)}\n`); }
     zoteroStream.push('data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n');
     zoteroStream.push('data: [DONE]\n\n');
     zoteroStream.close();
     // Yield to microtask queue so the SSE IIFE can process the "succeeded" frame
     await Promise.resolve();
     await Promise.resolve();
-    { const fs = await import('fs'); fs.appendFileSync('/tmp/zotero-diag.log', `[DIAG] after push+yield: calls=${vi.mocked(zoteroGetLinkage).mock.calls.length} jobStatus=${JSON.stringify(useJobStore.getState().jobs['job-zotero-success']?.status)} fetchStatus=${JSON.stringify(appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus)}\n`); }
 
     // The dropdown is still open (event.preventDefault() in onSelect keeps it open).
     // Wait for the dropdown content to flip: "Send to Zotero" disappears when
     // zoteroItemKey becomes non-null (ITEM-12345), which can only happen after
     // the second zoteroGetLinkage call returns the linked item.
     await waitFor(() => {
-      const jobStatus = useJobStore.getState().jobs['job-zotero-success']?.status;
-      const calls = vi.mocked(zoteroGetLinkage).mock.calls.length;
-      const fetchStatus = appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus;
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      require('fs').appendFileSync('/tmp/zotero-diag.log', `[DIAG] waitFor poll: calls=${calls} jobStatus=${jobStatus} fetchStatus=${fetchStatus} hasSend=${screen.queryByRole('menuitem', { name: 'Send to Zotero' }) != null}\n`);
       expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
     }, { timeout: 5000 });
     // "View in Zotero" should now be visible in the still-open dropdown.

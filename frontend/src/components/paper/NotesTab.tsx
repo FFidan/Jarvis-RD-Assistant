@@ -20,9 +20,15 @@ import { formatDate } from '@/lib/utils';
 
 interface NotesTabProps {
   paperId: number;
+  /**
+   * When true, disables the note creation form and delete/promote actions.
+   * Offline note editing is an explicit NON-GOAL (Wave 3 offline contract).
+   * Existing cached notes remain readable. Defaults to false.
+   */
+  readOnly?: boolean;
 }
 
-export function NotesTab({ paperId }: NotesTabProps) {
+export function NotesTab({ paperId, readOnly = false }: NotesTabProps) {
   const queryClient = useQueryClient();
   const trackExternalJob = useJobStore((s) => s.trackExternalJob);
   const [noteText, setNoteText] = useState('');
@@ -113,53 +119,55 @@ export function NotesTab({ paperId }: NotesTabProps) {
       <p className="text-sm text-muted-foreground">
         Page-anchored highlights and notes (separate from your Quick Rating in the sidebar).
       </p>
-      {/* Create note form */}
-      <section className="space-y-3">
-        <h3 className="text-lg font-semibold">Add a note</h3>
-        <div className="space-y-2">
-          <Label htmlFor="note-text">Note</Label>
-          <Textarea
-            id="note-text"
-            value={noteText}
-            onChange={(e) => setNoteText(e.target.value)}
-            placeholder="Write your note..."
-            rows={4}
-          />
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1">
-            <Label htmlFor="note-page">Page (optional)</Label>
-            <Input
-              id="note-page"
-              type="number"
-              min={1}
-              value={pageNumber}
-              onChange={(e) => setPageNumber(e.target.value)}
-              placeholder="Page number"
+      {/* Create note form — hidden when read-only (offline NON-GOAL). */}
+      {!readOnly && (
+        <section className="space-y-3" data-testid="notes-create-form">
+          <h3 className="text-lg font-semibold">Add a note</h3>
+          <div className="space-y-2">
+            <Label htmlFor="note-text">Note</Label>
+            <Textarea
+              id="note-text"
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              placeholder="Write your note..."
+              rows={4}
             />
           </div>
-          <div className="space-y-1">
-            <Label htmlFor="note-highlight">Highlight text (optional)</Label>
-            <Input
-              id="note-highlight"
-              value={highlightText}
-              onChange={(e) => setHighlightText(e.target.value)}
-              placeholder="Highlighted text"
-            />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1">
+              <Label htmlFor="note-page">Page (optional)</Label>
+              <Input
+                id="note-page"
+                type="number"
+                min={1}
+                value={pageNumber}
+                onChange={(e) => setPageNumber(e.target.value)}
+                placeholder="Page number"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="note-highlight">Highlight text (optional)</Label>
+              <Input
+                id="note-highlight"
+                value={highlightText}
+                onChange={(e) => setHighlightText(e.target.value)}
+                placeholder="Highlighted text"
+              />
+            </div>
           </div>
-        </div>
-        <Button
-          onClick={() => createMut.mutate()}
-          disabled={!noteText.trim() || createMut.isPending}
-        >
-          {createMut.isPending ? 'Saving...' : 'Save note'}
-        </Button>
-        {createMut.isError && (
-          <p className="text-sm text-destructive">
-            {createMut.error instanceof Error ? createMut.error.message : 'Failed to save note'}
-          </p>
-        )}
-      </section>
+          <Button
+            onClick={() => createMut.mutate()}
+            disabled={!noteText.trim() || createMut.isPending}
+          >
+            {createMut.isPending ? 'Saving...' : 'Save note'}
+          </Button>
+          {createMut.isError && (
+            <p className="text-sm text-destructive">
+              {createMut.error instanceof Error ? createMut.error.message : 'Failed to save note'}
+            </p>
+          )}
+        </section>
+      )}
 
       {/* Existing notes */}
       <section className="space-y-3">
@@ -190,16 +198,18 @@ export function NotesTab({ paperId }: NotesTabProps) {
                         .filter(Boolean)
                         .join(' | ')}
                     </p>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-destructive hover:text-destructive"
-                      onClick={() => deleteMut.mutate(note.id)}
-                      disabled={deleteMut.isPending}
-                    >
-                      <Trash2 className="mr-1 h-3 w-3" />
-                      Delete
-                    </Button>
+                    {!readOnly && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-destructive hover:text-destructive"
+                        onClick={() => deleteMut.mutate(note.id)}
+                        disabled={deleteMut.isPending}
+                      >
+                        <Trash2 className="mr-1 h-3 w-3" />
+                        Delete
+                      </Button>
+                    )}
                   </div>
                   {deleteMut.isError && deleteMut.variables === note.id && (
                     <p className="mt-1 text-xs text-destructive" role="alert">
@@ -222,7 +232,8 @@ export function NotesTab({ paperId }: NotesTabProps) {
             variant="outline"
             size="sm"
             onClick={() => syncZoteroMut.mutate()}
-            disabled={syncZoteroMut.isPending}
+            disabled={syncZoteroMut.isPending || readOnly}
+            title={readOnly ? 'Offline — sync unavailable' : undefined}
           >
             <RefreshCw className="mr-2 h-4 w-4" />
             {syncZoteroMut.isPending ? 'Syncing...' : 'Sync'}
@@ -284,7 +295,7 @@ export function NotesTab({ paperId }: NotesTabProps) {
                         );
                       })()}
                     </div>
-                    {note.verification_status !== 'verified' && note.highlight_text && (
+                    {note.verification_status !== 'verified' && note.highlight_text && !readOnly && (
                       <Button
                         variant="outline"
                         size="sm"

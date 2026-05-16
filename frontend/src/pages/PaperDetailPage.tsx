@@ -15,6 +15,9 @@ import { FileText, ArrowLeft, Menu, List } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { useUIStore } from '@/stores/ui-store';
 import { fetchPaperDetail, fetchNotes, fetchContradictions } from '@/lib/api';
+import { useOnlineStatus } from '@/hooks/use-online-status';
+import { getPersistedCacheTimestamp } from '@/lib/query-persister';
+import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -59,6 +62,15 @@ export function PaperDetailPage() {
   const [processPulse, setProcessPulse] = useState(false);
   const paperDetailNoteDismissed = useUIStore((s) => s.paperDetailNoteDismissed);
   const setPaperDetailNoteDismissed = useUIStore((s) => s.setPaperDetailNoteDismissed);
+  const { online } = useOnlineStatus();
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getPersistedCacheTimestamp().then((ts) => {
+      if (!cancelled) setCacheTimestamp(ts);
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Main data query (unchanged from previous layout)
   const { data, isLoading, isError, error } = useQuery({
@@ -173,42 +185,80 @@ export function PaperDetailPage() {
   ];
 
   // ── Action rail (right) ───────────────────────────────────────────────────
+  // When offline, pipeline actions (ActionsSidebar — Analyze/Download/Process/
+  // Summarize/Generate Cards), Zotero push, and contradiction recompute are
+  // all online-only. We overlay the action rail with a disabled state + indicator
+  // rather than passing `online` into every sub-component.
+  // LifecycleActionsCard (star/state changes) and UserStateForm (tags/notes
+  // metadata) are also online-only mutations; they follow the same overlay.
   const actionRailContent = (
     <div className="space-y-2">
-      <ActionsSidebar
-        paperId={paperId}
-        pdfDownloaded={paper.pdf_downloaded}
-        hasChunks={chunks.length > 0}
-        hasSummary={summary !== null}
-        pulseProcessButton={processPulse}
-        discoveryOrigin={paper.discovery_origin ?? 'user_initiated'}
-        recentFeedback={paper.recent_feedback ?? null}
-        state={user_state?.state ?? 'inbox'}
-      />
-      <LifecycleActionsCard
-        paperId={paperId}
-        paperTitle={paper.title}
-        state={user_state?.state ?? 'inbox'}
-        starred={user_state?.starred ?? false}
-      />
-      <UserStateForm paperId={paperId} userState={user_state} />
-      <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />
-      <ContradictionsPanel paperId={paperId} />
+      {/* Offline: online-only overlay on the whole action rail */}
+      {!online && (
+        <div
+          data-testid="action-rail-offline-banner"
+          className="flex items-center gap-2 rounded-md border border-hair bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+          role="status"
+        >
+          <OfflineIndicator variant="online-only" label="Pipeline actions" />
+          <span className="ml-1">Actions unavailable offline — read-only mode.</span>
+        </div>
+      )}
+      {/* Render components; pointer-events + opacity communicate disabled state.
+          Components are still mounted so cached pipeline STATUS still shows. */}
+      <div
+        className={!online ? 'pointer-events-none select-none opacity-50' : undefined}
+        aria-disabled={!online ? true : undefined}
+        data-testid={!online ? 'action-rail-disabled' : undefined}
+      >
+        <ActionsSidebar
+          paperId={paperId}
+          pdfDownloaded={paper.pdf_downloaded}
+          hasChunks={chunks.length > 0}
+          hasSummary={summary !== null}
+          pulseProcessButton={processPulse}
+          discoveryOrigin={paper.discovery_origin ?? 'user_initiated'}
+          recentFeedback={paper.recent_feedback ?? null}
+          state={user_state?.state ?? 'inbox'}
+        />
+        <LifecycleActionsCard
+          paperId={paperId}
+          paperTitle={paper.title}
+          state={user_state?.state ?? 'inbox'}
+          starred={user_state?.starred ?? false}
+        />
+        <UserStateForm paperId={paperId} userState={user_state} />
+        <ZoteroPanel paperId={paperId} hasProjectLinks={hasProjectLinks} />
+        <ContradictionsPanel paperId={paperId} />
+      </div>
     </div>
   );
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
-      {/* Top bar: back + mobile rail triggers */}
+      {/* Top bar: back + offline indicator + mobile rail triggers */}
       <div className="flex items-center justify-between gap-2">
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/feed'))}
-        >
-          <ArrowLeft className="mr-1 h-4 w-4" /> Back
-        </Button>
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/feed'))}
+          >
+            <ArrowLeft className="mr-1 h-4 w-4" /> Back
+          </Button>
+          {/* Offline indicator in paper header — stale-cached when timestamp known,
+              otherwise "available offline" (reading column + cached sections stay usable). */}
+          {!online && (
+            <span data-testid="paper-detail-offline-indicator">
+              {cacheTimestamp != null ? (
+                <OfflineIndicator variant="stale-cached" timestamp={cacheTimestamp} />
+              ) : (
+                <OfflineIndicator variant="available-offline" />
+              )}
+            </span>
+          )}
+        </div>
 
         <div className="flex items-center gap-2 lg:hidden">
           {/* TOC sheet trigger (small screens) */}
@@ -308,6 +358,7 @@ export function PaperDetailPage() {
             crossRefCount={crossRefCount}
             contradictionCount={contradictionCount}
             noteCount={noteCount}
+            isOnline={online}
           />
         </main>
 

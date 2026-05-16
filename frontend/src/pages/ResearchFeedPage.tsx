@@ -8,6 +8,9 @@ import {
   fetchSources,
   useFeedCounts,
 } from '@/lib/api';
+import { useOnlineStatus } from '@/hooks/use-online-status';
+import { getPersistedCacheTimestamp } from '@/lib/query-persister';
+import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
 import type { SearchFilters } from '@/lib/api';
 import type {
   SearchPreviewResult,
@@ -66,6 +69,20 @@ function SectionInfo({ children }: { children: React.ReactNode }) {
 
 export function ResearchFeedPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { online } = useOnlineStatus();
+
+  // P1b: fetch the cache timestamp once so the Library header can show
+  // "stale-cached · as of T" when offline.
+  const [cacheTimestamp, setCacheTimestamp] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    getPersistedCacheTimestamp().then((ts) => {
+      if (!cancelled) setCacheTimestamp(ts);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const rawSurface = searchParams.get('surface');
   const rawFilter = searchParams.get('filter');
@@ -119,16 +136,27 @@ export function ResearchFeedPage() {
   // ── feed counts with facets (§-facet rail) ───────────────────────────────
   const { data: countsWithFacets } = useFeedCountsWithFacets();
 
-  // ── default-landing redirect — spec §3.5: always Inbox ───────────────────
+  // ── default-landing redirect — spec §3.5 + offline contract ─────────────
+  // Online: default → Inbox. Offline: default → Library (cached read surface).
+  // Feed spec §3.5/offline-contract: "offline, fall back to Library".
   const hasRedirectedRef = useRef(false);
   useEffect(() => {
     if (hasRedirectedRef.current) return;
-    if (!searchParams.get('surface') && counts) {
-      hasRedirectedRef.current = true;
-      // Default: Inbox first (reversed from old library-first redirect)
-      setSearchParams({ surface: 'inbox' }, { replace: true });
+    if (!searchParams.get('surface')) {
+      // Offline: redirect immediately without waiting for counts (which won't
+      // arrive without a network).
+      if (!online) {
+        hasRedirectedRef.current = true;
+        setSearchParams({ surface: 'library' }, { replace: true });
+        return;
+      }
+      // Online: wait for counts then redirect to Inbox.
+      if (counts) {
+        hasRedirectedRef.current = true;
+        setSearchParams({ surface: 'inbox' }, { replace: true });
+      }
     }
-  }, [counts, searchParams, setSearchParams]);
+  }, [counts, online, searchParams, setSearchParams]);
 
   // ── legacy ?tab=pulse redirect → /my-day ─────────────────────────────────
   const navigate = useNavigate();
@@ -339,11 +367,12 @@ export function ResearchFeedPage() {
 
       {/* ── 3-pane layout ──────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Left: §-facet rail */}
+        {/* Left: §-facet rail — passes isOnline so Source/Topic show online-only offline */}
         <FacetRail
           counts={countsWithFacets}
           selection={facetSelection}
           onSelect={handleFacetSelect}
+          isOnline={online}
         />
 
         {/* Right: main list pane */}
@@ -394,12 +423,24 @@ export function ResearchFeedPage() {
 
           {/* ── Surface content ─────────────────────────────────────────── */}
 
-          {/* Inbox */}
+          {/* Inbox — online-only surface (live triage feed). When offline the
+              default redirect above sends users to Library instead, but a user
+              may still manually navigate here via URL or breadcrumb.        */}
           {surface === 'inbox' && (
             <div>
               <SectionInfo>
                 Unread papers from your configured sources — mark as read, view, or filter.
               </SectionInfo>
+              {!online && (
+                <div
+                  className="mb-3 flex items-center gap-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                  data-testid="inbox-offline-notice"
+                  role="status"
+                >
+                  <OfflineIndicator variant="online-only" label="Inbox" />
+                  <span className="ml-1">Inbox requires connectivity — switch to Library to read cached papers.</span>
+                </div>
+              )}
               <FeedView
                 surface="inbox"
                 filter={filter}
@@ -409,10 +450,22 @@ export function ResearchFeedPage() {
             </div>
           )}
 
-          {/* Library */}
+          {/* Library — offline-capable read surface. Shows stale-cached indicator
+              when offline and timestamp is known, otherwise "available offline". */}
           {surface === 'library' && (
             <div>
-              <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
+              <div className="mb-1 flex items-center gap-2">
+                <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
+                {!online && (
+                  <span className="ml-1 shrink-0" data-testid="library-offline-indicator">
+                    {cacheTimestamp != null ? (
+                      <OfflineIndicator variant="stale-cached" timestamp={cacheTimestamp} />
+                    ) : (
+                      <OfflineIndicator variant="available-offline" />
+                    )}
+                  </span>
+                )}
+              </div>
               <FeedView
                 surface="library"
                 filter={filter}
@@ -443,79 +496,97 @@ export function ResearchFeedPage() {
             </div>
           )}
 
-          {/* Search / Discover — kept as a surface, accessed via Discover in rail */}
+          {/* Search / Discover — online-only surface (live external DB search).
+              When offline: show disabled state with explanatory indicator.     */}
           {surface === 'search' && (
             <div className="space-y-4">
-              <SectionInfo>
-                Search external databases live and save new papers to your library.
-              </SectionInfo>
-              <div>
-                <p className="text-xs text-muted-foreground mb-2">
-                  Search across your enabled sources — results can be added to your library.
-                </p>
+              <div className="flex items-center gap-3">
+                <SectionInfo>
+                  Search external databases live and save new papers to your library.
+                </SectionInfo>
+                {!online && <OfflineIndicator variant="online-only" label="Search" />}
               </div>
 
-              {externalSources.length > 0 && (
-                <div className="space-y-1">
-                  <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
-                    <span className="text-xs font-medium text-muted-foreground">Sources:</span>
-                    {externalSources.map((source) => (
-                      <label
-                        key={source.source_type}
-                        className="flex items-center gap-1.5 cursor-pointer select-none"
-                      >
-                        <input
-                          type="checkbox"
-                          className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
-                          checked={selectedSourceTypes.includes(source.source_type)}
-                          onChange={(e) => {
-                            setSelectedSourceTypes((prev) =>
-                              e.target.checked
-                                ? [...prev, source.source_type]
-                                : prev.filter((t) => t !== source.source_type),
-                            );
-                          }}
-                        />
-                        <span className="text-sm">
-                          {SOURCE_LABELS[source.source_type] ?? source.source_type}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                  {selectedSourceTypes.length === 0 && (
-                    <p className="text-xs text-destructive">Select at least one source</p>
-                  )}
+              {!online ? (
+                /* Offline: disabled overlay explaining the surface is unavailable */
+                <div
+                  className="rounded-md border border-hair bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground"
+                  data-testid="search-offline-notice"
+                >
+                  <p className="font-medium mb-1">Search unavailable offline</p>
+                  <p>Searching external databases requires an internet connection.</p>
                 </div>
-              )}
+              ) : (
+                <>
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Search across your enabled sources — results can be added to your library.
+                    </p>
+                  </div>
 
-              <SearchBar
-                onSearch={handleSearch}
-                isLoading={searchMutation.isPending}
-                sourceTypes={selectedSourceTypes}
-              />
-              {searchErrorMessage && (
-                <p className="text-sm text-destructive">{searchErrorMessage}</p>
-              )}
-              <SearchSourceErrors sourceErrors={sourceErrors} />
-              {previewResults.length > 0 && (
-                <PreviewResults
-                  papers={previewResults}
-                  onSave={handleSave}
-                  onClear={handleClearPreview}
-                  isSaving={saveMutation.isPending}
-                />
-              )}
+                  {externalSources.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap gap-x-4 gap-y-2 items-center">
+                        <span className="text-xs font-medium text-muted-foreground">Sources:</span>
+                        {externalSources.map((source) => (
+                          <label
+                            key={source.source_type}
+                            className="flex items-center gap-1.5 cursor-pointer select-none"
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-3.5 w-3.5 rounded border-gray-300 accent-primary"
+                              checked={selectedSourceTypes.includes(source.source_type)}
+                              onChange={(e) => {
+                                setSelectedSourceTypes((prev) =>
+                                  e.target.checked
+                                    ? [...prev, source.source_type]
+                                    : prev.filter((t) => t !== source.source_type),
+                                );
+                              }}
+                            />
+                            <span className="text-sm">
+                              {SOURCE_LABELS[source.source_type] ?? source.source_type}
+                            </span>
+                          </label>
+                        ))}
+                      </div>
+                      {selectedSourceTypes.length === 0 && (
+                        <p className="text-xs text-destructive">Select at least one source</p>
+                      )}
+                    </div>
+                  )}
 
-              {/* PDF upload preserved in search surface */}
-              <div className="mt-6 border-t border-hair pt-4">
-                <p className="mb-2 text-xs font-medium text-muted-foreground">
-                  Or upload a local PDF:
-                </p>
-                <PdfUploadZone onComplete={() => {
-                  void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
-                  void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
-                }} />
-              </div>
+                  <SearchBar
+                    onSearch={handleSearch}
+                    isLoading={searchMutation.isPending}
+                    sourceTypes={selectedSourceTypes}
+                  />
+                  {searchErrorMessage && (
+                    <p className="text-sm text-destructive">{searchErrorMessage}</p>
+                  )}
+                  <SearchSourceErrors sourceErrors={sourceErrors} />
+                  {previewResults.length > 0 && (
+                    <PreviewResults
+                      papers={previewResults}
+                      onSave={handleSave}
+                      onClear={handleClearPreview}
+                      isSaving={saveMutation.isPending}
+                    />
+                  )}
+
+                  {/* PDF upload preserved in search surface */}
+                  <div className="mt-6 border-t border-hair pt-4">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">
+                      Or upload a local PDF:
+                    </p>
+                    <PdfUploadZone onComplete={() => {
+                      void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });
+                      void queryClient.invalidateQueries({ queryKey: ['feed-counts'] });
+                    }} />
+                  </div>
+                </>
+              )}
             </div>
           )}
 

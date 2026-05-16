@@ -3,6 +3,7 @@ import { createJSONStorage, persist } from 'zustand/middleware';
 import type { QueryClient } from '@tanstack/react-query';
 import { UI_STORE_KEY } from '@/stores/ui-store';
 import { abortAllStreams } from '@/stores/chat-store';
+import { clearPersistedQueryCache } from '@/lib/query-persister';
 
 // ---------------------------------------------------------------------------
 // QueryClient holder — registered once by the app's provider tree so logout()
@@ -157,6 +158,15 @@ export const useAuthStore = create<AuthState>()(
             import('@/stores/keyboard-shortcuts-store').then(({ useKeyboardShortcuts }) => useKeyboardShortcuts.getState()._reset()).catch((e: unknown) => { console.warn('[auth] keyboard-shortcuts-store reset failed', e); }),
           ]);
         })();
+
+        // Purge the IndexedDB-persisted TanStack Query cache (cross-user hygiene —
+        // P1b contract; also posts JARVIS_LOGOUT to SW for runtime-cache purge).
+        // Non-blocking: a storage failure must not block the logout flow.
+        // The existing SW postMessage below is kept for defense-in-depth (no-op
+        // when clearPersistedQueryCache() already posted it).
+        void clearPersistedQueryCache().catch((e: unknown) => {
+          console.warn('[auth] IDB cache purge failed', e);
+        });
 
         // Notify the active Service Worker to drop runtime-API caches so
         // cached responses from the previous user aren't served to the next.

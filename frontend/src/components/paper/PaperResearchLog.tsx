@@ -18,6 +18,7 @@ import { RAGChatSection } from './RAGChatSection';
 import { MarkdownContent } from '@/components/shared/MarkdownContent';
 import { formatDate, formatAuthors, cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, ExternalLink, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { OfflineIndicator } from '@/components/shared/OfflineIndicator';
 
 // ---- Section wrapper ------------------------------------------------------
 
@@ -62,6 +63,12 @@ export interface PaperResearchLogProps {
   crossRefCount: number;
   contradictionCount: number;
   noteCount: number;
+  /**
+   * When false (offline): Notes section renders read-only (editor disabled +
+   * explanatory hint); Ask This Paper RAG section shows an online-only indicator.
+   * Defaults to true so existing callers are unchanged.
+   */
+  isOnline?: boolean;
 }
 
 // ---- Lazy chunks section --------------------------------------------------
@@ -108,6 +115,7 @@ export function PaperResearchLog({
   crossRefCount,
   contradictionCount,
   noteCount,
+  isOnline = true,
 }: PaperResearchLogProps) {
   const isValidUrl =
     paper.url && (paper.url.startsWith('http://') || paper.url.startsWith('https://'));
@@ -286,8 +294,20 @@ export function PaperResearchLog({
       </ResearchSection>
 
       {/* ── § Your notes ─────────────────────────────────────────────── */}
+      {/* Offline: notes render read-only (editor disabled). Note *editing* is
+          an explicit offline NON-GOAL; existing cached notes remain readable. */}
       <ResearchSection id="section-notes" title={`Your Notes${noteCount > 0 ? ` (${noteCount})` : ''}`}>
-        <NotesTab paperId={paperId} />
+        {!isOnline && (
+          <div
+            data-testid="notes-offline-hint"
+            className="mb-3 flex items-center gap-2 rounded border border-hair bg-muted/40 px-3 py-2 text-xs text-muted-foreground"
+            role="status"
+          >
+            <OfflineIndicator variant="online-only" label="Note editing" />
+            <span className="ml-1">Notes are read-only offline. Connect to add or edit notes.</span>
+          </div>
+        )}
+        <NotesTab paperId={paperId} readOnly={!isOnline} />
       </ResearchSection>
 
       {/* ── § Chunks (lazy) ──────────────────────────────────────────── */}
@@ -302,8 +322,21 @@ export function PaperResearchLog({
       </ResearchSection>
 
       {/* ── Ask this paper ───────────────────────────────────────────── */}
+      {/* RAG chat is an explicit offline NON-GOAL — show online-only indicator. */}
       <ResearchSection id="section-ask" title="Ask This Paper">
-        <RAGChatSection paperId={paperId} />
+        {!isOnline ? (
+          <div
+            data-testid="ask-offline-notice"
+            className="rounded-md border border-hair bg-muted/30 px-4 py-6 text-center text-sm text-muted-foreground"
+          >
+            <div className="mb-2 flex justify-center">
+              <OfflineIndicator variant="online-only" label="Ask This Paper" />
+            </div>
+            <p>RAG chat requires an internet connection and a running model.</p>
+          </div>
+        ) : (
+          <RAGChatSection paperId={paperId} />
+        )}
       </ResearchSection>
     </div>
   );

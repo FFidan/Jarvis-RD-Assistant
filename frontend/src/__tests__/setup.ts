@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import '@testing-library/jest-dom';
 
 // jsdom does not implement IntersectionObserver — stub for usePaperScrollSpy and similar.

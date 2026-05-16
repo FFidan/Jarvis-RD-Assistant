@@ -15,6 +15,7 @@ import { ProjectsPage } from '@/pages/ProjectsPage';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
+import { useOnlineStatus } from '@/hooks/use-online-status';
 // ResearchFeedPage is lazy-loaded (DOM-F-10) — keeps ~26 kB of feed components
 // out of the HomePage initial bundle.
 const ResearchFeedPage = lazy(() =>
@@ -157,7 +158,26 @@ function FirstRunGate({ children }: { children: ReactNode }) {
 
 export function App() {
   const { isAuthenticated, checkSession } = useAuthStore();
-  const authed = isAuthenticated && checkSession();
+  // Offline / PWA contract — CANONICAL (shell-sidebar-admin-ia-redesign-design.md §4):
+  // When the device is offline AND a prior authenticated identity exists (isAuthenticated
+  // is true with a recent authTime), do NOT hard-bounce to /login. Instead allow the
+  // app shell to render so cached read-only surfaces (Library, Paper Detail) are
+  // accessible in last-known-good read mode.
+  //
+  // SECURITY INVARIANT: when `online===true` (or unknowable), the guard is
+  // byte-equivalent to the pre-offline-track implementation — same expiry logic
+  // inside checkSession(), same /login redirect. The softening is exclusively:
+  //   OFFLINE + prior authenticated identity → allow app shell (read-only cache).
+  //   OFFLINE + never authenticated (isAuthenticated===false) → still gated (no new access).
+  //   ONLINE + expired session → still redirects/clears as before (no security regression).
+  const { online } = useOnlineStatus();
+  const hasKnownIdentity = isAuthenticated;
+  // ONLINE path: use checkSession() which clears state on expiry — unchanged.
+  // OFFLINE + prior identity path: skip checkSession() expiry clearing so the
+  //   last-known-good session remains in place for cached read-only surfaces.
+  const authed = online
+    ? isAuthenticated && checkSession()
+    : hasKnownIdentity;
 
   if (!authed) {
     return (
