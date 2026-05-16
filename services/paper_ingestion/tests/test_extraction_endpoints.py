@@ -65,6 +65,7 @@ def _template_row(id=1, name="Default Template", description=None, is_default=Tr
 def _app():
     """Create a minimal app instance with mocked DB pool and disabled auth."""
     from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -76,6 +77,9 @@ def _app():
 
     app.dependency_overrides[get_db_pool] = lambda: mock_pool
     app.dependency_overrides[verify_api_key] = lambda: None
+    # Template CUD is admin-gated (PI-B). These tests exercise CRUD/404/503
+    # logic, not the auth gate, so run them as an admin caller.
+    app.dependency_overrides[require_admin] = lambda: None
     yield app, conn, mock_http
     app.dependency_overrides.clear()
     app.state.limiter.enabled = True

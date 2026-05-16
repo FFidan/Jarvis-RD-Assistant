@@ -50,6 +50,9 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SMTP_FROM",
         "SMTP_USER",
         "SMTP_PASS",
+        "LITELLM_MASTER_KEY",
+        "POSTGRES_PASSWORD",
+        "APP_BASE_URL",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -61,6 +64,9 @@ def _minimal_prod_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("JARVIS_API_KEY", "a" * 32)
     monkeypatch.setenv("JARVIS_MODEL_HMAC_KEY", "b" * 32)
     monkeypatch.setenv("JARVIS_CONFIG_KEY", "c" * 44)  # valid Fernet-length
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "d" * 40)  # SEC-A
+    monkeypatch.setenv("POSTGRES_PASSWORD", "e" * 24)  # SEC-A
+    monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example.com")  # SEC-B
 
 
 # ---------------------------------------------------------------------------
@@ -256,3 +262,146 @@ class TestValidateProductionConfigSmtpGate:
         assert "SMTP_HOST" not in missing_fields, (
             f"SMTP_HOST should not be listed as missing: {missing_fields!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# validate_production_config — SEC-A: LITELLM_MASTER_KEY / POSTGRES_PASSWORD
+# strength, SEC-B: APP_BASE_URL required
+# ---------------------------------------------------------------------------
+
+
+def _prod_env_with_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fully valid production env so only the var under test can trip the gate."""
+    _minimal_prod_env(monkeypatch)
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_PORT", "587")
+    monkeypatch.setenv("SMTP_FROM", "noreply@example.com")
+
+
+class TestValidateProductionConfigLitellmMasterKey:
+    """SEC-A — LITELLM_MASTER_KEY must be present, strong, and not a placeholder."""
+
+    def test_all_strong_prod_config_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Baseline: a fully-strong production config must not raise."""
+        _prod_env_with_smtp(monkeypatch)
+        validate_production_config()
+
+    def test_missing_litellm_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.delenv("LITELLM_MASTER_KEY", raising=False)
+
+        with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
+            validate_production_config()
+
+    def test_placeholder_litellm_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The literal dev placeholder from production-readiness-check.sh is rejected."""
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-jarvis-dev-test")
+
+        with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
+            validate_production_config()
+
+    def test_short_litellm_key_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-short")
+
+        with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
+            validate_production_config()
+
+    def test_substring_placeholder_litellm_key_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A long key containing a skeleton fragment ('changeme') is still rejected."""
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-CHANGEME-" + "z" * 30)
+
+        with pytest.raises(RuntimeError, match="LITELLM_MASTER_KEY"):
+            validate_production_config()
+
+    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Non-production environments are not subject to the LITELLM gate."""
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "true")
+
+        validate_production_config()
+
+
+class TestValidateProductionConfigPostgresPassword:
+    """SEC-A — POSTGRES_PASSWORD must be present, strong, and not a placeholder."""
+
+    def test_missing_postgres_password_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+
+        with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
+            validate_production_config()
+
+    def test_placeholder_postgres_password_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A long-enough but placeholder-derived password is still rejected.
+
+        The denylist is the verbatim port of production-readiness-check.sh, so
+        the 'changeme' skeleton fragment trips even at 20 chars.
+        """
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("POSTGRES_PASSWORD", "changeme-prod-db-pwd")
+
+        with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
+            validate_production_config()
+
+    def test_exact_placeholder_postgres_password_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exact-denylist value ('postgres') is rejected even though short
+        (the placeholder check fires before the length check)."""
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("POSTGRES_PASSWORD", "postgres")
+
+        with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
+            validate_production_config()
+
+    def test_short_postgres_password_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("POSTGRES_PASSWORD", "short")
+
+        with pytest.raises(RuntimeError, match="POSTGRES_PASSWORD"):
+            validate_production_config()
+
+    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "staging")
+        monkeypatch.setenv("DEV_MODE", "true")
+
+        validate_production_config()
+
+
+class TestValidateProductionConfigAppBaseUrl:
+    """SEC-B — APP_BASE_URL must be set in production (host-poisoning guard)."""
+
+    def test_missing_app_base_url_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.delenv("APP_BASE_URL", raising=False)
+
+        with pytest.raises(RuntimeError, match="APP_BASE_URL"):
+            validate_production_config()
+
+    def test_blank_app_base_url_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Whitespace-only APP_BASE_URL is treated as unset."""
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("APP_BASE_URL", "   ")
+
+        with pytest.raises(RuntimeError, match="APP_BASE_URL"):
+            validate_production_config()
+
+    def test_set_app_base_url_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _prod_env_with_smtp(monkeypatch)
+        monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example.com")
+
+        validate_production_config()
+
+    def test_non_production_unaffected(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _clear_env(monkeypatch)
+        monkeypatch.setenv("ENVIRONMENT", "development")
+        monkeypatch.setenv("DEV_MODE", "true")
+
+        validate_production_config()

@@ -72,6 +72,8 @@ htmlcov/
 *.png
 # Exception: handoff/ design package screenshots are the acceptance bar for the My Day redesign
 !handoff/screenshots/*.png
+# Exception: PWA app icons must be committed (required for Android-Chrome install / maskable)
+!frontend/public/icons/*.png
 
 # AI agent / tool scaffolding
 .claude/

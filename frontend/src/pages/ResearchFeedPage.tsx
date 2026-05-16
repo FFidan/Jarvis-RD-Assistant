@@ -184,8 +184,12 @@ export function ResearchFeedPage() {
     [allSources],
   );
 
+  // Initialise selectedSourceTypes once when sources first load.
+  // A ref guards against re-initialising after the user manually deselects sources.
+  const sourcesInitialisedRef = useRef(false);
   useEffect(() => {
-    if (externalSources.length > 0 && selectedSourceTypes.length === 0) {
+    if (!sourcesInitialisedRef.current && externalSources.length > 0) {
+      sourcesInitialisedRef.current = true;
       setSelectedSourceTypes(externalSources.map((s) => s.source_type));
     }
   }, [externalSources]);

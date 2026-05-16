@@ -4,6 +4,18 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
+// Spy on the cross-user-hygiene purges logout fans out to. These are mocked at
+// the module boundary so the test asserts the contract (logout calls them)
+// without driving real IndexedDB.
+const mockClearReviewOutbox = vi.fn().mockResolvedValue(undefined);
+const mockClearPersistedQueryCache = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/review-outbox', () => ({
+  clearReviewOutbox: () => mockClearReviewOutbox(),
+}));
+vi.mock('@/lib/query-persister', () => ({
+  clearPersistedQueryCache: () => mockClearPersistedQueryCache(),
+}));
+
 const { useAuthStore } = await import('@/stores/auth-store');
 
 const OWNER = { id: 7, email: 'owner@example.com', role: 'admin' as const };
@@ -110,5 +122,70 @@ describe('auth-store', () => {
       user: null,
     });
     expect(useAuthStore.getState().checkSession()).toBe(false);
+  });
+
+  it('logout fans out the cross-user-hygiene purges (FE-A/FE-B)', () => {
+    mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => OWNER });
+    useAuthStore.getState().logout();
+    // FE-A: review outbox wiped on logout. FE-B: persisted query cache wiped.
+    expect(mockClearReviewOutbox).toHaveBeenCalledTimes(1);
+    expect(mockClearPersistedQueryCache).toHaveBeenCalledTimes(1);
+  });
+
+  it('logout posts JARVIS_LOGOUT directly when a SW controls the page', () => {
+    const postMessage = vi.fn();
+    const sw = {
+      controller: { postMessage },
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal('navigator', { serviceWorker: sw });
+
+    useAuthStore.getState().logout();
+
+    expect(postMessage).toHaveBeenCalledWith({ type: 'JARVIS_LOGOUT' });
+    expect(sw.addEventListener).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
+  });
+
+  it('logout registers a one-shot controllerchange that posts JARVIS_LOGOUT when controller is null (FE-B race)', () => {
+    let captured: (() => void) | null = null;
+    const postMessage = vi.fn();
+    const sw: {
+      controller: { postMessage: typeof postMessage } | null;
+      addEventListener: ReturnType<typeof vi.fn>;
+      removeEventListener: ReturnType<typeof vi.fn>;
+    } = {
+      controller: null, // no SW claimed yet — logout right after first install
+      addEventListener: vi.fn((evt: string, cb: () => void) => {
+        if (evt === 'controllerchange') captured = cb;
+      }),
+      removeEventListener: vi.fn(),
+    };
+    vi.stubGlobal('navigator', { serviceWorker: sw });
+
+    useAuthStore.getState().logout();
+
+    // Deferred: nothing posted yet (no controller), listener registered instead.
+    expect(postMessage).not.toHaveBeenCalled();
+    expect(sw.addEventListener).toHaveBeenCalledWith(
+      'controllerchange',
+      expect.any(Function),
+    );
+    expect(captured).toBeTypeOf('function');
+
+    // SW now claims the page → controllerchange fires → purge is posted once,
+    // and the one-shot listener removes itself.
+    sw.controller = { postMessage };
+    captured!();
+    expect(postMessage).toHaveBeenCalledWith({ type: 'JARVIS_LOGOUT' });
+    expect(sw.removeEventListener).toHaveBeenCalledWith(
+      'controllerchange',
+      expect.any(Function),
+    );
+
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', mockFetch);
   });
 });

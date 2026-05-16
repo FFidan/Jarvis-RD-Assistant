@@ -169,18 +169,21 @@ async def list_project_activity(
             SELECT 'completed_task' AS kind, t.completed_at AS ts, t.title AS label
               FROM tasks t
              WHERE t.project_id = $1
+               AND t.user_id = $2
                AND t.status = 'done'
                AND t.completed_at IS NOT NULL
             UNION ALL
             SELECT 'completed_milestone' AS kind, m.completed_at AS ts, m.name AS label
               FROM milestones m
              WHERE m.project_id = $1
+               AND m.user_id = $2
                AND m.completed = TRUE
                AND m.completed_at IS NOT NULL
             ORDER BY ts DESC
-            LIMIT $2
+            LIMIT $3
             """,
             project_id,
+            user_id,
             limit,
         )
     return [dict(r) for r in rows]

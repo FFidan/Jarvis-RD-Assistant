@@ -5,7 +5,7 @@ import logging
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import delete_or_404, dynamic_update, log_audit
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import current_user_id_strict, require_admin
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models import TopicCreate, TopicResponse, TopicUpdate
@@ -86,7 +86,12 @@ async def unsubscribe_from_topic(
         )
 
 
-@router.post("", response_model=TopicResponse, status_code=201)
+@router.post(
+    "",
+    response_model=TopicResponse,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def create_topic(
     request: Request,
@@ -106,7 +111,11 @@ async def create_topic(
     return TopicResponse(**dict(row))
 
 
-@router.put("/{topic_id}", response_model=TopicResponse)
+@router.put(
+    "/{topic_id}",
+    response_model=TopicResponse,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def update_topic(
     request: Request,
@@ -133,7 +142,11 @@ async def update_topic(
     return TopicResponse(**dict(row))
 
 
-@router.delete("/{topic_id}", status_code=204)
+@router.delete(
+    "/{topic_id}",
+    status_code=204,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def delete_topic(
     request: Request,

@@ -23,7 +23,7 @@ import { getNavigate } from '@/lib/navigate-bridge';
  * Values are functions so paper_id etc. can be threaded through from payload.
  */
 const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
-  'pulse.generate':         () => [['pulse-today'], ['pulse-history'], ['pulse-stats']],
+  'pulse.generate':         () => [['pulse-today'], ['pulse-stats']],
   'paper.process':          (j) => {
     const paperId = getPaperIdFromJob(j);
     return paperId == null
@@ -39,14 +39,14 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [['paper-detail', paperId]];
   },
-  'papers.batch_process':   () => [['papers'], ['action-items-unprocessed']],
-  'papers.scan_local':      () => [['papers-feed'], ['papers']],
-  'papers.batch_summarize': () => [['papers']],
+  'papers.batch_process':   () => [['papers-feed'], ['feed-counts'], ['action-items-unprocessed']],
+  'papers.scan_local':      () => [['papers-feed'], ['feed-counts']],
+  'papers.batch_summarize': () => [['papers-feed']],
   'extraction.single':      (j) => {
     const paperId = getPaperIdFromJob(j);
-    return paperId == null ? [['extractions']] : [['paper-detail', paperId], ['extractions']];
+    return paperId == null ? [['extraction-table']] : [['paper-detail', paperId], ['extraction-table']];
   },
-  'extraction.batch':       () => [['extractions']],
+  'extraction.batch':       () => [['extraction-table']],
   'digest.weekly':          () => [['digest-weekly']],
   'contradictions.scan':    (j) => {
     const paperId = getPaperIdFromJob(j);
@@ -66,8 +66,8 @@ const INVALIDATE_ON_SUCCESS: Record<string, (job: Job) => unknown[][]> = {
     const paperId = getPaperIdFromJob(j);
     return paperId == null ? [] : [['notes', paperId], ['notes', paperId, 'zotero']];
   },
-  'zotero.poll':            () => [['zotero-library']],
-  'zotero.sync_from_zotero': () => [['zotero-library']],
+  'zotero.poll':            () => [['papers-feed'], ['feed-counts']],
+  'zotero.sync_from_zotero': () => [['papers-feed'], ['feed-counts']],
 };
 
 /** Terminal statuses — job will not receive more events. */

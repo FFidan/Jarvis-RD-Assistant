@@ -233,18 +233,14 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     db = get_db(context)
     user_id: int | None = jarvis_user_id
 
-    if user_id is not None:
-        project_row = await db.fetchrow(
-            "SELECT id, name, status, description, deadline FROM projects "
-            "WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
-            project_id,
-            user_id,
-        )
-    else:
-        project_row = await db.fetchrow(
-            "SELECT id, name, status, description, deadline FROM projects WHERE id = $1",
-            project_id,
-        )
+    # Single query handles both multi-tenant (user_id IS NOT NULL) and
+    # legacy single-tenant (user_id IS NULL) paths without an unscoped catch-all.
+    project_row = await db.fetchrow(
+        "SELECT id, name, status, description, deadline FROM projects "
+        "WHERE id = $1 AND user_id IS NOT DISTINCT FROM $2",
+        project_id,
+        user_id,
+    )
     if not project_row:
         await query.message.reply_text("Project not found.", parse_mode="HTML")
         return
@@ -252,15 +248,18 @@ async def project_detail_callback(update: Update, context: ContextTypes.DEFAULT_
     project = dict(project_row)
 
     task_rows = await db.fetch(
-        "SELECT id, title, status FROM tasks WHERE project_id = $1 ORDER BY created_at",
+        "SELECT id, title, status FROM tasks "
+        "WHERE project_id = $1 AND user_id IS NOT DISTINCT FROM $2 ORDER BY created_at",
         project_id,
+        user_id,
     )
     tasks = [dict(r) for r in task_rows]
 
     milestone_rows = await db.fetch(
         "SELECT id, name, deadline, completed FROM milestones "
-        "WHERE project_id = $1 ORDER BY deadline",
+        "WHERE project_id = $1 AND user_id IS NOT DISTINCT FROM $2 ORDER BY deadline",
         project_id,
+        user_id,
     )
     milestones = [dict(r) for r in milestone_rows]
 

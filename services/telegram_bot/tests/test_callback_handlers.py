@@ -886,3 +886,118 @@ async def test_paper_feedback_callback_sends_owner_user_id_for_paired_user():
     headers = mock_http.post.await_args[1]["headers"]
     assert headers.get("X-Owner-User-Id") == str(_PAIRED_USER_ID)
     assert headers.get("X-API-Key") == "test-key"
+
+
+# ---------------------------------------------------------------------------
+# TG-N2: project_detail user-scoping defense-in-depth
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_project_detail_with_user_id_scopes_project_fetch() -> None:
+    """TG-N2: when user_id is present, project fetch uses IS NOT DISTINCT FROM $2."""
+    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
+    # auth_check calls fetchrow for the pairing lookup (first call);
+    # project_detail_callback then calls fetchrow for the project (second call).
+    project_row = {
+        "id": 3,
+        "name": "Scoped Project",
+        "status": "active",
+        "description": None,
+        "deadline": None,
+    }
+    mock_db.fetchrow.side_effect = [
+        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
+        project_row,  # project fetch
+    ]
+    mock_db.fetch.return_value = []
+
+    await project_detail_callback(update, context)
+
+    # The project fetchrow is the SECOND call
+    fetchrow_call = mock_db.fetchrow.call_args_list[1]
+    sql = fetchrow_call.args[0]
+    args = fetchrow_call.args[1:]
+    assert "IS NOT DISTINCT FROM $2" in sql, (
+        f"project fetch must use IS NOT DISTINCT FROM $2; SQL={sql!r}"
+    )
+    assert args[0] == 3, f"$1 must be project_id=3; got {args[0]!r}"
+    assert args[1] == _PAIRED_USER_ID, f"$2 must be user_id={_PAIRED_USER_ID}; got {args[1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_project_detail_with_user_id_scopes_task_fetch() -> None:
+    """TG-N2: tasks query must include user_id predicate after project gate."""
+    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
+    mock_db.fetchrow.side_effect = [
+        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
+        {"id": 3, "name": "P", "status": "active", "description": None, "deadline": None},
+    ]
+    # Two fetch calls: tasks then milestones
+    mock_db.fetch.side_effect = [
+        [{"id": 1, "title": "T1", "status": "todo"}],
+        [],
+    ]
+
+    await project_detail_callback(update, context)
+
+    task_fetch_call = mock_db.fetch.call_args_list[0]
+    task_sql = task_fetch_call.args[0]
+    task_args = task_fetch_call.args[1:]
+    assert "IS NOT DISTINCT FROM $2" in task_sql, (
+        f"tasks query must scope by user_id; SQL={task_sql!r}"
+    )
+    assert task_args[0] == 3, f"$1 must be project_id=3; got {task_args[0]!r}"
+    assert task_args[1] == _PAIRED_USER_ID, f"$2 must be user_id; got {task_args[1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_project_detail_with_user_id_scopes_milestone_fetch() -> None:
+    """TG-N2: milestones query must include user_id predicate after project gate."""
+    update, context, mock_db, _ = _make_paired_callback("project_detail_3")
+    mock_db.fetchrow.side_effect = [
+        {"user_id": _PAIRED_USER_ID},  # auth_check pairing lookup
+        {"id": 3, "name": "P", "status": "active", "description": None, "deadline": None},
+    ]
+    mock_db.fetch.side_effect = [
+        [],
+        [{"id": 1, "name": "M1", "deadline": None, "completed": False}],
+    ]
+
+    await project_detail_callback(update, context)
+
+    milestone_fetch_call = mock_db.fetch.call_args_list[1]
+    milestone_sql = milestone_fetch_call.args[0]
+    milestone_args = milestone_fetch_call.args[1:]
+    assert "IS NOT DISTINCT FROM $2" in milestone_sql, (
+        f"milestones query must scope by user_id; SQL={milestone_sql!r}"
+    )
+    assert milestone_args[1] == _PAIRED_USER_ID, f"$2 must be user_id; got {milestone_args[1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_project_detail_none_user_id_scoped_to_null_rows_only() -> None:
+    """TG-N2: legacy single-tenant path scopes project fetch to user_id IS NULL.
+
+    Previously, the None branch used an unscoped SELECT that could return ANY
+    project by id.  After the fix, IS NOT DISTINCT FROM NULL restricts the
+    result to rows where user_id IS NULL — closing the unscoped catch-all.
+    """
+    # Single-tenant legacy path: auth_check returns (True, None)
+    update, context, mock_db, _ = _make_callback_update_and_context(
+        "project_detail_7", chat_id=_TEST_CHAT_ID
+    )
+    # The env-var path returns jarvis_user_id=None for the legacy owner
+    mock_db.fetchrow.return_value = None  # project not found under user_id=NULL
+
+    await project_detail_callback(update, context)
+
+    fetchrow_call = mock_db.fetchrow.call_args
+    sql = fetchrow_call.args[0]
+    bound_user_id = fetchrow_call.args[2]  # third positional arg = $2
+    assert "IS NOT DISTINCT FROM $2" in sql, (
+        f"None path must use IS NOT DISTINCT FROM $2 (not unscoped); SQL={sql!r}"
+    )
+    assert bound_user_id is None, (
+        f"$2 must be None (NULL) for legacy single-tenant path; got {bound_user_id!r}"
+    )

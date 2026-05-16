@@ -221,7 +221,10 @@ class SecretsSettings(BaseSettings):
             file_var = os.environ.get(f"{env_name}_FILE", "")
             if file_var:
                 try:
-                    values[field_name] = Path(file_var).read_text().strip()
+                    # An empty secret file (e.g. telegram_bot_token on the
+                    # Telegram-skipped install path) must resolve to None, not
+                    # "", so downstream Optional[SecretStr] fields stay unset.
+                    values[field_name] = Path(file_var).read_text().strip() or None
                 except OSError as exc:
                     raise RuntimeError(f"Failed to read secret from {file_var!r}") from exc
         return values

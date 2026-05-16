@@ -728,11 +728,32 @@ MANDATORY_SVCS=(postgres ollama litellm paper_ingestion learning_engine dashboar
 printf '\n'
 info "Waiting for services to become healthy..."
 
+# Detect first-run: if ollama has no models yet, paper_ingestion and
+# learning_engine will block behind ollama-bootstrap pulling ~14 GB.
+# The audit entry "ollama 60s" was imprecise — ollama itself already has a
+# 180s budget; the real blocker is paper_ingestion (60s) timing out while
+# waiting for ollama-bootstrap to finish pulling.  Give every app service a
+# long budget when models are absent, and print a clear banner so users do
+# not mistake the wait for a hang.
+_FIRST_RUN_PULL=0
+if docker compose exec -T ollama ollama list 2>/dev/null | grep -q 'NAME'; then
+  : # models present — normal budgets apply
+else
+  _FIRST_RUN_PULL=1
+  printf '\n'
+  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '%s  Downloading models — first run can take 20-60 min.           %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s  This is not an error. Please wait...                         %s\n' "$C_YELLOW" "$C_RESET"
+  printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
+  printf '\n'
+fi
+
 SETUP_FAILED=()
 for svc in "${MANDATORY_SVCS[@]}"; do
   case "$svc" in
-    ollama) _budget=180 ;;  # first-run model pull can be slow
-    *)      _budget=60  ;;
+    ollama)                          _budget=180 ;;  # model pull can be slow
+    paper_ingestion|learning_engine) [ "$_FIRST_RUN_PULL" -eq 1 ] && _budget=3600 || _budget=60 ;;
+    *)                               _budget=60  ;;
   esac
   if ! wait_healthy "$svc" "$_budget"; then
     SETUP_FAILED+=("$svc")
@@ -790,14 +811,21 @@ printf '\n%s================================================================%s\n
 printf '%s   Setup complete.%s\n' "$C_GREEN" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  Dashboard:    %s\n' "$DASHBOARD_URL"
-# Write the API key to a protected file instead of printing it to the terminal.
-_KEY_FILE="${HOME}/.config/jarvis/api-key"
-mkdir -p "${HOME}/.config/jarvis"
-chmod 700 "${HOME}/.config/jarvis"
-printf '%s' "$JARVIS_API_KEY" > "$_KEY_FILE"
-chmod 600 "$_KEY_FILE"
-printf '  API key:      written to %s (starts: %s...)\n' "$_KEY_FILE" "${JARVIS_API_KEY:0:8}"
-printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
+if [ "$NI_MODE" = "single" ]; then
+  # Single-user mode: API key auth is enabled.
+  _KEY_FILE="${HOME}/.config/jarvis/api-key"
+  mkdir -p "${HOME}/.config/jarvis"
+  chmod 700 "${HOME}/.config/jarvis"
+  printf '%s' "$JARVIS_API_KEY" > "$_KEY_FILE"
+  chmod 600 "$_KEY_FILE"
+  printf '  API key:      written to %s (starts: %s...)\n' "$_KEY_FILE" "${JARVIS_API_KEY:0:8}"
+  printf '  %sTo retrieve:%s grep JARVIS_API_KEY .env\n' "$C_BOLD" "$C_RESET"
+  printf '  Sign in:      open the dashboard and enter your API key.\n'
+else
+  # Multi/team mode: API key login is disabled — sign in via magic link.
+  printf '  Sign in:      open the dashboard and request a magic link to your email.\n'
+  printf '                (API key login is disabled in multi-user mode)\n'
+fi
 printf '\n'
 printf '  All mandatory services healthy. You can now open the dashboard.\n'
 printf '  Tail logs:  docker compose logs -f\n'
@@ -843,7 +871,11 @@ printf '\n%s================================================================%s\n
 printf '%s   Next steps%s\n' "$C_BOLD" "$C_RESET"
 printf '%s================================================================%s\n' "$C_BOLD" "$C_RESET"
 printf '  1. Open the dashboard: %s\n' "$DASHBOARD_URL"
-printf '  2. Log in with your API key (stored in ~/.config/jarvis/api-key).\n'
+if [ "$NI_MODE" = "single" ]; then
+  printf '  2. Log in with your API key (stored in ~/.config/jarvis/api-key).\n'
+else
+  printf '  2. Request a magic link at the sign-in page (API key login is disabled in multi-user mode).\n'
+fi
 printf '  3. Invite the first admin user:\n'
 printf '       %s/admin/users%s  — use the web UI to add users and set roles.\n' "$DASHBOARD_URL" ""
 printf '  4. Complete the setup wizard (runs automatically on first visit).\n'

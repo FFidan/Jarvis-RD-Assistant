@@ -101,6 +101,13 @@ self.addEventListener('activate', (event) => {
           .filter((k) => k.startsWith('jarvis-') && !OWNED_CACHES.includes(k))
           .map((k) => caches.delete(k)),
       );
+      // Cross-user hygiene on shared devices: every SW activation starts with a
+      // clean private-API cache. Stale-versioned caches are dropped above; this
+      // additionally drops the CURRENT-version runtime API cache so a new SW
+      // start (e.g. after a reinstall on the same SW version) cannot serve the
+      // previous user's cached API responses. The shell cache is unaffected
+      // (only hashed/public static assets — no per-user data).
+      await caches.delete(RUNTIME_API_CACHE);
       await self.clients.claim();
     })(),
   );

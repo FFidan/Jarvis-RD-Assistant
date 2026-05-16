@@ -17,6 +17,56 @@ logger = logging.getLogger(__name__)
 _api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 _HEALTH_PATHS = frozenset({"/health", "/health/", "/healthz", "/health/readiness"})
 
+# Production secret-strength gate (SEC-A). Minimum lengths mirror the project
+# convention enforced by scripts/production-readiness-check.sh so the boot gate
+# and the readiness script agree.
+_LITELLM_MASTER_KEY_MIN_LEN = 16
+_POSTGRES_PASSWORD_MIN_LEN = 16
+_POSTGRES_PASSWORD_SECRET_PATH = "/run/secrets/postgres_password"
+
+# Known placeholder / known-weak secret values rejected in production. This is a
+# verbatim port of the `_is_weak_secret` shell helper in
+# scripts/production-readiness-check.sh — keep the two in sync.
+_WEAK_SECRET_EXACT = frozenset(
+    {
+        "",
+        "changeme",
+        "password",
+        "secret",
+        "test",
+        "dev",
+        "jarvis_dev",
+        "sk-jarvis-dev-test",
+        "sk-1234",
+        "1234",
+        "admin",
+        "postgres",
+    }
+)
+_WEAK_SECRET_SUBSTRINGS = (
+    "changeme",
+    "placeholder",
+    "example",
+    "default",
+    "replace_me",
+    "your_",
+    "<",
+    "fixme",
+)
+
+
+def _is_weak_secret(value: str) -> bool:
+    """True if ``value`` is empty or a known placeholder/skeleton secret.
+
+    Mirrors ``_is_weak_secret`` in scripts/production-readiness-check.sh: an
+    exact (case-sensitive) match against a small denylist, plus a
+    case-insensitive substring scan for common skeleton fragments.
+    """
+    if value in _WEAK_SECRET_EXACT:
+        return True
+    lowered = value.lower()
+    return any(fragment in lowered for fragment in _WEAK_SECRET_SUBSTRINGS)
+
 
 def _request_db_pool(request: Request) -> asyncpg.Pool | None:
     """Best-effort ``app.state.db_pool`` lookup tolerant of test mocks."""
@@ -462,6 +512,7 @@ def validate_production_config() -> None:
     # the signing key has meaningful entropy.
     if env == "production":
         import os as _os  # noqa: PLC0415
+        from pathlib import Path  # noqa: PLC0415
 
         model_hmac_key = _os.environ.get("JARVIS_MODEL_HMAC_KEY", "")
         if not model_hmac_key:
@@ -490,6 +541,59 @@ def validate_production_config() -> None:
         if len(config_key) < 32:
             raise RuntimeError(
                 f"JARVIS_CONFIG_KEY must be at least 32 characters (got {len(config_key)})"
+            )
+
+        # SEC-A — LiteLLM master key gate. Without a strong key a prod VPS can
+        # boot with a guessable proxy credential (e.g. the literal
+        # ``sk-jarvis-dev-test``), letting anyone who can reach the LiteLLM
+        # port spend tokens. Require it set, ≥ 32 chars, and not a known
+        # placeholder (placeholder denylist mirrors production-readiness-check.sh).
+        litellm_secret = get_secrets_settings().litellm_master_key
+        litellm_key = litellm_secret.get_secret_value() if litellm_secret else ""
+        if not litellm_key:
+            raise RuntimeError("LITELLM_MASTER_KEY must be set in production")
+        if _is_weak_secret(litellm_key):
+            raise RuntimeError(
+                "LITELLM_MASTER_KEY is a known placeholder/weak value — "
+                "set a strong secret before deploying to production"
+            )
+        if len(litellm_key) < _LITELLM_MASTER_KEY_MIN_LEN:
+            raise RuntimeError(
+                f"LITELLM_MASTER_KEY must be at least "
+                f"{_LITELLM_MASTER_KEY_MIN_LEN} characters (got {len(litellm_key)})"
+            )
+
+        # SEC-A — PostgreSQL password gate. Mirror the readiness-script
+        # resolution order (env var, then the Docker Secret mount) so a
+        # secrets-file deployment is not falsely flagged. Reject empty,
+        # placeholder, and short passwords.
+        postgres_password = _os.environ.get("POSTGRES_PASSWORD", "")
+        if not postgres_password:
+            try:
+                postgres_password = Path(_POSTGRES_PASSWORD_SECRET_PATH).read_text().strip()
+            except OSError:
+                postgres_password = ""
+        if not postgres_password:
+            raise RuntimeError("POSTGRES_PASSWORD must be set in production")
+        if _is_weak_secret(postgres_password):
+            raise RuntimeError(
+                "POSTGRES_PASSWORD is a known placeholder/weak value — "
+                "set a strong secret before deploying to production"
+            )
+        if len(postgres_password) < _POSTGRES_PASSWORD_MIN_LEN:
+            raise RuntimeError(
+                f"POSTGRES_PASSWORD must be at least "
+                f"{_POSTGRES_PASSWORD_MIN_LEN} characters (got {len(postgres_password)})"
+            )
+
+        # SEC-B — Public base URL gate. Magic-link emails embed APP_BASE_URL;
+        # when it is unset the link host falls back to the inbound request
+        # ``Host`` header, which an attacker can poison to harvest tokens.
+        # Require it explicitly in production.
+        app_base_url = _os.environ.get("APP_BASE_URL", "").strip()
+        if not app_base_url:
+            raise RuntimeError(
+                "APP_BASE_URL must be set in production (prevents magic-link host-header poisoning)"
             )
 
         # H-2 — SMTP gate. When DEV_SMTP_LOG_ONLY is false (already enforced

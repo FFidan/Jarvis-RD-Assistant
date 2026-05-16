@@ -63,6 +63,32 @@ describe('HeaderPill', () => {
     });
   });
 
+  it('counts critical events alongside error events', async () => {
+    // badge must show error + critical so critical-level app events are visible
+    mockGetSummary.mockResolvedValue({
+      by_level: { error: 3, critical: 2 },
+      by_category: {},
+      total: 5,
+    });
+    renderPill();
+    await vi.waitFor(() => {
+      expect(screen.getByText('5')).toBeInTheDocument();
+    });
+  });
+
+  it('calls getSummary with excludeInfra:true to skip nginx rate-limit 503s', async () => {
+    // The queryFn passes { excludeInfra: true } so self-inflicted infra errors
+    // (category=infra) are excluded from the badge count.
+    mockGetSummary.mockResolvedValue({
+      by_level: { error: 2 },
+      by_category: {},
+      total: 2,
+    });
+    renderPill();
+    await vi.waitFor(() => screen.getByText('2'));
+    expect(mockGetSummary).toHaveBeenCalledWith({ excludeInfra: true });
+  });
+
   it('navigates to logs page on click', async () => {
     mockGetSummary.mockResolvedValue({
       by_level: { error: 3 },

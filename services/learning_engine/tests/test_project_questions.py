@@ -187,6 +187,65 @@ async def test_activity_404_for_other_users_project() -> None:
     conn.fetch.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_activity_union_task_arm_scoped_by_user_id() -> None:
+    """LE-OB4: tasks UNION arm must bind user_id as a SQL predicate (defense-in-depth).
+
+    Even after _assert_project_owner passes, the tasks arm must carry AND t.user_id = $2
+    so that FK-inconsistent rows belonging to another user are excluded.
+    """
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # project owned
+    conn.fetch = AsyncMock(return_value=[])
+    await project_questions.list_project_activity.__wrapped__(
+        _request(7), project_id=1, limit=20, db_pool=_pool(conn), user_id=7
+    )
+    sql, *args = conn.fetch.call_args.args
+    # The tasks UNION arm must include user_id predicate
+    assert "t.user_id = $2" in sql, f"tasks arm missing user_id predicate; SQL=\n{sql}"
+    # Bound parameters: $1=project_id, $2=user_id, $3=limit
+    assert args[1] == 7, f"$2 must be user_id=7; got {args[1]!r}"
+
+
+@pytest.mark.asyncio
+async def test_activity_union_milestone_arm_scoped_by_user_id() -> None:
+    """LE-OB4: milestones UNION arm must bind user_id as a SQL predicate (defense-in-depth).
+
+    Even after _assert_project_owner passes, the milestones arm must carry
+    AND m.user_id = $2 so that FK-inconsistent rows belonging to another user
+    are excluded.
+    """
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # project owned
+    conn.fetch = AsyncMock(return_value=[])
+    await project_questions.list_project_activity.__wrapped__(
+        _request(7), project_id=1, limit=20, db_pool=_pool(conn), user_id=7
+    )
+    sql, *args = conn.fetch.call_args.args
+    # The milestones UNION arm must include user_id predicate
+    assert "m.user_id = $2" in sql, f"milestones arm missing user_id predicate; SQL=\n{sql}"
+
+
+@pytest.mark.asyncio
+async def test_activity_union_user_id_bound_correctly() -> None:
+    """LE-OB4: $2 is always the authenticated user_id, $3 is always the limit.
+
+    Cross-checks the full parameter binding so a future refactor cannot
+    accidentally swap $2/$3 or omit user_id from the bind list.
+    """
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)
+    conn.fetch = AsyncMock(return_value=[])
+    await project_questions.list_project_activity.__wrapped__(
+        _request(42), project_id=5, limit=10, db_pool=_pool(conn), user_id=42
+    )
+    _, *args = conn.fetch.call_args.args
+    # positional args: project_id, user_id, limit
+    assert args[0] == 5, f"$1 must be project_id=5; got {args[0]!r}"
+    assert args[1] == 42, f"$2 must be user_id=42; got {args[1]!r}"
+    assert args[2] == 10, f"$3 must be limit=10; got {args[2]!r}"
+
+
 # ---------------------------------------------------------------------------
 # Widened list/detail counts (§3.6 / §4c)
 # ---------------------------------------------------------------------------

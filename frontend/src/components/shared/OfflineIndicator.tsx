@@ -91,6 +91,7 @@ export function OfflineIndicator({
     return (
       <span
         data-testid="offline-indicator-stale"
+        role="status"
         title={timestamp != null ? new Date(timestamp).toLocaleString() : undefined}
         className={cn(
           'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium',

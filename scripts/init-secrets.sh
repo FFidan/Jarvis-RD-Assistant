@@ -132,3 +132,16 @@ sync_secret BACKUP_ENCRYPT_KEY backup_encrypt_key.txt "openssl rand -base64 32 |
 # Manual secrets (cannot be auto-generated)
 # ---------------------------------------------------------------------------
 sync_secret TELEGRAM_BOT_TOKEN telegram_bot_token.txt
+
+# paper_ingestion declares telegram_bot_token as a Docker Secret (not profile-
+# gated), so docker compose up aborts with "secret not found" when the file is
+# absent — even when the Telegram profile is not active.  If sync_secret above
+# skipped creation (no token in .env and no generator), create an empty
+# placeholder so compose can mount the secret without error.  An empty file
+# resolves to None in SecretsSettings._resolve_file_indirection, which is the
+# correct sentinel for "Telegram not configured".
+if [ ! -f "secrets/telegram_bot_token.txt" ]; then
+  : > secrets/telegram_bot_token.txt
+  chmod 600 secrets/telegram_bot_token.txt
+  info "secrets/telegram_bot_token.txt created as empty placeholder (Telegram not configured)."
+fi

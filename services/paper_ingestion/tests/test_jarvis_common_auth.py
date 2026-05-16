@@ -130,6 +130,11 @@ def test_validate_production_config_accepts_dedicated_model_hmac_key(monkeypatch
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
     monkeypatch.setenv("SMTP_PORT", "587")
     monkeypatch.setenv("SMTP_FROM", "jarvis@example.com")
+    # SEC-A/SEC-B: production also requires a strong LiteLLM master key, a
+    # strong Postgres password, and an explicit APP_BASE_URL.
+    monkeypatch.setenv("LITELLM_MASTER_KEY", "sk-" + "p" * 40)
+    monkeypatch.setenv("POSTGRES_PASSWORD", "q" * 24)
+    monkeypatch.setenv("APP_BASE_URL", "https://jarvis.example.com")
 
     validate_production_config()
 

@@ -4,6 +4,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { UI_STORE_KEY } from '@/stores/ui-store';
 import { abortAllStreams } from '@/stores/chat-store';
 import { clearPersistedQueryCache } from '@/lib/query-persister';
+import { clearReviewOutbox } from '@/lib/review-outbox';
 
 // ---------------------------------------------------------------------------
 // QueryClient holder — registered once by the app's provider tree so logout()
@@ -168,9 +169,30 @@ export const useAuthStore = create<AuthState>()(
           console.warn('[auth] IDB cache purge failed', e);
         });
 
+        // FE-A (belt-and-suspenders): wipe the offline review outbox too.
+        // review-outbox already isolates per user via purgeForeignEntries; this
+        // is additive — a clean slate that also closes the null-user edge where
+        // no identity was resolvable at enqueue time. Non-blocking + non-throwing.
+        void clearReviewOutbox().catch((e: unknown) => {
+          console.warn('[auth] review outbox purge failed', e);
+        });
+
         // Notify the active Service Worker to drop runtime-API caches so
         // cached responses from the previous user aren't served to the next.
-        navigator.serviceWorker?.controller?.postMessage({ type: 'JARVIS_LOGOUT' });
+        // FE-B: if no SW controls this page yet (logout immediately after the
+        // very first install — controller is still null until the new SW
+        // claims), register a one-shot controllerchange listener so the purge
+        // still fires the moment the SW takes control.
+        const sw = navigator.serviceWorker;
+        if (sw?.controller) {
+          sw.controller.postMessage({ type: 'JARVIS_LOGOUT' });
+        } else if (sw) {
+          const onControllerChange = (): void => {
+            sw.removeEventListener('controllerchange', onControllerChange);
+            sw.controller?.postMessage({ type: 'JARVIS_LOGOUT' });
+          };
+          sw.addEventListener('controllerchange', onControllerChange);
+        }
 
         // Best-effort backend logout: clear the session cookie + revoke the row.
         // Don't await — UI state is already cleared and a network failure

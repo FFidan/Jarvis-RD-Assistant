@@ -66,6 +66,12 @@ describe('OfflineIndicator', () => {
       const el = screen.getByTestId('offline-indicator-stale');
       expect(el.getAttribute('title')).toBeTruthy();
     });
+
+    it('exposes role="status" for screen-reader live-region announcement', () => {
+      render(<OfflineIndicator variant="stale-cached" timestamp={KNOWN_TS} />);
+      const el = screen.getByTestId('offline-indicator-stale');
+      expect(el.getAttribute('role')).toBe('status');
+    });
   });
 
   describe('online-only variant', () => {

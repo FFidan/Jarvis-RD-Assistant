@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse
-from jarvis_common.auth import current_user_id_strict
+from jarvis_common.auth import current_user_id_strict, require_admin
 from jarvis_common.db_helpers import assert_paper_ownership, assert_papers_ownership
 from starlette.responses import StreamingResponse
 
@@ -81,7 +81,12 @@ async def list_templates(
     ]
 
 
-@router.post("/extraction-templates", response_model=ExtractionTemplateResponse, status_code=201)
+@router.post(
+    "/extraction-templates",
+    response_model=ExtractionTemplateResponse,
+    status_code=201,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def create_template(
     request: Request,
@@ -117,7 +122,11 @@ async def create_template(
     )
 
 
-@router.put("/extraction-templates/{template_id}", response_model=ExtractionTemplateResponse)
+@router.put(
+    "/extraction-templates/{template_id}",
+    response_model=ExtractionTemplateResponse,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def update_template(
     request: Request,
@@ -187,7 +196,11 @@ async def update_template(
     )
 
 
-@router.delete("/extraction-templates/{template_id}", status_code=204)
+@router.delete(
+    "/extraction-templates/{template_id}",
+    status_code=204,
+    dependencies=[Depends(require_admin)],
+)
 @limiter.limit("30/minute")
 async def delete_template(
     request: Request,

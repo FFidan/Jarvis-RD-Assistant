@@ -66,8 +66,9 @@ export async function getEvent(id: number): Promise<SystemEvent> {
   return apiFetch<SystemEvent>(`/api/logs/events/${id}`);
 }
 
-export async function getSummary(): Promise<LogsSummary> {
-  return apiFetch<LogsSummary>('/api/logs/summary');
+export async function getSummary(opts?: { excludeInfra?: boolean }): Promise<LogsSummary> {
+  const qs = opts?.excludeInfra ? '?exclude_infra=1' : '';
+  return apiFetch<LogsSummary>(`/api/logs/summary${qs}`);
 }
 
 export async function getCorrelation(correlationId: string): Promise<SystemEvent[]> {

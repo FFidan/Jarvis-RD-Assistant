@@ -8,13 +8,16 @@ export function HeaderPill() {
   const navigate = useNavigate();
 
   const { data } = useQuery({
-    queryKey: ['logs', 'summary'],
-    queryFn: getSummary,
+    queryKey: ['logs', 'summary', 'app-only'],
+    // exclude_infra=1 so nginx rate-limit 503s (category=infra) don't inflate
+    // the badge — those are self-inflicted infra noise, not application errors.
+    queryFn: () => getSummary({ excludeInfra: true }),
     refetchInterval: 30_000,
     staleTime: 20_000,
   });
 
-  const errorCount = data?.by_level?.error ?? 0;
+  // Count error + critical application events; infra events are excluded above.
+  const errorCount = (data?.by_level?.error ?? 0) + (data?.by_level?.critical ?? 0);
 
   // Only show pill when there are errors
   if (errorCount === 0) return null;

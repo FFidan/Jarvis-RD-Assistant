@@ -151,13 +151,46 @@ describe('JobStore', () => {
     },
   );
 
-  it('trackExternalJob: invalidates zotero-library query when zotero.poll succeeds', async () => {
+  it.each(['zotero.poll', 'zotero.sync_from_zotero'] as const)(
+    'trackExternalJob: invalidates papers-feed and feed-counts (not dead zotero-library) when %s succeeds',
+    async (kind) => {
+      const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+      vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+        new Response(
+          createMockSSEStream([
+            'data: {"status":"running","progress":25,"progress_message":"Polling"}\n\n',
+            'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+            'data: [DONE]\n\n',
+          ]),
+          { status: 200 },
+        ),
+      );
+
+      useJobStore.getState().trackExternalJob({
+        jobId: `job-${kind}`,
+        kind,
+        payload: {},
+        status: 'queued',
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
+      // Must NOT invalidate the dead key
+      const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+      expect(keys).not.toContain('zotero-library');
+    },
+  );
+
+  it('papers.batch_process: invalidates papers-feed, feed-counts, action-items-unprocessed on success', async () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(
         createMockSSEStream([
-          'data: {"status":"running","progress":25,"progress_message":"Polling"}\n\n',
+          'data: {"status":"running","progress":50,"progress_message":"Processing"}\n\n',
           'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
           'data: [DONE]\n\n',
         ]),
@@ -166,20 +199,105 @@ describe('JobStore', () => {
     );
 
     useJobStore.getState().trackExternalJob({
-      jobId: 'job-zotero-poll',
-      kind: 'zotero.poll',
+      jobId: 'job-batch-process',
+      kind: 'papers.batch_process',
       payload: {},
-      status: 'queued',
-    });
-
-    expect(useJobStore.getState().jobs['job-zotero-poll']).toMatchObject({
-      kind: 'zotero.poll',
       status: 'queued',
     });
 
     await new Promise((r) => setTimeout(r, 50));
 
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['zotero-library'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['action-items-unprocessed'] });
+    // Must NOT invalidate dead key
+    const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+    expect(keys).not.toContain('papers');
+  });
+
+  it('papers.batch_summarize: invalidates papers-feed (not dead papers key) on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":50,"progress_message":"Summarizing"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-batch-summarize',
+      kind: 'papers.batch_summarize',
+      payload: {},
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+    const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+    expect(keys).not.toContain('papers');
+  });
+
+  it('extraction.batch: invalidates extraction-table (not dead extractions key) on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":50,"progress_message":"Extracting"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-extraction-batch',
+      kind: 'extraction.batch',
+      payload: {},
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['extraction-table'] });
+    const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+    expect(keys).not.toContain('extractions');
+  });
+
+  it('pulse.generate: invalidates pulse-today and pulse-stats (not dead pulse-history) on success', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        createMockSSEStream([
+          'data: {"status":"running","progress":50,"progress_message":"Generating"}\n\n',
+          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    useJobStore.getState().trackExternalJob({
+      jobId: 'job-pulse-generate',
+      kind: 'pulse.generate',
+      payload: {},
+      status: 'queued',
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pulse-today'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pulse-stats'] });
+    const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
+    expect(keys).not.toContain('pulse-history');
   });
 
   it('trackExternalJob: invalidates contradiction queries when contradiction scan succeeds', async () => {
@@ -677,10 +795,12 @@ describe('JobStore', () => {
 
     await new Promise((r) => setTimeout(r, 50));
 
-    // Must invalidate the real feed key used by FeedView
+    // Must invalidate the real feed keys used by FeedView and ResearchFeedPage
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['papers-feed'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['feed-counts'] });
     // Must NOT invalidate the old stale key
     const keys = invalidateSpy.mock.calls.map((c) => (c[0] as { queryKey: unknown[] }).queryKey[0]);
     expect(keys).not.toContain('feed');
+    expect(keys).not.toContain('papers');
   });
 });
