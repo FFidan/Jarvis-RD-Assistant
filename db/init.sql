@@ -1077,7 +1077,10 @@ INSERT INTO schema_migrations (version) VALUES
     (17), (18), (19), (20), (21), (22), (23), (24),
     (25), (26), (27), (28), (29), (30), (31), (32),
     -- 33 is intentionally absent: it is false-applied and repaired at runtime.
-    (34), (35), (36), (37), (38), (39), (40), (41),
+    -- 34 is intentionally absent: this snapshot does NOT embody migration 034's
+    -- pulse_cards.reasoning_verified/_confidence columns, so the runtime runner
+    -- must apply 034 on first boot. (Pre-marking it here would skip those columns.)
+    (35), (36), (37), (38), (39), (40), (41),
     (42), (43), (44), (45), (46), (47), (48),
     -- 49-51, 54-62, 67-68 are baked into this snapshot.
     -- 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT in init.sql;

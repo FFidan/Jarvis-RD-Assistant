@@ -279,7 +279,14 @@ async def upload_pdf(
                 "SELECT * FROM papers WHERE external_id = $1", external_id
             )
             if existing:
-                raise HTTPException(status_code=409, detail="This PDF has already been uploaded")
+                if user_id is not None:
+                    await add_to_library(
+                        conn,
+                        user_id=user_id,
+                        paper_id=existing["id"],
+                        added_via="manual_save",
+                    )
+                return row_to_paper_response(existing)
 
             # Parse authors
             author_list = [a.strip() for a in authors.split(",") if a.strip()] if authors else []

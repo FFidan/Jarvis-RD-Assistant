@@ -52,9 +52,13 @@ def test_init_sql_uses_explicit_embodied_bootstrap_versions() -> None:
 
     seeded_versions = {int(value) for value in re.findall(r"\((\d+)\)", executable_bootstrap_sql)}
     assert set(range(1, 33)).issubset(seeded_versions)
-    assert set(range(34, 49)).issubset(seeded_versions)
+    assert set(range(35, 49)).issubset(seeded_versions)
     # 33 is intentionally absent (false-applied, repaired at runtime).
     assert 33 not in seeded_versions
+    # 34 is intentionally absent: this snapshot does NOT embody migration
+    # 034's pulse_cards.reasoning_verified/_confidence columns, so the
+    # runtime runner must apply 034 on first boot.
+    assert 34 not in seeded_versions
     # 49-51 and 54-61 are now baked into init.sql.
     assert {49, 50, 51, 54, 55, 56, 57, 58, 59, 60, 61}.issubset(seeded_versions)
     # 52 (procrastinate schema) and 53 (drop legacy jobs) are NOT baked into
@@ -144,8 +148,12 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      user_id is added by deferred mig 063, so this index cannot be baked
     #      into init.sql standalone; runtime-applied with its parent chain (pure
     #      additive perf index, idempotent IF NOT EXISTS, no backfill).
+    # 34: pulse_cards.reasoning_verified/_confidence columns — NOT embodied by
+    #      the init.sql snapshot, so the runtime runner applies 034 on first
+    #      boot (same false-applied class as 33).
     deferred = {
         33,
+        34,
         52,
         53,
         62,

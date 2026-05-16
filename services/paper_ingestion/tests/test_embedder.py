@@ -70,12 +70,12 @@ async def test_embed_texts_uses_shared_litellm_config_base_url(monkeypatch):
     result = await embedder.embed_texts(["test text"])
 
     assert result == [[0.1] * EMBEDDING_DIMENSION]
-    mock_http.post.assert_awaited_once_with(
-        "http://litellm.test:4000/v1/embeddings",
-        json={"model": "embed", "input": ["test text"]},
-        headers={},
-        timeout=60.0,
-    )
+    mock_http.post.assert_awaited_once()
+    call = mock_http.post.call_args
+    assert call.args[0] == "http://litellm.test:4000/v1/embeddings"
+    assert call.kwargs["json"] == {"model": "embed", "input": ["test text"]}
+    assert call.kwargs["headers"] == {}
+    assert call.kwargs["timeout"].read >= 300.0
 
 
 async def test_search_similar_skips_hits_without_dict_payload():

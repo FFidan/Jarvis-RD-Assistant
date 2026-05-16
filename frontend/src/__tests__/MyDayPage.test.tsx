@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { BrowserRouter, MemoryRouter } from 'react-router-dom';
 import { MyDayPage } from '@/pages/MyDayPage';
 import * as api from '@/lib/api';
-import type { MyDayResponse, RetentionStats, PulseDeck, PulseCardItem } from '@/types';
+import type { MyDayResponse, RetentionStats, PulseDeck, PulseCardItem, MyDayBundle } from '@/types';
 
 // Mock the api module
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -31,6 +31,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     seedThreadFromEod: vi.fn(),
     fetchIntentToday: vi.fn(),
     saveIntentToday: vi.fn(),
+    getMyDayBundle: vi.fn(),
   };
 });
 
@@ -85,6 +86,22 @@ const mockPulseDeck: PulseDeck | null = null;
 
 const mockFeedResponse = { papers: [], total: 0 };
 
+const mockBundle: MyDayBundle = {
+  tasks: [],
+  intent: { intent: null, updated_at: null },
+  threads: [],
+  yesterday: {
+    date: '2026-05-14',
+    focused_hours: 0,
+    cards_reviewed: 0,
+    tasks_done: 0,
+    completed: [],
+    deferred: [],
+  },
+  journal: null,
+  pulse_today: null,
+};
+
 function renderWithProviders() {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -100,6 +117,7 @@ function renderWithProviders() {
 
 describe('MyDayPage', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
     vi.mocked(api.fetchProjects).mockResolvedValue([]);
     vi.mocked(api.fetchYesterday).mockResolvedValue({
@@ -130,6 +148,7 @@ describe('MyDayPage', () => {
       period_start: '2026-05-01T00:00:00Z',
       period_end: '2026-05-08T00:00:00Z',
     });
+    vi.mocked(api.getMyDayBundle).mockResolvedValue(mockBundle);
   });
 
   it('renders DateMasthead with research log header', async () => {
@@ -240,6 +259,16 @@ describe('MyDayPage', () => {
       await screen.findByText(/No Pulse for today yet/i),
     ).toBeInTheDocument();
   });
+
+  it('calls getMyDayBundle once on mount (F7 bundle single round-trip)', async () => {
+    // F7: one bundle call replaces ~4 per-section cold fetches. Verify the
+    // bundle is fetched exactly once and the page renders correctly.
+    renderWithProviders();
+    await screen.findByText(/RESEARCH LOG/);
+    await waitFor(() => {
+      expect(api.getMyDayBundle).toHaveBeenCalledTimes(1);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -310,6 +339,7 @@ describe('HeroPulse behaviour', () => {
       period_start: '2026-05-01T00:00:00Z',
       period_end: '2026-05-08T00:00:00Z',
     });
+    vi.mocked(api.getMyDayBundle).mockResolvedValue(mockBundle);
   });
 
   it('two-card deck shows #1 of 2 in the meta text initially', async () => {
@@ -410,6 +440,7 @@ describe('MyDayPage hash-scroll', () => {
       period_start: '2026-05-01T00:00:00Z',
       period_end: '2026-05-08T00:00:00Z',
     });
+    vi.mocked(api.getMyDayBundle).mockResolvedValue(mockBundle);
   });
 
   it('scrolls to #now section via rAF retry loop when element appears after mount', async () => {

@@ -48,25 +48,49 @@ def test_migration_047_text() -> None:
 # Live-PG tests (gated by JARVIS_RUN_LIVE_PG=1, marked live_pg)
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
+# Minimal pre-047 schema = the post-046 paper_user_state shape (5 booleans +
+# status enum). init.sql is the *post-047* steady state — it has already dropped
+# saved/dismissed/archived/status/preference and added the `state` ENUM, so it
+# can never represent the pre-collapse state migration 047 reads from. Build
+# only the columns 047 backfills and then drops.
+_PRE_047_SCHEMA = """
+CREATE TABLE papers (
+    id          SERIAL PRIMARY KEY,
+    external_id VARCHAR(255) UNIQUE NOT NULL,
+    source_type VARCHAR(50) NOT NULL,
+    title       TEXT NOT NULL,
+    authors     TEXT[] NOT NULL,
+    url         TEXT NOT NULL
+);
+
+CREATE TABLE paper_user_state (
+    id          SERIAL PRIMARY KEY,
+    paper_id    INTEGER REFERENCES papers(id) ON DELETE CASCADE,
+    user_id     INTEGER,
+    status      TEXT NOT NULL DEFAULT 'new'
+                    CHECK (status IN ('new', 'reading', 'read')),
+    starred     BOOLEAN NOT NULL DEFAULT FALSE,
+    archived    BOOLEAN NOT NULL DEFAULT FALSE,
+    preference  VARCHAR(10) NOT NULL DEFAULT 'none',
+    saved       BOOLEAN NOT NULL DEFAULT FALSE,
+    dismissed   BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
 
 
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
+async def _apply_pre_047(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+        await conn.execute(_PRE_047_SCHEMA)
 
 
 @pytest.mark.live_pg
 @pytest.mark.asyncio
 async def test_migration_047_live_pg(live_pg_dsn: str) -> None:
-    """Apply migrations through 047 and verify state column shape + Restore semantics."""
-    from paper_ingestion.migrations_runner import run_migrations
-
+    """Apply migration 047 onto a pre-047 schema and verify state column shape + Restore semantics."""
     pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
     try:
-        await _apply_fresh_init(pool)
-        await run_migrations(pool)
+        await _apply_pre_047(pool)
+        await pool.execute(MIGRATION.read_text(encoding="utf-8"))
 
         async with pool.acquire() as conn:
             # Legacy columns must be gone post-migration.

@@ -1,10 +1,27 @@
+/**
+ * PulseSection tests — F2 (Wave 2)
+ *
+ * vi.mock factories use vi.hoisted() for any values needed in the factory
+ * closure so there are no TDZ issues with module-level consts.
+ * Each describe block gets a fresh QueryClient.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { PulseSection } from '@/components/settings/PulseSection';
-import type { PulseStats } from '@/types';
+import type { PulseStats, SystemCapabilities } from '@/types';
+
+// ---------------------------------------------------------------------------
+// Inline fixtures (avoid module-const TDZ in vi.mock factories)
+// ---------------------------------------------------------------------------
+
+// (debug fixture is inlined in vi.mock factory below to avoid TDZ)
+
+// ---------------------------------------------------------------------------
+// Module mock
+// ---------------------------------------------------------------------------
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -30,10 +47,38 @@ vi.mock('@/lib/api', async (importOriginal) => {
     }),
     createJob: vi.fn().mockResolvedValue({ job_id: 'pulse-job-1', status: 'queued' }),
     listJobs: vi.fn().mockResolvedValue([]),
+    getSystemCapabilities: vi.fn().mockResolvedValue({ networkx: true, scikit_learn: true }),
+    patchSourceConfig: vi.fn().mockResolvedValue({ ok: true }),
+    clearSourceCooldown: vi.fn().mockResolvedValue({ ok: true }),
   };
 });
 
-const { fetchConfig, fetchPulseStats, setConfig, createJob } = await import('@/lib/api');
+// Mock auth store — default: regular (non-admin) user.
+// Use eslint-disable for the any cast; the real AuthState is wide but we only
+// need the user field to drive isAdmin logic.
+vi.mock('@/stores/auth-store', () => ({
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  useAuthStore: vi.fn((selector: (s: any) => unknown) =>
+    selector({ user: { id: 1, email: 'test@example.com', role: 'user' } }),
+  ),
+}));
+
+const {
+  fetchConfig,
+  fetchPulseStats,
+  setConfig,
+  createJob,
+  getSystemCapabilities,
+  patchSourceConfig,
+  clearSourceCooldown,
+} = await import('@/lib/api');
+
+const { useAuthStore: useAuthStoreMock } = await import('@/stores/auth-store');
+const mockUseAuthStore = vi.mocked(useAuthStoreMock);
+
+// ---------------------------------------------------------------------------
+// Render helper — per-test QueryClient so cache never bleeds between tests
+// ---------------------------------------------------------------------------
 
 function renderSection() {
   const queryClient = new QueryClient({
@@ -55,18 +100,29 @@ async function openAdvancedTuning(user = userEvent.setup()) {
   expect(button).toHaveAttribute('aria-expanded', 'true');
 }
 
-describe('PulseSection', () => {
-  const baseStats: PulseStats = {
-    window_days: 1,
-    decks_generated: 3,
-    avg_candidates: 42,
-    avg_llm_calls: 15,
-    avg_duration_s: 12.3,
-    last_run_at: '2026-04-10T04:00:00Z',
-    last_error: null,
-    degraded_reason: null,
-  };
+// ---------------------------------------------------------------------------
+// Shared base data
+// ---------------------------------------------------------------------------
 
+const baseStats: PulseStats = {
+  window_days: 1,
+  decks_generated: 3,
+  avg_candidates: 42,
+  avg_llm_calls: 15,
+  avg_duration_s: 12.3,
+  last_run_at: '2026-04-10T04:00:00Z',
+  last_error: null,
+  degraded_reason: null,
+};
+
+const capableSystem: SystemCapabilities = { networkx: true, scikit_learn: true };
+const incapableSystem: SystemCapabilities = { networkx: false, scikit_learn: false };
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('PulseSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(fetchConfig).mockResolvedValue([
@@ -76,7 +132,15 @@ describe('PulseSection', () => {
       { key: 'pulse.stage2_top_k', value: 40 },
     ]);
     vi.mocked(fetchPulseStats).mockResolvedValue(baseStats);
+    vi.mocked(getSystemCapabilities).mockResolvedValue(capableSystem);
+    // Default: non-admin user
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockUseAuthStore.mockImplementation((selector: (s: any) => unknown) =>
+      selector({ user: { id: 1, email: 'test@example.com', role: 'user' } }),
+    );
   });
+
+  // ── Basic rendering ────────────────────────────────────────────────────────
 
   it('renders the Pulse enable toggle', async () => {
     renderSection();
@@ -117,7 +181,6 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getByText('Failed')).toBeInTheDocument();
     });
-    // The error message is also shown inline in the stats section
     expect(screen.getByText(/scoring pipeline exploded/i)).toBeInTheDocument();
   });
 
@@ -131,7 +194,6 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getByText('Degraded')).toBeInTheDocument();
     });
-    // The tooltip trigger element should carry the badge text
     const badge = screen.getByText('Degraded');
     expect(badge).toBeInTheDocument();
   });
@@ -147,7 +209,6 @@ describe('PulseSection', () => {
     renderSection();
     const badge = await screen.findByText('Degraded');
     await user.hover(badge);
-    // Radix renders tooltip content twice (visible div + hidden aria span), use getAllByText
     await waitFor(() => {
       const matches = screen.getAllByText(degradedMsg);
       expect(matches.length).toBeGreaterThan(0);
@@ -166,42 +227,89 @@ describe('PulseSection', () => {
     });
   });
 
-  // ── Conditional-signal gate tooltip tests ─────────────────────────────────
+  // ── Double-tooltip fix: gate trigger wraps ONLY the slider, not the ⓘ ─────
 
-  it('renders gate-tooltip trigger wrapper for the classifier slider', async () => {
+  it('gate-tooltip trigger for classifier wraps only the slider input, not the InfoTooltip', async () => {
+    // Capability missing → gate is visible
+    vi.mocked(getSystemCapabilities).mockResolvedValue(incapableSystem);
+    renderSection();
+    await openAdvancedTuning();
+
+    const gateTrigger = await screen.findByTestId('gate-tooltip-trigger-classifier');
+    // The gate trigger should contain the slider input
+    const slider = gateTrigger.querySelector('input[type="range"]');
+    expect(slider).not.toBeNull();
+    // The ⓘ InfoTooltip button must NOT be inside the gate trigger
+    // (InfoTooltip renders a <button> with aria-label containing "info" or similar)
+    const infoButtons = gateTrigger.querySelectorAll('button');
+    expect(infoButtons.length).toBe(0);
+  });
+
+  it('gate-tooltip trigger for citation_pagerank wraps only the slider input', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue(incapableSystem);
+    renderSection();
+    await openAdvancedTuning();
+
+    const gateTrigger = await screen.findByTestId('gate-tooltip-trigger-citation_pagerank');
+    const slider = gateTrigger.querySelector('input[type="range"]');
+    expect(slider).not.toBeNull();
+    const infoButtons = gateTrigger.querySelectorAll('button');
+    expect(infoButtons.length).toBe(0);
+  });
+
+  // ── Capability-driven gate: no nag when capability present ────────────────
+
+  it('does NOT render gate-tooltip trigger for classifier when scikit_learn is available', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue(capableSystem);
+    renderSection();
+    await openAdvancedTuning();
+    // Wait for sliders to be rendered
+    await screen.findByTestId('weight-slider-classifier');
+    expect(screen.queryByTestId('gate-tooltip-trigger-classifier')).toBeNull();
+  });
+
+  it('does NOT render gate-tooltip trigger for citation_pagerank when networkx is available', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue(capableSystem);
+    renderSection();
+    await openAdvancedTuning();
+    await screen.findByTestId('weight-slider-citation_pagerank');
+    expect(screen.queryByTestId('gate-tooltip-trigger-citation_pagerank')).toBeNull();
+  });
+
+  // ── Capability-driven gate: nag when capability missing ───────────────────
+
+  it('renders gate-tooltip trigger for classifier when scikit_learn is FALSE', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false });
     renderSection();
     await openAdvancedTuning();
     await waitFor(() => {
-      expect(
-        screen.getByTestId('gate-tooltip-trigger-classifier'),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId('gate-tooltip-trigger-classifier')).toBeInTheDocument();
     });
   });
 
-  it('renders gate-tooltip trigger wrapper for citation_pagerank slider', async () => {
+  it('renders gate-tooltip trigger for citation_pagerank when networkx is FALSE', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true });
     renderSection();
     await openAdvancedTuning();
     await waitFor(() => {
-      expect(
-        screen.getByTestId('gate-tooltip-trigger-citation_pagerank'),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId('gate-tooltip-trigger-citation_pagerank')).toBeInTheDocument();
     });
   });
 
-  it('gate tooltip for classifier contains sklearn + ratings requirement text', async () => {
+  it('gate tooltip for classifier contains plain-language message about scikit-learn', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: true, scikit_learn: false });
     const user = userEvent.setup();
     renderSection();
     await openAdvancedTuning(user);
     const trigger = await screen.findByTestId('gate-tooltip-trigger-classifier');
     await user.hover(trigger);
-    // Radix may render tooltip text in multiple nodes (visible + hidden aria span)
     await waitFor(() => {
       expect(screen.getAllByText(/scikit-learn/i).length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText(/30 Pulse ratings/i).length).toBeGreaterThan(0);
   });
 
-  it('gate tooltip for citation_pagerank contains networkx + paper_citations requirement text', async () => {
+  it('gate tooltip for citation_pagerank contains plain-language message about networkx', async () => {
+    vi.mocked(getSystemCapabilities).mockResolvedValue({ networkx: false, scikit_learn: true });
     const user = userEvent.setup();
     renderSection();
     await openAdvancedTuning(user);
@@ -210,8 +318,91 @@ describe('PulseSection', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/networkx/i).length).toBeGreaterThan(0);
     });
-    expect(screen.getAllByText(/paper_citations/i).length).toBeGreaterThan(0);
   });
+
+  // ── Fail-safe: capability loading/error treats signals as available ────────
+
+  it('treats optional signals as available when getSystemCapabilities returns error', async () => {
+    vi.mocked(getSystemCapabilities).mockRejectedValue(new Error('network error'));
+    renderSection();
+    await openAdvancedTuning();
+    // Wait for sliders to render; no gate triggers should appear
+    await screen.findByTestId('weight-slider-classifier');
+    expect(screen.queryByTestId('gate-tooltip-trigger-classifier')).toBeNull();
+    expect(screen.queryByTestId('gate-tooltip-trigger-citation_pagerank')).toBeNull();
+  });
+
+  // ── Presets ───────────────────────────────────────────────────────────────
+
+  it('renders the Presets control area when advanced tuning is open', async () => {
+    renderSection();
+    await openAdvancedTuning();
+    const presets = await screen.findByTestId('weight-presets');
+    expect(presets).toBeInTheDocument();
+  });
+
+  it('clicking Balanced preset calls setConfig with pulse.weights', async () => {
+    const user = userEvent.setup();
+    renderSection();
+    await openAdvancedTuning(user);
+    const balancedBtn = await screen.findByTestId('preset-balanced');
+    await user.click(balancedBtn);
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
+        'pulse.weights',
+        expect.objectContaining({ embedding: 0.2, llm_relevance: 0.3 }),
+      );
+    });
+  });
+
+  it('clicking Semantic-first preset sets higher embedding and topic weights', async () => {
+    const user = userEvent.setup();
+    renderSection();
+    await openAdvancedTuning(user);
+    const btn = await screen.findByTestId('preset-semantic-first');
+    await user.click(btn);
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
+        'pulse.weights',
+        expect.objectContaining({ embedding: 0.4, topic: 0.35 }),
+      );
+    });
+  });
+
+  it('clicking Freshness-first preset sets higher recency weight', async () => {
+    const user = userEvent.setup();
+    renderSection();
+    await openAdvancedTuning(user);
+    const btn = await screen.findByTestId('preset-freshness-first');
+    await user.click(btn);
+    await waitFor(() => {
+      expect(vi.mocked(setConfig)).toHaveBeenCalledWith(
+        'pulse.weights',
+        expect.objectContaining({ recency: 0.4 }),
+      );
+    });
+  });
+
+  // ── Normalize button always visible ───────────────────────────────────────
+
+  it('renders Normalize to 1.0 button even when sum is within range', async () => {
+    renderSection();
+    await openAdvancedTuning();
+    const normalizeBtn = await screen.findByTestId('normalize-button');
+    expect(normalizeBtn).toBeInTheDocument();
+  });
+
+  // ── Optional signals visually grouped ────────────────────────────────────
+
+  it('shows "Optional signals" group label in advanced tuning', async () => {
+    renderSection();
+    await openAdvancedTuning();
+    await waitFor(() => {
+      expect(screen.getByText(/optional signals/i)).toBeInTheDocument();
+    });
+  });
+
+  // ── Slider rendering ───────────────────────────────────────────────────────
 
   it('hides scoring weight sliders until Advanced tuning is expanded', async () => {
     renderSection();
@@ -231,12 +422,16 @@ describe('PulseSection', () => {
     expect(screen.getByText(/l2 negative-feedback penalty/i)).toBeInTheDocument();
   });
 
+  // ── Generate Pulse button ──────────────────────────────────────────────────
+
   it('renders Generate Pulse now button', async () => {
     renderSection();
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /generate pulse now/i })).toBeInTheDocument();
     });
   });
+
+  // ── Source diagnostics ────────────────────────────────────────────────────
 
   it('renders source diagnostics for rate-limited and unconfigured sources', async () => {
     const user = userEvent.setup();
@@ -282,6 +477,8 @@ describe('PulseSection', () => {
     expect(screen.getByText(/set OPENALEX_EMAIL/i)).toBeInTheDocument();
   });
 
+  // ── Config/stats error states ─────────────────────────────────────────────
+
   it('renders config failures explicitly and disables settings mutations', async () => {
     const user = userEvent.setup();
     vi.mocked(fetchConfig).mockRejectedValue(new Error('config unavailable'));
@@ -312,7 +509,23 @@ describe('PulseSection', () => {
     expect(vi.mocked(createJob)).not.toHaveBeenCalled();
   });
 
-  // ── Heading-rhythm cleanup (WS-6) ─────────────────────────────────────────
+  // ── Empty-state coaching ──────────────────────────────────────────────────
+
+  it('shows empty-state coaching note when decks_generated is 0 and no error', async () => {
+    vi.mocked(fetchPulseStats).mockResolvedValue({
+      ...baseStats,
+      decks_generated: 0,
+      last_run_at: null,
+      last_error: null,
+      degraded_reason: null,
+    });
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByText(/pulse needs a populated library/i)).toBeInTheDocument();
+    });
+  });
+
+  // ── Heading-rhythm ────────────────────────────────────────────────────────
 
   it('shows the CardDescription lead-in text', async () => {
     renderSection();
@@ -325,9 +538,64 @@ describe('PulseSection', () => {
 
   it('does not render a heading-level "Pulse" title inside the card', async () => {
     renderSection();
-    // Wait for the section to load so we are not catching a loading state
     await screen.findByRole('switch', { name: /pulse/i });
-    // There must be no heading element whose accessible name is exactly "Pulse"
     expect(screen.queryByRole('heading', { name: 'Pulse' })).toBeNull();
+  });
+
+  // ── Inline source config (admin-only) ─────────────────────────────────────
+
+  it('does NOT show source config inputs for non-admin users', async () => {
+    // Default mock is non-admin
+    renderSection();
+    await screen.findByRole('switch', { name: /pulse/i });
+    expect(screen.queryByLabelText(/openalex contact email/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/semantic scholar api key/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /clear arxiv cooldown/i })).not.toBeInTheDocument();
+  });
+
+  it('shows source config inputs for admin users', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockUseAuthStore.mockImplementation((selector: (s: any) => unknown) =>
+      selector({ user: { id: 1, email: 'admin@example.com', role: 'admin' } }),
+    );
+    renderSection();
+    await waitFor(() => {
+      expect(screen.getByLabelText(/openalex contact email/i)).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText(/semantic scholar api key/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /clear arxiv cooldown/i })).toBeInTheDocument();
+  });
+
+  it('calls patchSourceConfig for openalex with the entered email (admin)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockUseAuthStore.mockImplementation((selector: (s: any) => unknown) =>
+      selector({ user: { id: 1, email: 'admin@example.com', role: 'admin' } }),
+    );
+    const user = userEvent.setup();
+    renderSection();
+    const emailInput = await screen.findByLabelText(/openalex contact email/i);
+    await user.type(emailInput, 'contact@lab.org');
+    const [saveBtn] = screen.getAllByRole('button', { name: /save/i });
+    expect(saveBtn).toBeTruthy();
+    await user.click(saveBtn!);
+    await waitFor(() => {
+      expect(vi.mocked(patchSourceConfig)).toHaveBeenCalledWith('openalex', {
+        email: 'contact@lab.org',
+      });
+    });
+  });
+
+  it('calls clearSourceCooldown for arxiv when the button is clicked (admin)', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    mockUseAuthStore.mockImplementation((selector: (s: any) => unknown) =>
+      selector({ user: { id: 1, email: 'admin@example.com', role: 'admin' } }),
+    );
+    const user = userEvent.setup();
+    renderSection();
+    const clearBtn = await screen.findByRole('button', { name: /clear arxiv cooldown/i });
+    await user.click(clearBtn);
+    await waitFor(() => {
+      expect(vi.mocked(clearSourceCooldown)).toHaveBeenCalledWith('arxiv');
+    });
   });
 });

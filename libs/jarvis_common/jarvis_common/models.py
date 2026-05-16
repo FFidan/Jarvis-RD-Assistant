@@ -47,7 +47,7 @@ class JobStatusResponse(BaseModel):
     payload: dict[str, Any] | None = None
     result: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
-    user_id: str | None = None
+    user_id: int | None = None
     created_at: str | None = None
     updated_at: str | None = None
     started_at: str | None = None

@@ -18,11 +18,15 @@ import httpx
 import torch
 from qdrant_client.models import PointIdsList
 
-from paper_ingestion.ingestion.embedder import COLLECTION_NAME, EMBEDDING_MODEL_NAME
+from paper_ingestion.ingestion.embedder import (
+    COLLECTION_NAME,
+    EMBEDDING_MODEL_NAME,
+    EmbeddingBatchError,
+)
 
 if TYPE_CHECKING:
     from paper_ingestion.ingestion.embedder import Embedder
-    from paper_ingestion.models import PaperCreate
+    from paper_ingestion.models import ChunkForEmbedding, PaperCreate
     from paper_ingestion.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
@@ -62,6 +66,38 @@ def _sanitize_embedding_failure_detail(exc: BaseException, *, max_chars: int = 2
 
     redacted = _EMBEDDING_ERROR_SECRET_RE.sub(_redact, compact)
     return redacted[:max_chars]
+
+
+_INSERT_CHUNK_SQL = """\
+INSERT INTO paper_chunks (paper_id, chunk_index, content, page_number,
+                          start_char, end_char, embedding_id, embedding_model)
+   VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+   ON CONFLICT (paper_id, chunk_index) DO NOTHING"""
+
+
+async def _persist_chunk_rows(
+    conn: ConnLike,
+    paper_id: int,
+    chunks: list[ChunkForEmbedding],
+    point_ids: list[str],
+) -> None:
+    """Write chunk metadata rows, skipping any that already exist (idempotent)."""
+    await conn.executemany(
+        _INSERT_CHUNK_SQL,
+        [
+            (
+                paper_id,
+                chunk.chunk_index,
+                chunk.content,
+                chunk.page_number,
+                chunk.start_char,
+                chunk.end_char,
+                point_id,
+                EMBEDDING_MODEL_NAME,
+            )
+            for chunk, point_id in zip(chunks, point_ids)
+        ],
+    )
 
 
 def _embedding_failure_message(exc: BaseException) -> str:
@@ -228,6 +264,32 @@ async def run_process_pdf(
         raise RuntimeError(
             "PDF text-extraction GPU out-of-memory. Lower OLLAMA_MAX_LOADED_MODELS"
             " (default 3 → try 2) or set TORCH_DEVICE=cpu for the paper_ingestion service."
+        ) from e
+    except EmbeddingBatchError as e:
+        # Earlier batches embedded successfully; persist their chunk rows so a
+        # retry resumes (Phase-1 idempotency + ON CONFLICT) instead of
+        # re-embedding the whole paper. The job still fails → recoverable,
+        # surfaced as a failed/retryable paper.process job.
+        if e.completed_chunks:
+            try:
+                async with db_pool.acquire() as conn:
+                    async with conn.transaction():
+                        await _persist_chunk_rows(
+                            conn, paper_id, e.completed_chunks, e.completed_point_ids
+                        )
+                logger.info(
+                    "Persisted %d resumable chunks for paper %d before embedding failure",
+                    len(e.completed_chunks),
+                    paper_id,
+                )
+            except Exception:
+                logger.error(
+                    "Failed to persist resumable chunks for paper %d", paper_id, exc_info=True
+                )
+        logger.error("Process PDF embedding failure for paper %d: %s", paper_id, e)
+        raise RuntimeError(
+            f"{_embedding_failure_message(e)} "
+            f"({len(e.completed_chunks)} chunks saved — retry to resume)."
         ) from e
     except RuntimeError as e:
         msg = str(e)

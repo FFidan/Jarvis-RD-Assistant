@@ -156,7 +156,11 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen3:14b,qwen3:4b,qwen3-embedding:4b}
+      # Default fits a single 16 GB GPU with the embedder kept resident:
+      # qwen3:8b (smart + smart-fallback), qwen3:4b (fast), qwen3-embedding:4b.
+      # Larger-VRAM deployments can override OLLAMA_MODELS and switch the smart
+      # role via the in-app model picker (Settings → llm.smart_model).
+      OLLAMA_MODELS: ${OLLAMA_MODELS:-qwen3:8b,qwen3:4b,qwen3-embedding:4b}
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |

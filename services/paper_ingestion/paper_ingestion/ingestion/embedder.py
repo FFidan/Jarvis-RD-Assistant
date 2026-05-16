@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     import asyncpg
 
+import httpcore
 import httpx
 import tiktoken
 from jarvis_common.llm_client import (
@@ -24,7 +25,7 @@ from jarvis_common.llm_client import (
     get_litellm_config,
 )
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointIdsList, PointStruct, VectorParams
+from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import ChunkForEmbedding
@@ -35,6 +36,7 @@ _cfg = get_paper_ingestion_settings()
 EMBEDDING_MODEL = _cfg.embedding_model
 EMBEDDING_MODEL_NAME = _cfg.embedding_model_name
 EMBEDDING_DIMENSION = _cfg.embedding_dimension
+EMBED_REQUEST_TIMEOUT_SECONDS = _cfg.embed_request_timeout_seconds
 QDRANT_URL = _cfg.qdrant_url
 
 COLLECTION_NAME = "paper_chunks"
@@ -121,6 +123,28 @@ def _point_payload(hit) -> dict | None:
     """Return a Qdrant point payload when present, else ``None``."""
     payload = getattr(hit, "payload", None)
     return payload if isinstance(payload, dict) else None
+
+
+class EmbeddingBatchError(RuntimeError):
+    """A batch failed after one or more earlier batches were upserted.
+
+    Carries the chunk/point-id pairs whose Qdrant upsert *did* succeed so the
+    caller can persist their DB rows.  Those vectors are intentionally left in
+    Qdrant: discarding them throws away minutes of CPU-bound embedding and
+    makes a retry start from zero.  A retry resumes via the Phase-1 idempotency
+    check + ``ON CONFLICT (paper_id, chunk_index) DO NOTHING``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        completed_chunks: list[ChunkForEmbedding],
+        completed_point_ids: list[str],
+    ) -> None:
+        super().__init__(message)
+        self.completed_chunks = completed_chunks
+        self.completed_point_ids = completed_point_ids
 
 
 class Embedder:
@@ -365,12 +389,28 @@ class Embedder:
         ------
         RuntimeError
             If the embedding service times out, is unreachable, or returns
-            an HTTP error after up to 3 attempts (5xx / timeout are retried).
+            an HTTP error after up to 3 attempts (5xx / read-timeout are
+            retried with exponential backoff).
+
+        Notes
+        -----
+        The per-request read timeout is ``EMBED_REQUEST_TIMEOUT_SECONDS``
+        (default 300 s), not the historical 60 s scalar.  On memory-bound
+        machines the embedding model is often GPU-evicted to CPU, where a
+        32-chunk batch can take minutes; a 60 s ceiling turned that slow-path
+        into a hard failure that discarded the whole paper.
         """
         if not texts:
             return []
 
         litellm_config = get_litellm_config()
+        # Scalar timeouts collapse connect/read/write/pool into one budget; an
+        # explicit Timeout keeps a tight connect while allowing a long read for
+        # CPU-bound embedding.
+        request_timeout = httpx.Timeout(
+            EMBED_REQUEST_TIMEOUT_SECONDS,
+            connect=10.0,
+        )
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
@@ -378,11 +418,14 @@ class Embedder:
                     f"{litellm_config.base_url}/v1/embeddings",
                     json={"model": EMBEDDING_MODEL, "input": texts},
                     headers=build_litellm_headers(litellm_config),
-                    timeout=60.0,
+                    timeout=request_timeout,
                 )
                 response.raise_for_status()
                 break
-            except httpx.TimeoutException as exc:
+            except (httpx.TimeoutException, httpcore.ReadTimeout) as exc:
+                # httpx.ReadTimeout subclasses httpx.TimeoutException; the bare
+                # httpcore.ReadTimeout can still leak when httpx fails to wrap
+                # it, so it is retried explicitly here.
                 if attempt < 2:
                     last_exc = exc
                     logger.warning(
@@ -462,14 +505,22 @@ class Embedder:
         -------
         list[str]
             Qdrant point IDs (UUIDs), one per chunk, in chunk_index order.
-        """
-        all_point_ids: list[str] = []
-        successfully_upserted: list[str] = []
 
-        try:
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i : i + batch_size]
-                texts = [c.content for c in batch]
+        Raises
+        ------
+        EmbeddingBatchError
+            When a batch fails after earlier batches were upserted.  The
+            completed chunk/point pairs are attached so the caller can persist
+            their DB rows; the completed Qdrant points are *kept* so a retry
+            resumes instead of re-embedding from zero.
+        """
+        completed_chunks: list[ChunkForEmbedding] = []
+        completed_point_ids: list[str] = []
+
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i : i + batch_size]
+            texts = [c.content for c in batch]
+            try:
                 embeddings = await self.embed_texts(texts)
                 if len(embeddings) != len(texts):
                     raise RuntimeError(
@@ -481,7 +532,6 @@ class Embedder:
                 batch_ids: list[str] = []
                 for chunk, embedding in zip(batch, embeddings):
                     point_id = str(uuid.uuid4())
-                    all_point_ids.append(point_id)
                     batch_ids.append(point_id)
                     points.append(
                         PointStruct(
@@ -499,27 +549,30 @@ class Embedder:
                     )
 
                 await self.qdrant.upsert(collection_name=COLLECTION_NAME, points=points)
-                successfully_upserted.extend(batch_ids)
-        except Exception:
-            if successfully_upserted:
-                try:
-                    await self.qdrant.delete(
-                        collection_name=COLLECTION_NAME,
-                        points_selector=PointIdsList(points=successfully_upserted),  # type: ignore[arg-type]
-                    )
-                    logger.info(
-                        "Cleaned up %d orphaned Qdrant points after batch failure",
-                        len(successfully_upserted),
-                    )
-                except Exception:
-                    logger.error(
-                        "Failed to clean up %d orphaned Qdrant points",
-                        len(successfully_upserted),
-                        exc_info=True,
-                    )
-            raise
+            except Exception as exc:
+                if not completed_point_ids:
+                    # Nothing persisted yet — surface the raw error so callers
+                    # that special-case dimension/HTTP failures still work.
+                    raise
+                logger.warning(
+                    "Embedding batch %d failed for paper %d after %d/%d chunks persisted: %r",
+                    i // batch_size,
+                    paper_id,
+                    len(completed_point_ids),
+                    len(chunks),
+                    exc,
+                )
+                raise EmbeddingBatchError(
+                    f"Embedding failed at batch {i // batch_size} "
+                    f"({len(completed_point_ids)}/{len(chunks)} chunks persisted): {exc}",
+                    completed_chunks=completed_chunks,
+                    completed_point_ids=completed_point_ids,
+                ) from exc
 
-        return all_point_ids
+            completed_chunks.extend(batch)
+            completed_point_ids.extend(batch_ids)
+
+        return completed_point_ids
 
     async def search_similar(
         self,

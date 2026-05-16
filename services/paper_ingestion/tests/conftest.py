@@ -646,39 +646,25 @@ async def two_users(live_pg_dsn):
     Builds its OWN asyncpg pool against the disposable ``live_pg_dsn``
     container and provisions a complete schema.
 
-    Provisioning has to work around a *pre-existing* repo schema-drift
-    defect (the canonical fresh-init test ``test_migrations_live`` is
-    itself red on master for the same reason; ``test_db_pool``'s tolerant
-    ``;``-splitter merely swallows it into a half-built schema). Concretely:
+    ``init.sql`` references ``users(id)`` (the ``user_topic_subscriptions``
+    FK) but never creates ``users``/``sessions`` — those live only in
+    migration 069. So apply the idempotent 069 auth DDL first, then
+    ``init.sql`` whole.
 
-      1. ``init.sql`` references ``users(id)`` (``user_topic_subscriptions``
-         FK) but never creates ``users``/``sessions`` — those live only in
-         migration 069. So apply the idempotent 069 auth DDL first.
-      2. ``init.sql`` is *mostly* the post-migration steady state but
-         genuinely lags a handful of migrations whose per-user columns the
-         endpoints query (070 ``cards/decks.user_id``; 072 ``papers``
-         ``user_id``->``discovered_by`` rename + ``user_library``).
-      3. Re-running the full migration set on top of init.sql conflicts on
-         objects init.sql already has (e.g. 063's
-         ``uq_paper_recommendations`` unique index → "relation already
-         exists", which 063's ``EXCEPTION WHEN duplicate_object`` does NOT
-         catch).
-
-    Strategy that yields a correct, complete schema:
-      * apply 069 auth DDL + ``init.sql`` whole;
-      * pre-mark *every* migration version applied, then run the real
-        runner — its ``_repair_false_applied_migrations`` probe replays
-        only the genuinely-missing probe-covered ones (33/49/50/63/77…)
-        and skips everything init.sql already has (no conflicts);
-      * finally, explicitly re-apply the *idempotent* migrations init.sql
-        is known to lag (070 then 072) so the per-user scoping columns the
-        routers SELECT actually exist. Both are guarded
-        (``ADD COLUMN IF NOT EXISTS`` / ``DO $$ … EXCEPTION``) so a second
-        application is a safe no-op.
+    Provisioning trusts ``init.sql``'s curated ``schema_migrations``
+    bootstrap, which deliberately pre-marks only the migrations its snapshot
+    actually embodies and omits the later additive/corrective ones (e.g.
+    034, 063, 070, 072, 074). ``run_migrations`` then applies exactly those
+    omitted migrations — in version order, so the ``papers.user_id`` ->
+    ``discovered_by`` rename (072) and ``user_topic_subscriptions`` (074)
+    land correctly — with no "relation already exists" conflicts, because
+    the blanket over-mark that used to suppress them has been removed. No
+    post-runner re-apply is needed.
 
     The container is torn down by ``live_pg_dsn`` after the test, so no
     row-level cleanup is required — the DB is disposable per test.
     """
+    import asyncio
     from pathlib import Path
 
     import asyncpg
@@ -689,47 +675,27 @@ async def two_users(live_pg_dsn):
     init_sql = (db_dir / "init.sql").read_text(encoding="utf-8")
     migrations_dir = db_dir / "migrations"
     auth_ddl = (migrations_dir / "069_auth.sql").read_text(encoding="utf-8")
-    all_versions = sorted(
-        int(p.name.split("_")[0])
-        for p in migrations_dir.glob("*.sql")
-        if p.name.split("_")[0].isdigit()
-    )
-    # Migrations init.sql lags whose columns the endpoints query. Applied
-    # in version order after the runner; all are fully idempotent
-    # (ADD COLUMN IF NOT EXISTS / guarded DO $$ blocks) so re-applying what
-    # the runner already did is a safe no-op:
-    #   034 — pulse_cards.reasoning_verified/_confidence (pulse/today query)
-    #   070 — cards/decks.user_id (cards/decks scoping queries)
-    #   072 — papers user_id->discovered_by rename + user_library
-    lagged_migrations = (
-        migrations_dir / "034_pulse_reasoning_verification.sql",
-        migrations_dir / "070_multi_tenant_user_id_columns.sql",
-        migrations_dir / "072_canonical_corpus.sql",
-    )
 
     # init=init_pg_connection registers the JSON/JSONB codec exactly like the
     # app's lifespan-built pool, so JSONB columns deserialize to dicts (the
     # response models require dict, not str).
-    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection)
+    pool = None
+    for attempt in range(10):
+        try:
+            pool = await asyncpg.create_pool(
+                live_pg_dsn, min_size=1, max_size=5, init=init_pg_connection
+            )
+            break
+        except (OSError, asyncpg.PostgresError):
+            if attempt == 9:
+                raise
+            await asyncio.sleep(0.5)
     assert pool is not None
     try:
         async with pool.acquire() as conn:
             await conn.execute(auth_ddl)  # users + sessions (IF NOT EXISTS)
             await conn.execute(init_sql)  # everything else, FK now resolvable
-            await conn.execute("""
-                CREATE TABLE IF NOT EXISTS schema_migrations (
-                    version INTEGER PRIMARY KEY,
-                    applied_at TIMESTAMPTZ DEFAULT NOW()
-                )
-            """)
-            await conn.executemany(
-                "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING",
-                [(v,) for v in all_versions],
-            )
         await run_migrations(pool, migrations_dir=migrations_dir)
-        async with pool.acquire() as conn:
-            for mig in lagged_migrations:
-                await conn.execute(mig.read_text(encoding="utf-8"))
 
         async with pool.acquire() as conn:
             user_a_id, cookie_a = await _seed_user(conn, "iso-user-a@example.test")

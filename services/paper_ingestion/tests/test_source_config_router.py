@@ -1,8 +1,10 @@
-"""Tests for paper_ingestion.routers.source_config (Task B5).
+"""Tests for paper_ingestion.routers.source_config (Task B5 + B-1b).
 
 Covers:
   - PATCH /api/settings/sources/{source_type}: config merge, admin-only, 404 on unknown type
   - POST  /api/settings/sources/{source_type}/clear-cooldown: resets source_health, admin-only
+  - B-1b regression: JSONB args must be native dict (asyncpg codec auto-encodes; pre-serialised
+    strings cause double-encoding — stored as a JSON string scalar instead of an object).
 
 All DB calls are mocked via the project's _make_pool_and_conn() pattern from conftest.py.
 """
@@ -81,11 +83,9 @@ async def test_update_source_config_merges_api_key():
     sql, *args = conn.execute.await_args.args
     assert "UPDATE paper_sources" in sql
     assert "COALESCE" in sql
-    # The JSONB patch payload should contain api_key
-    import json
-
-    payload = json.loads(args[0])
-    assert payload["api_key"] == "my-key-123"
+    # B-1b: asyncpg JSONB codec auto-encodes — arg must be a native dict, not a JSON string.
+    assert isinstance(args[0], dict), "JSONB arg must be native dict (asyncpg auto-encodes)"
+    assert args[0]["api_key"] == "my-key-123"
     assert args[1] == "semantic_scholar"
 
 
@@ -100,10 +100,9 @@ async def test_update_source_config_merges_email():
         result = await sc_router.update_source_config("openalex", body, db_pool=pool)
 
     assert result == {"ok": True}
-    _, payload_json, src_type = conn.execute.await_args.args
-    import json
-
-    payload = json.loads(payload_json)
+    _, payload, src_type = conn.execute.await_args.args
+    # B-1b: asyncpg JSONB codec auto-encodes — arg must be a native dict, not a JSON string.
+    assert isinstance(payload, dict), "JSONB arg must be native dict (asyncpg auto-encodes)"
     assert payload["email"] == "researcher@example.com"
     assert "api_key" not in payload
     assert src_type == "openalex"
@@ -151,6 +150,52 @@ async def test_update_source_config_upserts_when_row_absent():
     assert conn.execute.await_count == 2
     insert_sql = conn.execute.await_args_list[1].args[0]
     assert "INSERT INTO paper_sources" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_jsonb_arg_is_dict_not_str():
+    """B-1b regression: JSONB arg passed to UPDATE must be a native dict.
+
+    asyncpg registers a JSONB codec that auto-encodes Python dicts.  Passing a
+    pre-serialised JSON string produces a double-encode: the stored value becomes
+    a JSON string scalar instead of an object, breaking all JSON-merge operations.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody(api_key="test-key", email="x@example.com")
+        await sc_router.update_source_config("arxiv", body, db_pool=pool)
+
+    sql, jsonb_arg, _src_type = conn.execute.await_args.args
+    assert "UPDATE paper_sources" in sql
+    assert isinstance(jsonb_arg, dict), (
+        "JSONB arg must be a native dict — got "
+        f"{type(jsonb_arg).__name__!r} which would double-encode"
+    )
+    assert jsonb_arg == {"api_key": "test-key", "email": "x@example.com"}
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_insert_fallback_jsonb_arg_is_dict():
+    """B-1b regression: JSONB arg passed to INSERT fallback must also be a native dict."""
+    pool, conn = _make_pool_and_conn()
+    # First execute = UPDATE 0 (row absent), second = INSERT
+    conn.execute = AsyncMock(side_effect=["UPDATE 0", None])
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody(api_key="fallback-key")
+        await sc_router.update_source_config("pubmed", body, db_pool=pool)
+
+    assert conn.execute.await_count == 2
+    # INSERT call: conn.execute(sql, source_type, updates)
+    insert_call_args = conn.execute.await_args_list[1].args
+    jsonb_arg = insert_call_args[2]  # position 2: updates dict
+    assert isinstance(jsonb_arg, dict), (
+        "JSONB arg must be a native dict — got "
+        f"{type(jsonb_arg).__name__!r} which would double-encode"
+    )
+    assert jsonb_arg.get("api_key") == "fallback-key"
 
 
 @pytest.mark.asyncio

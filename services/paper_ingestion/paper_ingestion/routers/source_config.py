@@ -24,7 +24,6 @@ SQL is therefore intentional and correct.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Annotated, Any
 
@@ -116,7 +115,7 @@ async def update_source_config(
                SET config = COALESCE(config, '{}'::jsonb) || $1::jsonb
              WHERE source_type = $2
             """,
-            json.dumps(updates),
+            updates,
             source_type,
         )
 
@@ -131,7 +130,7 @@ async def update_source_config(
                    SET config = paper_sources.config || EXCLUDED.config
                 """,
                 source_type,
-                json.dumps(updates),
+                updates,
             )
 
     logger.info("source_config: updated %s config keys=%s", source_type, list(updates))

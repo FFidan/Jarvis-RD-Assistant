@@ -61,14 +61,13 @@ export function ReviewMode({
   const [revealed, setRevealed] = useState(false);
   const startTime = useRef<number>(Date.now());
 
-  // Fetch the next card (1 at a time); deck_id filter applied when scoped session.
   const reviewQueryKey = deckId != null
     ? ['review-next', { deckId }]
     : ['review-next'];
 
   const { data: cards = [], isLoading, refetch } = useQuery({
     queryKey: reviewQueryKey,
-    queryFn: () => getNextReview(1, deckId ?? undefined),
+    queryFn: () => getNextReview(1),
   });
 
   // Pre-fetch decks to resolve deck name for the eyebrow.

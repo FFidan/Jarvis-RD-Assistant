@@ -61,40 +61,49 @@ export function AnalyticsPage() {
   const [days, setDays] = useState(30);
 
   // ── summary (KPI band) ──────────────────────────────────────────────────
+  // staleTime: 5 min — historical analytics data rarely changes mid-session;
+  // revisits and `days` toggles read from cache instead of refetching.
   const summaryQuery = useQuery({
     queryKey: ['analytics', 'summary', days],
     queryFn: () => fetchAnalyticsSummary(days),
+    staleTime: 5 * 60_000,
   });
 
   // ── existing chart queries (unchanged query keys + fetch fns) ───────────
   const activityQuery = useQuery({
     queryKey: ['analytics', 'activity', days],
     queryFn: () => fetchAnalyticsActivity(days),
+    staleTime: 5 * 60_000,
   });
 
   const retentionQuery = useQuery({
     queryKey: ['analytics', 'retention', days],
     queryFn: () => fetchAnalyticsRetention(days),
+    staleTime: 5 * 60_000,
   });
 
   const reviewsQuery = useQuery({
     queryKey: ['analytics', 'reviews', days],
     queryFn: () => fetchAnalyticsReviews(days),
+    staleTime: 5 * 60_000,
   });
 
   const llmCostQuery = useQuery({
     queryKey: ['analytics', 'llm-cost', days],
     queryFn: () => fetchAnalyticsLlmCost(days),
+    staleTime: 5 * 60_000,
   });
 
   const sourceQuery = useQuery({
     queryKey: ['analytics', 'papers-by-source'],
     queryFn: fetchPapersBySource,
+    staleTime: 5 * 60_000,
   });
 
   const statusQuery = useQuery({
     queryKey: ['analytics', 'papers-by-status'],
     queryFn: fetchPapersByStatus,
+    staleTime: 5 * 60_000,
   });
 
   const hasError =

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DateMasthead } from '@/components/my-day/sections/DateMasthead';
 import { YesterdaySection } from '@/components/my-day/sections/YesterdaySection';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
@@ -12,10 +13,71 @@ import { LearningFocusSection } from '@/components/my-day/sections/LearningFocus
 import { WeeklyDigestSection } from '@/components/my-day/sections/WeeklyDigestSection';
 import { EndOfDaySection } from '@/components/my-day/sections/EndOfDaySection';
 import { MyDayFooter } from '@/components/my-day/sections/MyDayFooter';
+import { getMyDayBundle } from '@/lib/api';
+import type { MyDayBundle } from '@/types';
+
+/** Today's ISO date string (YYYY-MM-DD) in local time — matches EndOfDaySection. */
+function todayIso(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 export function MyDayPage() {
   const entryNum = Math.floor((Date.now() - new Date('2026-01-01').getTime()) / 86400000);
   const { hash } = useLocation();
+  const queryClient = useQueryClient();
+
+  // Browser tz offset (minutes EAST of UTC) — matches YesterdaySection convention.
+  const tzOffsetMinutes = -new Date().getTimezoneOffset();
+
+  // ── My-Day bundle: single round-trip that primes per-section caches ────────
+  //
+  // Sections that can be satisfied from the bundle:
+  //   threads    → ['my-day', 'threads']  (ThreadsSection + HeroNow)
+  //   yesterday  → ['my-day', 'yesterday', tzOffsetMinutes]  (YesterdaySection)
+  //   intent     → ['intent', 'today']  (IntentSection)
+  //   journal    → ['journalEntry', today]  (EndOfDaySection)
+  //
+  // Sections that self-fetch because the bundle can't satisfy them:
+  //   ['my-day']               — bundle.tasks is MyDayTask[] only, not the full
+  //                              MyDayResponse (missing cards_due, focus_hours,
+  //                              project_pulse, recommendations). Self-fetch keeps.
+  //   ['pulse-today']          — bundle.pulse_today is always null (learning_engine
+  //                              cannot assemble the deck). Self-fetch keeps.
+  //   ['action-items-unprocessed'] — not in bundle. Self-fetch keeps.
+  //   ['retention-stats']      — not in bundle. Self-fetch keeps.
+  //   ['analytics', 'missing-foundational'] — not in bundle. Self-fetch keeps.
+  //   ['digest-weekly']        — not in bundle. Self-fetch keeps.
+  //   ['feed', 'reading', 'hero'] — not in bundle. Self-fetch keeps.
+  //
+  // Net result: ~4 section-level requests eliminated on cold mount.
+  const { data: bundle } = useQuery<MyDayBundle>({
+    queryKey: ['my-day-bundle', tzOffsetMinutes],
+    queryFn: () => getMyDayBundle(),
+    staleTime: 60_000, // bundle is a snapshot; individual queries may refresh faster
+  });
+
+  // Prime per-section caches when the bundle resolves — runs synchronously so
+  // the section hooks find data immediately without a network call.
+  useEffect(() => {
+    if (!bundle) return;
+    const today = todayIso();
+
+    // threads → ThreadsSection + HeroNow both use ['my-day', 'threads']
+    queryClient.setQueryData(['my-day', 'threads'], bundle.threads);
+
+    // yesterday — key includes tz offset to match YesterdaySection exactly
+    queryClient.setQueryData(['my-day', 'yesterday', tzOffsetMinutes], bundle.yesterday);
+
+    // intent — matches IntentSection's ['intent', 'today']
+    queryClient.setQueryData(['intent', 'today'], bundle.intent);
+
+    // journal — matches EndOfDaySection's ['journalEntry', today]
+    queryClient.setQueryData(['journalEntry', today], bundle.journal);
+  }, [bundle, queryClient, tzOffsetMinutes]);
 
   useEffect(() => {
     if (!hash) return;

@@ -32,25 +32,49 @@ def test_migration_046_text() -> None:
 # Live-PG tests (gated by JARVIS_RUN_LIVE_PG=1, marked live_pg)
 # ---------------------------------------------------------------------------
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_INIT_SQL = _REPO_ROOT / "db" / "init.sql"
+# Minimal pre-046 schema. Migration 046 operates on the paper_user_state shape
+# that existed *before* migration 047 collapsed it into the `state` ENUM, so
+# init.sql (the post-047 steady state) can never represent the pre-state this
+# migration mutates. Build only what 046 touches: the `status` reading enum plus
+# the starred/archived flags (added by migration 044) and the set_updated_at
+# helper its trigger reuses.
+_PRE_046_SCHEMA = """
+CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
+BEGIN NEW.updated_at = NOW(); RETURN NEW; END $$ LANGUAGE plpgsql;
+
+CREATE TABLE papers (
+    id          SERIAL PRIMARY KEY,
+    external_id VARCHAR(255) UNIQUE NOT NULL,
+    source_type VARCHAR(50) NOT NULL,
+    title       TEXT NOT NULL,
+    authors     TEXT[] NOT NULL,
+    url         TEXT NOT NULL
+);
+
+CREATE TABLE paper_user_state (
+    id        SERIAL PRIMARY KEY,
+    paper_id  INTEGER REFERENCES papers(id) ON DELETE CASCADE,
+    user_id   INTEGER,
+    status    TEXT NOT NULL DEFAULT 'new',
+    starred   BOOLEAN NOT NULL DEFAULT FALSE,
+    archived  BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
 
 
-async def _apply_fresh_init(pool: asyncpg.Pool) -> None:
+async def _apply_pre_046(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
-        await conn.execute(_INIT_SQL.read_text(encoding="utf-8"))
+        await conn.execute(_PRE_046_SCHEMA)
 
 
 @pytest.mark.live_pg
 @pytest.mark.asyncio
 async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
-    """Apply migrations through 046 and verify backfill, constraints, and idempotency."""
-    from paper_ingestion.migrations_runner import run_migrations
-
+    """Apply migration 046 onto a pre-046 schema and verify backfill, constraints, and idempotency."""
     pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
     try:
-        await _apply_fresh_init(pool)
-        await run_migrations(pool)
+        await _apply_pre_046(pool)
+        await pool.execute(MIGRATION.read_text(encoding="utf-8"))
 
         async with pool.acquire() as conn:
             # Insert a dependency paper row.

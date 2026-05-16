@@ -5,6 +5,9 @@ import {
   setConfig,
   fetchPulseStats,
   fetchPulseDebug,
+  getSystemCapabilities,
+  patchSourceConfig,
+  clearSourceCooldown,
   ApiError,
 } from '@/lib/api';
 import { cronToHumanReadable, cronToTime, timeToCron } from '@/lib/cron-utils';
@@ -31,6 +34,7 @@ import { formatDate } from '@/lib/utils';
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useJobStore } from '@/stores/job-store';
+import { useAuthStore } from '@/stores/auth-store';
 import type { ConfigEntry, PulseStats, PulseDebugInfo } from '@/types';
 import { apiFetch } from '@/lib/api';
 import { RejectedTopicsPanel } from '@/components/settings/RejectedTopicsPanel';
@@ -91,6 +95,24 @@ const DEFAULT_PULSE_WEIGHTS: Record<PulseWeightKey, number> = {
   classifier: 0,
 };
 
+// Core signals that are always available (no extra dependencies).
+const CORE_SIGNAL_KEYS: PulseWeightKey[] = [
+  'embedding',
+  'topic',
+  'llm_relevance',
+  'llm_novelty',
+  'author_bonus',
+  'recency',
+];
+
+// Optional signals that require extra data or backend dependencies.
+const OPTIONAL_SIGNAL_KEYS: PulseWeightKey[] = [
+  'citation_pagerank',
+  'citation_count',
+  'citation_adamic_adar',
+  'classifier',
+];
+
 const EMPTY_CONFIGS: ConfigEntry[] = [];
 
 type PulseWeightKey =
@@ -145,29 +167,95 @@ const PULSE_WEIGHT_TOOLTIPS: Record<PulseWeightKey, string> = {
   recency:
     'Prefer papers published more recently. High weight = always surface the newest work, even if it scores lower on relevance.',
   citation_pagerank:
-    'Graph centrality inside the citation neighbourhood around candidate papers. Defaults off until you have enough citation data.',
+    'Boosts papers that are highly influential in the citation network near your interests. Also needs citation data — fetch citations for some papers first.',
   citation_count:
-    'Normalized citation count from source metadata. Defaults off so it does not overpower relevance.',
+    'Boosts papers with more citations from source metadata. Also needs citation data — fetch citations for some papers first.',
   citation_adamic_adar:
-    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph.',
+    'Boosts candidates that share specific citation neighbours with papers you liked, without computing the full graph. Also needs citation data.',
   classifier:
-    'Probability from the optional per-user classifier trained from Pulse ratings. Requires enough positive and negative feedback.',
+    'Probability from a personal classifier trained on your Pulse ratings. Gets better as you rate more papers — best after about 30 ratings.',
 };
 
 /**
- * Activation-gate tooltips for the 4 conditional signals. Shown on the slider
- * wrapper so users understand what is needed before the signal fires.
+ * Gate tooltip shown only when the required capability is missing.
+ * Maps signal key → { capability, message }.
  */
-const CONDITIONAL_SIGNAL_GATE_TOOLTIPS: Partial<Record<PulseWeightKey, string>> = {
-  classifier:
-    'Requires scikit-learn installed on the backend and at least 30 Pulse ratings to train the personal classifier.',
-  citation_pagerank:
-    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
-  citation_count:
-    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
-  citation_adamic_adar:
-    'Requires networkx installed on the backend and a populated paper_citations table (fetch citations for some papers first).',
+const CONDITIONAL_SIGNAL_GATES: Partial<
+  Record<PulseWeightKey, { capability: 'networkx' | 'scikit_learn'; message: string }>
+> = {
+  citation_pagerank: {
+    capability: 'networkx',
+    message:
+      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+  },
+  citation_count: {
+    capability: 'networkx',
+    message:
+      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+  },
+  citation_adamic_adar: {
+    capability: 'networkx',
+    message:
+      'Citation signals need the networkx library on the server. Ask your administrator to install it.',
+  },
+  classifier: {
+    capability: 'scikit_learn',
+    message:
+      'The personal classifier needs scikit-learn on the server. Ask your administrator to install it.',
+  },
 };
+
+/**
+ * Presets for signal weights.
+ * All presets use only core signals (always available) so they always sum correctly
+ * without needing optional dependencies. Values sum to 1.0.
+ */
+const WEIGHT_PRESETS: {
+  label: string;
+  description: string;
+  weights: Partial<Record<PulseWeightKey, number>>;
+}[] = [
+  {
+    label: 'Balanced',
+    description: 'Equal emphasis on relevance, novelty, and semantic similarity.',
+    // embedding=0.20, topic=0.20, llm_relevance=0.30, llm_novelty=0.10, author_bonus=0.15, recency=0.05
+    weights: { ...DEFAULT_PULSE_WEIGHTS },
+  },
+  {
+    label: 'Semantic-first',
+    description: 'Surface papers closely matching your existing reading, minimise LLM cost.',
+    // embedding=0.40, topic=0.35, llm_relevance=0.10, llm_novelty=0.05, author_bonus=0.05, recency=0.05
+    weights: {
+      embedding: 0.4,
+      topic: 0.35,
+      llm_relevance: 0.1,
+      llm_novelty: 0.05,
+      author_bonus: 0.05,
+      recency: 0.05,
+      citation_pagerank: 0,
+      citation_count: 0,
+      citation_adamic_adar: 0,
+      classifier: 0,
+    },
+  },
+  {
+    label: 'Freshness-first',
+    description: 'Always surface the newest papers, regardless of similarity.',
+    // recency=0.40, llm_relevance=0.25, embedding=0.15, topic=0.10, author_bonus=0.05, llm_novelty=0.05
+    weights: {
+      embedding: 0.15,
+      topic: 0.1,
+      llm_relevance: 0.25,
+      llm_novelty: 0.05,
+      author_bonus: 0.05,
+      recency: 0.4,
+      citation_pagerank: 0,
+      citation_count: 0,
+      citation_adamic_adar: 0,
+      classifier: 0,
+    },
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -176,7 +264,7 @@ const CONDITIONAL_SIGNAL_GATE_TOOLTIPS: Partial<Record<PulseWeightKey, string>> 
 function isValidCron(s: string): boolean {
   const parts = s.trim().split(/\s+/);
   if (parts.length !== 5) return false;
-  return parts.every((p) => /^[*/0-9,\-]+$/.test(p));
+  return parts.every((p) => /^[*/0-9,-]+$/.test(p));
 }
 
 function getConfigValue<T>(entries: ConfigEntry[], key: string, fallback: T): T {
@@ -195,6 +283,155 @@ function coerceWeights(raw: unknown): Record<PulseWeightKey, number> {
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Inline source config panel (admin-only)
+// ---------------------------------------------------------------------------
+
+interface SourceConfigPanelProps {
+  isAdmin: boolean;
+  onArxivCooldownCleared: () => void;
+}
+
+function SourceConfigPanel({ isAdmin, onArxivCooldownCleared }: SourceConfigPanelProps) {
+  const [openAlexEmail, setOpenAlexEmail] = useState('');
+  const [s2ApiKey, setS2ApiKey] = useState('');
+  const [savingOpenAlex, setSavingOpenAlex] = useState(false);
+  const [savingS2, setSavingS2] = useState(false);
+  const [clearingArxiv, setClearingArxiv] = useState(false);
+
+  if (!isAdmin) return null;
+
+  const handleSaveOpenAlex = async () => {
+    if (!openAlexEmail.trim()) return;
+    setSavingOpenAlex(true);
+    try {
+      await patchSourceConfig('openalex', { email: openAlexEmail.trim() });
+      toast.success('OpenAlex email saved.');
+      setOpenAlexEmail('');
+    } catch {
+      toast.error('Failed to save OpenAlex email.');
+    } finally {
+      setSavingOpenAlex(false);
+    }
+  };
+
+  const handleSaveS2 = async () => {
+    if (!s2ApiKey.trim()) return;
+    setSavingS2(true);
+    try {
+      await patchSourceConfig('semantic_scholar', { api_key: s2ApiKey.trim() });
+      toast.success('Semantic Scholar API key saved.');
+      setS2ApiKey('');
+    } catch {
+      toast.error('Failed to save Semantic Scholar API key.');
+    } finally {
+      setSavingS2(false);
+    }
+  };
+
+  const handleClearArxiv = async () => {
+    setClearingArxiv(true);
+    try {
+      await clearSourceCooldown('arxiv');
+      toast.success('ArXiv cooldown cleared. It will retry on the next Pulse run.');
+      onArxivCooldownCleared();
+    } catch {
+      toast.error('Failed to clear ArXiv cooldown.');
+    } finally {
+      setClearingArxiv(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4 border-t pt-4">
+      <div>
+        <h4 className="text-sm font-medium">Source settings</h4>
+        <p className="text-xs text-muted-foreground">
+          Configure source credentials and reset cooldowns when a source gets temporarily blocked.
+        </p>
+      </div>
+
+      {/* OpenAlex email */}
+      <div className="space-y-1.5">
+        <Label className="text-xs font-medium">OpenAlex contact email</Label>
+        <p className="text-xs text-muted-foreground">
+          OpenAlex asks for a contact email for reliable access — no account or signup required.
+          Without it you may hit stricter rate limits.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="email"
+            aria-label="OpenAlex contact email"
+            placeholder="your@email.com"
+            value={openAlexEmail}
+            onChange={(e) => setOpenAlexEmail(e.target.value)}
+            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleSaveOpenAlex()}
+            disabled={savingOpenAlex || !openAlexEmail.trim()}
+          >
+            {savingOpenAlex ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Semantic Scholar API key */}
+      <div className="space-y-1.5">
+        <Label className="text-xs font-medium">Semantic Scholar API key</Label>
+        <p className="text-xs text-muted-foreground">
+          An API key increases your rate limit with Semantic Scholar. Get one free at{' '}
+          <span className="font-mono text-[11px]">semanticscholar.org/product/api</span>.
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            aria-label="Semantic Scholar API key"
+            placeholder="sk-..."
+            value={s2ApiKey}
+            onChange={(e) => setS2ApiKey(e.target.value)}
+            className="flex-1 rounded-md border bg-background px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void handleSaveS2()}
+            disabled={savingS2 || !s2ApiKey.trim()}
+          >
+            {savingS2 ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
+      </div>
+
+      {/* ArXiv cooldown reset */}
+      <div className="space-y-1.5">
+        <Label className="text-xs font-medium">ArXiv rate-limit reset</Label>
+        <p className="text-xs text-muted-foreground">
+          If ArXiv is showing as rate-limited in diagnostics, use this to clear the cooldown and
+          let Pulse retry immediately on the next run.
+        </p>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => void handleClearArxiv()}
+          disabled={clearingArxiv}
+        >
+          {clearingArxiv ? (
+            <span className="flex items-center gap-2">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Clearing…
+            </span>
+          ) : (
+            'Clear ArXiv cooldown'
+          )}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +610,75 @@ function DiagnosticsPanel() {
 }
 
 // ---------------------------------------------------------------------------
+// Weight slider row
+// ---------------------------------------------------------------------------
+
+interface WeightSliderRowProps {
+  weightKey: PulseWeightKey;
+  value: number;
+  disabled: boolean;
+  /** Whether the required capability is actually present (or unknown — fail safe). */
+  capabilityPresent: boolean;
+  onChange: (key: PulseWeightKey, value: number) => void;
+}
+
+function WeightSliderRow({
+  weightKey,
+  value,
+  disabled,
+  capabilityPresent,
+  onChange,
+}: WeightSliderRowProps) {
+  const gate = CONDITIONAL_SIGNAL_GATES[weightKey];
+  const sliderInput = (
+    <input
+      type="range"
+      aria-label={`${PULSE_WEIGHT_LABELS[weightKey]} weight`}
+      data-testid={`weight-slider-${weightKey}`}
+      min={0}
+      max={1}
+      step={0.05}
+      value={value}
+      onChange={(e) => onChange(weightKey, Number(e.target.value))}
+      disabled={disabled}
+      className="w-full accent-primary"
+    />
+  );
+
+  // When capability is missing, wrap only the slider input (not the label/ⓘ row)
+  // in the gate tooltip trigger. The ⓘ stays outside the trigger so its InfoTooltip
+  // fires independently.
+  const sliderWithGate =
+    gate && !capabilityPresent ? (
+      <TooltipProvider delayDuration={150}>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div data-testid={`gate-tooltip-trigger-${weightKey}`}>{sliderInput}</div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="max-w-xs text-xs">
+            {gate.message}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    ) : (
+      sliderInput
+    );
+
+  return (
+    <div className="space-y-1">
+      <Label className="flex items-center justify-between text-xs">
+        <span className="flex items-center gap-1">
+          {PULSE_WEIGHT_LABELS[weightKey]}
+          <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[weightKey]} />
+        </span>
+        <span className="font-mono text-muted-foreground">{value.toFixed(2)}</span>
+      </Label>
+      {sliderWithGate}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main PulseSection
 // ---------------------------------------------------------------------------
 
@@ -380,6 +686,9 @@ export function PulseSection() {
   const queryClient = useQueryClient();
   const cronTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const weightsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const user = useAuthStore((s) => s.user);
+  const isAdmin = user?.role === 'admin';
 
   useEffect(
     () => () => {
@@ -409,6 +718,17 @@ export function PulseSection() {
     refetchInterval: 60_000,
   });
 
+  // System capabilities — fail safe: treat as available on error/loading
+  const { data: capabilities } = useQuery({
+    queryKey: ['system-capabilities'],
+    queryFn: getSystemCapabilities,
+    staleTime: 5 * 60_000,
+  });
+
+  // Returns true when capability is present OR query hasn't resolved (fail safe — no false nag)
+  const hasNetworkx = capabilities?.networkx !== false;
+  const hasSklearn = capabilities?.scikit_learn !== false;
+
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['config'] }),
@@ -426,7 +746,6 @@ export function PulseSection() {
   const l2LambdaConfig = Number(getConfigValue(safeConfigs, 'pulse.l2_lambda', 0.5));
   const pulseWeights = useMemo(
     () => coerceWeights(getConfigValue(safeConfigs, 'pulse.weights', DEFAULT_PULSE_WEIGHTS)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [safeConfigs],
   );
 
@@ -491,11 +810,18 @@ export function PulseSection() {
     }, 400);
   };
 
+  const applyPreset = (preset: (typeof WEIGHT_PRESETS)[number]) => {
+    if (settingsControlsDisabled) return;
+    // DEFAULT_PULSE_WEIGHTS covers all keys; spread Partial on top to get a full Record
+    const next: Record<PulseWeightKey, number> = Object.assign({ ...DEFAULT_PULSE_WEIGHTS }, preset.weights);
+    setLocalPulseWeights(next);
+    setMut.mutate({ key: 'pulse.weights', value: next });
+  };
+
   const pulseWeightSum = PULSE_WEIGHT_KEYS.reduce((acc, k) => acc + localPulseWeights[k], 0);
-  const pulseWeightSumOutOfRange = pulseWeightSum < 0.8 || pulseWeightSum > 1.2;
 
   const handleNormalize = () => {
-    if (settingsControlsDisabled) return;
+    if (settingsControlsDisabled || pulseWeightSum === 0) return;
     const scale = 1 / pulseWeightSum;
     const next = { ...localPulseWeights };
     PULSE_WEIGHT_KEYS.forEach((k) => {
@@ -548,6 +874,15 @@ export function PulseSection() {
       );
     }
   }
+
+  // Resolve capability flag per signal key
+  const capabilityForKey = (key: PulseWeightKey): boolean => {
+    const gate = CONDITIONAL_SIGNAL_GATES[key];
+    if (!gate) return true; // core signal, no gate
+    if (gate.capability === 'networkx') return hasNetworkx;
+    if (gate.capability === 'scikit_learn') return hasSklearn;
+    return true; // unknown capability → fail safe
+  };
 
   return (
     <div className="space-y-6">
@@ -754,68 +1089,90 @@ export function PulseSection() {
                 </p>
               </div>
 
-              {/* Weight sliders — conditional signals include an extra gate tooltip */}
-              {PULSE_WEIGHT_KEYS.map((key) => {
-                const gateTooltip = CONDITIONAL_SIGNAL_GATE_TOOLTIPS[key];
-                const sliderDiv = (
-                  <div key={key} className="space-y-1">
-                    <Label className="flex items-center justify-between text-xs">
-                      <span className="flex items-center gap-1">
-                        {PULSE_WEIGHT_LABELS[key]}
-                        <InfoTooltip content={PULSE_WEIGHT_TOOLTIPS[key]} />
-                      </span>
-                      <span className="font-mono text-muted-foreground">
-                        {localPulseWeights[key].toFixed(2)}
-                      </span>
-                    </Label>
-                    <input
-                      type="range"
-                      aria-label={`${PULSE_WEIGHT_LABELS[key]} weight`}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={localPulseWeights[key]}
-                      onChange={(e) => updatePulseWeight(key, Number(e.target.value))}
-                      disabled={settingsControlsDisabled}
-                      className="w-full accent-primary"
-                    />
-                  </div>
-                );
-                if (!gateTooltip) return sliderDiv;
-                return (
-                  <TooltipProvider key={key} delayDuration={150}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        {/* div wrapper required — input cannot be a TooltipTrigger directly */}
-                        <div data-testid={`gate-tooltip-trigger-${key}`}>{sliderDiv}</div>
-                      </TooltipTrigger>
-                      <TooltipContent side="top" className="max-w-xs text-xs">
-                        {gateTooltip}
-                      </TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                );
-              })}
-              <div className="flex items-center">
+              {/* Presets */}
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">Presets</p>
+                <div className="flex flex-wrap gap-2" data-testid="weight-presets">
+                  {WEIGHT_PRESETS.map((preset) => (
+                    <TooltipProvider key={preset.label} delayDuration={200}>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2.5 text-xs"
+                            onClick={() => applyPreset(preset)}
+                            disabled={settingsControlsDisabled}
+                            data-testid={`preset-${preset.label.toLowerCase().replace(/\s+/g, '-')}`}
+                          >
+                            {preset.label}
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom" className="max-w-xs text-xs">
+                          {preset.description}
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  ))}
+                </div>
+              </div>
+
+              {/* Core signal sliders */}
+              <div className="space-y-3">
+                {CORE_SIGNAL_KEYS.map((key) => (
+                  <WeightSliderRow
+                    key={key}
+                    weightKey={key}
+                    value={localPulseWeights[key]}
+                    disabled={settingsControlsDisabled}
+                    capabilityPresent={true}
+                    onChange={updatePulseWeight}
+                  />
+                ))}
+              </div>
+
+              {/* Optional signal sliders — grouped under a labeled subsection */}
+              <div className="space-y-3 rounded-md border border-dashed p-3">
+                <div>
+                  <p className="text-xs font-semibold">Optional signals — need extra data or dependencies</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    These signals are inactive by default. Enable them once the prerequisites are in place.
+                  </p>
+                </div>
+                {OPTIONAL_SIGNAL_KEYS.map((key) => (
+                  <WeightSliderRow
+                    key={key}
+                    weightKey={key}
+                    value={localPulseWeights[key]}
+                    disabled={settingsControlsDisabled}
+                    capabilityPresent={capabilityForKey(key)}
+                    onChange={updatePulseWeight}
+                  />
+                ))}
+              </div>
+
+              {/* Sum readout + always-available normalize button */}
+              <div className="flex items-center gap-2">
                 <p
                   className={`text-xs ${
-                    pulseWeightSumOutOfRange ? 'text-[var(--status-warn)]' : 'text-muted-foreground'
+                    Math.abs(pulseWeightSum - 1.0) > 0.2
+                      ? 'text-[var(--status-warn)]'
+                      : 'text-muted-foreground'
                   }`}
                 >
                   Sum: {pulseWeightSum.toFixed(2)}
-                  {pulseWeightSumOutOfRange && ' (target ~1.0)'}
+                  {Math.abs(pulseWeightSum - 1.0) > 0.2 && ' (target ~1.0)'}
                 </p>
-                {pulseWeightSumOutOfRange && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleNormalize}
-                    disabled={settingsControlsDisabled}
-                    className="ml-2 h-6 px-2 text-xs"
-                  >
-                    Normalize to 1.0
-                  </Button>
-                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNormalize}
+                  disabled={settingsControlsDisabled || pulseWeightSum === 0}
+                  className="h-6 px-2 text-xs"
+                  data-testid="normalize-button"
+                >
+                  Normalize to 1.0
+                </Button>
               </div>
             </div>
 
@@ -970,6 +1327,12 @@ export function PulseSection() {
                   </Badge>
                 </div>
               )}
+              {stats.decks_generated === 0 && !stats.last_error && (
+                <p className="rounded-md border border-muted bg-muted/20 px-3 py-2 text-xs text-muted-foreground mt-2">
+                  No Pulse deck yet. Pulse needs a populated library with topics set and at least
+                  one working source. Enable Pulse above and run it once to get started.
+                </p>
+              )}
             </div>
           ) : statsError ? (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
@@ -1005,6 +1368,15 @@ export function PulseSection() {
           </Button>
 
           <DiagnosticsPanel />
+
+          {/* Inline source config — admin only */}
+          <SourceConfigPanel
+            isAdmin={isAdmin}
+            onArxivCooldownCleared={() => {
+              void queryClient.invalidateQueries({ queryKey: ['pulse-debug'] });
+              void queryClient.invalidateQueries({ queryKey: ['pulse-stats'] });
+            }}
+          />
         </CardContent>
       </Card>
     </div>

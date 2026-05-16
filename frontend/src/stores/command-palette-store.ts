@@ -10,8 +10,10 @@ import type { SearchPreviewResult } from '@/types';
  * the TopBar); this store is the single source of open/query/results state.
  *
  * Mirrors keyboard-shortcuts-store.ts: a tiny create() store with an
- * initial-state constant and a _reset() called on logout to prevent
- * cross-user leakage of in-flight queries.
+ * initial-state constant and a _reset() method that fully clears store
+ * state (available for tests and future logout wiring; not currently
+ * called on logout — the store has no persist middleware and close()
+ * already resets visible state on each palette interaction).
  */
 interface CommandPaletteSnapshot {
   isOpen: boolean;
@@ -38,7 +40,7 @@ interface CommandPaletteState extends CommandPaletteSnapshot {
   setLoading: (loading: boolean) => void;
   setResults: (results: SearchPreviewResult[]) => void;
   setErrored: (errored: boolean) => void;
-  /** Reset to initial state (called on logout and on close to drop stale results). */
+  /** Fully resets store to initial state. Used in tests; available for future logout wiring. */
   _reset: () => void;
 }
 

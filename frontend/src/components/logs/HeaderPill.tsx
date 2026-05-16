@@ -1,18 +1,24 @@
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { getSummary } from '@/lib/logs';
 import { AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export function HeaderPill() {
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+
+  // Only poll actively while the user is on /logs; elsewhere a 60s interval
+  // is enough to keep the badge roughly correct without hammering the endpoint.
+  // This halves the background polling rate on every non-logs page.
+  const isLogsPage = pathname.startsWith('/logs');
 
   const { data } = useQuery({
     queryKey: ['logs', 'summary', 'app-only'],
     // exclude_infra=1 so nginx rate-limit 503s (category=infra) don't inflate
     // the badge — those are self-inflicted infra noise, not application errors.
     queryFn: () => getSummary({ excludeInfra: true }),
-    refetchInterval: 30_000,
+    refetchInterval: isLogsPage ? 30_000 : 60_000,
     staleTime: 20_000,
   });
 

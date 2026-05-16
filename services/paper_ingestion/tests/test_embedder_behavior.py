@@ -116,12 +116,16 @@ async def test_embed_texts_sends_litellm_master_key_header(monkeypatch):
 
     await e.embed_texts(["text"])
 
-    e.http_client.post.assert_awaited_once_with(
-        "http://litellm.test:4000/v1/embeddings",
-        json={"model": "embed", "input": ["text"]},
-        headers={"Authorization": "Bearer test-master-key"},
-        timeout=60.0,
-    )
+    e.http_client.post.assert_awaited_once()
+    call = e.http_client.post.call_args
+    assert call.args[0] == "http://litellm.test:4000/v1/embeddings"
+    assert call.kwargs["json"] == {"model": "embed", "input": ["text"]}
+    assert call.kwargs["headers"] == {"Authorization": "Bearer test-master-key"}
+    # Read timeout must be the configurable default (>= 300 s), never the old
+    # 60 s scalar that turned CPU-bound embedding into a hard failure.
+    timeout = call.kwargs["timeout"]
+    assert timeout.read >= 300.0
+    assert timeout.connect == 10.0
 
 
 async def test_embed_texts_dimension_mismatch_raises(monkeypatch):
@@ -148,6 +152,59 @@ async def test_embed_texts_timeout_raises(monkeypatch):
 
     with pytest.raises(RuntimeError, match="timed out"):
         await e.embed_texts(["text"])
+
+
+async def test_embed_texts_retries_httpx_read_timeout_with_backoff(monkeypatch):
+    """A transient httpx.ReadTimeout is retried with backoff, then succeeds."""
+    import httpx
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleeps.append(secs)
+
+    monkeypatch.setattr("paper_ingestion.ingestion.embedder.asyncio.sleep", _fake_sleep)
+
+    e.http_client.post.side_effect = [
+        httpx.ReadTimeout("read timed out"),
+        _embed_response(1),
+    ]
+
+    result = await e.embed_texts(["text"])
+
+    assert len(result) == 1
+    assert e.http_client.post.await_count == 2
+    assert sleeps == [1]  # 2 ** 0 backoff after the first failure
+
+
+async def test_embed_texts_retries_httpcore_read_timeout_with_backoff(monkeypatch):
+    """A bare httpcore.ReadTimeout (leaked, not wrapped by httpx) is retried."""
+    import httpcore
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+
+    sleeps: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleeps.append(secs)
+
+    monkeypatch.setattr("paper_ingestion.ingestion.embedder.asyncio.sleep", _fake_sleep)
+
+    e.http_client.post.side_effect = [
+        httpcore.ReadTimeout("core read timed out"),
+        httpcore.ReadTimeout("core read timed out again"),
+        _embed_response(1),
+    ]
+
+    result = await e.embed_texts(["text"])
+
+    assert len(result) == 1
+    assert e.http_client.post.await_count == 3
+    assert sleeps == [1, 2]  # exponential backoff: 2**0, 2**1
 
 
 async def test_embed_texts_connect_error_raises(monkeypatch):
@@ -314,8 +371,15 @@ async def test_embed_and_store_empty_chunks():
     e.qdrant.upsert.assert_not_awaited()
 
 
-async def test_embed_and_store_cleanup_on_partial_failure(monkeypatch):
-    """embed_and_store rolls back already-upserted points when a later batch fails."""
+async def test_embed_and_store_per_batch_resume_preserves_completed_batches(monkeypatch):
+    """A failure on batch N keeps batches 0..N-1 (no rollback) for resume.
+
+    Per-batch resume contract: when a later batch fails, the already-upserted
+    Qdrant points are NOT deleted, and the raised EmbeddingBatchError carries
+    the completed chunk/point pairs so the caller can persist their DB rows.
+    """
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
     monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
     e = _make_embedder()
 
@@ -332,11 +396,37 @@ async def test_embed_and_store_cleanup_on_partial_failure(monkeypatch):
 
     # Two batches: batch_size=1 forces two embed_texts calls
     chunks = [_chunk(0, "A"), _chunk(1, "B")]
-    with pytest.raises(RuntimeError):
+    with pytest.raises(EmbeddingBatchError) as exc_info:
         await e.embed_and_store(paper_id=5, chunks=chunks, batch_size=1)
 
-    # The first batch was upserted; cleanup (delete) must have been called
-    e.qdrant.delete.assert_awaited_once()
+    # Completed batch 0 must be preserved, not rolled back.
+    e.qdrant.delete.assert_not_awaited()
+    e.qdrant.upsert.assert_awaited_once()
+
+    failure = exc_info.value
+    assert [c.chunk_index for c in failure.completed_chunks] == [0]
+    assert len(failure.completed_point_ids) == 1
+    uuid.UUID(failure.completed_point_ids[0])
+
+
+async def test_embed_and_store_first_batch_failure_raises_raw(monkeypatch):
+    """Nothing persisted yet → raw error propagates (no EmbeddingBatchError wrap).
+
+    Callers in pdf_workflow special-case dimension/HTTP errors; wrapping a
+    first-batch failure would hide those code paths.
+    """
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
+    monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm.test:4000")
+    e = _make_embedder()
+    e.embed_texts = AsyncMock(side_effect=RuntimeError("embed service down"))
+
+    chunks = [_chunk(0, "A"), _chunk(1, "B")]
+    with pytest.raises(RuntimeError) as exc_info:
+        await e.embed_and_store(paper_id=5, chunks=chunks, batch_size=1)
+
+    assert not isinstance(exc_info.value, EmbeddingBatchError)
+    e.qdrant.upsert.assert_not_awaited()
 
 
 async def test_embed_and_store_raises_on_partial_embed_response(monkeypatch):

@@ -16,6 +16,7 @@ EMBEDDING_MODEL             embedding_model             ingestion/embedder.py
 EMBEDDING_MODEL_NAME        embedding_model_name        ingestion/embedder.py
 EMBEDDING_DIMENSION         embedding_dimension         ingestion/embedder.py,
                                                          extraction/entities.py
+EMBED_REQUEST_TIMEOUT_SECONDS embed_request_timeout_seconds ingestion/embedder.py
 RERANKER_MODEL              reranker_model              ingestion/reranker.py
 QWEN3_RERANKER_MODEL        qwen3_reranker_model        ingestion/qwen3_reranker.py
 PDF_STORAGE_PATH            pdf_storage_path            pdf_processor.py, routers/analyze.py
@@ -94,6 +95,17 @@ class PaperIngestionSettings(JarvisCommonSettings):
     embedding_dimension: int = Field(
         default=2560,
         description="Dimensionality of the embedding vectors (EMBEDDING_DIMENSION).",
+    )
+    embed_request_timeout_seconds: float = Field(
+        default=300.0,
+        description=(
+            "Read timeout in seconds for a single LiteLLM /v1/embeddings call "
+            "(EMBED_REQUEST_TIMEOUT_SECONDS).  Must tolerate the embedding model "
+            "being GPU-evicted to CPU on memory-constrained machines, where a "
+            "batch of 32 chunks can take minutes.  Default 300 s matches the "
+            "service HTTP client read timeout; lower it only on fast dedicated "
+            "embedding hardware."
+        ),
     )
 
     # --- Reranker -------------------------------------------------------

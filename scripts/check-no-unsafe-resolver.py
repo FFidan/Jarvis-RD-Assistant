@@ -40,6 +40,7 @@ SAFE_NAMES = frozenset(
     {
         "current_user_id_strict",
         "current_user_id_strict_with_owner_override",
+        "get_current_user_id",
         "require_admin",
         "require_admin_or_api_key",
     }
@@ -69,6 +70,7 @@ ROUTE_ALLOWLIST: dict[str, str] = {
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /request-link": "public: starts magic-link auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /verify": "public: completes magic-link auth",  # noqa: E501
     "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /logout": "session teardown, no user data read",  # noqa: E501
+    "services/paper_ingestion/paper_ingestion/routers/auth.py::POST /api-key-session": "public: API-key session bootstrap (dependencies=[] — it IS the auth front door)",  # noqa: E501
     # Shared global catalog tables (tracked_authors, topics, extraction
     # templates, sources) — not per-user data.
     "services/paper_ingestion/paper_ingestion/routers/authors.py::GET ": "shared tracked_authors catalog",  # noqa: E501
@@ -186,7 +188,7 @@ def _missing_resolver(
         return []
     hits: list[tuple[int, str]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         routes = _route_meta(node)
         if not routes:
