@@ -10,7 +10,6 @@ import httpx
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
-
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------

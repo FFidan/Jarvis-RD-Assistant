@@ -12,10 +12,14 @@ POST   /api/settings/sources/{source_type}/clear-cooldown
     set ``last_status = 'ok'``, zero ``consecutive_failures``.
     Admin session required.
 
-Note: clear-cooldown uses direct SQL (``UPDATE source_health``) because
-``PersistentSourceRateLimiter`` has no ``reset()`` method as of this writing.
-When B4/B5 sibling task adds ``reset()`` to the shared limiter, switch to:
-    ``await limiter.reset()`` from ``jarvis_common.source_rate_limiter``.
+Note: clear-cooldown uses direct SQL (``UPDATE source_health``) rather than
+``PersistentSourceRateLimiter.reset()`` even though that method now exists (added
+in Wave-1 B2).  The two are NOT interchangeable: ``reset()`` is scoped to a
+single ``(user_id, source_type)`` pair, whereas this endpoint clears **all**
+``source_health`` rows for the source type — both the global row
+(``user_id IS NULL``) and every per-user row — via ``WHERE source_type=$1``.
+Delegating to ``reset()`` would require iterating all affected rows; the direct
+SQL is therefore intentional and correct.
 """
 
 from __future__ import annotations
@@ -146,12 +150,12 @@ async def clear_source_cooldown(
     ``consecutive_failures`` for every ``source_health`` row matching this
     source type (both global rows with ``user_id IS NULL`` and per-user rows).
 
-    NOTE: This endpoint implements the reset via a direct idempotent
-    ``UPDATE source_health`` rather than ``PersistentSourceRateLimiter.reset()``
-    because that method does not yet exist.  When a shared ``reset()`` method
-    is added to ``jarvis_common.source_rate_limiter.PersistentSourceRateLimiter``
-    (anticipated in Wave-1 sibling task), this endpoint should delegate to it
-    and remove the inline SQL.
+    NOTE: This endpoint uses a direct ``UPDATE source_health`` rather than
+    ``PersistentSourceRateLimiter.reset()`` (which now exists as of Wave-1 B2).
+    The two are intentionally NOT interchangeable: ``reset()`` targets a single
+    ``(user_id, source_type)`` pair, but this endpoint clears **all** rows for
+    the source type — global (``user_id IS NULL``) and every per-user row —
+    via ``WHERE source_type=$1``.  The direct SQL is therefore correct as-is.
     """
     _validate_source_type(source_type)
 

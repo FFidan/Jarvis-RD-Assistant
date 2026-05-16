@@ -118,6 +118,8 @@ select = ["E", "F", "I", "N", "W", "UP"]
 # tests.conftest (relative test helper) is classified as a different section from
 # paper_ingestion (src), causing a false-positive I001 split that ruff-format re-introduces.
 "services/paper_ingestion/tests/test_pulse_training.py" = ["I001"]
+"services/paper_ingestion/tests/test_pulse_discovery.py" = ["I001"]
+"services/paper_ingestion/tests/test_pulse_job.py" = ["I001"]
 "services/paper_ingestion/paper_ingestion/sources/registry.py" = ["UP047"]
 "libs/jarvis_common/jarvis_common/llm_client.py" = ["UP047"]
 "services/learning_engine/learning_engine/converters.py" = ["E501"]
