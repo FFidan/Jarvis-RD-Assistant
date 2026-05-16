@@ -23,6 +23,9 @@ from jarvis_common.cached_transport import CachingTransport
 _S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search?query=test"
 _OTHER_URL = "https://example.com/x"
 _NCBI = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=crispr"
+_ARXIV = "https://export.arxiv.org/api/query?search_query=all:neural+ode"
+
+_ATOM_OK = b'<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"><entry/></feed>'
 
 
 class _CountingInner(httpx.AsyncBaseTransport):
@@ -171,7 +174,11 @@ async def test_binary_content_type_not_cached():
 async def test_secret_query_param_excluded_from_cache_key():
     """Two GETs differing only by ``api_key`` collapse to one cached entry and
     the secret never appears in a stored cache key."""
-    inner = _CountingInner([(200, b'{"ids":[1]}'), (200, b'{"ids":[2]}')])
+    # NCBI E-utilities returns XML (retmode=xml); use a well-formed body so the
+    # B3 body guard caches it — this test is about the credential-stripped key.
+    inner = _CountingInner(
+        [(200, b"<eSearchResult><IdList/></eSearchResult>"), (200, b"<eSearchResult/>")]
+    )
     transport = CachingTransport(inner)
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -192,7 +199,8 @@ async def test_secret_query_param_excluded_from_cache_key():
 async def test_secret_not_written_to_debug_log(caplog):
     """DEBUG hit/miss logging must use the sanitized key, not the raw URL."""
     caplog.set_level(logging.DEBUG, logger="jarvis_common.cached_transport")
-    inner = _CountingInner([(200, b"{}"), (200, b"{}")])
+    xml = b"<eSearchResult/>"  # NCBI returns XML; well-formed so it caches
+    inner = _CountingInner([(200, xml), (200, xml)])
     transport = CachingTransport(inner)
 
     async with httpx.AsyncClient(transport=transport) as client:
@@ -233,3 +241,89 @@ async def test_hop_by_hop_headers_stripped():
         assert r.headers["content-length"] == str(len(b'{"ok":true}'))
     assert r1.content == r2.content == b'{"ok":true}'
     assert transport.hits == 1
+
+
+# ---------------------------------------------------------------------------
+# 10. B3 — malformed XML from an XML source host is NOT cached
+# ---------------------------------------------------------------------------
+
+
+async def test_malformed_xml_not_cached():
+    """A transient broken arXiv body must not poison the cache: the inner is
+    re-hit on the next request and the bad body is still returned to caller."""
+    bad = b"<feed><entry></feed>"  # unbalanced tags — not well-formed
+    inner = _CountingInner([(200, bad), (200, _ATOM_OK)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_ARXIV)  # malformed — NOT cached
+        r2 = await client.get(_ARXIV)  # inner hit again, now good — cached
+        r3 = await client.get(_ARXIV)  # served from cache
+
+    assert inner.calls == 2
+    assert transport.hits == 1
+    assert r1.status_code == 200
+    assert r1.content == bad  # caller still gets the (bad) body to retry/handle
+    assert r2.content == r3.content == _ATOM_OK
+
+
+# ---------------------------------------------------------------------------
+# 11. B3 — well-formed Atom from arXiv IS cached
+# ---------------------------------------------------------------------------
+
+
+async def test_wellformed_atom_is_cached():
+    """A valid Atom feed from export.arxiv.org is cached like any 200 body."""
+    inner = _CountingInner([(200, _ATOM_OK), (200, b"<feed>changed</feed>")])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_ARXIV)
+        r2 = await client.get(_ARXIV)
+
+    assert inner.calls == 1
+    assert transport.hits == 1
+    assert r1.content == r2.content == _ATOM_OK
+
+
+# ---------------------------------------------------------------------------
+# 12. B3 — empty 200 body is never cached (JSON host)
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_body_not_cached():
+    """An empty 200 body on an allowlisted JSON host is not cached."""
+    inner = _CountingInner([(200, b""), (200, b'{"data":[]}')])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_S2_URL)  # empty — NOT cached
+        r2 = await client.get(_S2_URL)  # inner hit again, now real — cached
+        r3 = await client.get(_S2_URL)  # served from cache
+
+    assert inner.calls == 2
+    assert transport.hits == 1
+    assert r1.status_code == 200
+    assert r1.content == b""
+    assert r2.content == r3.content == b'{"data":[]}'
+
+
+# ---------------------------------------------------------------------------
+# 13. B3 — empty 200 body on an XML host is also not cached
+# ---------------------------------------------------------------------------
+
+
+async def test_empty_body_xml_host_not_cached():
+    """An empty 200 from arXiv is treated as no usable body, not as XML."""
+    inner = _CountingInner([(200, b""), (200, _ATOM_OK)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_ARXIV)
+        r2 = await client.get(_ARXIV)
+        r3 = await client.get(_ARXIV)
+
+    assert inner.calls == 2
+    assert transport.hits == 1
+    assert r1.content == b""
+    assert r2.content == r3.content == _ATOM_OK

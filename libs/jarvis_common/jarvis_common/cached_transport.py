@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from collections import OrderedDict
+from xml.etree.ElementTree import ParseError, XMLPullParser
 
 import httpx
 
@@ -27,6 +28,13 @@ _SOURCE_HOSTS = frozenset(
         "eutils.ncbi.nlm.nih.gov",
     }
 )
+
+# Hosts whose 200 bodies are XML/Atom. A transient bad/empty body here parses
+# fine as "text" but breaks the downstream feed parser, so we additionally
+# require well-formedness before caching (the rest are JSON APIs — empty-body
+# check below is enough). Crossref/OpenAlex/S2 are JSON REST and stay off this
+# list so a JSON body is never run through the XML parser.
+_XML_SOURCE_HOSTS = frozenset({"export.arxiv.org", "eutils.ncbi.nlm.nih.gov"})
 
 # Structural guard: these hosts serve metadata, but export.arxiv.org also
 # serves PDFs. Never buffer a binary/large body into the in-memory cache —
@@ -73,6 +81,33 @@ def _safe_headers(raw: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
     return [(name, value) for name, value in raw if name.lower() not in _STRIP_HEADERS]
 
 
+def _is_well_formed_xml(body: bytes) -> bool:
+    """True if ``body`` is a complete, well-formed XML document.
+
+    Pull-parses without entity expansion or tree construction — a cheap
+    well-formedness gate that also avoids the entity-expansion risk of feeding
+    an untrusted upstream body to ``ElementTree.fromstring``.
+    """
+    parser = XMLPullParser()
+    try:
+        parser.feed(body)
+        parser.close()
+    except ParseError:
+        return False
+    return True
+
+
+def _is_cacheable_body(host: str, body: bytes) -> bool:
+    """Only genuine usable bodies enter the cache: never empty, and for XML
+    source hosts the body must parse as well-formed XML (a transient bad/empty
+    arXiv response must not be served for the whole TTL)."""
+    if not body:
+        return False
+    if host in _XML_SOURCE_HOSTS:
+        return _is_well_formed_xml(body)
+    return True
+
+
 def _env_enabled() -> bool:
     return os.getenv("SOURCE_HTTP_CACHE_ENABLED", "true").strip().lower() != "false"
 
@@ -117,10 +152,15 @@ class CachingTransport(httpx.AsyncBaseTransport):
         if response.status_code == 200 and not is_binary:
             body = await response.aread()
             safe_headers = _safe_headers(response.headers.raw)
-            self._store[key] = (now, response.status_code, safe_headers, body)
-            self._store.move_to_end(key)
-            if len(self._store) > self._max:
-                self._store.popitem(last=False)
+            if _is_cacheable_body(request.url.host, body):
+                self._store[key] = (now, response.status_code, safe_headers, body)
+                self._store.move_to_end(key)
+                if len(self._store) > self._max:
+                    self._store.popitem(last=False)
+            else:
+                logger.debug("source-cache SKIP (empty/malformed body) %s", key)
+            # Body was consumed by aread(); rebuild a fresh response either way so
+            # the caller still gets it (uncached on skip → can transiently retry).
             response = httpx.Response(200, headers=safe_headers, content=body, request=request)
         self.misses += 1
         logger.debug("source-cache MISS %s h=%d m=%d", key, self.hits, self.misses)
