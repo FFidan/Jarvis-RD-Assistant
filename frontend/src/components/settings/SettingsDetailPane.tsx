@@ -22,6 +22,8 @@ import { ZoteroSection } from './ZoteroSection';
 import { TopicSection } from './TopicSection';
 import { AuthorSection } from './AuthorSection';
 import { SourceDetailPane } from './SourceDetailPane';
+import { SourcesList } from './SourcesList';
+import { SmtpSection } from './SmtpSection';
 
 // ---------------------------------------------------------------------------
 // Section title map (mirrors STATIC_SECTIONS in SettingsRail)
@@ -41,6 +43,9 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
     profile: 'Profile & Email',
     appearance: 'Appearance',
   },
+  sources: {
+    sources: 'Sources',
+  },
   models: {
     llm: 'LLM Models',
     providers: 'Cloud Providers',
@@ -48,6 +53,7 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
   system: {
     automation: 'Automation',
     extraction: 'Extraction Templates',
+    smtp: 'Email / SMTP',
     pulse: 'Pulse',
     timer: 'Timer',
     observability: 'Observability',
@@ -102,7 +108,9 @@ function DetailContent({
   }
 
   if (section === 'sources') {
-    // item = source_type slug (e.g. 'arxiv', 'semantic_scholar')
+    // Single "Sources" item shows the full all-sources list (enable/disable/reorder/api-key).
+    // Deep-links with a specific source_type slug still work via SourceDetailPane.
+    if (item === 'sources' || item === '') return <SourcesList />;
     return <SourceDetailPane sourceType={item} />;
   }
 
@@ -120,6 +128,7 @@ function DetailContent({
   if (section === 'system') {
     if (item === 'automation') return <AutomationSection />;
     if (item === 'extraction') return <ExtractionTemplateSection />;
+    if (item === 'smtp') return <SmtpSection />;
     if (item === 'pulse') return <PulseSection />;
     if (item === 'timer') return <TimerSection />;
     if (item === 'observability') return <div className="space-y-4"><LangfuseLinkCard /></div>;

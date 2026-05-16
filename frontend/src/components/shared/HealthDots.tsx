@@ -59,22 +59,37 @@ function pillLabel(overall: ServiceHealthStatus, downCount: number, degradedCoun
 // Sub-components
 // ---------------------------------------------------------------------------
 
+/** Display label for a service — renames "Vector" to the self-hoster-friendly label. */
+function serviceDisplayLabel(svc: ServiceHealth): string {
+  if (svc.name === 'vector') return 'Log collector (optional)';
+  return svc.label;
+}
+
 function ServiceRow({ svc }: { svc: ServiceHealth }) {
+  const label = serviceDisplayLabel(svc);
+  const isVectorUnknown = svc.name === 'vector' && svc.status === 'unknown';
   return (
-    <div className="flex items-center gap-2" data-testid={`health-row-${svc.name}`}>
-      <span
-        className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(svc.status))}
-        aria-label={`${svc.label}: ${svc.status}`}
-      />
-      <span className="truncate">{svc.label}</span>
-      <span className={cn('ml-auto font-medium capitalize', {
-        'text-green-600 dark:text-green-400': svc.status === 'ok',
-        'text-amber-600 dark:text-amber-400': svc.status === 'degraded',
-        'text-red-600 dark:text-red-400': svc.status === 'down',
-        'text-gray-500': svc.status === 'unknown',
-      })}>
-        {svc.status}
-      </span>
+    <div className="space-y-0.5" data-testid={`health-row-${svc.name}`}>
+      <div className="flex items-center gap-2">
+        <span
+          className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(svc.status))}
+          aria-label={`${label}: ${svc.status}`}
+        />
+        <span className="truncate">{label}</span>
+        <span className={cn('ml-auto font-medium capitalize', {
+          'text-green-600 dark:text-green-400': svc.status === 'ok',
+          'text-amber-600 dark:text-amber-400': svc.status === 'degraded',
+          'text-red-600 dark:text-red-400': svc.status === 'down',
+          'text-gray-500': svc.status === 'unknown',
+        })}>
+          {svc.status}
+        </span>
+      </div>
+      {isVectorUnknown && (
+        <p className="pl-4 text-[10px] text-muted-foreground leading-tight" data-testid="vector-optional-note">
+          Not running — normal unless you enabled observability.
+        </p>
+      )}
     </div>
   );
 }
@@ -177,7 +192,7 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
                 className="text-xs text-muted-foreground hover:text-foreground hover:underline"
                 data-testid="health-popover-full-report"
               >
-                View full report →
+                Deployment &amp; service health →
               </Link>
             </div>
           </PopoverContent>

@@ -187,7 +187,37 @@ describe('HealthDots', () => {
     expect(screen.getByText('Qdrant')).toBeInTheDocument();
     expect(screen.getByText('Ollama')).toBeInTheDocument();
     expect(screen.getByText('LiteLLM')).toBeInTheDocument();
-    expect(screen.getByText('Vector')).toBeInTheDocument();
+    // Vector is relabelled to the self-hoster-friendly display name
+    expect(screen.getByText('Log collector (optional)')).toBeInTheDocument();
+    expect(screen.queryByText('Vector')).not.toBeInTheDocument();
+  });
+
+  it('shows plain-language note for Vector when status is unknown', async () => {
+    mockFetchStackHealth.mockResolvedValue(makeAllOk()); // vector is unknown in makeAllOk
+    renderHealthDots();
+
+    const toggle = await screen.findByTestId('health-pill-toggle');
+    fireEvent.click(toggle);
+
+    const note = screen.getByTestId('vector-optional-note');
+    expect(note).toBeInTheDocument();
+    expect(note).toHaveTextContent(/not running/i);
+    expect(note).toHaveTextContent(/observability/i);
+  });
+
+  it('does not show vector optional note when vector status is ok', async () => {
+    const summary = makeAllOk();
+    // Override vector to ok
+    summary.services = summary.services.map((s) =>
+      s.name === 'vector' ? { ...s, status: 'ok' as const } : s,
+    );
+    mockFetchStackHealth.mockResolvedValue(summary);
+    renderHealthDots();
+
+    const toggle = await screen.findByTestId('health-pill-toggle');
+    fireEvent.click(toggle);
+
+    expect(screen.queryByTestId('vector-optional-note')).not.toBeInTheDocument();
   });
 
   // --- Compact mode ---

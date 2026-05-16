@@ -24,6 +24,13 @@ interface PomodoroState {
   phaseDurationMs: number;         // frozen duration for current phase (avoids mid-session setting changes)
   cyclesCompleted: number;
   attachedItem: AttachedItem | null;
+  /**
+   * How many milliseconds of actual work were elapsed when the most-recent
+   * work phase ended (either by natural completion or manual stop during a
+   * break). Persisted so stop-during-break after a refresh logs the right
+   * amount rather than the full nominal workMinutes.
+   */
+  lastWorkElapsedMs: number;
 
   // Computed (NOT persisted — recomputed each tick)
   secondsRemaining: number;
@@ -62,6 +69,7 @@ export const usePomodoroStore = create<PomodoroState>()(
       secondsRemaining: 0,
       cyclesCompleted: 0,
       attachedItem: null,
+      lastWorkElapsedMs: 0,
 
       // Ephemeral signal
       completedSession: null,
@@ -83,6 +91,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           phaseDurationMs: durationMs,
           secondsRemaining: state.workMinutes * 60,
           attachedItem: item ?? null,
+          lastWorkElapsedMs: 0,
         });
       },
 
@@ -103,6 +112,8 @@ export const usePomodoroStore = create<PomodoroState>()(
           // Phase expired — transition
           if (state.phase === 'work') {
             const newCycles = state.cyclesCompleted + 1;
+            // Actual elapsed work time — cap at phaseDurationMs (can't exceed it)
+            const workElapsedMs = Math.min(state.phaseDurationMs, elapsed);
 
             // Build completedSession signal for auto-logging
             const session: CompletedSession = {
@@ -127,6 +138,7 @@ export const usePomodoroStore = create<PomodoroState>()(
                 secondsRemaining: state.longBreakMinutes * 60,
                 cyclesCompleted: newCycles,
                 completedSession: session,
+                lastWorkElapsedMs: workElapsedMs,
               });
             } else {
               // Short break
@@ -139,6 +151,7 @@ export const usePomodoroStore = create<PomodoroState>()(
                 secondsRemaining: state.shortBreakMinutes * 60,
                 cyclesCompleted: newCycles,
                 completedSession: session,
+                lastWorkElapsedMs: workElapsedMs,
               });
             }
           } else if (state.phase === 'short-break') {
@@ -150,6 +163,7 @@ export const usePomodoroStore = create<PomodoroState>()(
               totalPausedMs: 0,
               phaseDurationMs: state.workMinutes * 60 * 1000,
               secondsRemaining: state.workMinutes * 60,
+              lastWorkElapsedMs: 0,
             });
           } else {
             // Long break ended — full reset
@@ -216,8 +230,9 @@ export const usePomodoroStore = create<PomodoroState>()(
           const elapsed = Date.now() - state.startedAt - state.totalPausedMs - pauseAdjustment;
           durationSeconds = Math.max(0, elapsed / 1000);
         } else {
-          // In a break — the last full work session was completed
-          durationSeconds = state.workMinutes * 60;
+          // In a break — log the actual elapsed work from the prior work phase,
+          // not the full nominal duration (which over-reports if work was cut short).
+          durationSeconds = state.lastWorkElapsedMs / 1000;
         }
 
         const result: { durationSeconds: number; taskId?: number; paperId?: number } = {
@@ -262,6 +277,7 @@ export const usePomodoroStore = create<PomodoroState>()(
           cyclesCompleted: 0,
           attachedItem: null,
           completedSession: null,
+          lastWorkElapsedMs: 0,
         });
       },
 
@@ -285,8 +301,24 @@ export const usePomodoroStore = create<PomodoroState>()(
         totalPausedMs: state.totalPausedMs,
         cyclesCompleted: state.cyclesCompleted,
         attachedItem: state.attachedItem,
+        lastWorkElapsedMs: state.lastWorkElapsedMs,
         // NOT persisted: secondsRemaining (recomputed), completedSession (ephemeral)
       }),
+      onRehydrateStorage: () => (state) => {
+        // Recompute secondsRemaining synchronously from persisted timestamps so
+        // the header never shows 00:00 for a live session on first paint.
+        if (!state || state.phase === 'idle' || !state.startedAt) return;
+        const now = Date.now();
+        if (state.pausedAt !== null) {
+          // Still paused — use pausedAt as the reference point
+          const elapsed = state.pausedAt - state.startedAt - state.totalPausedMs;
+          state.secondsRemaining = Math.max(0, Math.ceil((state.phaseDurationMs - elapsed) / 1000));
+        } else {
+          // Running — compute live remaining
+          const elapsed = now - state.startedAt - state.totalPausedMs;
+          state.secondsRemaining = Math.max(0, Math.ceil((state.phaseDurationMs - elapsed) / 1000));
+        }
+      },
     },
   ),
 );

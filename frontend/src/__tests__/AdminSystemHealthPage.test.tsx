@@ -1,5 +1,6 @@
 /**
- * Tests for AdminSystemHealthPage — per-check explanations + dev-mode context banner.
+ * Tests for AdminSystemHealthPage — per-check explanations + dev-mode context banner
+ * + live-services section (fetchStackHealth) + Vector clarity.
  *
  * Scope:
  * - Table renders all checks from the API.
@@ -8,6 +9,8 @@
  * - Dev-mode banner is hidden when all checks are green.
  * - Unknown (future) check names render without a tooltip (graceful degradation).
  * - Loading and error states render correctly.
+ * - Live services section renders per-service rows from fetchStackHealth.
+ * - Vector shown as "Log collector (optional)" with note when unknown.
  */
 
 import React from 'react';
@@ -17,18 +20,21 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AdminSystemHealthPage } from '@/pages/AdminSystemHealthPage';
+import type { StackHealthSummary } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // Mocks
 // ---------------------------------------------------------------------------
 
 const getSystemReadinessMock = vi.fn();
+const fetchStackHealthMock = vi.fn();
 
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
     ...actual,
     getSystemReadiness: () => getSystemReadinessMock(),
+    fetchStackHealth: () => fetchStackHealthMock(),
   };
 });
 
@@ -41,6 +47,27 @@ vi.mock('@/components/layout/AdminBreadcrumb', () => ({
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------
+
+/**
+ * Default stack health fixture.
+ * @param vectorOk - when true vector is 'ok', otherwise 'unknown' (default).
+ */
+function makeStackHealth(vectorOk = false): StackHealthSummary {
+  return {
+    overall: 'ok',
+    degradedCount: 0,
+    downCount: 0,
+    services: [
+      { name: 'paper_ingestion', label: 'Paper Ingestion', status: 'ok' },
+      { name: 'learning_engine', label: 'Learning Engine', status: 'ok' },
+      { name: 'postgres', label: 'PostgreSQL', status: 'ok' },
+      { name: 'qdrant', label: 'Qdrant', status: 'ok' },
+      { name: 'ollama', label: 'Ollama', status: 'ok' },
+      { name: 'litellm', label: 'LiteLLM', status: 'ok' },
+      { name: 'vector', label: 'Vector', status: vectorOk ? 'ok' : 'unknown' },
+    ],
+  };
+}
 
 /** All-green response — no dev flags active, environment is production. */
 const allGreenResponse = {
@@ -100,6 +127,8 @@ function renderPage() {
 describe('AdminSystemHealthPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default stack health mock — vector unknown (normal)
+    fetchStackHealthMock.mockResolvedValue(makeStackHealth());
   });
 
   it('renders all checks from the API in the table', async () => {
@@ -121,7 +150,7 @@ describe('AdminSystemHealthPage', () => {
   it('shows loading state initially', () => {
     getSystemReadinessMock.mockReturnValue(new Promise(() => {}));
     renderPage();
-    expect(screen.getByText(/loading system health/i)).toBeInTheDocument();
+    expect(screen.getByText(/loading readiness checks/i)).toBeInTheDocument();
   });
 
   it('shows error state when getSystemReadiness fails', async () => {
@@ -154,7 +183,7 @@ describe('AdminSystemHealthPage', () => {
     await user.hover(tooltipTrigger);
 
     await waitFor(() => {
-      const matches = screen.getAllByText(/Development auth bypass is ON/i);
+      const matches = screen.getAllByText(/Anyone who can reach this URL/i);
       expect(matches.length).toBeGreaterThan(0);
     });
   });
@@ -248,5 +277,89 @@ describe('AdminSystemHealthPage', () => {
       const banner = screen.getByRole('alert');
       expect(banner).toHaveTextContent(/running in development mode/i);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Live services section
+  // -------------------------------------------------------------------------
+
+  it('renders the live services section with per-service rows', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    // Wait for the table to appear (fetchStackHealth resolves)
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+
+    // All 7 services should be present as rows
+    const expectedNames = [
+      'paper_ingestion',
+      'learning_engine',
+      'postgres',
+      'qdrant',
+      'ollama',
+      'litellm',
+      'vector',
+    ];
+    for (const name of expectedNames) {
+      expect(screen.getByTestId(`live-svc-row-${name}`)).toBeInTheDocument();
+    }
+  });
+
+  it('shows readiness checks alongside live services (superset)', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    // Both sections must resolve and be visible simultaneously
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByText('dev_auth_bypass')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('live-services-section')).toBeInTheDocument();
+  });
+
+  it('Vector service shows "Log collector (optional)" label', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-services-table')).toBeInTheDocument();
+    });
+
+    const vectorRow = screen.getByTestId('live-svc-row-vector');
+    expect(vectorRow).toHaveTextContent('Log collector (optional)');
+    // Raw backend label must not appear as standalone text
+    expect(vectorRow.querySelector('td')?.textContent).toBe('Log collector (optional)');
+  });
+
+  it('Vector row shows plain-language note when status is unknown', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    // beforeEach sets fetchStackHealthMock to makeStackHealth() — vector is unknown
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-svc-row-vector')).toBeInTheDocument();
+    });
+
+    const vectorRow = screen.getByTestId('live-svc-row-vector');
+    expect(vectorRow).toHaveTextContent(/Optional log shipper/i);
+    expect(vectorRow).toHaveTextContent(/observability/i);
+  });
+
+  it('Vector row shows no note when status is ok', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    // Override: vector is ok
+    fetchStackHealthMock.mockResolvedValue(makeStackHealth(/* vectorOk= */ true));
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('live-svc-row-vector')).toBeInTheDocument();
+    });
+
+    const vectorRow = screen.getByTestId('live-svc-row-vector');
+    expect(vectorRow).not.toHaveTextContent(/Optional log shipper/i);
   });
 });

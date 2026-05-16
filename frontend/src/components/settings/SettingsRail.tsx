@@ -2,17 +2,12 @@
  * SettingsRail — §-grouped left navigation for the 2-pane Settings IA.
  *
  * Renders Roman-numeral section groups with nested rail items. The active item
- * is highlighted. Dynamic §II Sources items come from useQuery(['sources']).
+ * is highlighted.
  *
  * RBAC: §IV System section is hidden entirely for non-admin users.
- *       §II Sources rail items are admin-only (sourced from /api/sources which
- *       is admin-gated on the backend; we also hide on the frontend).
+ *       §II Sources and §IV System items are admin-only.
  */
-import { useQuery } from '@tanstack/react-query';
-import { fetchSources } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import { SOURCE_DISPLAY_NAMES } from './SourceSection';
-import type { SourceConfig } from '@/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,10 +33,10 @@ export interface RailItem {
 }
 
 // ---------------------------------------------------------------------------
-// Static section definitions (§I, §III-§VI; §II is dynamic)
+// All sections (static — §II Sources is now a single item, not dynamic)
 // ---------------------------------------------------------------------------
 
-export const STATIC_SECTIONS: RailSection[] = [
+export const ALL_SECTIONS: RailSection[] = [
   {
     label: '§I',
     title: 'Account',
@@ -50,7 +45,14 @@ export const STATIC_SECTIONS: RailSection[] = [
       { section: 'account', item: 'appearance', label: 'Appearance' },
     ],
   },
-  // §II Sources — injected dynamically from useQuery(['sources'])
+  {
+    label: '§II',
+    title: 'Sources',
+    adminOnly: true,
+    items: [
+      { section: 'sources', item: 'sources', label: 'Sources' },
+    ],
+  },
   {
     label: '§III',
     title: 'Models',
@@ -67,6 +69,7 @@ export const STATIC_SECTIONS: RailSection[] = [
     items: [
       { section: 'system', item: 'automation', label: 'Automation' },
       { section: 'system', item: 'extraction', label: 'Extraction Templates' },
+      { section: 'system', item: 'smtp', label: 'Email / SMTP' },
       { section: 'system', item: 'pulse', label: 'Pulse' },
       { section: 'system', item: 'timer', label: 'Timer' },
       { section: 'system', item: 'observability', label: 'Observability' },
@@ -103,36 +106,8 @@ interface SettingsRailProps {
 }
 
 export function SettingsRail({ activeSection, activeItem, isAdmin, onSelect }: SettingsRailProps) {
-  const { data: sources = [] } = useQuery<SourceConfig[]>({
-    queryKey: ['sources'],
-    queryFn: fetchSources,
-    staleTime: 30_000,
-    // Only fetch for admins — non-admins don't see §II Sources
-    enabled: isAdmin,
-  });
-
-  // Build §II Sources section from live data
-  const sourcesSection: RailSection = {
-    label: '§II',
-    title: 'Sources',
-    adminOnly: true,
-    items: sources.map((s) => ({
-      section: 'sources',
-      item: s.source_type,
-      label: SOURCE_DISPLAY_NAMES[s.source_type] ?? s.source_type,
-      status: s.enabled ? ('ok' as const) : undefined,
-    })),
-  };
-
-  // Splice §II after §I
-  const sections: RailSection[] = [
-    STATIC_SECTIONS[0]!, // §I Account
-    sourcesSection,      // §II Sources (dynamic)
-    ...STATIC_SECTIONS.slice(1), // §III-§VI
-  ];
-
   // Filter out admin-only sections for non-admin users
-  const visibleSections = sections.filter((s) => !s.adminOnly || isAdmin);
+  const visibleSections = ALL_SECTIONS.filter((s) => !s.adminOnly || isAdmin);
 
   return (
     <nav

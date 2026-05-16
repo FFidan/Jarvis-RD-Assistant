@@ -47,6 +47,7 @@ export function HeaderPomodoro() {
   if (phase === 'idle') return null;
 
   const isPaused = pausedAt !== null;
+  const isWorkPhase = phase === 'work';
   const colorClass = PHASE_COLORS[phase];
   const phaseLabel = PHASE_LABELS[phase];
   const tooltipText = `Pomodoro · ${phaseLabel} · click to open`;
@@ -99,16 +100,18 @@ export function HeaderPomodoro() {
                 {attachedItem.title}
               </span>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-5 w-5"
-              onClick={handleTogglePause}
-              aria-label={isPaused ? 'Resume Pomodoro' : 'Pause Pomodoro'}
-              data-touch-target
-            >
-              {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
-            </Button>
+            {isWorkPhase && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5"
+                onClick={handleTogglePause}
+                aria-label={isPaused ? 'Resume Pomodoro' : 'Pause Pomodoro'}
+                data-touch-target
+              >
+                {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="icon"

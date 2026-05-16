@@ -291,7 +291,9 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
           />
         ))
       ) : isOnline ? (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground/60">No papers yet</p>
+        <p className="px-3 py-1.5 text-xs text-muted-foreground/60" data-testid="facet-source-empty">
+          No papers in your library yet — papers you save or that match your topics appear here.
+        </p>
       ) : (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60 flex items-center gap-1">
           <WifiOff size={11} />
@@ -331,7 +333,9 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
           )}
         </>
       ) : isOnline ? (
-        <p className="px-3 py-1.5 text-xs text-muted-foreground/60">No topics configured</p>
+        <p className="px-3 py-1.5 text-xs text-muted-foreground/60" data-testid="facet-topic-empty">
+          No library papers tagged with a topic yet — add a topic in Settings and turn on &ldquo;Auto-add matches&rdquo;.
+        </p>
       ) : (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60 flex items-center gap-1">
           <WifiOff size={11} />

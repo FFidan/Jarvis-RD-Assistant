@@ -104,7 +104,7 @@ describe('HealthDots — adminLink prop (admin popover behavior)', () => {
     });
   });
 
-  it('popover content includes a "View full report" link to adminLink path', async () => {
+  it('popover content includes a "Deployment & service health" link to adminLink path', async () => {
     mockFetchStackHealth.mockResolvedValue(makeAllOk());
     const user = userEvent.setup();
     renderHealthDots({ adminLink: '/admin/system-health' });
@@ -116,7 +116,7 @@ describe('HealthDots — adminLink prop (admin popover behavior)', () => {
       const fullReportLink = screen.getByTestId('health-popover-full-report');
       expect(fullReportLink).toBeInTheDocument();
       expect(fullReportLink).toHaveAttribute('href', '/admin/system-health');
-      expect(fullReportLink).toHaveTextContent('View full report');
+      expect(fullReportLink).toHaveTextContent('Deployment & service health');
     });
   });
 

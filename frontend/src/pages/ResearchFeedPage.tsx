@@ -31,7 +31,7 @@ import { FeedListFilter } from '@/components/feed/FeedListFilter';
 import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { useFeedCountsWithFacets } from '@/hooks/use-feed-counts-with-facets';
-import { BookOpen as BookOpenIcon } from 'lucide-react';
+import { BookOpen as BookOpenIcon, Upload } from 'lucide-react';
 
 // ─── URL-param helpers ───────────────────────────────────────────────────────
 
@@ -387,7 +387,7 @@ export function ResearchFeedPage() {
               <FeedListFilter
                 value={listFilter}
                 onChange={setListFilter}
-                className="max-w-sm"
+                className="min-w-0 flex-1"
                 placeholder={
                   surface === 'inbox'
                     ? 'Filter inbox by title or author…'
@@ -396,6 +396,25 @@ export function ResearchFeedPage() {
                       : 'Filter trash by title or author…'
                 }
               />
+
+              {/* Upload PDF button — visible on Inbox and Library surfaces */}
+              {(surface === 'inbox' || surface === 'library') && (
+                <button
+                  type="button"
+                  data-testid="upload-pdf-button"
+                  onClick={() =>
+                    setSearchParams((prev) => {
+                      const p = new URLSearchParams(prev);
+                      p.set('surface', 'search');
+                      return p;
+                    })
+                  }
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-hair bg-muted/40 px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  <Upload size={14} aria-hidden />
+                  Upload PDF
+                </button>
+              )}
 
               {/* Library scope toggle (preserved) */}
               {surface === 'library' && (
@@ -459,7 +478,15 @@ export function ResearchFeedPage() {
           {surface === 'library' && (
             <div>
               <div className="mb-1 flex items-center gap-2">
-                <SectionInfo>Browse, search, and filter all papers in your library.</SectionInfo>
+                <SectionInfo>
+                  {filter === 'reading'
+                    ? 'Papers you\'re currently reading.'
+                    : filter === 'to_read'
+                      ? 'Papers saved to read later.'
+                      : filter === 'done'
+                        ? 'Papers you\'ve finished.'
+                        : 'Browse, search, and filter all papers in your library.'}
+                </SectionInfo>
                 {!online && (
                   <span className="ml-1 shrink-0" data-testid="library-offline-indicator">
                     {cacheTimestamp != null ? (

@@ -174,9 +174,20 @@ describe('FacetRail', () => {
     expect(call.sourceFacet).toBeNull();
   });
 
-  it('shows "No papers yet" when by_source is empty and online', () => {
+  it('shows honest empty-source copy when by_source is empty and online', () => {
     render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline />);
-    expect(screen.getByText('No papers yet')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-source-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-source-empty')).toHaveTextContent(
+      'No papers in your library yet',
+    );
+  });
+
+  it('shows honest empty-topic copy when by_topic is empty and online', () => {
+    render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline />);
+    expect(screen.getByTestId('facet-topic-empty')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-topic-empty')).toHaveTextContent(
+      'No library papers tagged with a topic yet',
+    );
   });
 
   it('shows offline indicator when isOnline=false', () => {

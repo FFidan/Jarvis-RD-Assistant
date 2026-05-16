@@ -34,13 +34,14 @@ interface ModePickerProps {
   hasThread: boolean;
   hasTask: boolean;
   hasReading: boolean;
+  taskPhaseLabel: string;
 }
 
-function ModePicker({ mode, onChange, hasThread, hasTask, hasReading }: ModePickerProps) {
+function ModePicker({ mode, onChange, hasThread, hasTask, hasReading, taskPhaseLabel }: ModePickerProps) {
   const tabs: { value: Mode; label: string; show: boolean }[] = [
     { value: 'pulse', label: 'Pulse #1', show: true },
     { value: 'thread', label: 'Resume thread', show: hasThread },
-    { value: 'task', label: 'Continue task', show: hasTask },
+    { value: 'task', label: taskPhaseLabel, show: hasTask },
     { value: 'reading', label: 'Resume reading', show: hasReading },
   ];
   const visibleTabs = tabs.filter((t) => t.show);
@@ -79,9 +80,15 @@ function ModePicker({ mode, onChange, hasThread, hasTask, hasReading }: ModePick
   );
 }
 
+function taskLabelForPhase(phase: string): string {
+  if (phase === 'short-break' || phase === 'long-break') return 'On break';
+  return 'Continue task';
+}
+
 export function HeroNow() {
   const phase = usePomodoroStore((s) => s.phase);
   const hasTask = phase !== 'idle';
+  const taskPhaseLabel = taskLabelForPhase(phase);
 
   const { data: readingData } = useQuery<FeedResponse>({
     queryKey: ['feed', 'reading', 'hero'],
@@ -148,6 +155,7 @@ export function HeroNow() {
             hasThread={hasThread}
             hasTask={hasTask}
             hasReading={hasReading}
+            taskPhaseLabel={taskPhaseLabel}
           />
         }
       />
