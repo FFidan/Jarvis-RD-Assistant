@@ -305,6 +305,11 @@ import type {
   ProjectQuestion,
   ProjectActivityItem,
   FeedCountsWithFacets,
+  SmtpConfig,
+  SmtpConfigInput,
+  SourceConfigPatch,
+  SystemCapabilities,
+  MyDayBundle,
 } from '@/types';
 
 export type { SourceHealth, SourceRunRecord };
@@ -1566,6 +1571,40 @@ export const confirmEmailChange = (token: string) =>
 export async function fetchWeeklyDigest(days: number = 7): Promise<WeeklyDigestResponse> {
   return apiFetch<WeeklyDigestResponse>(`/api/digest/weekly?days=${days}`);
 }
+
+// --- Settings: SMTP relay ---
+
+export const getSmtpConfig = () => apiFetch<SmtpConfig>('/api/setup/smtp');
+
+/** Mirrors setup.py SmtpBody (populate_by_name → `password` is accepted). */
+export const saveSmtpConfig = (body: SmtpConfigInput) =>
+  apiFetch<{ saved: boolean; test_sent: boolean | null; test_error: string | null }>(
+    '/api/setup/smtp',
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+
+// --- Settings: per-source credential / cooldown ---
+
+export const patchSourceConfig = (sourceType: string, patch: SourceConfigPatch) =>
+  apiFetch<{ ok: boolean }>(`/api/settings/sources/${sourceType}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+
+export const clearSourceCooldown = (sourceType: string) =>
+  apiFetch<{ ok: boolean }>(`/api/settings/sources/${sourceType}/clear-cooldown`, {
+    method: 'POST',
+  });
+
+// --- System capabilities ---
+
+export const getSystemCapabilities = () =>
+  apiFetch<SystemCapabilities>('/api/system/capabilities');
+
+// --- Executive § My Day aggregate bundle ---
+
+export const getMyDayBundle = () =>
+  apiFetch<MyDayBundle>('/api/executive/my-day-bundle');
 
 // --- React Query hooks ---
 export { useFeedCounts } from '@/hooks/use-feed-counts';

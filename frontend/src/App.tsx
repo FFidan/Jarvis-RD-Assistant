@@ -9,12 +9,7 @@ import { RouteErrorBoundary } from '@/components/RouteErrorBoundary';
 import { LoginPage } from '@/pages/LoginPage';
 import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
 import { HomePage } from '@/pages/HomePage';
-import { MyDayPage } from '@/pages/MyDayPage';
-import { SettingsPage } from '@/pages/SettingsPage';
-import { ProjectsPage } from '@/pages/ProjectsPage';
-import { LearningCardsPage } from '@/pages/LearningCardsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
-import { ExtractionTablePage } from '@/pages/ExtractionTablePage';
 import { useOnlineStatus } from '@/hooks/use-online-status';
 // ResearchFeedPage is lazy-loaded (DOM-F-10) — keeps ~26 kB of feed components
 // out of the HomePage initial bundle.
@@ -67,6 +62,21 @@ const SetupWizard = lazy(() =>
 );
 const FirstRunSetupPage = lazy(() =>
   import('@/pages/FirstRunSetupPage').then((m) => ({ default: m.FirstRunSetupPage })),
+);
+const MyDayPage = lazy(() =>
+  import('@/pages/MyDayPage').then((m) => ({ default: m.MyDayPage })),
+);
+const SettingsPage = lazy(() =>
+  import('@/pages/SettingsPage').then((m) => ({ default: m.SettingsPage })),
+);
+const ProjectsPage = lazy(() =>
+  import('@/pages/ProjectsPage').then((m) => ({ default: m.ProjectsPage })),
+);
+const LearningCardsPage = lazy(() =>
+  import('@/pages/LearningCardsPage').then((m) => ({ default: m.LearningCardsPage })),
+);
+const ExtractionTablePage = lazy(() =>
+  import('@/pages/ExtractionTablePage').then((m) => ({ default: m.ExtractionTablePage })),
 );
 
 function PageFallback() {
@@ -212,16 +222,16 @@ export function App() {
               <AppShell>
                 <Routes>
                   <Route path="/" element={<RouteErrorBoundary><HomePage /></RouteErrorBoundary>} />
-                  <Route path="/my-day" element={<RouteErrorBoundary><MyDayPage /></RouteErrorBoundary>} />
-                  <Route path="settings" element={<RouteErrorBoundary><SettingsPage /></RouteErrorBoundary>} />
+                  <Route path="/my-day" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><MyDayPage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="settings" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><SettingsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="analytics" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AnalyticsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="logs" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><LogsPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/users" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminUsersPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/audit-log" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminAuditLogPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
                   <Route path="admin/system-health" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><AdminOnlyRoute><AdminSystemHealthPage /></AdminOnlyRoute></Suspense></RouteErrorBoundary>} />
-                  <Route path="extractions" element={<RouteErrorBoundary><ExtractionTablePage /></RouteErrorBoundary>} />
-                  <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
-                  <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
+                  <Route path="extractions" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ExtractionTablePage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="projects" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ProjectsPage /></Suspense></RouteErrorBoundary>} />
+                  <Route path="cards" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><LearningCardsPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ResearchFeedPage /></Suspense></RouteErrorBoundary>} />
                   {/* Feed spec §3.4 / Shell spec group Ⅳ: Ask is its own */}
                   {/* nav destination, NOT a folded-in feed filter. The old */}

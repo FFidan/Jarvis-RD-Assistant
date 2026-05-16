@@ -10,7 +10,7 @@ concrete types.
 """
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -37,7 +37,7 @@ router = APIRouter(prefix="/api/my-day", tags=["my-day"])
 @limiter.limit("60/minute")
 async def get_journal_entry(
     request: Request,
-    date: str = Query(..., description="ISO date YYYY-MM-DD"),
+    date: date = Query(..., description="ISO date YYYY-MM-DD"),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
 ) -> JournalEntryResponse:
     """Fetch a journal entry for the given date (404 if not found)."""

@@ -1241,3 +1241,48 @@ export interface WeeklyDigestResponse {
   period_start: string;
   period_end: string;
 }
+
+// --- Settings: SMTP relay (GET /api/setup/smtp, POST /api/setup/smtp) ---
+
+export interface SmtpConfig {
+  host: string | null;
+  port: number | null;
+  user: string | null;
+  from_email: string | null;
+  has_password: boolean;
+}
+
+export interface SmtpConfigInput {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  from_email: string;
+  test_send?: boolean;
+  test_recipient?: string;
+}
+
+// --- Settings: per-source credential patch / cooldown reset ---
+
+export interface SourceConfigPatch {
+  api_key?: string;
+  email?: string;
+}
+
+// --- System capabilities probe (GET /api/system/capabilities) ---
+
+export interface SystemCapabilities {
+  networkx: boolean;
+  scikit_learn: boolean;
+}
+
+// --- Executive § My Day aggregate bundle (GET /api/executive/my-day-bundle) ---
+// TODO(F7): tighten once /api/executive/my-day-bundle ships
+export interface MyDayBundle {
+  tasks: unknown;
+  intent: unknown;
+  threads: unknown;
+  yesterday: unknown;
+  journal: unknown;
+  pulse_today: unknown;
+}

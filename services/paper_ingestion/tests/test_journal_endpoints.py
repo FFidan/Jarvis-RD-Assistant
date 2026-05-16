@@ -96,6 +96,65 @@ async def test_get_journal_entry_not_found():
 
 
 # ---------------------------------------------------------------------------
+# B1/P1 regression: GET /api/my-day/journal must bind a date OBJECT, not str
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_journal_entry_binds_date_object_not_str():
+    """B1/P1: routed GET must not 500; ``$2`` must be a ``datetime.date``.
+
+    Root cause: ``date: str = Query(...)`` bound the raw query string as ``$2``
+    against the Postgres ``DATE`` column ``journal_entries.date``. asyncpg
+    encodes a DATE param via ``.toordinal()``; a ``str`` has none →
+    ``DataError: 'str' object has no attribute 'toordinal'`` → unhandled 500.
+
+    This exercises FastAPI's query-param coercion (via ``TestClient``), which
+    the existing ``__wrapped__`` tests bypass. With the buggy ``str`` annotation
+    FastAPI passes the string straight through and ``$2`` is a ``str``; with the
+    ``datetime.date`` annotation FastAPI coerces it to a real ``date``.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from paper_ingestion.deps import get_db_pool, limiter
+
+    pool, conn = _make_pool_and_conn()
+    today = date(2026, 5, 16)
+    now = datetime(2026, 5, 16, 12, 0, 0)
+    conn.fetchrow.return_value = {
+        "id": 1,
+        "date": today,
+        "prompts": {"first_move": "Ground in code"},
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    app = FastAPI()
+    app.state.limiter = limiter
+    limiter.enabled = False
+    app.include_router(my_day.router)
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    try:
+        with TestClient(app, raise_server_exceptions=True) as client:
+            resp = client.get("/api/my-day/journal?date=2026-05-16")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["date"] == "2026-05-16"
+
+        _sql, *bound = conn.fetchrow.await_args.args
+        # $1 = user_id, $2 = date
+        date_param = bound[1]
+        assert isinstance(date_param, date), (
+            f"B1/P1 regression: $2 must be datetime.date for the DATE column, "
+            f"got {type(date_param).__name__!r}: {date_param!r} — asyncpg cannot "
+            f"encode a str DATE param (no .toordinal())"
+        )
+        assert date_param == today
+    finally:
+        app.dependency_overrides.clear()
+        limiter.enabled = True
+
+
+# ---------------------------------------------------------------------------
 # POST /api/my-day/journal — creates / updates entry
 # ---------------------------------------------------------------------------
 
