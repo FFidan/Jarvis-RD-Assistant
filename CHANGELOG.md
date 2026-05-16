@@ -3,6 +3,295 @@
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
 
+## [v0.4.1] - 2026-05-15
+
+
+### Bug Fixes
+- Scope entity_relationships reads to caller-visible papers (close cross-user leak)
+- Inline defaults for new compose interpolations so config renders env-free (INF-hardening followup)
+- Bound CardCreate text, rate-limit /api/me/export + telegram whoami (Wave3 DoS)
+- Scope intent_repo/project counts/my-day + unlink TOCTOU + drop redundant json reload (Wave3 LE)
+- Atomic source-slot claim so concurrent workers can't double-fire (H-1)
+- Readiness + litellm entrypoint reject weak LITELLM/POSTGRES secrets (H-5)
+- Accept valid session as sufficient for verify_api_key global gate (WS-AUTH-KEY-SESSION followup)
+- Add lastError to job-store.test AuthState mock (WS-AUTH followup)
+- Jarvis-setup.sh must generate secrets before compose up (H-4 followup)
+- Correct _make_context return annotation (RB-5 followup)
+- Scope check_tracked_authors recent_papers to user_library (RB-2 followup)
+- Rewrite Host so nginx default_server stops 444ing dashboard (H-6)
+- Never log magic-link token; require SMTP in prod when not log-only (H-2)
+- Generate all required secret files incl infra_ingest_key (H-4)
+- Scope BM25/fallback list_papers to user_library (RB-1)
+- Provision PYTHONPATH so cross-user isolation gate actually runs (CI-1)
+- Require session + scope all 6 endpoints to user_id (RB-2)
+- Convert get_event_loop tests to async for Py3.12+uvloop (CI-3)
+- Add session auth + scope GET to caller library (RB-3)
+- Use fresh auth_check user_id in review handlers (RB-5)
+- .npmrc legacy-peer-deps so npm ci tolerates react19 peers (CI-2)
+- Reject create_card into another user's deck (RB-4)
+- Preserve outer X-Forwarded-Proto instead of clobbering with $scheme
+
+
+### Documentation
+- Pin assert_paper_ownership canonical-corpus invariant + regression test (D4 escalate)
+- Fix CHANGELOG links, reconcile DEPLOYMENT/residual-risks to multi-tenant GA, archive old audits (D-2,3,7,8,10,11)
+- Reconcile PRD/REQUIREMENTS/ARCHITECTURE to HEAD + multi-tenant GA (D-1,4,5,6,9)
+
+
+### Features
+- POST /api/auth/api-key-session mints scoped owner session (WS-AUTH-KEY-SESSION)
+
+
+### Miscellaneous Tasks
+- Import-org + kg-test type:ignore (D4 followup cleanup)
+- Defence-in-depth — no-new-privileges, vector entrypoint, CI checks, SHA-pin, nginx real_ip (INF-hardening)
+- Gate py-spy behind INSTALL_PROFILING build arg; prod excludes it
+- Remove redundant check-no-jsonb-double-encode.sh; .py is canonical (DB-04)
+
+
+### Refactoring
+- Remove assert_paper_ownership multitenant knob — shared canonical corpus is decided + SECURITY.md boundary (D4 resolved)
+- Fix job-store feed key, consolidate _owner_headers, drop dead _probe_postgres, relocate useFeedCounts (Wave3 DRY)
+
+
+### Testing
+- Align magic-link event + prod-config tests with H-2 security behavior
+- Regression — /api/papers/feed 200 across limits (BATCH-A)
+
+## [v0.4.0] - 2026-05-15
+
+
+### Bug Fixes
+- Isolate get_secrets_settings/api-key caches in paper_ingestion conftest
+- Make db/init.sql self-consistent — fresh-volume Docker installs were broken
+- CODEOWNERS handle @ferhatfidan -> @FFidan (actual repo owner per remote)
+- Make $$ state machine comment-aware (mig 080 FOREACH crash)
+- Hash email in stdlib auth logs + clear pre-existing ruff debt + COC/SECURITY contact
+- B1 — audit_log column is timestamp not created_at
+
+
+### Documentation
+- WS-MULTITENANT-DOCS — SECURITY threat model, DEPLOYMENT retraction, README quickstart, CONTRIBUTING, CODE_OF_CONDUCT
+
+
+### Features
+- WS-PRE-PUBLIC-CHECKLIST — readiness endpoint, System Health page, Sentry opt-in
+- Audit-log + per-user rate-limit + user-deletion cascade + installer
+
+
+### Testing
+- WS-NEGATIVE-TESTS — cross-user isolation suite + self-enforcing CI gate
+
+## [v0.3.5-rc] - 2026-05-15
+
+
+### Bug Fixes
+- Purge conflict-marker residue from 6 non-scope files
+- Mig-077 test expects papers.discovered_by (mig 072 rename)
+- Adversarial-review blockers — B1/B2/B3/B4 + N1-N5 + test debt
+- Enforce per-user isolation in paper_ingestion
+- Detect aliased + attribute-form Depends in unsafe-resolver linter
+- Exempt /api/setup/* from verify_api_key middleware
+- Stop logging users out on 403 + add 401 toast
+
+
+### Features
+- WS-CROSS-USER learning_engine — replace permissive resolvers with strict auth
+- Clear React-Query cache + zustand stores on logout (WS-FRONTEND-HYGIENE)
+- WS-DEV-MODE-RETIREMENT — granular dev flags + meta-flag promotion
+- Forward X-Owner-User-Id on all user-data backend calls (WS-CROSS-USER)
+- WS-AUTH foundation — demote API key to ops-only
+
+## [v0.3.4] - 2026-05-14
+
+
+### Bug Fixes
+- Mig 077 — papers.user_id was renamed to discovered_by in mig 072
+- Tsc-strict compat for PulseDeck + JournalSection tests
+
+## [v0.3.3] - 2026-05-14
+
+
+### Bug Fixes
+- JournalSection preserves typed text on refetch (N3)
+- Paper_digest per-pairing X-Owner-User-Id (N1)
+- Tighten CORS wildcard check to membership (L-03)
+- JournalSection useQuery + PulseDeck per-card savePending (M-12, M-13)
+- _handle_pairing uses @rate_limit decorator (M-05)
+- Reset outage flags before recovery INSERT (L-06)
+- AdminUsersPage setState into mutation lifecycle (H2)
+- Refresh warn_multitenant_stub log message (M-08); vault narrative (H1)
+
+
+### Documentation
+- Refresh contracts §6.2 and §10 — call_llm_structured (L-11)
+- 2026-05-14 deep-audit refresh (post-Wave-0)
+
+
+### Features
+- Scope KG read endpoints by user_id (M-01..M-04)
+- Admin-gate /api/nudges + FSRS per-user config + null guard + tx (L-12, L-13, L-14, M-11)
+- Rate-limit /setup/status and /auth/logout (L-01, L-02)
+- AST-based JSONB double-encode linter (M-10)
+- Migration 079 — JSONB repair for audit_log + job_progress (M-09)
+- Migration 077 — FK constraints on 18 user_id tables (H4)
+- Structlog PII key scrubber (L-07)
+- Asyncio.wait_for timeout per probe (L-08)
+- Require JARVIS_MODEL_HMAC_KEY in production (M-07)
+- Thread user_id through extract_entities_for_paper + batch (H3)
+- Migration 078 — paper_entities.user_id + backfill (H3)
+
+
+### Miscellaneous Tasks
+- Suppress I001 in test_pulse_training.py via per-file-ignores
+- Refresh M-05/M-08 tests + ruff I001
+- Add resolve_secret_row to __all__ (L-05)
+
+
+### Refactoring
+- Extract make_postgres_probe / make_litellm_probe (L-10)
+- Drop l2_penalty signal — feature already in embedding (M-06)
+
+## [v0.3.2] - 2026-05-14
+
+
+### Bug Fixes
+- Scope sibling handlers + orchestration by user_id (Wave 0.4 sweep)
+- User_id-scope complete_task + create_project
+- Scope /briefing /tasks /done /projects /newproject by user_id
+- Auth_check returns user_id; auth_required stashes on context
+
+
+### Refactoring
+- Residual 4.2+4.3 changes (post-edit hook sweep)
+
+## [v0.3.1] - 2026-05-14
+
+
+### Bug Fixes
+- FeedView onHardDelete stable callback + AdminUsers per-row delete + nits (Wave 4-7 closeout)
+- Per-user scoping for liked CTE + weight config + l2_lambda out of weights (3.1-3.3)
+- Disable PulseCard Save during pending mutation (DOM-F-03)
+- Boot-gate JARVIS_CONFIG_KEY in production (DOM-E-08)
+- Close HTML tags at chunk boundaries in _send_chunked (DOM-D-09)
+- Reorder ownership-vs-null guard + form-field max_length (3.7, 3.8)
+- Enable allow_credentials for cross-origin session cookies (DOM-E-12)
+- Tighten assert_paper_ownership NULL semantics in multi-tenant (DOM-E-04)
+- Allowlist-check S2 openAccessPdf.url at parse time (DOM-B-09)
+- Explicit X-API-Key on daily_briefing stats call (DOM-D-04)
+
+
+### Documentation
+- Explain Optional noqa edge case in dynamic_models (Task 7.4)
+
+
+### Miscellaneous Tasks
+- Add exc_info to bare except Exception blocks (Task 7.1)
+- Profile-gate vector service to avoid unintended docker-socket access (DOM-H-03)
+
+
+### Performance
+- Memoize FeedPaperRow + lazy-split ResearchFeedPage (6.1, 6.2)
+- Per-row pendingRoleUserId on AdminUsersPage (DOM-F-07)
+- Wrap detect_hardware in asyncio.to_thread at 4 async call sites (DOM-J-07)
+
+
+### Refactoring
+- Extract warn_multitenant_stub + health-check skeleton (4.2, 4.3)
+- Consolidate _coerce_bool, sse shim, decompose_query param, dead models, predicate inlines (4.4-4.8)
+- Switch config from @dataclass to BaseSettings (Task 7.3)
+
+
+### Testing
+- Update _make_profile to use l2_lambda field after 3.3 refactor
+- Cover shared init_langfuse_hook (DOM-J-01)
+
+## [v0.3.0] - 2026-05-14
+
+
+### Bug Fixes
+- Defer migrations 075/076 + drop future-annotations to unblock OpenAPI schema (Wave 2 closeout)
+- Per-endpoint rate limits on setup + /pair (H16, DOM-D-02)
+- Require paper ownership on compute_paper_priority (Wave 1 closeout)
+- Require paper ownership on extract_entities (Wave 1 closeout)
+- Per-endpoint rate limits on request_link + verify (H15)
+- Drop double json.dumps in SystemEventHandler + widen lint window (Wave 1 closeout)
+- Validate deck ownership in single-paper generate_cards (Wave 1 closeout)
+- Drop public-literal HMAC fallback + dedicated key (H14)
+- Mig 075 backfills double-encoded rows (Wave 1 closeout)
+- Wrap 5 lazy routes in Suspense (H12)
+- Drop double json.dumps + add nolint markers (Wave 1 closeout)
+- Use hmac.compare_digest for INFRA_INGEST_KEY check (H13)
+- Wire telegram_user_pairings into auth_check (C1)
+- Sanitize bulk_action error responses (DOM-A-07)
+- Scope to author + assert paper ownership (DOM-A-05/06/14, DOM-C-07)
+- Block personal-key NULL fallback for non-admin readers (DOM-A-09)
+- Hoist assert_paper_ownership above async_mode branch (H9)
+- Require paper ownership on graph + fetch + get endpoints (H11)
+- Scope analytics handlers to caller + add llm_usage_log.user_id (H8)
+- Scope batch_process_papers via user_library JOIN (H10)
+- Scope decks + cards.create_card to caller (H5, DOM-C-06)
+- Thread user_id through generate_cards_core (H7)
+- Drop double json.dumps in my_day.upsert_journal_entry (H2)
+- Scope anki export to deck owner (H6)
+- Drop double json.dumps in _handle_pairing (H4)
+- Drop double json.dumps in _autoconfigure_models_hook (H4)
+- Drop double json.dumps in setup._persist_config (H3)
+- Drop double json.dumps in infra_events.bulk_ingest (H1)
+- Merge no-user FROM into corpus-user variant to type $1
+
+
+### Documentation
+- 2026-05-14 deep audit + security review baseline
+
+
+### Miscellaneous Tasks
+- Rephrase JSONB test docstring to avoid lint false-positive
+- Add check-no-jsonb-double-encode gate (Wave 1)
+- Install py-spy in paper_ingestion image for profiling
+- Restrict vector docker_logs to this compose project
+- Align pydantic-ai-eval deps with eval doc recommendation
+- Use --no-deps in profile-stack-up to avoid sibling-Ollama collision
+
+## [v0.2.2] - 2026-05-14
+
+
+### Documentation
+- Close §6 §9 §10 §11 §P0.3 via 2026-05-14 cleanup sprint
+- Baseline report + ranked follow-ups (closes §11)
+- Archive stale multiuser plans per deletion manifest
+- Add 2026-05-14 post-v0.2.0 cleanup sprint plan
+- Close items via 2026-05-14 functional sweep
+- Deletion-candidate manifest for pre-v0.2.0 plans
+
+
+### Features
+- User-scope Qdrant search + backfill script
+- Per-user topic subscriptions wire fan-out
+
+
+### Miscellaneous Tasks
+- Pyright fixes + migration 074 deferred-set + plan doc
+
+
+### Performance
+- Cache get_secrets_settings() in build_litellm_headers hot path
+- Split OnboardingTour (react-joyride) out of eager bundle
+
+
+### Refactoring
+- Typed SecretsSettings replaces read_secret helper
+- Fail-loud when no pairings; delete single_tenant_user_id
+
+
+### Testing
+- Move secrets-cache clear fixture to root conftest
+- Assert BM25 leg of hybrid_search remains user_id-unscoped (Decision 6)
+
+
+### Spike
+- Pydantic-ai evaluation + recommendation doc for §13
+
 ## [v0.2.1] - 2026-05-12
 
 ### Changed

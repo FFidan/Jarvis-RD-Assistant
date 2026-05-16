@@ -7,7 +7,7 @@ topic-name join, and bulk-delete behaviour.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from paper_ingestion.routers import recommendation_feedback
@@ -60,17 +60,14 @@ async def test_get_returns_paginated_list_with_topic_join():
     ]
     conn.fetchval.return_value = 2
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=None,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.total == 2
     assert len(result.items) == 2
@@ -85,17 +82,14 @@ async def test_get_filters_by_paper_id():
     conn.fetch.return_value = [_row(paper_id=42)]
     conn.fetchval.return_value = 1
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=42,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=42,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.total == 1
     # Verify the SQL query passed to conn.fetch includes paper_id as a positional arg.
@@ -114,17 +108,14 @@ async def test_get_scopes_by_user_id():
     conn.fetch.return_value = [_row()]
     conn.fetchval.return_value = 1
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=7),
-    ):
-        await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=None,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    await recommendation_feedback.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=7,
+    )
 
     sql = conn.fetch.call_args.args[0]
     assert "IS NOT DISTINCT FROM" not in sql
@@ -138,17 +129,14 @@ async def test_get_pagination_default():
     conn.fetch.return_value = []
     conn.fetchval.return_value = 0
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=None,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.total == 0
     assert result.items == []
@@ -178,17 +166,14 @@ async def test_get_topic_name_join():
     ]
     conn.fetchval.return_value = 1
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=None,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=None,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=None,
+    )
 
     item = result.items[0]
     assert item.paper_id == 7
@@ -212,15 +197,12 @@ async def test_delete_removes_user_scoped_rows_for_topic():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 3"
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
-            request=MagicMock(),
-            topic_id=5,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
+        request=MagicMock(),
+        topic_id=5,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.deleted == 3
     assert result.topic_id == 5
@@ -232,15 +214,12 @@ async def test_delete_returns_zero_when_no_rows():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
-            request=MagicMock(),
-            topic_id=99,
-            db_pool=pool,
-        )
+    result = await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
+        request=MagicMock(),
+        topic_id=99,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.deleted == 0
     assert result.topic_id == 99
@@ -252,15 +231,12 @@ async def test_delete_scopes_by_user_id():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=7),
-    ):
-        await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
-            request=MagicMock(),
-            topic_id=1,
-            db_pool=pool,
-        )
+    await recommendation_feedback.delete_recommendation_feedback_by_topic.__wrapped__(
+        request=MagicMock(),
+        topic_id=1,
+        db_pool=pool,
+        user_id=7,
+    )
 
     sql = conn.execute.call_args.args[0]
     assert "IS NOT DISTINCT FROM" not in sql

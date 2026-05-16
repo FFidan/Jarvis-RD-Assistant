@@ -465,6 +465,29 @@ async def current_user_id_strict_with_owner_override(
     return uid
 
 
+async def get_current_user_id(
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> int:
+    """Declarative ``Depends`` wrapper for :func:`current_user_id_strict_with_owner_override`.
+
+    CC-03: route handlers historically resolved the caller identity
+    imperatively::
+
+        user_id = await current_user_id_strict_with_owner_override(
+            request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
+        )
+
+    That pattern (a) hides the auth requirement from the OpenAPI schema and
+    (b) hand-extracts the ``X-API-Key`` header instead of letting the
+    ``APIKeyHeader`` security scheme do it. This thin wrapper lets handlers
+    declare ``user_id: int = Depends(get_current_user_id)`` instead: identical
+    runtime behaviour (same session → X-Owner-User-Id resolution, same
+    401/403), but the dependency is now visible in the generated spec and the
+    API-key header is sourced through the declared security scheme.
+    """
+    return user_id
+
+
 # allow-user-id-none: legacy Telegram single-tenant path
 
 

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from httpx import ASGITransport
+from jarvis_common import current_user_id_strict_with_owner_override
 from paper_ingestion.models import NoteCreate, NoteResponse, NoteUpdate
 
 # ---------------------------------------------------------------------------
@@ -691,10 +692,8 @@ async def test_promote_note_403_for_other_user(_app, monkeypatch):
     """
     from jarvis_common import assert_paper_ownership as _real_assert_ownership
 
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_99
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 99
     # _app pass-throughs ownership by default; this test exercises the real
     # canonical-corpus ownership guard, so restore it.
     monkeypatch.setattr(
@@ -745,10 +744,8 @@ async def test_list_notes_scopes_to_author(_app, monkeypatch):
     includes an exact ``user_id = $2`` scope so the mock returns an empty
     list because the conn.fetch stub returns [].
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
     # assert_paper_ownership: single fetchrow for paper lookup (user_id=8 → None discovery → allow)
     conn.fetchrow.return_value = {"discovered_by": None}
     # The user-scoped SELECT returns empty (user 7's notes, not user 8's)
@@ -773,10 +770,8 @@ async def test_update_note_rejects_non_author(_app, monkeypatch):
     Note was created by user 7. User 8 attempts to update it.  The authorship
     SELECT (id + exact user_id match) returns None → 404.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
     # First fetchval: source check → "user" (not zotero)
     conn.fetchval.return_value = "user"
     # The authorship SELECT returns None (note belongs to user 7, not 8)
@@ -796,10 +791,8 @@ async def test_delete_note_rejects_non_author(_app, monkeypatch):
     Note was created by user 7. User 8 attempts to delete it.  The authorship
     SELECT returns None → 404.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
     # First fetchval: source check → "user" (not zotero)
     conn.fetchval.return_value = "user"
     # The authorship SELECT returns None (note belongs to user 7, not 8)
@@ -826,10 +819,8 @@ async def test_promote_zotero_note_rejects_non_author(_app, monkeypatch):
     to promote it: the user-scoped initial SELECT returns None → 404, before
     any verification or UPDATE runs.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 8
     # User-scoped "SELECT * FROM paper_notes WHERE id=$1 AND user_id=$2" misses
     # (note belongs to user 7, caller is user 8) → None.
     conn.fetchrow.return_value = None
@@ -855,10 +846,8 @@ async def test_promote_zotero_note_author_succeeds(_app, monkeypatch):
     User 7 promotes their own note; the user-scoped SELECT matches and the
     happy path proceeds to a verified promotion.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_7
-    )
     app, conn = _app
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 7
     promoted_at = datetime(2026, 1, 5, tzinfo=UTC)
     conn.fetchrow.side_effect = [
         _make_note_record(

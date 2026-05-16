@@ -18,7 +18,12 @@ from datetime import date
 
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
-from jarvis_common import ErrorResponse, current_user_id_strict_with_owner_override, log_audit
+from jarvis_common import (
+    ErrorResponse,
+    current_user_id_strict_with_owner_override,
+    get_current_user_id,
+    log_audit,
+)
 from jarvis_common.advisory_lock import _kind_lock_key
 from jarvis_common.paper_state import trash_paper as _trash_paper
 from jarvis_common.settings import get_core_settings
@@ -72,6 +77,7 @@ def _is_dev_mode() -> bool:
 async def generate_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    current_uid: int = Depends(get_current_user_id),
 ) -> PulseGenerateResponse:
     """Enqueue an on-demand Pulse deck generation job.
 
@@ -84,9 +90,6 @@ async def generate_pulse(
     is per-payload, whereas we want a per-kind+user lock that spans the full
     multi-minute pipeline run.
     """
-    current_uid = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     key1 = _kind_lock_key("pulse.generate")
     key2 = current_uid or 0
 
@@ -140,6 +143,7 @@ async def generate_pulse(
 async def get_today(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> PulseDeckResponse:
     """Fetch today's Pulse deck, falling back to the last non-empty deck within 7 days.
 
@@ -157,9 +161,6 @@ async def get_today(
     HTTPException(404)
         When no deck has been generated for today at all.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     deck = await load_today(db_pool, user_id=user_id)
     if deck is None:
         raise HTTPException(status_code=404, detail="No Pulse deck for today")
@@ -212,11 +213,9 @@ async def get_history(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> list[PulseDeckResponse]:
     """Return Pulse decks from the last *days* days, newest first."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     return await load_history(db_pool, days=days, user_id=user_id)
 
 
@@ -231,6 +230,7 @@ async def rate_card(
     request: Request,
     body: PulseRateRequest = Body(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> PulseRateResponse:
     """Persist a user rating for a Pulse-shown paper (spec §4.4).
 
@@ -245,9 +245,6 @@ async def rate_card(
     Guard: paper must be a member of the requesting user's pulse deck (404 if not).
     """
     _ = request  # required by slowapi limiter — pyright suppression idiom (plan §2 constraint 7)
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         in_deck = await conn.fetchval(
             """SELECT 1 FROM pulse_cards pc
@@ -332,11 +329,9 @@ async def get_stats(
     request: Request,
     days: int = Query(default=30, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    caller_id: int = Depends(get_current_user_id),
 ) -> PulseStatsResponse:
     """Aggregate Pulse run stats over the past *days* days."""
-    caller_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
             """
@@ -391,6 +386,7 @@ async def get_stats(
 async def debug_pulse(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    caller_id: int = Depends(get_current_user_id),
 ) -> PulseDebugResponse:
     """Return diagnostics for the latest Pulse deck.
 
@@ -406,9 +402,6 @@ async def debug_pulse(
     """
     if not _is_dev_mode():
         raise HTTPException(status_code=404)
-    caller_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         # Fetch the most recent deck row for this caller
         deck_row = await conn.fetchrow(
@@ -556,6 +549,7 @@ async def debug_pulse(
 async def get_source_health(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> list[dict]:
     """Return per-source health status (last request, last success, cooldown).
 
@@ -566,9 +560,6 @@ async def get_source_health(
         Fields: source_type, last_request_at, last_success_at, last_status,
                 cooldown_until, consecutive_failures.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     rows = await db_pool.fetch(
         """
         SELECT source_type, last_request_at, last_success_at, last_status,
@@ -593,6 +584,7 @@ async def get_source_history(
     request: Request,
     days: int = Query(default=7, ge=1, le=365),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, list[dict]]:
     """Return source run history grouped by source_type.
 
@@ -608,9 +600,6 @@ async def get_source_history(
     days : int
         Include runs started in the last *days* days (default 7).
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     rows = await db_pool.fetch(
         """
         SELECT source_type, started_at, finished_at, status, candidate_count, duration_ms

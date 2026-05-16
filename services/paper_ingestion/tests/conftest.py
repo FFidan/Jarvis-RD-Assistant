@@ -188,6 +188,8 @@ def _default_authenticated_user(request):
     from unittest.mock import AsyncMock
 
     import paper_ingestion.routers as routers_pkg
+    from jarvis_common.auth import current_user_id_strict_with_owner_override
+    from paper_ingestion.main import app
 
     resolver_names = (
         "current_user_id_strict",
@@ -200,11 +202,33 @@ def _default_authenticated_user(request):
             if hasattr(module, name):
                 saved.append((module, name, getattr(module, name)))
                 setattr(module, name, AsyncMock(return_value=1))
+
+    # CC-03: handlers converted to ``Depends(get_current_user_id)`` resolve
+    # identity through FastAPI's dependency graph, which the symbol monkeypatch
+    # above cannot intercept (``Depends`` captured the function object at import
+    # time). ``get_current_user_id`` is a thin wrapper whose body is
+    # ``Depends(current_user_id_strict_with_owner_override)``, so overriding the
+    # *inner* resolver lets FastAPI's recursive override resolution default
+    # every converted route — and the pre-existing declarative
+    # ``Depends(current_user_id_strict_with_owner_override)`` routes
+    # (e.g. pulse ``explain_card``) — to user 1.
+    #
+    # Overriding the inner resolver (not the wrapper) is deliberate: a test that
+    # needs a specific attacker/owner id re-assigns this SAME dict key inside
+    # its own scope, and the last assignment wins — exactly the precedence the
+    # old per-router symbol monkeypatch provided. Overriding the wrapper instead
+    # would short-circuit FastAPI before it descends to the inner resolver, so
+    # such per-test re-overrides would be silently ignored.
+    override_added = current_user_id_strict_with_owner_override not in app.dependency_overrides
+    if override_added:
+        app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 1
     try:
         yield
     finally:
         for module, name, original in saved:
             setattr(module, name, original)
+        if override_added:
+            app.dependency_overrides.pop(current_user_id_strict_with_owner_override, None)
 
 
 @pytest.fixture()

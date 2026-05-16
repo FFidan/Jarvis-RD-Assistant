@@ -53,7 +53,7 @@ Services read the `*_FILE` environment variable first (Docker Secrets mount path
 `/run/secrets/<name>`), falling back to the plain env var from `.env`. This means you
 can run without secrets files in development by setting values in `.env` as usual.
 
-The helper is `jarvis_common.secrets.read_secret(name)`.
+The settings are accessed via `get_secrets_settings()` from `jarvis_common.settings`, which returns a `SecretsSettings` object populated from `*_FILE` env vars (Docker Secrets mount) falling back to plain env vars.
 
 ## Rotation & Hot-Reload
 

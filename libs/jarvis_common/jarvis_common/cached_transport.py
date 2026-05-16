@@ -34,6 +34,44 @@ _SOURCE_HOSTS = frozenset(
 # resolves to a cache-allowlisted host.
 _UNCACHEABLE_CONTENT = ("pdf", "octet-stream", "zip", "image/")
 
+# Credential-bearing query params (NCBI E-utilities / OpenAlex pass the key in
+# the query string). Excluded from the cache key so the secret never lands in
+# the in-memory store or the debug log — and because two requests differing
+# only by credential address the same upstream resource anyway.
+_SENSITIVE_QUERY_PARAMS = frozenset(
+    {"api_key", "apikey", "api-key", "key", "token", "access_token"}
+)
+
+# Hop-by-hop headers (RFC 7230 §6.1) plus content-coding/length: meaningless or
+# wrong once the body is buffered and decoded by httpx, so they must not be
+# stored and replayed on a cache hit.
+_STRIP_HEADERS = frozenset(
+    {
+        b"connection",
+        b"keep-alive",
+        b"proxy-authenticate",
+        b"proxy-authorization",
+        b"te",
+        b"trailer",
+        b"transfer-encoding",
+        b"upgrade",
+        b"content-encoding",
+        b"content-length",
+    }
+)
+
+
+def _cache_key(url: httpx.URL) -> str:
+    """URL string with credential query params removed."""
+    for name in [k for k in url.params.keys() if k.lower() in _SENSITIVE_QUERY_PARAMS]:
+        url = url.copy_remove_param(name)
+    return str(url)
+
+
+def _safe_headers(raw: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
+    """Drop hop-by-hop / stale framing headers from a to-be-cached response."""
+    return [(name, value) for name, value in raw if name.lower() not in _STRIP_HEADERS]
+
 
 def _env_enabled() -> bool:
     return os.getenv("SOURCE_HTTP_CACHE_ENABLED", "true").strip().lower() != "false"
@@ -64,7 +102,7 @@ class CachingTransport(httpx.AsyncBaseTransport):
         if not self._enabled or request.method != "GET" or request.url.host not in _SOURCE_HOSTS:
             return await self._inner.handle_async_request(request)
 
-        key = str(request.url)
+        key = _cache_key(request.url)
         now = time.monotonic()
         hit = self._store.get(key)
         if hit is not None and now - hit[0] < self._ttl:
@@ -78,12 +116,12 @@ class CachingTransport(httpx.AsyncBaseTransport):
         is_binary = any(tok in ctype for tok in _UNCACHEABLE_CONTENT)
         if response.status_code == 200 and not is_binary:
             body = await response.aread()
-            raw_headers = list(response.headers.raw)
-            self._store[key] = (now, response.status_code, raw_headers, body)
+            safe_headers = _safe_headers(response.headers.raw)
+            self._store[key] = (now, response.status_code, safe_headers, body)
             self._store.move_to_end(key)
             if len(self._store) > self._max:
                 self._store.popitem(last=False)
-            response = httpx.Response(200, headers=raw_headers, content=body, request=request)
+            response = httpx.Response(200, headers=safe_headers, content=body, request=request)
         self.misses += 1
         logger.debug("source-cache MISS %s h=%d m=%d", key, self.hits, self.misses)
         return response

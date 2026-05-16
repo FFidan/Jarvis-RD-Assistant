@@ -12,7 +12,7 @@ import logging
 
 import asyncpg
 from fastapi import APIRouter, Depends, Query, Request
-from jarvis_common.auth import current_user_id_strict_with_owner_override
+from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion.deps import get_db_pool, limiter
 from paper_ingestion.models.papers import (
@@ -41,6 +41,7 @@ async def list_recommendation_feedback(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> FeedbackListResponse:
     """List recommendation_feedback rows for the current user.
 
@@ -48,9 +49,6 @@ async def list_recommendation_feedback(
     Optional ``paper_id`` query param narrows results to a single paper.
     """
     _ = request  # required by @limiter.limit; not used in body
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         where_clauses = ["rf.user_id = $1"]
         params: list[object] = [user_id]
@@ -93,6 +91,7 @@ async def delete_recommendation_feedback_by_topic(
     request: Request,
     topic_id: int = Query(...),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> DeleteFeedbackResponse:
     """Bulk-delete all recommendation_feedback rows for the given topic.
 
@@ -100,9 +99,6 @@ async def delete_recommendation_feedback_by_topic(
     rows deleted.
     """
     _ = request  # required by @limiter.limit; not used in body
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         result = await conn.execute(
             """DELETE FROM recommendation_feedback

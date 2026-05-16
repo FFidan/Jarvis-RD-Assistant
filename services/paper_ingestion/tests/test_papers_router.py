@@ -549,6 +549,7 @@ async def test_list_papers_no_filters_uses_limit_offset():
         offset=10,
         db_pool=pool,
         embedder=None,
+        user_id=1,
     )
 
     fetch_call = conn.fetch.await_args
@@ -579,6 +580,7 @@ async def test_list_papers_topic_filter_correct_param_indices():
         offset=0,
         db_pool=pool,
         embedder=None,
+        user_id=1,
     )
 
     fetch_call = conn.fetch.await_args
@@ -614,6 +616,7 @@ async def test_list_papers_view_and_source_type_correct_param_indices():
         offset=5,
         db_pool=pool,
         embedder=None,
+        user_id=1,
     )
 
     fetch_call = conn.fetch.await_args
@@ -654,6 +657,7 @@ async def test_list_papers_all_filters_correct_param_indices():
         offset=3,
         db_pool=pool,
         embedder=None,
+        user_id=1,
     )
 
     fetch_call = conn.fetch.await_args
@@ -692,6 +696,9 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
     pool_a, conn_a = _make_pool_and_conn()
     conn_a.fetch.return_value = [_paper_row(id=10)]
 
+    # CC-03: identity is now a Depends(get_current_user_id) param; a direct
+    # .__wrapped__ call passes it explicitly. user A == id 1 (the value the
+    # pre-conversion autouse stub supplied).
     await papers.list_papers.__wrapped__(
         SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None))),
         view=None,
@@ -702,6 +709,7 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
         offset=0,
         db_pool=pool_a,
         embedder=None,
+        user_id=1,
     )
 
     sql_a, *params_a = conn_a.fetch.await_args.args
@@ -709,15 +717,7 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
     # user_id=1 (user A) must be the param bound to the library join
     assert params_a[0] == 1, f"Expected user_id=1 for user A, got {params_a[0]}"
 
-    # --- call as user B (id=2) — re-patch the resolver ---
-    async def _user_b(req, *_a, **_kw):
-        return 2
-
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        _user_b,
-    )
-
+    # --- call as user B (id=2) — pass the distinct caller identity directly ---
     pool_b, conn_b = _make_pool_and_conn()
     conn_b.fetch.return_value = []  # user B has no papers — cross-tenant leak would add rows
 
@@ -731,6 +731,7 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
         offset=0,
         db_pool=pool_b,
         embedder=None,
+        user_id=2,
     )
 
     sql_b, *params_b = conn_b.fetch.await_args.args
@@ -746,17 +747,9 @@ async def test_list_papers_bm25_scoped_to_user(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-async def _async_user_99(_request, *_args, **_kwargs):
-    del _request
-    return 99
-
-
 @pytest.mark.asyncio
-async def test_get_paper_detail_403_for_other_user(monkeypatch):
+async def test_get_paper_detail_403_for_other_user():
     """Sprint B: paper discovered_by=42, caller=99 + not in library → 403."""
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
-    )
     pool, conn = _make_pool_and_conn()
     # First fetchrow is the ownership check on `papers` table — return the
     # legacy ``user_id`` key (the helper falls back to it when
@@ -771,6 +764,7 @@ async def test_get_paper_detail_403_for_other_user(monkeypatch):
             MagicMock(),
             paper_id=1,
             db_pool=pool,
+            user_id=99,
         )
     assert exc_info.value.status_code == 403
 
@@ -1387,13 +1381,10 @@ async def test_bulk_feedback_negative_writes_recommendation_feedback():
 
 
 @pytest.mark.asyncio
-async def test_bulk_partial_failure_records_savepoint_isolation(monkeypatch):
+async def test_bulk_partial_failure_records_savepoint_isolation():
     """Per-paper savepoints must isolate failures: paper 2 raises, papers
     1 and 3 still succeed (the outer txn commits, only paper 2's
     savepoint rolls back)."""
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
-    )
     pool, conn = _make_pool_and_conn()
 
     # Sprint B: assert_paper_ownership now reads ``discovered_by`` (audit) +
@@ -1426,7 +1417,7 @@ async def test_bulk_partial_failure_records_savepoint_isolation(monkeypatch):
     body = BulkActionRequest(paper_ids=[1, 2, 3], action="save")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool, user_id=99)
 
     assert result["succeeded"] == [1, 3]
     assert len(result["failed"]) == 1
@@ -1682,15 +1673,12 @@ async def test_annotate_paper_404_when_paper_missing():
 
 
 @pytest.mark.asyncio
-async def test_annotate_paper_unauthorized_user(monkeypatch):
+async def test_annotate_paper_unauthorized_user():
     """PUT /annotations with a caller who does not own the paper returns 403.
 
     Mirrors the pattern in test_get_paper_detail_403_for_other_user: the paper
     is owned by user 42, the caller is user 99 → assert_paper_ownership raises 403.
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
-    )
     pool, conn = _make_pool_and_conn()
     # Sprint B: assert_paper_ownership reads discovered_by (with legacy
     # user_id fallback for fixtures), then checks user_library membership.
@@ -1704,6 +1692,7 @@ async def test_annotate_paper_unauthorized_user(monkeypatch):
             1,
             body=AnnotationsRequest(rating=3),
             db_pool=pool,
+            user_id=99,
         )
 
     assert exc_info.value.status_code == 403
@@ -1729,7 +1718,7 @@ async def test_bulk_action_idempotent_recall():
 
 
 @pytest.mark.asyncio
-async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
+async def test_bulk_action_partial_idempotent_with_invalid_id():
     """Bulk {action: 'save', paper_ids: [1, 99999]} with paper 99999 missing.
 
     Per-paper savepoints isolate the failure so paper 1 succeeds while
@@ -1737,9 +1726,6 @@ async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
     the succeeded/failed partition — NOT a 207 (the bulk endpoint always
     returns 200 in this implementation).
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override", _async_user_99
-    )
     pool, conn = _make_pool_and_conn()
 
     async def _fetchrow(sql: str, *args, **kwargs):
@@ -1758,7 +1744,7 @@ async def test_bulk_action_partial_idempotent_with_invalid_id(monkeypatch):
     body = BulkActionRequest(paper_ids=[1, 99999], action="save")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(embedder=None)))
 
-    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool)
+    result = await papers.bulk_action_papers.__wrapped__(request, body, db_pool=pool, user_id=99)
 
     assert result["succeeded"] == [1]
     assert len(result["failed"]) == 1
@@ -1784,17 +1770,14 @@ async def test_get_recommendation_feedback_404_for_nonexistent_paper_filter():
     conn.fetch.return_value = []
     conn.fetchval.return_value = 0
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await rf_router.list_recommendation_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=99999,
-            limit=50,
-            offset=0,
-            db_pool=pool,
-        )
+    result = await rf_router.list_recommendation_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=99999,
+        limit=50,
+        offset=0,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.items == []
     assert result.total == 0
@@ -1812,15 +1795,12 @@ async def test_delete_recommendation_feedback_returns_zero_for_nonexistent_topic
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"
 
-    with patch(
-        "paper_ingestion.routers.recommendation_feedback.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await rf_router.delete_recommendation_feedback_by_topic.__wrapped__(
-            request=MagicMock(),
-            topic_id=99999,
-            db_pool=pool,
-        )
+    result = await rf_router.delete_recommendation_feedback_by_topic.__wrapped__(
+        request=MagicMock(),
+        topic_id=99999,
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result.deleted == 0
     assert result.topic_id == 99999
@@ -1841,16 +1821,13 @@ async def test_delete_paper_feedback_returns_204_for_existing_row():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 1"
 
-    with patch(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=7),
-    ):
-        result = await papers.delete_paper_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=42,
-            source="pulse_thumbs",
-            db_pool=pool,
-        )
+    result = await papers.delete_paper_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=42,
+        source="pulse_thumbs",
+        db_pool=pool,
+        user_id=7,
+    )
 
     # 204 handler returns None
     assert result is None
@@ -1875,16 +1852,13 @@ async def test_delete_paper_feedback_returns_204_for_nonexistent_row():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"  # no row matched
 
-    with patch(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=None),
-    ):
-        result = await papers.delete_paper_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=99,
-            source="dismiss_combined",
-            db_pool=pool,
-        )
+    result = await papers.delete_paper_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=99,
+        source="dismiss_combined",
+        db_pool=pool,
+        user_id=None,
+    )
 
     assert result is None
     conn.execute.assert_awaited_once()
@@ -1902,16 +1876,13 @@ async def test_delete_paper_feedback_scoped_to_exact_user():
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 1"
 
-    with patch(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=13),
-    ):
-        await papers.delete_paper_feedback.__wrapped__(
-            request=MagicMock(),
-            paper_id=7,
-            source="feed_thumbs",
-            db_pool=pool,
-        )
+    await papers.delete_paper_feedback.__wrapped__(
+        request=MagicMock(),
+        paper_id=7,
+        source="feed_thumbs",
+        db_pool=pool,
+        user_id=13,
+    )
 
     call_args = conn.execute.await_args
     sql = call_args.args[0]
@@ -1922,17 +1893,13 @@ async def test_delete_paper_feedback_scoped_to_exact_user():
 
 
 @pytest.mark.asyncio
-async def test_delete_paper_feedback_different_user_id_not_deleted(monkeypatch):
+async def test_delete_paper_feedback_different_user_id_not_deleted():
     """DELETE is scoped to the caller's user_id — a different user's row is untouched.
 
     This test verifies that the SQL parameters carry the caller's user_id.
     A row owned by user 42 is NOT deleted when the caller is user 99.
     (The DB enforces scoping; we verify we pass the correct user_id arg.)
     """
-    monkeypatch.setattr(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        _async_user_99,
-    )
     pool, conn = _make_pool_and_conn()
     conn.execute.return_value = "DELETE 0"  # user 99 has no row for paper 42
 
@@ -1941,6 +1908,7 @@ async def test_delete_paper_feedback_different_user_id_not_deleted(monkeypatch):
         paper_id=42,
         source="pulse_thumbs",
         db_pool=pool,
+        user_id=99,
     )
 
     call_args = conn.execute.await_args
@@ -2017,17 +1985,11 @@ async def test_process_batch_happy_path_returns_job_id():
     mock_task = MagicMock()
     mock_defer = AsyncMock()
     mock_task.defer_async = mock_defer
-    with (
-        patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task}),
-        patch(
-            "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-            new=AsyncMock(return_value=None),
-        ),
-    ):
+    with patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_task}):
         from paper_ingestion.models import ProcessBatchRequest
 
         body = ProcessBatchRequest(paper_ids=[1, 2, 3])
-        result = await papers.process_batch.__wrapped__(request, body, db_pool=pool)
+        result = await papers.process_batch.__wrapped__(request, body, db_pool=pool, user_id=None)
 
     assert result["status"] == "queued"
     assert "job_id" in result

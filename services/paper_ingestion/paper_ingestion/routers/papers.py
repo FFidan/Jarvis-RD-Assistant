@@ -8,7 +8,7 @@ from typing import Annotated
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, assert_paper_ownership, escape_like
-from jarvis_common.auth import current_user_id_strict_with_owner_override
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.library import add_to_library
 from jarvis_common.paper_state import (  # noqa: I001
     assert_paper_in_states as _assert_paper_in_states,
@@ -72,15 +72,13 @@ async def list_papers_brief(
     request: Request,
     search: str | None = Query(default=None, min_length=1),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    caller_id: int = Depends(get_current_user_id),
 ) -> list[dict]:
     """Return lightweight paper list for selector dropdowns."""
     # Sprint B: scope to the caller's user_library. WS-CROSS-USER: the
     # resolver now hard-401s sessionless callers, so caller_id is always a
     # real user and the previous unscoped-corpus fallback is removed (it
     # leaked every user's papers to API-key-only callers).
-    caller_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         if search:
             rows = await conn.fetch(
@@ -122,6 +120,7 @@ async def list_papers(
     offset: int = Query(default=0, ge=0),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     embedder=Depends(get_optional_embedder),
+    user_id: int = Depends(get_current_user_id),
 ) -> list[PaperResponse]:
     """List papers with optional filters.
 
@@ -151,10 +150,6 @@ async def list_papers(
         ``created_at DESC``.
     """
     from paper_ingestion.converters import hybrid_dict_to_paper_response
-
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
 
     if view is not None and view not in VIEW_PREDICATES:
         raise HTTPException(
@@ -242,6 +237,7 @@ async def get_paper_detail(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> PaperDetailResponse:
     """Get a paper with its summary, chunks, user state, and most recent feedback.
 
@@ -256,9 +252,6 @@ async def get_paper_detail(
         Paper, optional summary, chunks, user state, and most recent
         recommendation feedback (if any).
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         paper_row = await conn.fetchrow("SELECT * FROM papers WHERE id = $1", paper_id)
@@ -345,6 +338,7 @@ async def batch_save_papers(
     request: Request,
     papers: Annotated[list[PaperCreate], Body()],
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> list[PaperResponse]:
     """Upsert a list of papers to the database (by external_id)."""
     max_batch = 100
@@ -355,9 +349,6 @@ async def batch_save_papers(
     # Sprint B canonical-corpus: papers are inserted into the canonical
     # corpus (no owner column), then mirrored into the caller's user_library
     # so they show up in *their* feed.
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     results: list[PaperResponse] = []
     async with db_pool.acquire() as conn:
         async with conn.transaction():
@@ -385,6 +376,7 @@ async def submit_feedback(
     paper_id: int,
     body: FeedbackRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Record per-paper recommendation feedback.
 
@@ -397,9 +389,6 @@ async def submit_feedback(
     papers are kept out of recommendation training; use ``trash_and_reject`` for
     the atomic trash plus negative feedback path.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
 
@@ -449,15 +438,13 @@ async def delete_paper_feedback(
     paper_id: int,
     source: Annotated[str, Query()],
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> None:
     """Delete a recommendation_feedback row for this paper+user+source triple.
 
     Idempotent — returns 204 regardless of whether a row was deleted.
     ``source`` must be supplied as a query parameter (e.g. ``?source=pulse_thumbs``).
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await conn.execute(
             "DELETE FROM recommendation_feedback"
@@ -478,11 +465,9 @@ async def delete_paper_feedback(
 async def get_feed_counts(
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Return per-bucket paper counts for the current user (10 named views)."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
 
     def _sum(view_key: str, alias: str) -> str:
         return (
@@ -618,11 +603,9 @@ async def save_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Save a paper to the Reading List (``state := 'to_read'``)."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -646,14 +629,12 @@ async def unsave_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Revert a saved paper from the Reading List back to the Inbox (``state := 'inbox'``).
 
     Requires the paper to be in ``to_read`` state; raises 409 otherwise.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("to_read",))
@@ -672,11 +653,9 @@ async def skip_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Skip a paper from the Inbox (``state := 'done'``)."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -698,11 +677,9 @@ async def reading_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Mark a paper as currently being read (``state := 'reading'``)."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -726,11 +703,9 @@ async def done_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Mark a paper as done (``state := 'done'``)."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -751,6 +726,7 @@ async def star_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Set ``starred = TRUE``. Does not change reading state.
 
@@ -768,9 +744,6 @@ async def star_paper(
     fail the star mutation itself (best-effort).
     """
     _ = request  # required by @limiter.limit; not used in body
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     was_new_star = False
     project_link_count = 0
     auto_push_on_star = False
@@ -830,11 +803,9 @@ async def unstar_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Set ``starred = FALSE``. Does not change reading state."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -855,11 +826,9 @@ async def trash_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Move paper to Trash. Atomic: ``state_before_trash := state; state := 'trash'``."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -880,11 +849,9 @@ async def restore_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Restore a paper from Trash to its prior state."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -906,14 +873,12 @@ async def trash_and_reject_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Trash the paper AND record negative feedback (``source='dismiss_combined'``).
 
     Single transaction. The only combined action in the system per spec §4.4.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         row = await conn.fetchrow("SELECT id FROM papers WHERE id = $1", paper_id)
@@ -943,6 +908,7 @@ async def annotate_paper(
     paper_id: int,
     body: AnnotationsRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Update subjective per-paper annotations (rating 1-5, user_notes, flagged).
 
@@ -950,9 +916,6 @@ async def annotate_paper(
     Returns the resulting :class:`UserStateResponse` so the frontend can
     refresh its local cache without a follow-up GET.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         try:
@@ -982,6 +945,7 @@ async def hard_delete_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Permanently delete a trashed paper.
 
@@ -993,9 +957,6 @@ async def hard_delete_paper(
     reverse order is data-loss-prone — do not collapse the inside-txn
     DELETE and outside-txn Qdrant cleanup into a single try/except.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
         await _assert_paper_in_states(conn, paper_id, user_id, allowed=("trash",))
@@ -1054,6 +1015,7 @@ async def bulk_action_papers(
     request: Request,
     body: BulkActionRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Apply a lifecycle action to multiple papers atomically.
 
@@ -1061,9 +1023,6 @@ async def bulk_action_papers(
     Partial failures are collected; the outer transaction is committed even when
     individual papers fail (per-paper savepoints isolate rollbacks).
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     succeeded: list[int] = []
     failed: list[dict[str, object]] = []
     # Track hard-deleted IDs for Qdrant cleanup OUTSIDE the transaction so that
@@ -1121,6 +1080,7 @@ async def process_batch(
     request: Request,
     body: ProcessBatchRequest,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ):
     """Enqueue a ``papers.batch_process`` job for the given paper IDs.
 
@@ -1132,10 +1092,6 @@ async def process_batch(
     """
     _ = request  # required by @limiter.limit; not used in body
     from jarvis_common.task_registry import KIND_TO_TASK
-
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
 
     # Assert ownership for each paper before enqueuing to prevent IDOR via
     # batch-processing another user's papers.

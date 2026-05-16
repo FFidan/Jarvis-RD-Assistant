@@ -171,7 +171,7 @@ Known open items post-Phase-2 (see `docs/known-residual-risks.md`):
 
 Fresh schema is defined in `db/init.sql`; existing installs advance through
 `db/migrations/`. The migration runner applies migrations on
-`paper_ingestion` startup. As of 2026-05-15 there are 82 migrations (001–082),
+`paper_ingestion` startup. As of 2026-05-16 there are 87 migrations (001–087),
 including Telegram pairings, canonical corpus, scoped `user_config` rows, and multi-tenant GA hardening.
 Fresh-install validation must replay `db/init.sql` and migrations against live
 Docker Postgres when schema duplication risk is in scope.

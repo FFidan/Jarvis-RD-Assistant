@@ -80,9 +80,14 @@ def client():
         app.dependency_overrides[get_db_pool] = lambda: mock_pool
         app.state.limiter.enabled = False
 
-        from jarvis_common import verify_api_key
+        from jarvis_common import get_current_user_id, verify_api_key
 
         app.dependency_overrides[verify_api_key] = lambda: None
+        # CC-03: this fixture resets ``dependency_overrides`` wholesale, which
+        # wipes the autouse ``_default_authenticated_user`` override. Re-add it
+        # so the converted ``Depends(get_current_user_id)`` routes still default
+        # to user 1 (identical to the pre-conversion symbol-stub behaviour).
+        app.dependency_overrides[get_current_user_id] = lambda: 1
 
         yield TestClient(app, raise_server_exceptions=False), mock_pool
 

@@ -15,11 +15,14 @@ Six cases:
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 from jarvis_common.cached_transport import CachingTransport
 
 _S2_URL = "https://api.semanticscholar.org/graph/v1/paper/search?query=test"
 _OTHER_URL = "https://example.com/x"
+_NCBI = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=crispr"
 
 
 class _CountingInner(httpx.AsyncBaseTransport):
@@ -158,3 +161,75 @@ async def test_binary_content_type_not_cached():
     assert transport.hits == 0
     assert r1.status_code == 200
     assert r2.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# 7. PI-D — api_key query param is excluded from the cache key
+# ---------------------------------------------------------------------------
+
+
+async def test_secret_query_param_excluded_from_cache_key():
+    """Two GETs differing only by ``api_key`` collapse to one cached entry and
+    the secret never appears in a stored cache key."""
+    inner = _CountingInner([(200, b'{"ids":[1]}'), (200, b'{"ids":[2]}')])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(f"{_NCBI}&api_key=SECRET-AAA")
+        r2 = await client.get(f"{_NCBI}&api_key=SECRET-BBB")
+
+    assert inner.calls == 1
+    assert transport.hits == 1
+    assert r1.content == r2.content
+    assert all("SECRET-" not in stored_key for stored_key in transport._store)
+
+
+# ---------------------------------------------------------------------------
+# 8. PI-D — the secret is not emitted to the debug log
+# ---------------------------------------------------------------------------
+
+
+async def test_secret_not_written_to_debug_log(caplog):
+    """DEBUG hit/miss logging must use the sanitized key, not the raw URL."""
+    caplog.set_level(logging.DEBUG, logger="jarvis_common.cached_transport")
+    inner = _CountingInner([(200, b"{}"), (200, b"{}")])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        await client.get(f"{_NCBI}&api_key=TOPSECRET")  # MISS — logs
+        await client.get(f"{_NCBI}&api_key=TOPSECRET")  # HIT — logs
+
+    assert "TOPSECRET" not in caplog.text
+    assert "esearch.fcgi" in caplog.text  # sanitized key still logged
+
+
+# ---------------------------------------------------------------------------
+# 9. PI-E — hop-by-hop / framing headers are stripped before caching
+# ---------------------------------------------------------------------------
+
+
+async def test_hop_by_hop_headers_stripped():
+    """Buffered cache entries must not carry upstream connection/transfer
+    framing headers — on the freshly-stored response or the cache hit."""
+    upstream = {
+        "transfer-encoding": "chunked",
+        "connection": "keep-alive",
+        "content-length": "99999",
+        "content-type": "application/json",
+        "cache-control": "max-age=60",
+    }
+    inner = _CountingInner([(200, b'{"ok":true}', upstream)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_S2_URL)  # fresh store
+        r2 = await client.get(_S2_URL)  # cache hit
+
+    for r in (r1, r2):
+        assert "transfer-encoding" not in r.headers
+        assert "connection" not in r.headers
+        assert r.headers["content-type"] == "application/json"
+        assert r.headers["cache-control"] == "max-age=60"
+        assert r.headers["content-length"] == str(len(b'{"ok":true}'))
+    assert r1.content == r2.content == b'{"ok":true}'
+    assert transport.hits == 1

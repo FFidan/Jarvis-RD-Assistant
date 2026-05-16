@@ -2,7 +2,7 @@
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from jarvis_common import current_user_id_strict_with_owner_override
+from jarvis_common import get_current_user_id
 from pydantic import BaseModel
 
 from paper_ingestion.deps import get_db_pool, limiter
@@ -25,10 +25,8 @@ async def list_recommendations(
     request: Request,
     limit: int = Query(default=20, ge=1, le=200),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> list[RecommendationItem]:
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             "SELECT paper_id, score, modes, explanation, dismissed "
@@ -43,10 +41,9 @@ async def list_recommendations(
 
 @router.post("/refresh")
 @limiter.limit("2/hour")
-async def trigger_refresh(request: Request) -> dict[str, int]:
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
+async def trigger_refresh(
+    request: Request, user_id: int = Depends(get_current_user_id)
+) -> dict[str, int]:
     count = await refresh_recommendations(request.app, user_id=user_id)
     return {"refreshed": count}
 
@@ -57,10 +54,8 @@ async def dismiss_recommendation(
     paper_id: int,
     request: Request,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, bool]:
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         result = await conn.execute(
             "UPDATE paper_recommendations SET dismissed = TRUE "

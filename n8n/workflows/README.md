@@ -81,7 +81,7 @@ The following workflows are handled by APScheduler in Python services and do **n
 | Zotero Library Sync | `zotero_library_sync_job` | `paper_ingestion/scheduler.py` | `zotero.poll_enabled` + `zotero.poll_cron` |
 | Pulse Classifier Training | `pulse_classifier_training_job` | `paper_ingestion/scheduler.py` | `pulse.enabled` + `_DEFAULT_PULSE_CLASSIFIER_CRON` |
 
-All APScheduler jobs use `@job_handler` registry from `jarvis_common.jobs` for async background execution.
+Jobs are dispatched via procrastinate (Postgres-backed task queue) and triggered by APScheduler `CronTrigger`s defined in `paper_ingestion/scheduler.py`; the legacy `@job_handler` decorator was removed in the B.4 migration.
 
 ## Notes
 

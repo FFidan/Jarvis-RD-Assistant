@@ -53,11 +53,16 @@ async def test_submit_feedback_threads_user_id_to_insert():
     # fetchval returns topic_id from paper_topics lookup; None means no topic
     conn.fetchval.return_value = None
 
+    # CC-03: the handler now declares ``user_id: int = Depends(get_current_user_id)``;
+    # a direct ``.__wrapped__`` call bypasses FastAPI injection, so the caller
+    # identity is passed explicitly (pre-conversion the autouse symbol stub
+    # supplied user 1 to the in-body resolver call — identical value here).
     result = await papers.submit_feedback.__wrapped__(
         MagicMock(),
         paper_id=7,
         body=FeedbackRequest(signal="positive", source="feed_thumbs"),
         db_pool=pool,
+        user_id=1,
     )
 
     assert result.paper_id == 7
@@ -104,11 +109,14 @@ async def test_submit_feedback_threads_user_id_to_select():
     conn.fetchrow.return_value = {"discovery_origin": "pulse_discovery"}
     conn.fetchval.return_value = None  # no topic mapping
 
+    # CC-03: explicit caller identity for the direct (non-ASGI) handler call;
+    # value matches the pre-conversion autouse symbol stub (user 1).
     await papers.submit_feedback.__wrapped__(
         MagicMock(),
         paper_id=10,
         body=FeedbackRequest(signal="negative", source="pulse_thumbs"),
         db_pool=pool,
+        user_id=1,
     )
 
     assert conn.execute.await_count == 1
@@ -140,22 +148,16 @@ async def test_submit_feedback_select_returns_correct_user_row_when_monkeypatche
     ]
     conn.fetchval.return_value = None  # no topic mapping
 
-    async def _user_42(_request, *_args, **_kwargs):
-        return 42
-
-    import paper_ingestion.routers.papers as papers_module
-
-    original = papers_module.current_user_id_strict_with_owner_override
-    papers_module.current_user_id_strict_with_owner_override = _user_42
-    try:
-        result = await papers.submit_feedback.__wrapped__(
-            MagicMock(),
-            paper_id=10,
-            body=FeedbackRequest(signal="positive", source="paper_detail_thumbs"),
-            db_pool=pool,
-        )
-    finally:
-        papers_module.current_user_id_strict_with_owner_override = original
+    # CC-03: caller identity passed explicitly to the direct handler call
+    # (pre-conversion this test set the in-body resolver to return 42 via a
+    # module-symbol swap; the threaded user_id and every assertion are identical).
+    result = await papers.submit_feedback.__wrapped__(
+        MagicMock(),
+        paper_id=10,
+        body=FeedbackRequest(signal="positive", source="paper_detail_thumbs"),
+        db_pool=pool,
+        user_id=42,
+    )
 
     assert result.signal == "positive"
     assert result.paper_id == 10

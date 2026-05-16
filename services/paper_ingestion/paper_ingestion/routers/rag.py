@@ -10,7 +10,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from jarvis_common import ErrorResponse, JobCreateResponse, get_smart_model
-from jarvis_common.auth import current_user_id_strict_with_owner_override
+from jarvis_common.auth import get_current_user_id
 from jarvis_common.db_helpers import assert_paper_ownership
 from jarvis_common.llm_client import (
     LLM_TIMEOUT_DEFAULT,
@@ -66,11 +66,9 @@ async def summarize_paper(
     request: Request,
     paper_id: int,
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> JobCreateResponse:
     """Enqueue LLM summary generation with quote verification."""
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     import uuid  # noqa: PLC0415
@@ -97,6 +95,7 @@ async def batch_summarize_papers(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, int | str | None]:
     """Enqueue a single batch-summarize job for processed papers without summaries.
 
@@ -110,9 +109,6 @@ async def batch_summarize_papers(
     # Sprint B: select only papers in the caller's user_library. WS-CROSS-USER:
     # the resolver hard-401s sessionless callers, so the previous unscoped
     # corpus fallback (which leaked every user's papers) is removed.
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         rows = await conn.fetch(
             """SELECT p.id FROM papers p
@@ -151,6 +147,7 @@ async def ask_paper(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Answer a question about a specific paper using RAG.
 
@@ -171,9 +168,6 @@ async def ask_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     messages, raw_sources = await prepare_single_paper_rag(
@@ -242,6 +236,7 @@ async def ask_paper_stream(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> StreamingResponse:
     """Stream RAG response for a single paper via SSE.
 
@@ -257,9 +252,6 @@ async def ask_paper_stream(
     body : AskRequest
         Question and optional max_chunks parameter.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     async with db_pool.acquire() as conn:
         await assert_paper_ownership(conn, paper_id, user_id)
     try:
@@ -309,6 +301,7 @@ async def ask_cross_paper(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Ask a question across ALL embedded papers.
 
@@ -331,9 +324,6 @@ async def ask_cross_paper(
     dict
         {answer: str, sources: [...], confidence: str, verified_fraction: float}
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     result = await prepare_cross_paper_rag(embedder, db_pool, body, http_client, user_id=user_id)
 
     # Short-circuit when no chunks were found
@@ -400,6 +390,7 @@ async def ask_cross_paper_stream(
     embedder=Depends(get_embedder),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> StreamingResponse:
     """Stream cross-paper RAG response via SSE.
 
@@ -413,9 +404,6 @@ async def ask_cross_paper_stream(
     body : CrossPaperAskRequest
         Question, max_chunks, max_papers, and decompose parameters.
     """
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     try:
         result = await prepare_cross_paper_rag(
             embedder, db_pool, body, http_client, user_id=user_id
@@ -474,6 +462,7 @@ async def get_weekly_digest(
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     http_client: httpx.AsyncClient = Depends(get_http_client),
     verifier: QuoteVerifier = Depends(get_verifier),
+    user_id: int = Depends(get_current_user_id),
 ) -> dict[str, object]:
     """Generate a weekly research digest grouped by topic.
 
@@ -483,7 +472,7 @@ async def get_weekly_digest(
     ``unverified_themes`` (ephemeral — not persisted to DB).
 
     Phase 2 WS-2D: ``user_id`` is resolved from the session via
-    ``current_user_id_strict_with_owner_override`` rather than accepted as a query parameter
+    ``get_current_user_id`` rather than accepted as a query parameter
     (which was an IDOR vector pre-WS-2A — any authenticated user could pass
     any user_id and read another user's digest).
 
@@ -500,9 +489,6 @@ async def get_weekly_digest(
     from paper_ingestion.weekly_summary import generate_weekly_summary
 
     _ = http_client  # weekly_summary uses openai_client directly; dep kept for backwards-compat.
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     return await generate_weekly_summary(
         db_pool,
         days=days,
@@ -518,6 +504,7 @@ async def enqueue_weekly_digest(
     request: Request,
     days: int = Query(default=7, ge=1, le=30),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
 ) -> JobCreateResponse:
     """Enqueue weekly digest regeneration while keeping GET synchronous.
 
@@ -531,9 +518,6 @@ async def enqueue_weekly_digest(
     from jarvis_common.task_registry import KIND_TO_TASK  # noqa: PLC0415
 
     _ = db_pool  # retained for future use; procrastinate uses its own connector
-    user_id = await current_user_id_strict_with_owner_override(
-        request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
-    )
     jarvis_job_id = str(uuid.uuid4())
     await KIND_TO_TASK["digest.weekly"].defer_async(
         job_id=jarvis_job_id, days=days, user_id=user_id

@@ -54,7 +54,10 @@ def _make_pulse_client(user_id_override=7):
     ``current_user_id_strict_with_owner_override`` (hard-401 when sessionless),
     so the test injects a concrete authenticated user instead of ``None``.
     """
-    from jarvis_common import verify_api_key
+    from jarvis_common import (
+        current_user_id_strict_with_owner_override,
+        verify_api_key,
+    )
     from paper_ingestion.deps import limiter
     from paper_ingestion.routers import pulse as pulse_router
 
@@ -70,9 +73,12 @@ def _make_pulse_client(user_id_override=7):
     app.include_router(pulse_router.router)
 
     app.dependency_overrides[verify_api_key] = lambda: None
-    pulse_router.current_user_id_strict_with_owner_override = AsyncMock(
-        return_value=user_id_override
-    )
+    # CC-03: pulse routes resolve via Depends(get_current_user_id) ->
+    # Depends(current_user_id_strict_with_owner_override). This mini-app is
+    # separate from paper_ingestion.main.app (which the autouse fixture
+    # overrides), so set the inner-resolver override here; FastAPI resolves it
+    # recursively through the wrapper. Same injected user, same assertions.
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: user_id_override
 
     tc = TestClient(app, raise_server_exceptions=False)
     return tc, pool, conn, app
@@ -193,7 +199,7 @@ async def test_papers_brief_idor_user_id_filter_no_search():
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common import verify_api_key
+    from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -204,19 +210,20 @@ async def test_papers_brief_idor_user_id_filter_no_search():
     app.state.limiter.enabled = False
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_db_pool] = lambda: pool
+    # CC-03: list_papers_brief now resolves identity via
+    # Depends(get_current_user_id) -> Depends(current_user_id_strict_with_owner_override);
+    # override the inner resolver so the caller is user 42 (FastAPI resolves the
+    # override recursively through the wrapper). Same attacker id, same assertions.
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 42
 
-    with patch(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=42),
-    ):
-        try:
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/papers/brief")
-        finally:
-            app.dependency_overrides.clear()
-            app.state.limiter.enabled = old_limiter
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/papers/brief")
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = old_limiter
 
     assert resp.status_code == 200
     sql: str = conn.fetch.call_args.args[0]
@@ -232,13 +239,14 @@ async def test_papers_brief_idor_user_id_filter_no_search():
 async def test_papers_brief_idor_user_id_filter_with_search():
     """GET /api/papers/brief?search=X SQL must include user_id guard.
 
-    list_papers_brief calls the strict resolver directly (not via FastAPI
-    Depends), so we must patch at the module level rather than using
-    dependency_overrides.
+    CC-03: list_papers_brief now resolves identity via
+    Depends(get_current_user_id), so the caller is set with a FastAPI
+    dependency override on the inner resolver (resolved recursively through
+    the wrapper) rather than a module-level patch.
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common import verify_api_key
+    from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -249,21 +257,16 @@ async def test_papers_brief_idor_user_id_filter_with_search():
     app.state.limiter.enabled = False
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 42
 
-    # Patch current_user_id_or_none at the papers router module level because
-    # list_papers_brief calls it directly (not via Depends), bypassing overrides.
-    with patch(
-        "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-        new=AsyncMock(return_value=42),
-    ):
-        try:
-            async with httpx.AsyncClient(
-                transport=ASGITransport(app=app), base_url="http://test"
-            ) as client:
-                resp = await client.get("/api/papers/brief", params={"search": "neural"})
-        finally:
-            app.dependency_overrides.clear()
-            app.state.limiter.enabled = old_limiter
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.get("/api/papers/brief", params={"search": "neural"})
+    finally:
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = old_limiter
 
     assert resp.status_code == 200
     sql: str = conn.fetch.call_args.args[0]
@@ -293,7 +296,7 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     """
     import httpx
     from httpx import ASGITransport
-    from jarvis_common import verify_api_key
+    from jarvis_common import current_user_id_strict_with_owner_override, verify_api_key
     from paper_ingestion.deps import get_db_pool
     from paper_ingestion.main import app
 
@@ -303,6 +306,9 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     app.state.limiter.enabled = False
     app.dependency_overrides[verify_api_key] = lambda: None
     app.dependency_overrides[get_db_pool] = lambda: pool
+    # CC-03: caller identity (user 7) via the inner-resolver override, resolved
+    # recursively through Depends(get_current_user_id). Same id, same assertions.
+    app.dependency_overrides[current_user_id_strict_with_owner_override] = lambda: 7
 
     ownership_calls: list[tuple] = []
 
@@ -319,10 +325,6 @@ async def test_process_batch_asserts_ownership_before_enqueue():
     mock_batch_task = MagicMock()
     mock_batch_task.defer_async = AsyncMock(side_effect=_fake_defer)
     with (
-        patch(
-            "paper_ingestion.routers.papers.current_user_id_strict_with_owner_override",
-            new=AsyncMock(return_value=7),
-        ),
         patch("paper_ingestion.routers.papers.assert_paper_ownership", side_effect=_fake_ownership),
         patch.dict(task_registry.KIND_TO_TASK, {"papers.batch_process": mock_batch_task}),
     ):

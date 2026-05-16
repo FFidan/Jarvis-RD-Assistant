@@ -13,6 +13,7 @@ from jarvis_common.auth import (
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
     current_user_id_with_owner_override,
+    get_current_user_id,
     require_admin,
     require_admin_or_api_key,
     validate_production_config,
@@ -106,6 +107,7 @@ __all__ = [
     "current_user_id_strict",
     "current_user_id_strict_with_owner_override",
     "current_user_id_with_owner_override",
+    "get_current_user_id",
     "require_admin",
     "require_admin_or_api_key",
     # DRY-003: crypto helpers re-exported from jarvis_common top-level

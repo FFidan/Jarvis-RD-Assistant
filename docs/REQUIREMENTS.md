@@ -184,7 +184,7 @@ Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `AUTO_FETCH_INTERVAL_HOURS` | `0` (disabled) | Automation pipeline interval in paper_ingestion |
-| `DASHBOARD_PASSWORD` | `` (no auth) | Dashboard login password; empty = open access |
+| `DASHBOARD_PASSWORD` | `` | **Deprecated** — superseded by magic-link auth (see `JARVIS_SMTP_*` settings). Ignored in current versions; kept for backward-compat recognition only. |
 | `DEV_MODE` | `false` | Bypass API key auth in services (dev only) |
 | `JARVIS_API_KEY` | `` | API key for inter-service auth; required in production |
 | `SEMANTIC_SCHOLAR_API_KEY` | `` | Optional; increases S2 rate limit from 100/5min to 1000/5min. Also unlocks the multi-seed recommendation endpoint used by the Phase 1 Pulse discovery pipeline. |
@@ -215,7 +215,7 @@ Note:
 
 ## Database Migrations
 
-82 migrations currently applied in `db/migrations/` (001–082). Fresh installs get all tables via `db/init.sql`.
+87 migrations currently applied in `db/migrations/` (001–087) as of 2026-05-16. Fresh installs get all tables via `db/init.sql`.
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 
