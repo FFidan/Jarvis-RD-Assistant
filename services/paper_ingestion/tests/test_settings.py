@@ -1443,3 +1443,61 @@ async def test_set_config_rolls_back_on_scheduler_failure(monkeypatch):
     finally:
         app.dependency_overrides.clear()
         app.state.limiter.enabled = True
+
+
+# ---------------------------------------------------------------------------
+# B4: SMTP config keys in the settings allow-list (system-scoped, admin-only)
+# ---------------------------------------------------------------------------
+
+_SMTP_CONFIG_KEYS = ("smtp.host", "smtp.port", "smtp.user", "smtp.from", "smtp.pass")
+
+
+@pytest.mark.parametrize("key", _SMTP_CONFIG_KEYS)
+def test_smtp_keys_accepted_by_allow_list(key: str) -> None:
+    """Each smtp.* key (matching the rows setup.py persists) is allow-listed."""
+    from paper_ingestion.routers import settings
+
+    assert key in settings._ALLOWED_CONFIG_KEYS
+    assert settings._is_allowed_config_key(key) is True
+
+
+@pytest.mark.parametrize("key", _SMTP_CONFIG_KEYS)
+def test_smtp_keys_classified_system(key: str) -> None:
+    """SMTP is deployment-wide → system-scoped (admin-only via require_admin),
+    never personal."""
+    from paper_ingestion.routers import settings
+
+    assert key in settings.SYSTEM_KEYS
+    assert key not in settings.PERSONAL_KEYS
+    assert settings._classify_config_key(key) == "system"
+
+
+def test_smtp_pass_is_encrypted_and_secret() -> None:
+    """smtp.pass is persisted as Fernet ciphertext by setup.py; the generic
+    /api/config surface must treat it as encrypted + secret so it is masked,
+    never returned in plaintext."""
+    from paper_ingestion.routers import settings
+
+    assert "smtp.pass" in settings._ENCRYPTED_KEYS
+    assert "smtp.pass" in settings._SECRET_KEYS
+
+
+def test_smtp_pass_resolve_value_is_masked_not_plaintext(monkeypatch) -> None:
+    """_resolve_config_value must mask a decrypted smtp.pass — never expose it."""
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
+    from jarvis_common.crypto import _load_fernet, encrypt_secret
+
+    _load_fernet.cache_clear()
+    from paper_ingestion.routers import settings
+
+    ciphertext = encrypt_secret("sup3r-secret-pw").encode("ascii")
+    row = FakeRecord(
+        key="smtp.pass",
+        value=None,
+        encrypted_value=ciphertext,
+        user_id=None,
+    )
+    resolved = settings._resolve_config_value("smtp.pass", row)
+    assert resolved is not None
+    assert "sup3r-secret-pw" not in resolved
+    assert resolved.startswith("****")

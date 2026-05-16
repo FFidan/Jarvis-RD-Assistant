@@ -477,6 +477,7 @@ from paper_ingestion.routers import audit_admin as audit_admin_router  # noqa: E
 from paper_ingestion.routers import auth as auth_router  # noqa: E402
 from paper_ingestion.routers import pulse as pulse_router  # noqa: E402
 from paper_ingestion.routers import setup as setup_router  # noqa: E402
+from paper_ingestion.routers import source_config as source_config_router  # noqa: E402
 from paper_ingestion.routers import zotero as zotero_router  # noqa: E402
 
 app.include_router(auth_router.router)
@@ -517,6 +518,7 @@ app.include_router(system.router)
 app.include_router(jobs.router)
 app.include_router(logs.router)
 app.include_router(audit_admin_router.router)
+app.include_router(source_config_router.router)
 app.include_router(infra_events.router)
 # UI_v3 §I Account — self-service current-user profile (GET/PATCH /api/account
 # + verified email change). Distinct from admin user-mgmt (/api/admin/*).

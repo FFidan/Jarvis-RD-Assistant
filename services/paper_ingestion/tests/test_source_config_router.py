@@ -1,0 +1,227 @@
+"""Tests for paper_ingestion.routers.source_config (Task B5).
+
+Covers:
+  - PATCH /api/settings/sources/{source_type}: config merge, admin-only, 404 on unknown type
+  - POST  /api/settings/sources/{source_type}/clear-cooldown: resets source_health, admin-only
+
+All DB calls are mocked via the project's _make_pool_and_conn() pattern from conftest.py.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import paper_ingestion.routers.source_config as sc_router
+import pytest
+from fastapi import HTTPException
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _make_pool_and_conn():
+    """Create mock asyncpg Pool + Connection."""
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool = MagicMock()
+    pool.acquire.return_value = ctx
+    return pool, conn
+
+
+def _build_request(*, user_id: int | None = 1, user_role: str = "admin") -> SimpleNamespace:
+    """Build a minimal fake FastAPI Request with state."""
+    state = SimpleNamespace(user_id=user_id, user_role=user_role)
+    return SimpleNamespace(state=state)
+
+
+# ---------------------------------------------------------------------------
+# _validate_source_type
+# ---------------------------------------------------------------------------
+
+
+def test_validate_source_type_known_passes():
+    """No exception for a type returned by the registry."""
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        sc_router._validate_source_type("arxiv")  # should not raise
+
+
+def test_validate_source_type_unknown_raises_404():
+    """404 for a source_type not in the registry."""
+    with (
+        patch.object(sc_router, "get_source_class", return_value=None),
+        patch.object(sc_router, "get_all_source_types", return_value=["arxiv", "pubmed"]),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            sc_router._validate_source_type("not_a_source")
+        assert exc_info.value.status_code == 404
+        assert "not_a_source" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# PATCH update_source_config
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_merges_api_key():
+    """PATCH updates the config row when source_type is valid."""
+    pool, conn = _make_pool_and_conn()
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody(api_key="my-key-123")
+        result = await sc_router.update_source_config("semantic_scholar", body, db_pool=pool)
+
+    assert result == {"ok": True}
+    conn.execute.assert_called_once()
+    sql, *args = conn.execute.await_args.args
+    assert "UPDATE paper_sources" in sql
+    assert "COALESCE" in sql
+    # The JSONB patch payload should contain api_key
+    import json
+
+    payload = json.loads(args[0])
+    assert payload["api_key"] == "my-key-123"
+    assert args[1] == "semantic_scholar"
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_merges_email():
+    """PATCH with email-only writes email to config."""
+    pool, conn = _make_pool_and_conn()
+    conn.execute = AsyncMock(return_value="UPDATE 1")
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody(email="researcher@example.com")
+        result = await sc_router.update_source_config("openalex", body, db_pool=pool)
+
+    assert result == {"ok": True}
+    _, payload_json, src_type = conn.execute.await_args.args
+    import json
+
+    payload = json.loads(payload_json)
+    assert payload["email"] == "researcher@example.com"
+    assert "api_key" not in payload
+    assert src_type == "openalex"
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_unknown_type_raises_404():
+    """PATCH returns 404 for an unregistered source_type."""
+    pool, _conn = _make_pool_and_conn()
+
+    with (
+        patch.object(sc_router, "get_source_class", return_value=None),
+        patch.object(sc_router, "get_all_source_types", return_value=["arxiv"]),
+    ):
+        body = sc_router.SourceConfigBody(api_key="k")
+        with pytest.raises(HTTPException) as exc_info:
+            await sc_router.update_source_config("ghost_source", body, db_pool=pool)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_no_fields_raises_400():
+    """PATCH with no api_key or email raises 400."""
+    pool, _conn = _make_pool_and_conn()
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody()  # both None
+        with pytest.raises(HTTPException) as exc_info:
+            await sc_router.update_source_config("arxiv", body, db_pool=pool)
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_upserts_when_row_absent():
+    """PATCH falls back to INSERT when UPDATE affects 0 rows."""
+    pool, conn = _make_pool_and_conn()
+    # First call = UPDATE 0; second call = INSERT (execute returns nothing meaningful)
+    conn.execute = AsyncMock(side_effect=["UPDATE 0", None])
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        body = sc_router.SourceConfigBody(api_key="new-key")
+        result = await sc_router.update_source_config("pubmed", body, db_pool=pool)
+
+    assert result == {"ok": True}
+    assert conn.execute.await_count == 2
+    insert_sql = conn.execute.await_args_list[1].args[0]
+    assert "INSERT INTO paper_sources" in insert_sql
+
+
+@pytest.mark.asyncio
+async def test_update_source_config_admin_required():
+    """require_admin raises 403 for non-admin callers."""
+    request = _build_request(user_role="user")
+    with pytest.raises(HTTPException) as exc_info:
+        await sc_router.require_admin(request)
+    assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST clear_source_cooldown
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_clear_cooldown_resets_source_health():
+    """POST clear-cooldown issues UPDATE with ok status and NULL cooldown_until."""
+    pool, conn = _make_pool_and_conn()
+    conn.execute = AsyncMock(return_value=None)
+    request = _build_request(user_id=1)
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        result = await sc_router.clear_source_cooldown("arxiv", request, db_pool=pool)
+
+    assert result == {"ok": True}
+    conn.execute.assert_called_once()
+    sql, src_type = conn.execute.await_args.args
+    assert "UPDATE source_health" in sql
+    assert "cooldown_until" in sql
+    assert "consecutive_failures" in sql
+    assert "last_status" in sql
+    assert src_type == "arxiv"
+
+
+@pytest.mark.asyncio
+async def test_clear_cooldown_unknown_type_raises_404():
+    """POST clear-cooldown returns 404 for an unregistered source_type."""
+    pool, _conn = _make_pool_and_conn()
+    request = _build_request(user_id=1)
+
+    with (
+        patch.object(sc_router, "get_source_class", return_value=None),
+        patch.object(sc_router, "get_all_source_types", return_value=["arxiv"]),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await sc_router.clear_source_cooldown("ghost_source", request, db_pool=pool)
+    assert exc_info.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_clear_cooldown_admin_required():
+    """require_admin raises 403 for non-admin callers."""
+    request = _build_request(user_role="user")
+    with pytest.raises(HTTPException) as exc_info:
+        await sc_router.require_admin(request)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_clear_cooldown_all_source_health_rows_targeted():
+    """UPDATE targets all rows for source_type (global + per-user) via WHERE source_type=$1."""
+    pool, conn = _make_pool_and_conn()
+    conn.execute = AsyncMock(return_value=None)
+    request = _build_request(user_id=99)
+
+    with patch.object(sc_router, "get_source_class", return_value=object()):
+        await sc_router.clear_source_cooldown("pubmed", request, db_pool=pool)
+
+    sql, src_type = conn.execute.await_args.args
+    # The WHERE clause must not filter by user_id — it resets all rows for the source
+    assert "WHERE source_type" in sql
+    assert src_type == "pubmed"

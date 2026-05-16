@@ -87,6 +87,14 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "llm.anthropic.api_key",
         "llm.openai.api_key",
         "llm.google.api_key",
+        # SMTP relay (system-wide; collected in the first-run wizard, viewable
+        # and editable post-onboarding by admins). Key names MUST match the
+        # rows persisted by routers/setup.py (_SMTP_PLAINTEXT_KEYS / _SMTP_ENCRYPTED_KEYS).
+        "smtp.host",
+        "smtp.port",
+        "smtp.user",
+        "smtp.from",
+        "smtp.pass",
     }
 )
 
@@ -203,6 +211,12 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "setup.completed",
         # Telegram owner pairing (single owner, system-wide)
         "telegram.owner_chat_id",
+        # SMTP relay — one deployment-wide mail config; admin-only.
+        "smtp.host",
+        "smtp.port",
+        "smtp.user",
+        "smtp.from",
+        "smtp.pass",
     }
 )
 # Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
@@ -232,6 +246,7 @@ _SECRET_KEYS: frozenset[str] = frozenset(
         "llm.anthropic.api_key",
         "llm.openai.api_key",
         "llm.google.api_key",
+        "smtp.pass",
     }
 )
 
@@ -241,6 +256,9 @@ _ENCRYPTED_KEYS: frozenset[str] = frozenset(
         "llm.openai.api_key",
         "llm.google.api_key",
         "zotero.api_key",
+        # setup.py persists smtp.pass as Fernet ciphertext in encrypted_value;
+        # keep the generic /api/config surface masking it consistently.
+        "smtp.pass",
     }
 )
 

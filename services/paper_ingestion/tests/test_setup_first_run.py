@@ -342,6 +342,126 @@ async def test_smtp_test_send_failure_returns_error_string(monkeypatch) -> None:
 
 
 # ---------------------------------------------------------------------------
+# GET /api/setup/smtp — masked read, admin-gated
+# ---------------------------------------------------------------------------
+
+
+def _smtp_rows(*, with_password: bool) -> list[dict]:
+    rows = [
+        {"key": "smtp.host", "value": "smtp.example.com", "encrypted_value": None},
+        {"key": "smtp.port", "value": 587, "encrypted_value": None},
+        {"key": "smtp.user", "value": "mailer", "encrypted_value": None},
+        {"key": "smtp.from", "value": "noreply@example.com", "encrypted_value": None},
+    ]
+    if with_password:
+        rows.append({"key": "smtp.pass", "value": None, "encrypted_value": b"gAAA-ciphertext"})
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_returns_masked_shape_when_unconfigured() -> None:
+    """Bootstrap mode (no admins): GET is reachable and never leaks the password.
+
+    Response shape must equal the frontend SmtpConfig type:
+    {host, port, user, from_email, has_password}.
+    """
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)  # no admins → bootstrap, gate open
+    conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=True))
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_smtp_config(request)
+
+    assert res.host == "smtp.example.com"
+    assert res.port == 587
+    assert res.user == "mailer"
+    assert res.from_email == "noreply@example.com"
+    assert res.has_password is True
+    # The plaintext / ciphertext password must never appear on the response.
+    dumped = res.model_dump()
+    assert set(dumped) == {
+        "host",
+        "port",
+        "user",
+        "from_email",
+        "has_password",
+        "restart_required",
+    }
+    assert "password" not in dumped
+    assert "gAAA-ciphertext" not in str(dumped)
+    # Sender reads env-cached SecretsSettings, not user_config → restart needed.
+    assert res.restart_required is True
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_has_password_false_when_no_pass_row() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=False))
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_smtp_config(request)
+
+    assert res.has_password is False
+    assert res.host == "smtp.example.com"
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_empty_when_nothing_persisted() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.fetch = AsyncMock(return_value=[])
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_smtp_config(request)
+
+    assert res.host is None
+    assert res.port is None
+    assert res.user is None
+    assert res.from_email is None
+    assert res.has_password is False
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_allows_admin_when_configured() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # admin exists → gate locked down
+    conn.fetch = AsyncMock(return_value=_smtp_rows(with_password=True))
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_role="admin")
+
+    res = await setup_router.get_smtp_config(request)
+    assert res.has_password is True
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_rejects_non_admin_when_configured() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # admins exist
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_role="user")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.get_smtp_config(request)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_get_smtp_config_rejects_anon_when_configured() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)  # no user_role on state
+
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.get_smtp_config(request)
+    assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
 # /api/setup/cloud-llm-keys
 # ---------------------------------------------------------------------------
 
@@ -483,6 +603,7 @@ def _unique_ip() -> str:
     "handler_name,expected_limit",
     [
         ("system_check", "10 per 1 minute"),
+        ("get_smtp_config", "30 per 1 minute"),
         ("configure_smtp", "10 per 1 minute"),
         ("create_first_admin", "3 per 1 minute"),
         ("configure_cloud_llm_keys", "10 per 1 minute"),

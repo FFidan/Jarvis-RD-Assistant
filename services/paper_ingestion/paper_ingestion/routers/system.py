@@ -1,5 +1,6 @@
 """System status endpoints: setup wizard readiness + Ollama model info."""
 
+import importlib.util
 import logging
 import re
 import time
@@ -549,3 +550,33 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
 
     aggregate = max(checks, key=lambda c: _STATUS_RANK[c.status]).status
     return ReadinessResponse(status=aggregate, checks=checks)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/system/capabilities
+# ---------------------------------------------------------------------------
+
+
+class SystemCapabilities(BaseModel):
+    """Available optional heavy-library capabilities on the backend."""
+
+    networkx: bool
+    scikit_learn: bool
+
+
+@router.get(
+    "/capabilities",
+    response_model=SystemCapabilities,
+    dependencies=[Depends(require_admin_or_api_key)],
+)
+@limiter.limit("30/minute")
+async def get_system_capabilities(request: Request) -> SystemCapabilities:
+    """Return whether optional heavy libraries (networkx, scikit-learn) are importable.
+
+    Uses ``importlib.util.find_spec`` — no actual import, trivially cheap.
+    The frontend Pulse settings UI uses this to suppress false-alarm warnings.
+    """
+    return SystemCapabilities(
+        networkx=importlib.util.find_spec("networkx") is not None,
+        scikit_learn=importlib.util.find_spec("sklearn") is not None,
+    )

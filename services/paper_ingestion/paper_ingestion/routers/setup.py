@@ -108,6 +108,24 @@ class SmtpResponse(BaseModel):
     test_error: str | None = None
 
 
+class SmtpConfigResponse(BaseModel):
+    """Current SMTP relay config for the settings UI.
+
+    The password is never returned — only ``has_password`` indicates whether a
+    secret is stored. ``restart_required`` is always True: the magic-link
+    sender reads SMTP from process-cached env (``SecretsSettings``), not from
+    ``user_config``, so saved changes only take effect after the service is
+    restarted with the matching SMTP env vars set.
+    """
+
+    host: str | None = None
+    port: int | None = None
+    user: str | None = None
+    from_email: str | None = None
+    has_password: bool = False
+    restart_required: bool = True
+
+
 class AdminBody(BaseModel):
     email: Annotated[EmailStr, Field(max_length=MAX_EMAIL_LEN)]
 
@@ -300,6 +318,49 @@ async def _persist_config(pool: Any, key: str, value: Any, *, encrypted: bool) -
             )
 
 
+async def _read_smtp_config(pool: Any) -> SmtpConfigResponse:
+    """Read the persisted SMTP config (system-wide rows) with the password masked.
+
+    The password row (``smtp.pass``) is Fernet-encrypted at rest; we only
+    report whether it exists via ``has_password`` and never decrypt it here.
+    """
+    keys = (*_SMTP_PLAINTEXT_KEYS, *_SMTP_ENCRYPTED_KEYS)
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT key, value, encrypted_value FROM user_config "
+            "WHERE key = ANY($1::text[]) AND user_id IS NULL",
+            list(keys),
+        )
+    by_key = {r["key"]: r for r in rows}
+
+    def _plain(key: str) -> str | None:
+        row = by_key.get(key)
+        if row is None:
+            return None
+        # asyncpg JSONB codec auto-decodes — value is already a Python scalar.
+        value = row["value"]
+        return None if value is None else str(value)
+
+    port_raw = _plain("smtp.port")
+    port: int | None = None
+    if port_raw is not None:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            port = None
+
+    pass_row = by_key.get("smtp.pass")
+    has_password = pass_row is not None and pass_row["encrypted_value"] is not None
+
+    return SmtpConfigResponse(
+        host=_plain("smtp.host"),
+        port=port,
+        user=_plain("smtp.user"),
+        from_email=_plain("smtp.from"),
+        has_password=has_password,
+    )
+
+
 async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
     """Best-effort SMTP test send. Returns None on success, error string on failure."""
     try:
@@ -333,6 +394,31 @@ async def _send_test_email(body: SmtpBody, recipient: str) -> str | None:
         logger.warning("setup smtp test_send failed: %s", exc, exc_info=True)
         return str(exc)[:300]
     return None
+
+
+@router.get(
+    "/smtp",
+    response_model=SmtpConfigResponse,
+    dependencies=[],
+)
+@limiter.limit("30/minute")
+async def get_smtp_config(request: Request) -> SmtpConfigResponse:
+    """Return the current SMTP config with the password masked.
+
+    Same admin gate as the POST: open during bootstrap (no admin yet), then
+    admin-only. Never returns the stored password — only ``has_password``.
+    """
+    await require_unconfigured_or_admin(request)
+    pool = request.app.state.db_pool
+    config = await _read_smtp_config(pool)
+    if config.restart_required and (config.host or config.from_email or config.has_password):
+        # Surface the env-vs-user_config gap so the UI (F3) can tell the
+        # operator a restart is needed for the running magic-link sender.
+        logger.info(
+            "setup smtp: config present in user_config; service restart with "
+            "matching SMTP_* env vars is required for the magic-link sender to use it"
+        )
+    return config
 
 
 @router.post(
