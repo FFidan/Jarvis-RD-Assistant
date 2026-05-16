@@ -257,17 +257,18 @@ async def test_get_my_day_milestone_laterals_include_user_id() -> None:
     Confirms the SQL text contains AND m.user_id = $1 for both the name and
     deadline milestone laterals.
     """
-    import inspect
+    # B7 hoisted the /my-day SQL into module-level constants and runs the six
+    # reads concurrently; the project-pulse query (with the milestone laterals)
+    # now lives in executive._PROJECT_PULSE_SQL rather than inline in
+    # get_my_day. The user_id scoping invariant is unchanged — assert it
+    # against the SQL constant directly.
+    from learning_engine.routers.executive import _PROJECT_PULSE_SQL
 
-    from learning_engine.routers.executive import get_my_day
-
-    # Extract the source of the function and verify the SQL contains the fix.
-    source = inspect.getsource(get_my_day)
-    assert "m.user_id = $1" in source, (
-        "milestone laterals in get_my_day must filter by m.user_id = $1"
+    assert "m.user_id = $1" in _PROJECT_PULSE_SQL, (
+        "milestone laterals in _PROJECT_PULSE_SQL must filter by m.user_id = $1"
     )
     # And there should be two occurrences (name lateral + deadline lateral).
-    assert source.count("m.user_id = $1") >= 2, (
+    assert _PROJECT_PULSE_SQL.count("m.user_id = $1") >= 2, (
         "both milestone sub-selects (name and deadline) must add m.user_id = $1"
     )
 

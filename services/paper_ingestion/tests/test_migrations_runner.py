@@ -139,6 +139,11 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      is created by deferred mig 018 and FK'd by deferred mig 082, so this
     #      index cannot be baked into init.sql standalone; runtime-applied with
     #      its parent chain (same precedent as 86).
+    # 088: idx_paper_recommendations_user_score_active — partial composite index
+    #      on paper_recommendations(user_id, score DESC) WHERE NOT dismissed.
+    #      user_id is added by deferred mig 063, so this index cannot be baked
+    #      into init.sql standalone; runtime-applied with its parent chain (pure
+    #      additive perf index, idempotent IF NOT EXISTS, no backfill).
     deferred = {
         33,
         52,
@@ -167,6 +172,7 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         85,
         86,
         87,
+        88,
     }
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions

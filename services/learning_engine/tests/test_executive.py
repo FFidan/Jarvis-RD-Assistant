@@ -56,6 +56,48 @@ def _make_pool_and_conn():
     return pool, conn
 
 
+def _route_my_day(
+    conn,
+    *,
+    tasks=None,
+    cards_due=0,
+    recs=None,
+    focus_hours=0,
+    streak=0,
+    pulse=None,
+):
+    """Install SQL-keyed dispatch for the GET /my-day reads.
+
+    /my-day now issues its six reads concurrently via asyncio.gather on
+    separate pooled connections, so side_effect *ordering* is no longer
+    deterministic — dispatch on the SQL text instead.
+    """
+    tasks = tasks or []
+    recs = recs or []
+    pulse = pulse or []
+
+    async def fetch(sql, *args):
+        if "FROM tasks t" in sql:
+            return tasks
+        if "FROM paper_recommendations" in sql:
+            return recs
+        if "FROM projects p" in sql:
+            return pulse
+        raise AssertionError(f"unexpected fetch SQL: {sql!r}")
+
+    async def fetchval(sql, *args):
+        if "FROM cards" in sql:
+            return cards_due
+        if "log_date = CURRENT_DATE" in sql:
+            return focus_hours
+        if "qualifying AS" in sql:
+            return streak
+        raise AssertionError(f"unexpected fetchval SQL: {sql!r}")
+
+    conn.fetch.side_effect = fetch
+    conn.fetchval.side_effect = fetchval
+
+
 # ---------------------------------------------------------------------------
 # Fixture
 # ---------------------------------------------------------------------------
@@ -142,10 +184,7 @@ async def test_my_day_happy_path(exec_app):
         ),
     ]
 
-    # fetch is called 4 times: tasks, recommendations, streak_rows, project_pulse
-    conn.fetch.side_effect = [task_rows, rec_rows, [], []]
-    # fetchval is called 2 times: cards_due, today_focus_hours
-    conn.fetchval.side_effect = [5, 2.5]
+    _route_my_day(conn, tasks=task_rows, cards_due=5, recs=rec_rows, focus_hours=2.5)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -171,8 +210,7 @@ async def test_my_day_empty(exec_app):
     """GET /api/executive/my-day returns empty lists and zero when nothing is due."""
     app, conn = exec_app
 
-    conn.fetch.side_effect = [[], [], [], []]
-    conn.fetchval.side_effect = [0, 0]
+    _route_my_day(conn)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -197,8 +235,7 @@ async def test_my_day_limit_recommendations_query_param(exec_app):
     rec_row = FakeRecord(
         recommendation_id=1, paper_id=100, score=0.9, title="Paper A", authors=["Author"]
     )
-    conn.fetch.side_effect = [[], [rec_row], [], []]
-    conn.fetchval.side_effect = [0, 0]
+    _route_my_day(conn, recs=[rec_row])
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -206,10 +243,11 @@ async def test_my_day_limit_recommendations_query_param(exec_app):
         resp = await client.get("/api/executive/my-day", params={"limit_recommendations": 1})
 
     assert resp.status_code == 200
-    # Verify the query param was actually passed to the SQL call (second fetch call).
-    # WS-2D: the recommendations query is now `($1=user_id, $2=limit)` — limit
-    # shifted from $1 to $2 because user_id scoping was added.
-    rec_fetch_call = conn.fetch.call_args_list[1]
+    # gather makes call ordering non-deterministic — find the recommendations
+    # fetch by SQL. WS-2D: query is `($1=user_id, $2=limit)`, limit is $2.
+    rec_fetch_call = next(
+        c for c in conn.fetch.call_args_list if "FROM paper_recommendations" in c[0][0]
+    )
     assert rec_fetch_call[0][2] == 1  # positional arg $2 = limit_recommendations
 
 
@@ -395,8 +433,7 @@ async def test_my_day_tasks_include_project_context(exec_app):
             project_color=None,
         ),
     ]
-    conn.fetch.side_effect = [task_rows, [], [], []]
-    conn.fetchval.side_effect = [0, 0]
+    _route_my_day(conn, tasks=task_rows)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -412,20 +449,14 @@ async def test_my_day_tasks_include_project_context(exec_app):
 
 @pytest.mark.asyncio
 async def test_my_day_returns_focus_stats(exec_app):
-    """Response includes today_focus_hours and focus_streak_days."""
-    import datetime
+    """Response surfaces today_focus_hours and the SQL-computed focus_streak_days.
 
+    The streak is now a single gaps-and-islands SQL scalar (was a 365-row
+    Python walk). Behaviour-preservation of the SQL itself is covered against
+    real PostgreSQL by test_my_day_focus_streak_sql_live_pg.
+    """
     app, conn = exec_app
-    # Use UTC date to match the streak logic in executive.py which calls
-    # datetime.datetime.now(datetime.UTC).date() — local and UTC may differ.
-    today = datetime.datetime.now(datetime.UTC).date()
-    streak_rows = [
-        FakeRecord(log_date=today),
-        FakeRecord(log_date=today - datetime.timedelta(days=1)),
-        FakeRecord(log_date=today - datetime.timedelta(days=2)),
-    ]
-    conn.fetch.side_effect = [[], [], streak_rows, []]
-    conn.fetchval.side_effect = [0, 1.5]
+    _route_my_day(conn, focus_hours=1.5, streak=3)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -452,8 +483,7 @@ async def test_my_day_returns_project_pulse(exec_app):
             next_milestone_deadline=None,
         ),
     ]
-    conn.fetch.side_effect = [[], [], [], pulse_rows]
-    conn.fetchval.side_effect = [0, 0]
+    _route_my_day(conn, pulse=pulse_rows)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -496,8 +526,7 @@ async def test_my_day_includes_completed_tasks_today(exec_app):
             project_color=None,
         ),
     ]
-    conn.fetch.side_effect = [task_rows, [], [], []]
-    conn.fetchval.side_effect = [0, 0]
+    _route_my_day(conn, tasks=task_rows)
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
@@ -706,3 +735,241 @@ async def test_focus_log_concurrent_requests_no_duplicate_rows(exec_app):
     for call in conn.fetchrow.call_args_list:
         sql = call[0][0]
         assert "FOR UPDATE" in sql.upper(), f"Expected FOR UPDATE in SQL: {sql!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: GET /api/executive/my-day-bundle
+# ---------------------------------------------------------------------------
+
+
+def _route_bundle(
+    conn,
+    *,
+    tasks=None,
+    intent=None,
+    threads=None,
+    journal=None,
+    yday_done=None,
+    yday_deferred=None,
+    yday_log=None,
+):
+    """SQL-keyed dispatch for the gather'd /my-day-bundle reads."""
+    tasks = tasks or []
+    threads = threads or []
+    yday_done = yday_done or []
+    yday_deferred = yday_deferred or []
+
+    async def fetch(sql, *args):
+        if "FROM tasks t" in sql:
+            return tasks
+        if "FROM thread " in sql:
+            return threads
+        if "status = 'done'" in sql:
+            return yday_done
+        if "IN ('todo', 'in_progress', 'blocked')" in sql:
+            return yday_deferred
+        raise AssertionError(f"unexpected bundle fetch SQL: {sql!r}")
+
+    async def fetchrow(sql, *args):
+        if "FROM daily_intent" in sql:
+            return intent
+        if "FROM journal_entries" in sql:
+            return journal
+        if "FROM daily_log" in sql:
+            return yday_log
+        raise AssertionError(f"unexpected bundle fetchrow SQL: {sql!r}")
+
+    conn.fetch.side_effect = fetch
+    conn.fetchrow.side_effect = fetchrow
+
+
+@pytest.mark.asyncio
+async def test_my_day_bundle_shape_and_aggregation(exec_app):
+    """Bundle returns the six keys F7 needs, aggregated from the same tables."""
+    import datetime
+
+    app, conn = exec_app
+    now = datetime.datetime.now(tz=datetime.UTC)
+
+    task_rows = [
+        FakeRecord(
+            id=1,
+            project_id=None,
+            title="Write report",
+            priority=1,
+            deadline=None,
+            status="todo",
+            completed_at=None,
+            project_name=None,
+            project_color=None,
+        )
+    ]
+    intent_row = FakeRecord(intent_text="Ship B7", updated_at=now)
+    thread_rows = [
+        FakeRecord(
+            id=9,
+            title="Refactor streak",
+            anchor=None,
+            progress=0.5,
+            last_at=now,
+            status="open",
+            created_at=now,
+        )
+    ]
+    journal_row = FakeRecord(
+        id=3,
+        date=now.date(),
+        prompts={"worked": "indexes"},
+        created_at=now,
+        updated_at=now,
+    )
+    yday_done_rows = [FakeRecord(id=2, title="Done thing", status="done")]
+    yday_log_row = FakeRecord(focus_hours=4.0, cards_reviewed=12)
+
+    _route_bundle(
+        conn,
+        tasks=task_rows,
+        intent=intent_row,
+        threads=thread_rows,
+        journal=journal_row,
+        yday_done=yday_done_rows,
+        yday_log=yday_log_row,
+    )
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/executive/my-day-bundle")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data) == {
+        "tasks",
+        "intent",
+        "threads",
+        "yesterday",
+        "journal",
+        "pulse_today",
+    }
+    assert data["tasks"][0]["title"] == "Write report"
+    assert data["intent"]["intent"] == "Ship B7"
+    assert data["threads"][0]["id"] == 9
+    assert data["journal"]["prompts"] == {"worked": "indexes"}
+    assert data["yesterday"]["focused_hours"] == 4.0
+    assert data["yesterday"]["cards_reviewed"] == 12
+    assert data["yesterday"]["tasks_done"] == 1
+    assert data["yesterday"]["completed"][0]["id"] == 2
+    # pulse_today is intentionally null (deck assembly lives in paper_ingestion).
+    assert data["pulse_today"] is None
+
+
+@pytest.mark.asyncio
+async def test_my_day_bundle_null_tolerant_when_empty(exec_app):
+    """Empty DB → empty/null fields, never a 500."""
+    app, conn = exec_app
+    _route_bundle(conn)  # everything empty / None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/executive/my-day-bundle")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["tasks"] == []
+    assert data["intent"] == {"intent": None, "updated_at": None}
+    assert data["threads"] == []
+    assert data["journal"] is None
+    assert data["pulse_today"] is None
+    assert data["yesterday"]["tasks_done"] == 0
+    assert data["yesterday"]["focused_hours"] == 0.0
+    assert data["yesterday"]["completed"] == []
+    assert data["yesterday"]["deferred"] == []
+
+
+# ---------------------------------------------------------------------------
+# Live-PG: focus-streak SQL must reproduce the old 365-row Python walk exactly.
+# Opt-in via JARVIS_RUN_LIVE_PG=1.
+# ---------------------------------------------------------------------------
+
+
+def _py_streak(log_dates: list, today) -> int:
+    """The exact pre-B7 Python streak algorithm, for differential testing."""
+    import datetime
+
+    rows = sorted(set(log_dates), reverse=True)
+    if not rows:
+        return 0
+    expected = today if rows[0] == today else today - datetime.timedelta(days=1)
+    if rows[0] != expected:
+        return 0
+    streak = 0
+    for d in rows:
+        if d == expected:
+            streak += 1
+            expected -= datetime.timedelta(days=1)
+        else:
+            break
+    return streak
+
+
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_my_day_focus_streak_sql_live_pg(live_pg_dsn: str) -> None:
+    """The gaps-and-islands streak SQL must equal _py_streak for every fixture.
+
+    Covers: streak through today, streak ending yesterday, broken streak (gap),
+    most-recent run too old (→ 0), and no rows (→ 0).
+    """
+    import datetime
+    from pathlib import Path
+
+    import asyncpg
+    from learning_engine.routers.executive import _FOCUS_STREAK_SQL
+
+    repo_root = Path(__file__).resolve().parents[3]
+    init_sql = (repo_root / "db" / "init.sql").read_text(encoding="utf-8")
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        async with pool.acquire() as conn:
+            await conn.execute(init_sql)
+            from paper_ingestion.migrations_runner import run_migrations
+
+        await run_migrations(pool)
+
+        async with pool.acquire() as conn:
+            today = await conn.fetchval("SELECT CURRENT_DATE")
+            d = datetime.timedelta(days=1)
+            cases = {
+                "through_today": [today, today - d, today - 2 * d],
+                "ends_yesterday": [today - d, today - 2 * d],
+                "broken_by_gap": [today, today - 2 * d, today - 3 * d],
+                "too_old": [today - 5 * d, today - 6 * d],
+                "empty": [],
+            }
+            for name, dates in cases.items():
+                user_id = await conn.fetchval(
+                    "INSERT INTO users (email) VALUES ($1) RETURNING id",
+                    f"streak_{name}@example.com",
+                )
+                for ld in dates:
+                    await conn.execute(
+                        "INSERT INTO daily_log (user_id, log_date, focus_hours) "
+                        "VALUES ($1, $2, 1.0)",
+                        user_id,
+                        ld,
+                    )
+                # A zero-hour row must NOT count (mirrors focus_hours > 0).
+                await conn.execute(
+                    "INSERT INTO daily_log (user_id, log_date, focus_hours) VALUES ($1, $2, 0)",
+                    user_id,
+                    today - 10 * d,
+                )
+                sql_val = await conn.fetchval(_FOCUS_STREAK_SQL, user_id)
+                expected = _py_streak(dates, today)
+                assert sql_val == expected, (
+                    f"case {name}: SQL={sql_val} expected(py)={expected} dates={dates}"
+                )
+    finally:
+        await pool.close()
