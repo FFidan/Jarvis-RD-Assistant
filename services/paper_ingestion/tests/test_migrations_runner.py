@@ -135,6 +135,10 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      both target tables are deferred (mig 069, not in init.sql), so this
     #      ALTER cannot be baked in standalone; runtime-applied with mig 069.
     # 086: review_logs.idempotency_key + partial UNIQUE over (user_id, …); user_id is added by deferred mig 070, so this ALTER is runtime-applied with its parent chain (same as 83/84/85).
+    # 087: idx_pulse_models_user_id — index on pulse_models(user_id). pulse_models
+    #      is created by deferred mig 018 and FK'd by deferred mig 082, so this
+    #      index cannot be baked into init.sql standalone; runtime-applied with
+    #      its parent chain (same precedent as 86).
     deferred = {
         33,
         52,
@@ -162,6 +166,7 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         84,
         85,
         86,
+        87,
     }
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions

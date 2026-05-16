@@ -76,15 +76,32 @@ def test_migration_082_pulse_models_uses_on_delete_set_null() -> None:
     assert executable.count("REFERENCES users(id) ON DELETE SET NULL") == len(SET_NULL_TABLES)
 
 
-def test_migration_082_preflight_raises_on_null_user_rows() -> None:
+def test_migration_082_self_heals_null_user_rows_no_raise() -> None:
+    """RB-D: the pre-flight must self-heal NULL-user rows (per-table backup +
+    reassign-to-first-admin), NOT RAISE/abort (which crash-looped the runner).
+    """
     sql = MIGRATION.read_text(encoding="utf-8")
-    assert "RAISE EXCEPTION" in sql
-    # pre-flight must reference all 6 CASCADE tables
+    # The crash-loop RAISE EXCEPTION must be gone.
+    assert "RAISE EXCEPTION" not in sql, "082 must self-heal, not RAISE/abort"
+    # Self-heal must reference all 6 CASCADE tables.
     array_block = sql.split("cascade_tables TEXT[] := ARRAY[")[1].split("]")[0]
     for table in CASCADE_TABLES:
-        assert f"'{table}'" in array_block, f"table {table!r} missing from pre-flight ARRAY"
-    # pulse_models must NOT be in the pre-flight (SET NULL, nulls are intentional)
+        assert f"'{table}'" in array_block, f"table {table!r} missing from self-heal ARRAY"
+    # pulse_models must NOT be in the self-heal set (SET NULL, nulls intentional).
     assert "'pulse_models'" not in array_block
+    # Per-table idempotent backup before mutating (mirrors migrate_null_user_data.py).
+    assert "CREATE TABLE IF NOT EXISTS" in sql
+    assert "_null_user_backup_082" in sql
+    # Reassign to the oldest active admin (NULL → 0-row no-op on fresh installs).
+    # The admin sub-select lives inside a format() string literal, so single
+    # quotes are doubled in the file text ('' == ' once rendered by Postgres).
+    assert "role = ''admin''" in sql
+    assert "deleted_at IS NULL" in sql
+    assert "SET user_id =" in sql
+    # No DELETE — reassign-only, matching the safe script's first_admin strategy.
+    assert "DELETE FROM" not in sql.upper().replace("ON DELETE", "")
+    # Pointer to the advanced-cases tool must remain in the comment block.
+    assert "scripts/migrate_null_user_data.py" in sql
 
 
 def test_migration_082_no_outer_transaction() -> None:
@@ -177,5 +194,98 @@ async def test_migration_082_live_pg_fks_exist_and_no_orphans(live_pg_dsn: str) 
                 assert orphan_count == 0, (
                     f"{table}: {orphan_count} orphan row(s) remain after migration 082"
                 )
+    finally:
+        await pool.close()
+
+
+async def _rewind_before_082(pool: asyncpg.Pool) -> None:
+    """Reproduce a pre-082 schema state on a fully-migrated DB.
+
+    Building a partial pre-082 chain by replaying early migrations on top of
+    init.sql is not viable (init.sql already carries later schema, so the early
+    ALTERs conflict). Instead we let the runner build the full schema, then
+    surgically rewind only what 082/087 created: drop the 6 CASCADE FKs and
+    un-record versions 82 & 87 from ``schema_migrations`` so the next
+    ``run_migrations`` re-applies 082 (and 087) against whatever NULL-user data
+    the test then injects — exactly the pre-v0.4.0 upgrade condition.
+    """
+    from paper_ingestion.migrations_runner import run_migrations
+
+    await _apply_fresh_init(pool)
+    await run_migrations(pool)
+    async with pool.acquire() as conn:
+        for table in CASCADE_TABLES:
+            await conn.execute(
+                f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {table}_user_id_fkey"  # noqa: S608
+            )
+        await conn.execute("DELETE FROM schema_migrations WHERE version IN (82, 87)")
+
+
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_migration_082_self_heals_null_user_rows_with_admin(live_pg_dsn: str) -> None:
+    """RB-D: a pre-082 DB with a NULL-user CASCADE row + an admin migrates
+    clean — the row is reassigned to the admin and a backup table is present,
+    instead of the runner crash-looping on a RAISE.
+    """
+    from paper_ingestion.migrations_runner import run_migrations
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await _rewind_before_082(pool)
+        async with pool.acquire() as conn:
+            admin_id = await conn.fetchval(
+                "INSERT INTO users (email, role) VALUES ('admin082@example.com', 'admin') "
+                "RETURNING id"
+            )
+            # Pre-082 NULL-user row in a CASCADE table (would have RAISEd before).
+            await conn.execute(
+                "INSERT INTO source_health (user_id, source_type) VALUES (NULL, 'arxiv')"
+            )
+
+        # Must NOT raise — 082 self-heals instead of aborting.
+        await run_migrations(pool)
+
+        async with pool.acquire() as conn:
+            healed = await conn.fetchval(
+                "SELECT user_id FROM source_health WHERE source_type = 'arxiv'"
+            )
+            assert healed == admin_id, "NULL-user row not reassigned to first admin"
+            null_remaining = await conn.fetchval(
+                "SELECT count(*) FROM source_health WHERE user_id IS NULL"
+            )
+            assert null_remaining == 0
+            backup_rows = await conn.fetchval(
+                "SELECT count(*) FROM source_health_null_user_backup_082"
+            )
+            assert backup_rows == 1, "backup table missing the healed row"
+            # Idempotent: re-running the raw 082 body must not error or re-heal.
+            await conn.execute(MIGRATION.read_text(encoding="utf-8"))
+            assert (
+                await conn.fetchval("SELECT count(*) FROM source_health WHERE user_id IS NULL")
+            ) == 0
+    finally:
+        await pool.close()
+
+
+@pytest.mark.live_pg
+@pytest.mark.asyncio
+async def test_migration_082_empty_db_still_passes(live_pg_dsn: str) -> None:
+    """Empty DB (no NULL-user rows, no admin): 082 is a clean no-op — no backup
+    table is created and no FK is left dangling.
+    """
+    from paper_ingestion.migrations_runner import run_migrations
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
+    try:
+        await _apply_fresh_init(pool)
+        await run_migrations(pool)  # must not raise on a NULL-row-free DB
+
+        async with pool.acquire() as conn:
+            for table in CASCADE_TABLES:
+                exists = await conn.fetchval(
+                    "SELECT to_regclass($1)", f"{table}_null_user_backup_082"
+                )
+                assert exists is None, f"{table}: backup table created despite no NULL-user rows"
     finally:
         await pool.close()

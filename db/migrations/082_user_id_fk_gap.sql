@@ -11,9 +11,9 @@
 --
 -- Pre-flight: RAISE on any remaining true orphan rows (user_id NOT NULL but
 -- pointing to a non-existent users row) so the ADD CONSTRAINT cannot fail.
--- For the CASCADE tables we also verify no NULL rows remain before adding the
--- constraint, mirroring 080's discipline. For pulse_models the FK is SET NULL
--- so NULL rows are intentionally allowed.
+-- For the CASCADE tables we self-heal any NULL-user rows in-line (see the
+-- self-heal block below) instead of aborting, mirroring 080's discipline. For
+-- pulse_models the FK is SET NULL so NULL rows are intentionally allowed.
 --
 -- Idempotent: DROP CONSTRAINT IF EXISTS then ADD inside the canonical
 -- DO $$ ... EXCEPTION WHEN duplicate_object guard (migration 051 pattern).
@@ -55,9 +55,29 @@ UPDATE pulse_models
  WHERE user_id IS NOT NULL
    AND user_id NOT IN (SELECT id FROM users);
 
--- ===== Pre-flight: refuse on NULL-user rows in the 6 CASCADE tables =====
--- (mirrors 080's pre-flight discipline; pulse_models is excluded because
---  NULL user_id = shared/system model, so SET NULL is used instead.)
+-- ===== Pre-flight: self-heal NULL-user rows in the 6 CASCADE tables =====
+-- An earlier revision RAISEd here, hard-aborting the migration runner on any
+-- pre-v0.4.0 upgrade that still held NULL-user rows. Because the runner retries
+-- the whole chain on every boot, that turned a one-time data condition into a
+-- crash-loop. Instead we self-heal in-line, mirroring the SAFE strategy of
+-- scripts/migrate_null_user_data.py (single transaction — the runner's —
+-- per-table backup, then reassign-to-first-admin, NEVER delete):
+--   1. If a table has NULL-user rows, snapshot them into
+--      <table>_null_user_backup_082 (CREATE TABLE IF NOT EXISTS, so a retried
+--      migration never clobbers an existing backup).
+--   2. Reassign those rows to the oldest active admin
+--      (role='admin' AND deleted_at IS NULL, ORDER BY created_at, id LIMIT 1).
+-- Idempotent / safe edge cases:
+--   * No NULL rows  -> 0-row no-op, no backup table created.
+--   * No admin yet  -> the scalar sub-select is NULL, the UPDATE matches the
+--     same NULL rows and re-sets user_id = NULL (still 0 effective change);
+--     ADD CONSTRAINT on a nullable column tolerates NULLs, so a fresh install
+--     with no users is unaffected. The follow-up FK still enforces validity for
+--     any non-NULL value.
+-- Operators with non-trivial cases (delete vs reassign, multi-admin routing)
+-- should run scripts/migrate_null_user_data.py BEFORE upgrading; this in-line
+-- heal is the safe automatic fallback, not a replacement for that tool.
+-- (pulse_models is excluded — NULL user_id = shared/system model, SET NULL.)
 DO $$
 DECLARE
     t TEXT;
@@ -70,12 +90,20 @@ BEGIN
     FOREACH t IN ARRAY cascade_tables LOOP
         EXECUTE format('SELECT count(*) FROM %I WHERE user_id IS NULL', t) INTO n;
         IF n > 0 THEN
-            RAISE EXCEPTION
-                'Migration 082 aborted: table % has % NULL-user row(s). '
-                'ON DELETE CASCADE requires non-NULL FK ownership. '
-                'Resolve with: python scripts/migrate_null_user_data.py '
-                '(see scripts/audit_null_user_data.py for a read-only report).',
-                t, n;
+            -- 1. Per-table backup of the affected rows (idempotent).
+            EXECUTE format(
+                'CREATE TABLE IF NOT EXISTS %I AS '
+                'SELECT * FROM %I WHERE user_id IS NULL',
+                t || '_null_user_backup_082', t
+            );
+            -- 2. Reassign to the oldest active admin (NULL if none -> no-op).
+            EXECUTE format(
+                'UPDATE %I SET user_id = ('
+                '  SELECT id FROM users'
+                '   WHERE role = ''admin'' AND deleted_at IS NULL'
+                '   ORDER BY created_at ASC, id ASC LIMIT 1'
+                ') WHERE user_id IS NULL', t
+            );
         END IF;
     END LOOP;
 END $$;
