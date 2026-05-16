@@ -160,7 +160,6 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
               )}
               aria-label={`Stack health: ${pillLabel(overall, downCount, degradedCount)}. Click to view system health.`}
               data-testid="health-pill-admin-link"
-              data-popover-testid="health-pill-popover-trigger"
             >
               <span className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(overall))} />
               <span className="flex-1 text-left">{pillLabel(overall, downCount, degradedCount)}</span>

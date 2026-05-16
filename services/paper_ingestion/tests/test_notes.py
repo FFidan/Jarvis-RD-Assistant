@@ -811,3 +811,99 @@ async def test_delete_note_rejects_non_author(_app, monkeypatch):
         resp = await client.delete("/api/notes/1")
 
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# PI-A — promote_zotero_note IDOR: cross-tenant write must 404, not promote.
+# ---------------------------------------------------------------------------
+
+
+async def test_promote_zotero_note_rejects_non_author(_app, monkeypatch):
+    """PI-A: promote returns 404 when caller is not the note author.
+
+    User 7 owns a Zotero note on a shared-corpus paper (discovered_by IS NULL,
+    so assert_paper_ownership would otherwise pass for anyone). User 8 attempts
+    to promote it: the user-scoped initial SELECT returns None → 404, before
+    any verification or UPDATE runs.
+    """
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_8
+    )
+    app, conn = _app
+    # User-scoped "SELECT * FROM paper_notes WHERE id=$1 AND user_id=$2" misses
+    # (note belongs to user 7, caller is user 8) → None.
+    conn.fetchrow.return_value = None
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/5/promote")
+
+    assert resp.status_code == 404
+    assert "5" in resp.json()["detail"]
+    # The scoped SELECT carried an exact user_id predicate bound to the caller.
+    first_sql = conn.fetchrow.await_args_list[0].args[0]
+    assert "user_id = $2" in first_sql
+    assert conn.fetchrow.await_args_list[0].args[2] == 8
+    # No verification / UPDATE was attempted (cross-tenant write blocked).
+    conn.fetch.assert_not_awaited()
+
+
+async def test_promote_zotero_note_author_succeeds(_app, monkeypatch):
+    """PI-A: the owning user can still promote their own Zotero note.
+
+    User 7 promotes their own note; the user-scoped SELECT matches and the
+    happy path proceeds to a verified promotion.
+    """
+    monkeypatch.setattr(
+        "paper_ingestion.routers.notes.current_user_id_strict_with_owner_override", _async_user_7
+    )
+    app, conn = _app
+    promoted_at = datetime(2026, 1, 5, tzinfo=UTC)
+    conn.fetchrow.side_effect = [
+        _make_note_record(
+            note_id=5,
+            source="zotero",
+            zotero_annotation_key="Z1",
+            highlight_text="The method improves accuracy.",
+            page_number=2,
+        ),
+        _make_note_record(
+            note_id=5,
+            source="zotero",
+            zotero_annotation_key="Z1",
+            highlight_text="The method improves accuracy.",
+            page_number=2,
+            verification_status="verified",
+            verified_quote="The method improves accuracy.",
+            verified_page_number=2,
+            promoted_at=promoted_at,
+        ),
+    ]
+    conn.fetch.return_value = [
+        {
+            "id": 100,
+            "paper_id": 1,
+            "chunk_index": 0,
+            "content": "The method improves accuracy.",
+            "page_number": 2,
+            "start_char": None,
+            "end_char": None,
+            "embedding_id": None,
+            "created_at": _NOW,
+        }
+    ]
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.post("/api/notes/5/promote")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["verification_status"] == "verified"
+    assert body["promoted_at"] is not None
+    # Initial SELECT was user-scoped to the owning caller.
+    first_sql = conn.fetchrow.await_args_list[0].args[0]
+    assert "user_id = $2" in first_sql
+    assert conn.fetchrow.await_args_list[0].args[2] == 7

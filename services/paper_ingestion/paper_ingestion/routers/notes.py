@@ -204,7 +204,18 @@ async def promote_zotero_note(
         request, api_key=(getattr(request, "headers", None) or {}).get("X-API-Key")
     )
     async with db_pool.acquire() as conn:
-        note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
+        # PI-A: authorship scope — a shared-corpus paper (discovered_by IS NULL)
+        # makes assert_paper_ownership pass for any caller, so the note fetch
+        # must itself be scoped to the owning user. Mirrors update_note /
+        # delete_note (exact user_id match, 404-on-miss, single-tenant guard).
+        if user_id is not None:
+            note = await conn.fetchrow(
+                "SELECT * FROM paper_notes WHERE id = $1 AND user_id = $2",
+                note_id,
+                user_id,
+            )
+        else:
+            note = await conn.fetchrow("SELECT * FROM paper_notes WHERE id = $1", note_id)
         if note is None:
             raise HTTPException(status_code=404, detail=f"Note {note_id} not found")
         if note["source"] != "zotero":

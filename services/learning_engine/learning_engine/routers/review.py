@@ -207,20 +207,14 @@ async def sync_reviews(
                 new_state, log_dict, next_due = fsrs_manager.schedule_review(
                     card["fsrs_state"], event.rating.value
                 )
-                await conn.execute(
-                    "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
-                    "WHERE id = $3",
-                    new_state,
-                    next_due,
-                    event.card_id,
-                )
-                await conn.execute(
+                inserted_log_id = await conn.fetchval(
                     """
                     INSERT INTO review_logs
                         (card_id, rating, review_duration_ms, reviewed_at,
                          fsrs_log, user_id, idempotency_key)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                     ON CONFLICT (user_id, idempotency_key) DO NOTHING
+                    RETURNING id
                     """,
                     event.card_id,
                     event.rating.value,
@@ -229,6 +223,20 @@ async def sync_reviews(
                     log_dict,
                     user_id,
                     event.idempotency_key,
+                )
+                if inserted_log_id is None:
+                    # A concurrent request with the same idempotency_key won the
+                    # INSERT (its row is durably recorded). Do NOT advance FSRS
+                    # again — count as synced per contract §4 and move on.
+                    applied.add(event.idempotency_key)
+                    synced += 1
+                    continue
+                await conn.execute(
+                    "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
+                    "WHERE id = $3",
+                    new_state,
+                    next_due,
+                    event.card_id,
                 )
             applied.add(event.idempotency_key)
             synced += 1
