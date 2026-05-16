@@ -19,7 +19,7 @@ import { useState, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCcw } from 'lucide-react';
 import type { Card as CardType } from '@/types';
-import { submitReview, fetchDecks } from '@/lib/api';
+import { getNextReview, submitReview, fetchDecks } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { EvidenceSnapshot } from '@/components/shared/EvidenceSnapshot';
 import { computeLastSeenDays, resolveDeckName } from '@/components/cards/SessionShell';
@@ -68,22 +68,7 @@ export function ReviewMode({
 
   const { data: cards = [], isLoading, refetch } = useQuery({
     queryKey: reviewQueryKey,
-    queryFn: () => {
-      const url = deckId != null
-        ? `/api/review/next?limit=1&deck_id=${deckId}`
-        : `/api/review/next?limit=1`;
-      return fetch(url, {
-        headers: { 'X-API-Key': (() => {
-          try {
-            const s = JSON.parse(sessionStorage.getItem('jarvis-auth') ?? '{}');
-            return s?.state?.apiKey ?? '';
-          } catch { return ''; }
-        })() },
-      }).then((r) => {
-        if (!r.ok) throw new Error(`review/next: ${r.status}`);
-        return r.json() as Promise<CardType[]>;
-      });
-    },
+    queryFn: () => getNextReview(1, deckId ?? undefined),
   });
 
   // Pre-fetch decks to resolve deck name for the eyebrow.

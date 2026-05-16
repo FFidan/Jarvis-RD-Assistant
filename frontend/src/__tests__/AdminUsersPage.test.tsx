@@ -26,6 +26,11 @@ const listUsersMock = vi.fn();
 const inviteUserMock = vi.fn();
 const updateUserRoleMock = vi.fn();
 const deleteUserMock = vi.fn();
+const sendSignInLinkMock = vi.fn();
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
 
 // Map of aria-label → onValueChange callback, populated as rows mount.
 // Used by the per-row isolation test to trigger mutations without Radix portals.
@@ -94,6 +99,7 @@ vi.mock('@/lib/api', async () => {
     inviteUser: (email: string, role: string) => inviteUserMock(email, role),
     updateUserRole: (userId: number, role: string) => updateUserRoleMock(userId, role),
     deleteUser: (userId: number) => deleteUserMock(userId),
+    sendSignInLink: (userId: number) => sendSignInLinkMock(userId),
   };
 });
 
@@ -445,6 +451,89 @@ describe('AdminUsersPage — delete mutation lifecycle (H2)', () => {
 
     rejectDelete(new Error('server error'));
     await waitFor(() => expect(aliceDeleteBtn).not.toBeDisabled());
+  });
+});
+
+describe('AdminUsersPage — send sign-in link', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _mockRole = 'admin';
+    _mockUserId = 1;
+  });
+
+  it('renders a send sign-in link button per non-deleted row', async () => {
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    renderPage();
+
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    expect(
+      screen.getByRole('button', { name: /send sign-in link to alice@example\.com/i }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /send sign-in link to admin@example\.com/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking the button calls sendSignInLink with the row id + success toast', async () => {
+    const { toast } = await import('sonner');
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+    sendSignInLinkMock.mockResolvedValueOnce({ sent: true });
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    await userEvent.click(
+      screen.getByRole('button', { name: /send sign-in link to alice@example\.com/i }),
+    );
+
+    await waitFor(() => {
+      expect(sendSignInLinkMock).toHaveBeenCalledWith(2);
+    });
+    await waitFor(() => {
+      expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+        'Sign-in link sent to alice@example.com',
+      );
+    });
+  });
+
+  it('hides the send sign-in link button for soft-deleted rows', async () => {
+    listUsersMock.mockResolvedValueOnce([
+      _sampleUsers[0],
+      { ..._sampleUsers[1], deleted_at: new Date().toISOString() },
+    ]);
+    renderPage();
+
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    expect(
+      screen.queryByRole('button', { name: /send sign-in link to alice@example\.com/i }),
+    ).not.toBeInTheDocument();
+    // Non-deleted row still shows it.
+    expect(
+      screen.getByRole('button', { name: /send sign-in link to admin@example\.com/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('only disables the targeted row button during a pending send (per-row isolation)', async () => {
+    sendSignInLinkMock.mockReturnValue(new Promise(() => {}));
+    listUsersMock.mockResolvedValueOnce(_sampleUsers);
+
+    renderPage();
+    await waitFor(() => screen.getByText('alice@example.com'));
+
+    const aliceBtn = screen.getByRole('button', {
+      name: /send sign-in link to alice@example\.com/i,
+    });
+    const adminBtn = screen.getByRole('button', {
+      name: /send sign-in link to admin@example\.com/i,
+    });
+
+    expect(aliceBtn).not.toBeDisabled();
+    await userEvent.click(aliceBtn);
+
+    await waitFor(() => expect(aliceBtn).toBeDisabled());
+    expect(adminBtn).not.toBeDisabled();
   });
 });
 

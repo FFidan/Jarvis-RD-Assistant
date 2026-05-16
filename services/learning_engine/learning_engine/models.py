@@ -156,6 +156,29 @@ class ReviewResponse(BaseModel):
     review_log_id: int
 
 
+class ReviewSyncEvent(BaseModel):
+    """One offline review replayed from the client outbox (contract 2026-05-16)."""
+
+    idempotency_key: str = Field(..., min_length=1, max_length=128)
+    card_id: int
+    rating: Rating
+    reviewed_at: datetime
+    review_duration_ms: int | None = Field(default=None, ge=0)
+
+
+class ReviewSyncRequest(BaseModel):
+    """Batch of offline reviews to reconcile, oldest-first."""
+
+    reviews: list[ReviewSyncEvent] = Field(..., max_length=500)
+
+
+class ReviewSyncResponse(BaseModel):
+    """Reconcile outcome: durably-recorded vs declined event counts."""
+
+    synced: int = Field(..., ge=0)
+    skipped: int = Field(..., ge=0)
+
+
 class RetentionStats(BaseModel):
     """Retention and review statistics."""
 

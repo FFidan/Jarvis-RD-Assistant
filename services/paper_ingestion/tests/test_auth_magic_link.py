@@ -117,6 +117,88 @@ async def test_request_link_known_email_inserts_token_and_logs(monkeypatch) -> N
     assert "token=" in sent_calls[0][1]
 
 
+@pytest.mark.asyncio
+async def test_request_link_unknown_email_equalises_app_side_work(monkeypatch) -> None:
+    """Enumeration-timing hardening: the unknown-email branch must perform the
+    same application-side work shape as the known branch (mint+hash a throwaway
+    token, do a connection-acquire round-trip) so there is no order-of-magnitude
+    fast/slow split. Structural assertion — not a flaky wall-clock timer.
+    """
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)  # unknown email
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    hashed: list[str] = []
+    real_hash = auth_router._hash_token
+    monkeypatch.setattr(
+        auth_router,
+        "_hash_token",
+        lambda t: hashed.append(t) or real_hash(t),
+    )
+
+    result = await auth_router.request_link.__wrapped__(
+        auth_router.RequestLinkBody(email="ghost@example.com"),
+        request,
+    )
+
+    assert result.sent is True
+    # Decoy token minted + hashed (CPU oracle equalised).
+    assert len(hashed) == 1
+    # Connection-acquire round-trip performed: once for the user lookup,
+    # once for the decoy await — mirrors the known branch's two acquires.
+    assert pool.acquire.call_count >= 2
+    # Still no real token persisted on the unknown branch.
+    executed_sql = [c.args[0] for c in conn.execute.await_args_list]
+    assert not any("INSERT INTO magic_link_tokens" in s for s in executed_sql)
+
+
+# ---------------------------------------------------------------------------
+# A-3: api_key_session explicit-owner role enforcement (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_api_key_session_non_admin_owner_user_id_returns_409(monkeypatch) -> None:
+    """A configured OWNER_USER_ID resolving to a non-admin must 409, not
+    silently mint a member 'owner' session."""
+    from jarvis_common.auth import refresh_api_key_cache
+
+    key = "k" * 40
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("JARVIS_API_KEY", key)
+    monkeypatch.setenv("OWNER_USER_ID", "7")
+    refresh_api_key_cache()
+
+    conn = AsyncMock()
+    # user_count=1 (single-tenant gate passes), admin-filtered lookup → None,
+    # then the existence probe finds the row (exists but not admin).
+    conn.fetchval = AsyncMock(return_value=1)
+    conn.fetchrow = AsyncMock(side_effect=[None, {"id": 7}])
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+    request.headers = {"X-API-Key": key, "user-agent": "pytest"}
+
+    async def _noop(*a, **k):  # noqa: ANN002, ANN003
+        pass
+
+    monkeypatch.setattr(auth_router, "log_audit", _noop)
+
+    try:
+        with pytest.raises(HTTPException) as exc:
+            await auth_router.api_key_session.__wrapped__(
+                auth_router.ApiKeySessionBody(api_key=key),
+                request,
+                Response(),
+            )
+        assert exc.value.status_code == 409
+        assert "non-admin" in exc.value.detail
+    finally:
+        monkeypatch.delenv("JARVIS_API_KEY", raising=False)
+        refresh_api_key_cache()
+
+
 # ---------------------------------------------------------------------------
 # verify
 # ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ below outrank archived notes.
 
 ## Operations
 
+- [User Guide](USER_GUIDE.md) — end-user reference: sign-in, surfaces, account recovery.
 - [Deployment](DEPLOYMENT.md)
 - [Requirements](REQUIREMENTS.md)
 - [Performance Profiling HOWTO](perf/HOWTO.md)

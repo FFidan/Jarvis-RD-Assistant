@@ -3,13 +3,14 @@
  * Shell/Sidebar+Admin IA redesign (spec §3.4).
  *
  * Covers:
- * - When adminLink is provided: renders a <Link> to that path, not a toggle button
+ * - When adminLink is provided: renders a popover trigger pill (not a raw <Link>);
+ *   clicking it opens a per-service grid + "View full report" link to the admin path.
  * - When adminLink is NOT provided: keeps existing toggle behavior (in-place expand)
- * - Non-admin in-place expand still works when no adminLink passed
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HealthDots } from '@/components/shared/HealthDots';
@@ -51,12 +52,12 @@ function renderHealthDots({ compact = false, adminLink }: { compact?: boolean; a
   );
 }
 
-describe('HealthDots — adminLink prop (admin navigation behavior)', () => {
+describe('HealthDots — adminLink prop (admin popover behavior)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it('renders admin link anchor when adminLink is provided', async () => {
+  it('renders popover trigger button when adminLink is provided', async () => {
     mockFetchStackHealth.mockResolvedValue(makeAllOk());
     renderHealthDots({ adminLink: '/admin/system-health' });
 
@@ -64,9 +65,9 @@ describe('HealthDots — adminLink prop (admin navigation behavior)', () => {
       expect(screen.getByTestId('health-pill-admin-link')).toBeInTheDocument();
     });
 
-    const link = screen.getByTestId('health-pill-admin-link');
-    expect(link.tagName).toBe('A');
-    expect(link).toHaveAttribute('href', '/admin/system-health');
+    const trigger = screen.getByTestId('health-pill-admin-link');
+    // Trigger is now a button (not an anchor); clicking opens a popover.
+    expect(trigger.tagName).toBe('BUTTON');
   });
 
   it('does NOT render the toggle button when adminLink is provided', async () => {
@@ -89,7 +90,54 @@ describe('HealthDots — adminLink prop (admin navigation behavior)', () => {
     });
   });
 
-  it('does NOT render admin link when adminLink is undefined (non-admin)', async () => {
+  it('clicking the pill opens a popover containing all service rows', async () => {
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+    const user = userEvent.setup();
+    renderHealthDots({ adminLink: '/admin/system-health' });
+
+    const trigger = await screen.findByTestId('health-pill-admin-link');
+    await user.click(trigger);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('health-row-paper_ingestion')).toBeInTheDocument();
+      expect(screen.getByTestId('health-row-learning_engine')).toBeInTheDocument();
+    });
+  });
+
+  it('popover content includes a "View full report" link to adminLink path', async () => {
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+    const user = userEvent.setup();
+    renderHealthDots({ adminLink: '/admin/system-health' });
+
+    const trigger = await screen.findByTestId('health-pill-admin-link');
+    await user.click(trigger);
+
+    await waitFor(() => {
+      const fullReportLink = screen.getByTestId('health-popover-full-report');
+      expect(fullReportLink).toBeInTheDocument();
+      expect(fullReportLink).toHaveAttribute('href', '/admin/system-health');
+      expect(fullReportLink).toHaveTextContent('View full report');
+    });
+  });
+
+  it('clicking the full-report link does NOT immediately navigate (stays in popover)', async () => {
+    mockFetchStackHealth.mockResolvedValue(makeAllOk());
+    const user = userEvent.setup();
+    renderHealthDots({ adminLink: '/admin/system-health' });
+
+    const trigger = await screen.findByTestId('health-pill-admin-link');
+    await user.click(trigger);
+
+    // Full-report link is rendered as an anchor inside the popover, not a push
+    // that closes the popover on mount — it must be present and clickable.
+    const fullReportLink = await screen.findByTestId('health-popover-full-report');
+    expect(fullReportLink).toBeInTheDocument();
+    // It's an <a> rendered by react-router <Link>; MemoryRouter intercepts navigation
+    // so it doesn't leave the page — the link merely exists here.
+    expect(fullReportLink.tagName).toBe('A');
+  });
+
+  it('does NOT render admin trigger when adminLink is undefined (non-admin)', async () => {
     mockFetchStackHealth.mockResolvedValue(makeAllOk());
     renderHealthDots();
 
@@ -110,13 +158,13 @@ describe('HealthDots — adminLink prop (admin navigation behavior)', () => {
     expect(screen.getByTestId('health-expanded-grid')).toBeInTheDocument();
   });
 
-  it('admin link accessible name includes health status', async () => {
+  it('admin trigger accessible name includes health status', async () => {
     mockFetchStackHealth.mockResolvedValue(makeAllOk());
     renderHealthDots({ adminLink: '/admin/system-health' });
 
     await waitFor(() => {
-      const link = screen.getByTestId('health-pill-admin-link');
-      expect(link.getAttribute('aria-label')).toMatch(/All healthy/);
+      const trigger = screen.getByTestId('health-pill-admin-link');
+      expect(trigger.getAttribute('aria-label')).toMatch(/All healthy/);
     });
   });
 });

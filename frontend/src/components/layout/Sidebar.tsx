@@ -178,7 +178,7 @@ function GroupHeader({ numeral, label, subLabel, collapsed }: GroupHeaderProps) 
   }
 
   return (
-    <div className="px-3 pt-4 pb-1" data-testid={`nav-group-${label.toLowerCase()}`}>
+    <div className="px-3 pt-4 pb-1">
       <div className="flex items-baseline gap-2">
         <span className="text-[10px] font-mono font-semibold uppercase tracking-[0.18em] text-muted-foreground/60">
           {numeral}

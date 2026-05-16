@@ -21,7 +21,8 @@ vi.mock('@/lib/api', async () => {
   };
 });
 
-import { fetchDecks } from '@/lib/api';
+import { getNextReview, fetchDecks } from '@/lib/api';
+const mockGetNextReview = vi.mocked(getNextReview);
 const mockFetchDecks = vi.mocked(fetchDecks);
 
 const CARD_FIXTURE: Card = {
@@ -51,15 +52,7 @@ function renderReview(props: Partial<React.ComponentProps<typeof ReviewMode>> & 
 }) {
   const { nextCards = [CARD_FIXTURE], ...rest } = props;
 
-  // Intercept fetch at the native level for review-next
-  const originalFetch = window.fetch;
-  vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
-    const url = typeof input === 'string' ? input : (input as Request).url;
-    if (url.includes('/api/review/next')) {
-      return new Response(JSON.stringify(nextCards), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    }
-    return originalFetch(input);
-  });
+  mockGetNextReview.mockResolvedValue(nextCards);
 
   const qc = makeQueryClient();
   return render(
@@ -79,13 +72,11 @@ describe('ReviewMode', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetchDecks.mockResolvedValue(DECK_FIXTURE);
-    vi.restoreAllMocks();
+    mockGetNextReview.mockResolvedValue([CARD_FIXTURE]);
   });
 
   it('shows loading state initially', () => {
-    vi.spyOn(window, 'fetch').mockImplementation(
-      () => new Promise(() => {}), // never resolves
-    );
+    mockGetNextReview.mockReturnValue(new Promise(() => {})); // never resolves
     const qc = makeQueryClient();
     render(
       <QueryClientProvider client={qc}>
@@ -130,13 +121,6 @@ describe('ReviewMode', () => {
 
   it('calls submitReviewFn (the offline seam) on rating click', async () => {
     const submitFn = vi.fn().mockResolvedValue({});
-    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : (input as Request).url;
-      if (url.includes('/api/review/next')) {
-        return new Response(JSON.stringify([CARD_FIXTURE]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('{}', { status: 200 });
-    });
     const qc = makeQueryClient();
     render(
       <QueryClientProvider client={qc}>
@@ -155,13 +139,6 @@ describe('ReviewMode', () => {
 
   it('calls onReviewSuccess after rating', async () => {
     const onSuccess = vi.fn();
-    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : (input as Request).url;
-      if (url.includes('/api/review/next')) {
-        return new Response(JSON.stringify([CARD_FIXTURE]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('{}', { status: 200 });
-    });
     const qc = makeQueryClient();
     render(
       <QueryClientProvider client={qc}>
@@ -209,10 +186,8 @@ describe('ReviewMode', () => {
   });
 
   it('renders null (session end delegated to parent) when no cards returned', async () => {
+    mockGetNextReview.mockResolvedValue([]);
     const onSessionEnd = vi.fn();
-    vi.spyOn(window, 'fetch').mockImplementation(async () => {
-      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    });
     const qc = makeQueryClient();
     const { container } = render(
       <QueryClientProvider client={qc}>
@@ -226,10 +201,28 @@ describe('ReviewMode', () => {
       expect(container.querySelector('.mx-auto')).toBeNull();
     });
   });
+
+  it('calls getNextReview with limit=1 and no deckId when unscoped', async () => {
+    renderReview({});
+    await waitFor(() => screen.getByText(CARD_FIXTURE.front));
+    expect(mockGetNextReview).toHaveBeenCalledWith(1, undefined);
+  });
+
+  it('calls getNextReview with limit=1 and deckId when deck-scoped', async () => {
+    renderReview({ deckId: 7 });
+    await waitFor(() => screen.getByText(CARD_FIXTURE.front));
+    expect(mockGetNextReview).toHaveBeenCalledWith(1, 7);
+  });
 });
 
 // --- P2 offline seam contract test ---
 describe('ReviewMode offline seam', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchDecks.mockResolvedValue(DECK_FIXTURE);
+    mockGetNextReview.mockResolvedValue([CARD_FIXTURE]);
+  });
+
   it('submitReviewFn is the single point of control for submit-review calls', async () => {
     /**
      * This test asserts the offline-seam contract:
@@ -244,14 +237,6 @@ describe('ReviewMode offline seam', () => {
         return {};
       },
     );
-
-    vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : (input as Request).url;
-      if (url.includes('/api/review/next')) {
-        return new Response(JSON.stringify([CARD_FIXTURE]), { status: 200, headers: { 'Content-Type': 'application/json' } });
-      }
-      return new Response('{}', { status: 200 });
-    });
 
     const qc = makeQueryClient();
     render(

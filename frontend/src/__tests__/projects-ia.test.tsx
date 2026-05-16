@@ -48,7 +48,7 @@ import {
   deleteProjectQuestion,
 } from '@/lib/api';
 
-import { ChapterRail } from '@/components/projects/ChapterRail';
+import { ChapterRail, toRoman } from '@/components/projects/ChapterRail';
 import { QuestionsSection } from '@/components/projects/QuestionsSection';
 import { RecentActivitySection } from '@/components/projects/RecentActivitySection';
 import { ProjectsPage } from '@/pages/ProjectsPage';
@@ -223,6 +223,23 @@ describe('ChapterRail', () => {
     expect(screen.getByText('0 papers')).toBeInTheDocument();
     expect(screen.getByText('0 Qs')).toBeInTheDocument();
   });
+});
+
+// ---------------------------------------------------------------------------
+// toRoman — full Roman numeral helper
+// ---------------------------------------------------------------------------
+
+describe('toRoman', () => {
+  it('toRoman(1) → "I"', () => expect(toRoman(1)).toBe('I'));
+  it('toRoman(4) → "IV"', () => expect(toRoman(4)).toBe('IV'));
+  it('toRoman(9) → "IX"', () => expect(toRoman(9)).toBe('IX'));
+  it('toRoman(10) → "X"', () => expect(toRoman(10)).toBe('X'));
+  it('toRoman(39) → "XXXIX"', () => expect(toRoman(39)).toBe('XXXIX'));
+  it('toRoman(40) → "XL"', () => expect(toRoman(40)).toBe('XL'));
+  it('toRoman(49) → "XLIX"', () => expect(toRoman(49)).toBe('XLIX'));
+  it('toRoman(50) → "L"', () => expect(toRoman(50)).toBe('L'));
+  it('toRoman(90) → "XC"', () => expect(toRoman(90)).toBe('XC'));
+  it('toRoman(100) → "C"', () => expect(toRoman(100)).toBe('C'));
 });
 
 // ---------------------------------------------------------------------------

@@ -16,6 +16,7 @@ present the session cookie takes priority for ``request.state.user_id``
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -26,6 +27,11 @@ from starlette.types import ASGIApp
 logger = logging.getLogger(__name__)
 
 SESSION_COOKIE_NAME = "jarvis_session"
+
+# Offline-tolerant grace: a session expired by no more than this still resolves
+# identity (without renewing expires_at) so reviews taken offline reconcile
+# after a realistic offline gap. revoked_at/deleted_at still hard-fail.
+SESSION_GRACE = timedelta(hours=24)
 
 
 _SESSION_LOOKUP_SQL = """
@@ -87,10 +93,11 @@ async def _populate_state_from_cookie(request: Request, session_id: str) -> None
     if row["deleted_at"] is not None:
         return
     # asyncpg returns timezone-aware datetimes for TIMESTAMPTZ columns.
+    # Offline-tolerant: a session expired within SESSION_GRACE still resolves
+    # identity (no renewal here — refresh stays the auth layer's job) so
+    # reviews queued offline reconcile after a realistic offline gap.
     expires_at = row["expires_at"]
-    from datetime import UTC, datetime  # noqa: PLC0415
-
-    if expires_at is not None and expires_at <= datetime.now(UTC):
+    if expires_at is not None and expires_at <= datetime.now(UTC) - SESSION_GRACE:
         return
     request.state.user_id = int(row["user_id"])
     request.state.user_email = row["email"]

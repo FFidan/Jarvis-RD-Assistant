@@ -32,6 +32,8 @@ from jarvis_common.audit import log_audit
 from jarvis_common.email import send_magic_link
 from pydantic import BaseModel, EmailStr, Field
 
+from paper_ingestion.routers.auth import MAGIC_LINK_TTL
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -360,6 +362,64 @@ async def restore_user(user_id: int, request: Request) -> UserRecord:
     )
 
     return _row_to_user(row)
+
+
+@router.post(
+    "/users/{user_id}/send-link",
+    dependencies=[Depends(require_admin)],
+)
+async def send_sign_in_link(user_id: int, request: Request) -> dict[str, bool]:
+    """Email an existing user a fresh 15-minute magic sign-in link.
+
+    Mirrors :func:`invite_user`'s token path but targets an EXISTING
+    non-deleted user and uses the short ``MAGIC_LINK_TTL`` (a login token,
+    not a 24h invite). ``pending_email`` is left NULL so ``/auth/verify``
+    treats it as a plain login token (it rejects pending-email tokens).
+
+    Raises 404 if the user does not exist or is soft-deleted.
+    """
+    pool = request.app.state.db_pool
+
+    async with pool.acquire() as conn:
+        user_row = await conn.fetchrow(
+            "SELECT id, email FROM users WHERE id = $1 AND deleted_at IS NULL",
+            user_id,
+        )
+
+    if user_row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    email = user_row["email"]
+    raw_token = secrets.token_urlsafe(32)
+    token_hash = _hash_token(raw_token)
+    expires_at = datetime.now(UTC) + MAGIC_LINK_TTL
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO magic_link_tokens (token_hash, user_id, expires_at)
+            VALUES ($1, $2, $3)
+            """,
+            token_hash,
+            user_id,
+            expires_at,
+        )
+
+    link = _build_invite_link(request, raw_token)
+    try:
+        await send_magic_link(email, link, pool=pool)
+    except Exception:  # noqa: BLE001 — never expose SMTP errors
+        logger.exception("send_magic_link (sign-in) failed for user_id=%s", user_id)
+
+    caller_id = getattr(request.state, "user_id", None)
+    await log_audit(
+        pool,
+        action="admin.user.send_link",
+        resource=f"users/{user_id}",
+        user_id=str(caller_id) if caller_id is not None else None,
+    )
+
+    return {"sent": True}
 
 
 __all__ = ["router"]

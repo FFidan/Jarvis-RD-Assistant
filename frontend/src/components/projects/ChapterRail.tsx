@@ -34,10 +34,10 @@ const STATUS_VARIANTS: Record<string, 'default' | 'secondary' | 'destructive' | 
   archived: 'secondary',
 };
 
-/** Convert a 1-based integer to a Roman numeral string (I–XXXIX sufficient for chapters). */
-function toRoman(n: number): string {
-  const vals = [10, 9, 5, 4, 1] as const;
-  const syms = ['X', 'IX', 'V', 'IV', 'I'] as const;
+/** Convert a 1-based integer to a Roman numeral string. */
+export function toRoman(n: number): string {
+  const vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1] as const;
+  const syms = ['M', 'CM', 'D', 'CD', 'C', 'XC', 'L', 'XL', 'X', 'IX', 'V', 'IV', 'I'] as const;
   let result = '';
   let remaining = n;
   for (let i = 0; i < vals.length; i++) {

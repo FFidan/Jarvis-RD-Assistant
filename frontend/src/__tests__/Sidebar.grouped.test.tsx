@@ -235,6 +235,33 @@ describe('Sidebar — grouped nav (admin)', () => {
   });
 });
 
+describe('Sidebar — nav-group testid uniqueness', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('each nav-group-* testid appears exactly once for non-admin (4 visible groups)', () => {
+    renderSidebar({ role: 'user' });
+
+    const groups = ['today', 'read', 'learn', 'ask'];
+    for (const label of groups) {
+      // getAllByTestId throws if 0; length > 1 would mean duplicate
+      const els = document.querySelectorAll(`[data-testid="nav-group-${label}"]`);
+      expect(els.length).toBe(1);
+    }
+  });
+
+  it('each nav-group-* testid appears exactly once for admin (5 visible groups)', () => {
+    renderSidebar({ role: 'admin' });
+
+    const groups = ['today', 'read', 'learn', 'ask', 'admin'];
+    for (const label of groups) {
+      const els = document.querySelectorAll(`[data-testid="nav-group-${label}"]`);
+      expect(els.length).toBe(1);
+    }
+  });
+});
+
 describe('Sidebar — collapsed mode', () => {
   beforeEach(() => {
     vi.clearAllMocks();

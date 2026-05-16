@@ -15,6 +15,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { fetchStackHealth, type ServiceHealth, type ServiceHealthStatus } from '@/lib/api';
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -86,9 +87,9 @@ interface HealthDotsProps {
   /** When true the component renders a compact row of dots (sidebar-collapsed mode). */
   compact?: boolean;
   /**
-   * When provided (admin users only), clicking the health pill navigates to
-   * this path instead of expanding in-place. Spec §3.4: admin users navigate
-   * to /admin/system-health; non-admin users keep in-place expand behavior.
+   * When provided (admin users only), clicking the health pill opens a
+   * per-service popover with a footer link to this path (full report).
+   * Non-admin users keep the in-place expand behavior.
    */
   adminLink?: string;
 }
@@ -145,24 +146,43 @@ export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
 
   // ----- Expanded sidebar mode -----
 
-  // Admin users: pill navigates to system-health page instead of expanding.
+  // Admin users: pill opens a quick per-service popover + footer link to full report.
   if (adminLink) {
     return (
       <div className="space-y-1 text-xs text-muted-foreground" data-testid="health-dots-root">
-        <Link
-          to={adminLink}
-          className={cn(
-            'flex w-full items-center gap-2 rounded px-2 py-1 text-xs font-medium transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            pillColor(overall),
-          )}
-          aria-label={`Stack health: ${pillLabel(overall, downCount, degradedCount)}. Click to view system health.`}
-          data-testid="health-pill-admin-link"
-        >
-          <span
-            className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(overall))}
-          />
-          <span className="flex-1 text-left">{pillLabel(overall, downCount, degradedCount)}</span>
-        </Link>
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={cn(
+                'flex w-full items-center gap-2 rounded px-2 py-1 text-xs font-medium transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                pillColor(overall),
+              )}
+              aria-label={`Stack health: ${pillLabel(overall, downCount, degradedCount)}. Click to view system health.`}
+              data-testid="health-pill-admin-link"
+              data-popover-testid="health-pill-popover-trigger"
+            >
+              <span className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(overall))} />
+              <span className="flex-1 text-left">{pillLabel(overall, downCount, degradedCount)}</span>
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-64 p-3">
+            <div className="space-y-1" data-testid="health-popover-grid">
+              {services.map((svc) => (
+                <ServiceRow key={svc.name} svc={svc} />
+              ))}
+            </div>
+            <div className="mt-3 border-t border-border pt-2">
+              <Link
+                to={adminLink}
+                className="text-xs text-muted-foreground hover:text-foreground hover:underline"
+                data-testid="health-popover-full-report"
+              >
+                View full report →
+              </Link>
+            </div>
+          </PopoverContent>
+        </Popover>
       </div>
     );
   }

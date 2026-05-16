@@ -324,3 +324,95 @@ async def test_unauthenticated_cannot_reach_admin() -> None:
     with pytest.raises(HTTPException) as exc:
         await admin_router.require_admin(request)
     assert exc.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# POST /api/admin/users/{id}/send-link
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_link_issues_short_token_and_emails(monkeypatch) -> None:
+    monkeypatch.setenv("DEV_MODE", "true")
+    monkeypatch.setenv("APP_BASE_URL", "https://localhost:3001")
+
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 5, "email": "bob@example.com"})
+    conn.execute = AsyncMock()
+
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send(email, link, *, pool=None):
+        sent.append((email, link))
+
+    monkeypatch.setattr(admin_router, "send_magic_link", fake_send)
+    audit = AsyncMock()
+    monkeypatch.setattr(admin_router, "log_audit", audit)
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    result = await admin_router.send_sign_in_link(5, request)
+
+    assert result == {"sent": True}
+    # 15-minute magic_link_tokens row inserted (login TTL, not 24h invite).
+    conn.execute.assert_awaited_once()
+    insert_sql, _hash, uid, expires_at = conn.execute.await_args.args
+    assert "INSERT INTO magic_link_tokens" in insert_sql
+    assert uid == 5
+    ttl = expires_at - datetime.now(UTC)
+    assert ttl <= admin_router.MAGIC_LINK_TTL
+    assert ttl > timedelta(minutes=10)  # ~15 min, well under the 24h invite TTL
+    # Link emailed to the existing user's address.
+    assert sent == [("bob@example.com", sent[0][1])]
+    assert "token=" in sent[0][1]
+    # Audit row written.
+    audit.assert_awaited_once()
+    assert audit.await_args.kwargs["action"] == "admin.user.send_link"
+    assert audit.await_args.kwargs["resource"] == "users/5"
+
+
+@pytest.mark.asyncio
+async def test_send_link_token_has_pending_email_null(monkeypatch) -> None:
+    """Login token: INSERT omits pending_email so /auth/verify accepts it."""
+    monkeypatch.setenv("DEV_MODE", "true")
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value={"id": 9, "email": "x@example.com"})
+    conn.execute = AsyncMock()
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    await admin_router.send_sign_in_link(9, request)
+
+    insert_sql = conn.execute.await_args.args[0]
+    assert "pending_email" not in insert_sql
+    # Only (token_hash, user_id, expires_at) bound — pending_email defaults NULL.
+    assert len(conn.execute.await_args.args) == 4
+
+
+@pytest.mark.asyncio
+async def test_send_link_missing_or_deleted_user_raises_404(monkeypatch) -> None:
+    conn = AsyncMock()
+    conn.fetchrow = AsyncMock(return_value=None)  # absent OR deleted_at IS NOT NULL
+    monkeypatch.setattr(admin_router, "send_magic_link", AsyncMock())
+    monkeypatch.setattr(admin_router, "log_audit", AsyncMock())
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=1, user_role="admin")
+
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.send_sign_in_link(999, request)
+    assert exc.value.status_code == 404
+    conn.execute.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_non_admin_cannot_send_link() -> None:
+    conn = AsyncMock()
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_id=2, user_role="user")
+    with pytest.raises(HTTPException) as exc:
+        await admin_router.require_admin(request)
+    assert exc.value.status_code == 403

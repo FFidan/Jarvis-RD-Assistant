@@ -13,7 +13,14 @@ from jarvis_common.streak import compute_streak
 from learning_engine.converters import row_to_card_response
 from learning_engine.deps import get_db_pool, limiter
 from learning_engine.fsrs_manager import FSRSManager
-from learning_engine.models import CardResponse, RetentionStats, ReviewRequest, ReviewResponse
+from learning_engine.models import (
+    CardResponse,
+    RetentionStats,
+    ReviewRequest,
+    ReviewResponse,
+    ReviewSyncRequest,
+    ReviewSyncResponse,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +71,7 @@ async def _build_fsrs_manager_from_db(
                 )
                 if isinstance(steps_raw, list) and len(steps_raw) == 2:
                     learning_steps = [timedelta(minutes=int(s)) for s in steps_raw]
-        except Exception:
+        except (ValueError, json.JSONDecodeError, TypeError):
             logger.warning(
                 "Could not parse fsrs config key %s, using default", row["key"], exc_info=True
             )
@@ -159,6 +166,73 @@ async def submit_review(
         fsrs_state=new_state,
         review_log_id=log_id,
     )
+
+
+@router.post("/review/sync", response_model=ReviewSyncResponse)
+@limiter.limit("30/minute")
+async def sync_reviews(
+    request: Request,
+    body: ReviewSyncRequest,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(current_user_id_strict_with_owner_override),
+) -> ReviewSyncResponse:
+    """Idempotently replay an offline review batch (contract 2026-05-16)."""
+    synced = 0
+    skipped = 0
+    if not body.reviews:
+        return ReviewSyncResponse(synced=0, skipped=0)
+    async with db_pool.acquire() as conn:
+        keys = [e.idempotency_key for e in body.reviews]
+        applied_rows = await conn.fetch(
+            "SELECT idempotency_key FROM review_logs "
+            "WHERE user_id = $1 AND idempotency_key = ANY($2::text[])",
+            user_id,
+            keys,
+        )
+        applied = {r["idempotency_key"] for r in applied_rows}
+        for event in body.reviews:
+            if event.idempotency_key in applied:
+                synced += 1
+                continue
+            async with conn.transaction():
+                card = await conn.fetchrow(
+                    "SELECT * FROM cards WHERE id = $1 AND user_id = $2 FOR UPDATE",
+                    event.card_id,
+                    user_id,
+                )
+                if not card:
+                    skipped += 1
+                    continue
+                fsrs_manager = await _build_fsrs_manager_from_db(conn, user_id=user_id)
+                new_state, log_dict, next_due = fsrs_manager.schedule_review(
+                    card["fsrs_state"], event.rating.value
+                )
+                await conn.execute(
+                    "UPDATE cards SET fsrs_state = $1, due_at = $2, updated_at = NOW() "
+                    "WHERE id = $3",
+                    new_state,
+                    next_due,
+                    event.card_id,
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO review_logs
+                        (card_id, rating, review_duration_ms, reviewed_at,
+                         fsrs_log, user_id, idempotency_key)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (user_id, idempotency_key) DO NOTHING
+                    """,
+                    event.card_id,
+                    event.rating.value,
+                    event.review_duration_ms,
+                    event.reviewed_at,
+                    log_dict,
+                    user_id,
+                    event.idempotency_key,
+                )
+            applied.add(event.idempotency_key)
+            synced += 1
+    return ReviewSyncResponse(synced=synced, skipped=skipped)
 
 
 @router.get("/stats", response_model=RetentionStats)

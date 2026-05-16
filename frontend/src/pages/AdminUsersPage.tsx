@@ -14,11 +14,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { formatDistanceToNow } from 'date-fns';
+import { toast } from 'sonner';
 import {
   listUsers,
   inviteUser,
   updateUserRole,
   deleteUser,
+  sendSignInLink,
   type AdminUser,
 } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
@@ -51,7 +53,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
-import { UserPlus, Trash2, Shield, User } from 'lucide-react';
+import { UserPlus, Trash2, Shield, User, Send } from 'lucide-react';
 import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string | null): string {
@@ -207,6 +209,9 @@ export function AdminUsersPage() {
   // DOM-F-07 (delete): track which specific user's delete is in-flight so only
   // that row's button is disabled, not all rows (same pattern as pendingRoleUserId).
   const [pendingDeleteUserId, setPendingDeleteUserId] = useState<number | null>(null);
+  // Per-row send-link in-flight tracking (same isolation pattern as delete):
+  // only the targeted row's button is disabled, not the whole table.
+  const [pendingSendLinkUserId, setPendingSendLinkUserId] = useState<number | null>(null);
 
   const { data: users, isLoading, isError } = useQuery({
     queryKey: ['admin', 'users'],
@@ -241,6 +246,20 @@ export function AdminUsersPage() {
     },
     onError: () => {
       setPendingDelete(null);
+    },
+  });
+
+  const sendLinkMutation = useMutation({
+    mutationFn: ({ userId }: { userId: number; email: string }) => sendSignInLink(userId),
+    onMutate: ({ userId }) => setPendingSendLinkUserId(userId),
+    onSettled: () => setPendingSendLinkUserId(null),
+    onSuccess: (_data, { email }) => {
+      toast.success(`Sign-in link sent to ${email}`);
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.detail : 'Failed to send sign-in link.',
+      );
     },
   });
 
@@ -292,6 +311,12 @@ export function AdminUsersPage() {
           <tbody>
             {users?.map((user) => {
               const isSelf = currentUser?.id === user.id;
+              // listUsers only returns non-deleted users, but guard defensively
+              // so a soft-deleted row (if ever surfaced) hides the send-link
+              // action. deleted_at is not in the AdminUser contract.
+              const isDeleted = Boolean(
+                (user as AdminUser & { deleted_at?: string | null }).deleted_at,
+              );
               return (
                 <tr key={user.id} className="border-b last:border-0">
                   <td className="px-4 py-3">
@@ -336,17 +361,34 @@ export function AdminUsersPage() {
                     {formatDate(user.last_login_at)}
                   </td>
                   <td className="px-4 py-3">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                      disabled={isSelf || pendingDeleteUserId === user.id}
-                      onClick={() => setPendingDelete(user)}
-                      aria-label={`Remove ${user.email}`}
-                      title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      {!isDeleted && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                          disabled={pendingSendLinkUserId === user.id}
+                          onClick={() =>
+                            sendLinkMutation.mutate({ userId: user.id, email: user.email })
+                          }
+                          aria-label={`Send sign-in link to ${user.email}`}
+                          title={`Send sign-in link to ${user.email}`}
+                        >
+                          <Send className="h-4 w-4" />
+                        </Button>
+                      )}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                        disabled={isSelf || pendingDeleteUserId === user.id}
+                        onClick={() => setPendingDelete(user)}
+                        aria-label={`Remove ${user.email}`}
+                        title={isSelf ? 'Cannot remove your own account' : `Remove ${user.email}`}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               );

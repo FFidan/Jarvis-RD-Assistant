@@ -139,9 +139,18 @@ async def request_link(body: RequestLinkBody, request: Request) -> RequestLinkRe
         )
 
     if row is None:
-        # No-op: don't leak account existence. Constant-time-ish: skip the DB
-        # write entirely (it's faster than a real path), but the token-issuing
-        # path is dominated by the email/log call which we can't safely fake.
+        # Don't leak account existence. Equalise the application-side work the
+        # known-email branch does so there is no trivial fast/slow timing split:
+        # always mint + SHA-256-hash a throwaway token (the CPU oracle) and
+        # always perform an equivalent connection-acquire round-trip (mirrors
+        # the known branch's second pool.acquire). We deliberately do NOT
+        # INSERT or call send_magic_link — the DB write + SMTP send cannot be
+        # safely faked and true constant-time across real SMTP is infeasible;
+        # this closes the order-of-magnitude split, not the residual µs-level
+        # one, which is the accepted bar here.
+        _hash_token(secrets.token_urlsafe(32))  # decoy: equalise CPU work
+        async with pool.acquire():
+            pass
         logger.info("auth_request_link_unknown_email email_hash=%s", _hash_email(email_norm))
         return RequestLinkResponse(sent=True)
 
@@ -368,11 +377,31 @@ async def api_key_session(
 
         # Guardrail 1: resolve the single explicit owner. Never create one.
         if core.owner_user_id is not None:
+            # A-3 (defense-in-depth): the explicit-owner lookup must enforce
+            # role='admin' symmetrically with the fallback branch below. A
+            # configured OWNER_USER_ID that resolves to a non-admin must NOT
+            # silently mint a member "owner" session — distinguish "missing"
+            # (deleted/absent) from "exists but not admin" so the operator
+            # gets an actionable error instead of a privilege downgrade.
             owner = await conn.fetchrow(
-                "SELECT id, email, role FROM users WHERE id = $1 AND deleted_at IS NULL",
+                "SELECT id, email, role FROM users "
+                "WHERE id = $1 AND deleted_at IS NULL AND role = 'admin'",
                 int(core.owner_user_id),
             )
             if owner is None:
+                non_admin = await conn.fetchrow(
+                    "SELECT id FROM users WHERE id = $1 AND deleted_at IS NULL",
+                    int(core.owner_user_id),
+                )
+                if non_admin is not None:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "OWNER_USER_ID references a non-admin user; "
+                            "no session minted (promote the user to admin "
+                            "or unset OWNER_USER_ID)"
+                        ),
+                    )
                 raise HTTPException(
                     status_code=409,
                     detail=(
