@@ -1,5 +1,14 @@
 import '@testing-library/jest-dom';
 
+// jsdom does not implement IntersectionObserver — stub for usePaperScrollSpy and similar.
+if (typeof IntersectionObserver === 'undefined') {
+  global.IntersectionObserver = class IntersectionObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  } as unknown as typeof IntersectionObserver;
+}
+
 // jsdom does not implement ResizeObserver — stub for Radix UI components (Slider, etc.).
 if (typeof ResizeObserver === 'undefined') {
   global.ResizeObserver = class ResizeObserver {

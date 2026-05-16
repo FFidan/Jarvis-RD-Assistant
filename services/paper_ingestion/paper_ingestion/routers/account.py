@@ -15,9 +15,14 @@ Admin user-management lives in ``paper_ingestion.routers.admin``
 (``/api/admin/*``) and is intentionally untouched. Crypto helpers
 (``_hash_token``, ``_hash_email``, ``_audit_pool``) are imported from
 ``auth`` — no duplication.
-"""
 
-from __future__ import annotations
+Note: ``from __future__ import annotations`` is intentionally absent — see
+``routers/my_day.py`` / ``docs/plans/2026-04-29-future-import-failure-analysis.md``
+for the verified PydanticUserError trace. ``AccountUpdate`` /
+``ConfirmEmailChangeBody`` are FastAPI request-body models; PEP-563
+stringized annotations make FastAPI misclassify them as query params and
+break ``app.openapi()``. Body annotations must remain concrete types.
+"""
 
 import logging
 import secrets

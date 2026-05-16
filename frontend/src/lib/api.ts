@@ -296,6 +296,15 @@ import type {
   SourceHealth,
   SourceRunRecord,
   WeeklyDigestResponse,
+  YesterdaySummary,
+  Thread,
+  ThreadSeedResponse,
+  AccountResponse,
+  AccountUpdateResponse,
+  AnalyticsSummaryResponse,
+  ProjectQuestion,
+  ProjectActivityItem,
+  FeedCountsWithFacets,
 } from '@/types';
 
 export type { SourceHealth, SourceRunRecord };
@@ -578,6 +587,14 @@ export const fetchPapersBySource = () =>
   apiFetch<SourceCountRow[]>('/api/analytics/papers-by-source');
 export const fetchPapersByStatus = () =>
   apiFetch<StatusCountRow[]>('/api/analytics/papers-by-status');
+/**
+ * Analytics "Reflect" KPI band — current/prior-period totals + streaks.
+ * GET /api/analytics/summary?days=N (learning_engine analytics router).
+ */
+export const fetchAnalyticsSummary = (days?: number) =>
+  apiFetch<AnalyticsSummaryResponse>(
+    `/api/analytics/summary${days ? `?days=${days}` : ''}`,
+  );
 
 // --- Contradictions ---
 export const fetchContradictions = (params?: {
@@ -636,6 +653,24 @@ export const updateProject = (id: number, data: Partial<Project>) =>
   apiFetch<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) });
 export const deleteProject = (id: number) =>
   apiFetch<void>(`/api/projects/${id}`, { method: 'DELETE' });
+
+// --- Project Open Questions (UI_v3 Projects § OPEN QUESTIONS) ---
+export const fetchProjectQuestions = (projectId: number) =>
+  apiFetch<ProjectQuestion[]>(`/api/projects/${projectId}/questions`);
+export const createProjectQuestion = (projectId: number, body: string) =>
+  apiFetch<ProjectQuestion>(`/api/projects/${projectId}/questions`, {
+    method: 'POST',
+    body: JSON.stringify({ body }),
+  });
+/** DELETE is addressed by question id (own /api/questions prefix). */
+export const deleteProjectQuestion = (questionId: number) =>
+  apiFetch<void>(`/api/questions/${questionId}`, { method: 'DELETE' });
+
+// --- Project Recent Activity (UI_v3 Projects § RECENT ACTIVITY) ---
+export const fetchProjectActivity = (projectId: number, limit?: number) =>
+  apiFetch<ProjectActivityItem[]>(
+    `/api/projects/${projectId}/activity${limit ? `?limit=${limit}` : ''}`,
+  );
 
 // --- Tasks ---
 export const fetchTasks = (projectId: number) =>
@@ -836,6 +871,17 @@ export async function bulkAction(body: { paper_ids: number[]; action: BulkAction
 }
 
 export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
+  return apiFetch('/api/papers/feed/counts');
+}
+
+/**
+ * UI_v3 Feed facet rail — same `GET /api/papers/feed/counts` payload, typed
+ * with the additive `by_source` / `by_topic` / `untagged` facet fields the
+ * backend always emits (models/papers.py:646-649). The Feed surface agent
+ * consumes this for the §-facet rail; `fetchFeedCounts` stays numeric-only so
+ * existing `keyof`-indexing consumers (CountsBadge) are untouched.
+ */
+export async function fetchFeedCountsWithFacets(): Promise<FeedCountsWithFacets> {
   return apiFetch('/api/papers/feed/counts');
 }
 
@@ -1429,6 +1475,84 @@ export async function upsertJournalEntry(
     signal,
   });
 }
+
+// --- My Day § Yesterday (UI_v3, on-the-fly rollup) ---
+
+/**
+ * GET /api/my-day/yesterday — on-the-fly § Yesterday rollup.
+ * `tzOffsetMinutes` = minutes EAST of UTC (JS `-new Date().getTimezoneOffset()`);
+ * the server stores no per-user timezone so the client supplies it.
+ */
+export const fetchYesterday = (tzOffsetMinutes = 0) =>
+  apiFetch<YesterdaySummary>(
+    `/api/my-day/yesterday?tz_offset_minutes=${tzOffsetMinutes}`,
+  );
+
+// --- My Day § Open threads (UI_v3 `thread` entity) ---
+
+export const fetchThreads = () =>
+  apiFetch<Thread[]>('/api/my-day/threads');
+export const fetchThread = (threadId: number) =>
+  apiFetch<Thread>(`/api/my-day/threads/${threadId}`);
+export const createThread = (data: {
+  title: string;
+  anchor?: string | null;
+  progress?: number;
+}) =>
+  apiFetch<Thread>('/api/my-day/threads', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const updateThread = (
+  threadId: number,
+  data: { title?: string; anchor?: string | null; progress?: number; status?: string },
+) =>
+  apiFetch<Thread>(`/api/my-day/threads/${threadId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+/** The prototype's `resume →` action — bumps last_at and returns the thread. */
+export const resumeThread = (threadId: number) =>
+  apiFetch<Thread>(`/api/my-day/threads/${threadId}/resume`, { method: 'POST' });
+/** Auto-seed producer 1 — interrupted Pomodoro session → thread. */
+export const seedThreadFromPomodoro = (data: {
+  title: string;
+  anchor?: string | null;
+  progress?: number;
+}) =>
+  apiFetch<ThreadSeedResponse>('/api/my-day/threads/seed/pomodoro', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+/** Auto-seed producer 2 — EOD "make this a thread" → thread. */
+export const seedThreadFromEod = (data: {
+  title: string;
+  anchor?: string | null;
+  progress?: number;
+}) =>
+  apiFetch<ThreadSeedResponse>('/api/my-day/threads/seed/eod', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+
+// --- §I Account (UI_v3 self-service profile) ---
+
+export const fetchAccount = () => apiFetch<AccountResponse>('/api/account');
+/**
+ * PATCH /api/account — `display_name` applies immediately; an `email` change
+ * is never silent (issues a verification link to the new address).
+ */
+export const updateAccount = (data: { display_name?: string | null; email?: string }) =>
+  apiFetch<AccountUpdateResponse>('/api/account', {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+/** Consume the email-change token (mirrors /api/auth/verify). */
+export const confirmEmailChange = (token: string) =>
+  apiFetch<AccountResponse>('/api/account/confirm-email', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
 
 // --- Weekly Digest ---
 

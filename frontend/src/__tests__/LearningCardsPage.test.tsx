@@ -1,10 +1,15 @@
+/**
+ * Regression-guard tests for LearningCardsPage v3 IA.
+ * Covers: session / library mode routing, stats in Library, breadcrumb, DeckBrowser.
+ */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { LearningCardsPage } from '@/pages/LearningCardsPage';
 
-// Mock API module
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
@@ -13,118 +18,227 @@ vi.mock('@/lib/api', async () => {
     getNextReview: vi.fn(),
     fetchDecks: vi.fn(),
     fetchCards: vi.fn(),
+    submitReview: vi.fn(),
   };
 });
 
-import { getStats, getNextReview, fetchDecks } from '@/lib/api';
+import { getStats, fetchDecks, submitReview } from '@/lib/api';
 const mockGetStats = vi.mocked(getStats);
-const mockGetNextReview = vi.mocked(getNextReview);
 const mockFetchDecks = vi.mocked(fetchDecks);
+const mockSubmitReview = vi.mocked(submitReview);
 
-function renderPage() {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
+const STATS_WITH_DUE = {
+  total_cards: 20,
+  due_now: 5,
+  reviewed_today: 3,
+  average_retention: 80.0,
+  reviews_by_rating: {},
+  streak_days: 2,
+};
+
+const STATS_ALL_DONE = {
+  total_cards: 20,
+  due_now: 0,
+  reviewed_today: 10,
+  average_retention: 90.0,
+  reviews_by_rating: {},
+  streak_days: 3,
+};
+
+const DECKS = [
+  { id: 1, name: 'My Deck', description: null, topic_id: null, card_count: 5, due_count: 2, created_at: '' },
+];
+
+function renderPage(initialRoute = '/cards') {
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  // Mock fetch for review/next
+  vi.spyOn(window, 'fetch').mockImplementation(async (input) => {
+    const url = typeof input === 'string' ? input : (input as Request).url;
+    if (url.includes('/api/review/next')) {
+      return new Response(JSON.stringify([]), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
+    return new Response('{}', { status: 200 });
   });
   return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <LearningCardsPage />
+    <QueryClientProvider client={qc}>
+      <MemoryRouter initialEntries={[initialRoute]}>
+        <Routes>
+          <Route path="/cards" element={<LearningCardsPage />} />
+        </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-describe('LearningCardsPage', () => {
+describe('LearningCardsPage — mode routing', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockGetNextReview.mockResolvedValue([]);
     mockFetchDecks.mockResolvedValue([]);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
   });
 
-  it('renders stats header with data', async () => {
-    mockGetStats.mockResolvedValue({
-      total_cards: 42,
-      due_now: 5,
-      reviewed_today: 10,
-      average_retention: 85.3,
-      reviews_by_rating: { '3': 8, '4': 2 },
-      streak_days: 7,
-    });
-
+  it('shows review mode (breadcrumb) when due_now > 0', async () => {
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('42')).toBeInTheDocument();
-    });
-    expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('10')).toBeInTheDocument();
-    expect(screen.getByText('85.3%')).toBeInTheDocument();
-    expect(screen.getByText('7d')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('Reflect')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /flashcards/i })).toBeInTheDocument();
+    expect(screen.getByText(/all decks · session/i)).toBeInTheDocument();
   });
 
-  it('shows empty state when no cards are due', async () => {
-    mockGetStats.mockResolvedValue({
-      total_cards: 0,
-      due_now: 0,
-      reviewed_today: 0,
-      average_retention: 0,
-      reviews_by_rating: {},
-      streak_days: 0,
-    });
-
+  it('shows Library view when due_now === 0', async () => {
+    mockGetStats.mockResolvedValue(STATS_ALL_DONE);
     renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('No cards to review')).toBeInTheDocument();
-    });
-    expect(screen.getByText("All caught up! Generate cards from a paper or wait for scheduled reviews.")).toBeInTheDocument();
+    // Stats load triggers mode switch to Library (due_now=0 → Library default)
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument(),
+    );
   });
 
-  it('renders page title and action buttons', () => {
-    mockGetStats.mockResolvedValue({
-      total_cards: 0,
-      due_now: 0,
-      reviewed_today: 0,
-      average_retention: 0,
-      reviews_by_rating: {},
-      streak_days: 0,
-    });
-
-    renderPage();
-
-    expect(screen.getByText('Learning Cards')).toBeInTheDocument();
-    expect(screen.getByText('Generate')).toBeInTheDocument();
-    expect(screen.getByText('New Card')).toBeInTheDocument();
+  it('shows Library view when ?mode=library in URL', async () => {
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
+    renderPage('/cards?mode=library');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
   });
 
-  it('shows Review and Browse tabs', () => {
-    mockGetStats.mockResolvedValue({
-      total_cards: 0,
-      due_now: 0,
-      reviewed_today: 0,
-      average_retention: 0,
-      reviews_by_rating: {},
-      streak_days: 0,
-    });
-
+  it('navigates to Library when breadcrumb Flashcards clicked', async () => {
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
     renderPage();
+    await waitFor(() => screen.getByRole('button', { name: /flashcards/i }));
+    await userEvent.click(screen.getByRole('button', { name: /flashcards/i }));
+    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
+  });
+});
 
-    expect(screen.getByText('Review')).toBeInTheDocument();
-    expect(screen.getByText('Browse')).toBeInTheDocument();
+describe('LearningCardsPage — Library view content', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetStats.mockResolvedValue(STATS_ALL_DONE);
+    mockFetchDecks.mockResolvedValue(DECKS);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
   });
 
-  it('does not render § REVIEW section marker in the Review tab', () => {
-    mockGetStats.mockResolvedValue({
-      total_cards: 0,
-      due_now: 0,
-      reviewed_today: 0,
-      average_retention: 0,
-      reviews_by_rating: {},
-      streak_days: 0,
-    });
-
+  it('renders Generate and New Card buttons in Library', async () => {
     renderPage();
+    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    expect(screen.getByRole('button', { name: /generate/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /new card/i })).toBeInTheDocument();
+  });
 
-    expect(screen.queryByText(/§\s*REVIEW/)).toBeNull();
+  it('renders StatsHeader tiles in Library view', async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    // StatsHeader renders after stats load
+    await waitFor(() => expect(screen.getByText('Total Cards')).toBeInTheDocument());
+    expect(screen.getByText('Due Now')).toBeInTheDocument();
+    expect(screen.getByText('Reviewed Today')).toBeInTheDocument();
+  });
+
+  it('does NOT render StatsHeader in review session mode', async () => {
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
+    renderPage();
+    await waitFor(() => screen.getByText(/all decks · session/i));
+    expect(screen.queryByText('Total Cards')).toBeNull();
+  });
+
+  it('shows deck grid in Library', async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    await waitFor(() => expect(screen.getByText('My Deck')).toBeInTheDocument());
+  });
+
+  it('does not show old Review/Browse tabs', async () => {
+    renderPage();
+    await waitFor(() => screen.getByRole('heading', { name: /flashcards/i }));
+    // Old tab structure is gone
+    expect(screen.queryByRole('tab', { name: /browse/i })).toBeNull();
+  });
+});
+
+describe('LearningCardsPage — breadcrumb and progress', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetStats.mockResolvedValue(STATS_WITH_DUE);
+    mockFetchDecks.mockResolvedValue([]);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
+  });
+
+  it('renders progress bar in review mode', async () => {
+    renderPage();
+    await waitFor(() => screen.getByText(/progress/i));
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  });
+
+  it('renders PROGRESS label (uppercase)', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByText(/progress/i)).toBeInTheDocument());
+  });
+
+  it('shows 0 / N counter on fresh session after stats load', async () => {
+    renderPage();
+    // Progress counter shows reviewed/total after stats load with due_now=5
+    await waitFor(() => expect(screen.getByText(/0 \/ 5/)).toBeInTheDocument());
+  });
+});
+
+describe('LearningCardsPage — session end', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetchDecks.mockResolvedValue([]);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
+  });
+
+  it('shows "Review now" CTA in Library when cards are due', async () => {
+    mockGetStats.mockResolvedValue({ ...STATS_ALL_DONE, due_now: 3 });
+    renderPage('/cards?mode=library');
+    // Wait for stats to resolve and CTA to appear
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /review now/i })).toBeInTheDocument(),
+    );
+  });
+});
+
+describe('LearningCardsPage — deck-scope bleed (F8)', () => {
+  /**
+   * Regression guard: after a deck-scoped session, starting a global review
+   * via "Review now" must NOT retain the previous sessionDeckId.
+   *
+   * Observable: when sessionDeckId is null the breadcrumb reads "All decks · session".
+   * If bleed occurs, it would read "My Deck · session" (the prior deck name).
+   */
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetStats.mockResolvedValue({ ...STATS_WITH_DUE, due_now: 3 });
+    mockFetchDecks.mockResolvedValue(DECKS);
+    mockSubmitReview.mockResolvedValue({ card_id: 1, rating: 3, next_due_at: '', fsrs_state: {}, review_log_id: 1 });
+  });
+
+  it('does not bleed sessionDeckId when navigateToReview is called globally', async () => {
+    renderPage('/cards?mode=library');
+
+    // Wait for Library to render with a deck.
+    await waitFor(() => expect(screen.getByRole('heading', { name: /flashcards/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('My Deck')).toBeInTheDocument());
+
+    // Start a deck-scoped review session (simulates handleStartReview(1)).
+    // DeckBrowser renders a Play button with title "Start review — N cards due".
+    const startReviewBtn = screen.getByTitle(/start review/i);
+    await userEvent.click(startReviewBtn);
+
+    // We are now in review mode scoped to deck 1 — breadcrumb should show deck name.
+    await waitFor(() => expect(screen.getByText(/my deck · session/i)).toBeInTheDocument());
+
+    // Navigate back to Library via breadcrumb.
+    await userEvent.click(screen.getByRole('button', { name: /flashcards/i }));
+
+    // Library shows "Review now" CTA (due_now=3).
+    await waitFor(() => expect(screen.getByRole('button', { name: /review now/i })).toBeInTheDocument());
+
+    // Click "Review now" — this calls navigateToReview() with no deck argument.
+    await userEvent.click(screen.getByRole('button', { name: /review now/i }));
+
+    // ASSERTION: breadcrumb must show "All decks · session" — not "My Deck · session".
+    // This proves sessionDeckId was reset to null (no bleed from the prior deck session).
+    await waitFor(() => expect(screen.getByText(/all decks · session/i)).toBeInTheDocument());
+    expect(screen.queryByText(/my deck · session/i)).toBeNull();
   });
 });

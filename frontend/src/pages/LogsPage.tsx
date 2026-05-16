@@ -4,6 +4,7 @@ import { LiveTab } from '@/components/logs/LiveTab';
 import { JobsTab } from '@/components/logs/JobsTab';
 import { SourcesTab } from '@/components/logs/SourcesTab';
 import { EventsTab } from '@/components/logs/EventsTab';
+import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 const TABS = ['live', 'jobs', 'sources', 'events'] as const;
 type TabId = typeof TABS[number];
@@ -28,6 +29,7 @@ export function LogsPage() {
   return (
     <div className="space-y-6">
       <div>
+        <AdminBreadcrumb page="System logs" />
         <h1 className="text-2xl font-semibold tracking-tight">System Logs</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Live events, background jobs, source health, and event history

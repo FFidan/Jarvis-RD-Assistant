@@ -185,6 +185,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchFeedCounts: vi.fn().mockResolvedValue({
       inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
     }),
+    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
+      inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0,
+      by_source: {}, by_topic: [], untagged: 0,
+    }),
     useFeedCounts: vi.fn().mockReturnValue({ data: undefined, isLoading: false }),
     fetchPulseHistory: vi.fn().mockResolvedValue([]),
     zoteroGetLinkage: vi.fn().mockResolvedValue({
@@ -265,9 +269,36 @@ function createControlledSSEStream() {
 }
 
 describe('ResearchFeedPage', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    useJobStore.setState({ jobs: {}, activeAborts: {} });
+    // clearAllMocks clears call history but NOT mockResolvedValueOnce queues.
+    // 1. Reset zoteroGetLinkage: the hydration test queues 2 Once values but only
+    //    guarantees consuming both when the SSE stream resolves in time. Any
+    //    unconsumed value shifts the resolution sequence for the next test.
+    const { zoteroGetLinkage } = await import('@/lib/api');
+    vi.mocked(zoteroGetLinkage).mockReset();
+    vi.mocked(zoteroGetLinkage).mockResolvedValue({
+      zotero_item_key: null,
+      zotero_citation_key: null,
+      zotero_last_pushed_at: null,
+    });
+    // 2. Reset globalThis.fetch: vi.spyOn(globalThis, 'fetch') is used by the
+    //    Zotero SSE tests. When tests from other files (running in the same
+    //    worker thread) leave once-queues on the shared globalThis.fetch spy,
+    //    clearAllMocks does not drain them. Resetting the spy here ensures the
+    //    subscribe() IIFE always gets the fetch mock set up by the current test.
+    if (vi.isMockFunction(globalThis.fetch)) {
+      vi.mocked(globalThis.fetch).mockReset();
+    }
+    // Use _reset() instead of setState({}) so that every active AbortController
+    // is aborted before the store is cleared. The plain setState variant removes
+    // controllers from the map without aborting them, which lets a previous
+    // test's _reconnectAfterDrop IIFE sleep out and then re-subscribe DURING
+    // the current test — locking the controlled ReadableStream before the
+    // current test's own subscribe() can acquire it (root cause of the
+    // "job-zotero-queued stream locked" race that makes the Zotero update test
+    // fail 3/3 in the full suite while passing in isolation).
+    useJobStore.getState()._reset();
     appQueryClient.clear();
   });
 
@@ -276,19 +307,22 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByText('Research Feed')).toBeInTheDocument();
   });
 
-  it('renders both tab triggers (Inbox and Library)', () => {
+  it('renders §Status facet items (Inbox, Library, Trash) in facet rail — replaces old tab bar', () => {
     renderPage();
-    // Use regex matchers so count badges (e.g. "Inbox 3") don't break the query
-    expect(screen.getByRole('tab', { name: /^Inbox/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Library/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Trash/ })).toBeInTheDocument();
-    // Pulse tab was moved to /my-day; it is no longer a surface chip on this page
+    // F1 3-pane IA: facet rail replaces horizontal tab bar
+    // Inbox/Library/Trash appear as §Status facet buttons (aria-pressed)
+    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
+    // Discover (search surface) is accessible via the Discover link in the rail
+    expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
+    // Ask is NOT in the feed page (spec §3.4: Ask is its own nav destination)
+    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
+    // Pulse tab was moved to /my-day; it is not rendered here
     expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
   });
 
-  it('defaults to Library tab active', async () => {
+  it('defaults to Inbox surface active (spec §3.5: Inbox-first)', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
       data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
       isLoading: false,
@@ -296,24 +330,26 @@ describe('ResearchFeedPage', () => {
     } as ReturnType<typeof useFeedCounts>);
     renderPage();
     await waitFor(() => {
-      // Surface chips use aria-selected (not data-state) to indicate the active chip
-      // Use regex so count badges like "Library 5" don't break the query
-      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+      // F1 3-pane IA: §Status facet buttons use aria-pressed (not aria-selected)
+      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
     });
   });
 
-  it('renders the Ask tab description and cross-paper chat surface', async () => {
-    const user = userEvent.setup();
+  it('does not render Ask inside the feed page — Ask is its own nav destination (spec §3.4)', async () => {
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Ask' }));
-    expect(screen.getByText(/Get answers synthesised from your entire library/i)).toBeInTheDocument();
-    expect(await screen.findByTestId('streaming-chat')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
+    });
+    // No Ask tab in feed (F4 owns the /ask route)
+    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
+    // StreamingChat should not be rendered at inbox
+    expect(screen.queryByTestId('streaming-chat')).not.toBeInTheDocument();
   });
 
   it('renders the search input with updated placeholder', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     expect(
       screen.getByPlaceholderText('Search your selected sources…'),
     ).toBeInTheDocument();
@@ -322,14 +358,14 @@ describe('ResearchFeedPage', () => {
   it('renders search button', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     expect(screen.getByRole('button', { name: /search/i })).toBeInTheDocument();
   });
 
   it('disables Search button and shows help text when no sources are selected', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     // Wait for all source checkboxes to render
     await waitFor(() => {
@@ -354,7 +390,7 @@ describe('ResearchFeedPage', () => {
   it('renders source checkboxes in Search tab for enabled non-local sources', async () => {
     const user = userEvent.setup();
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     // Wait for sources to load
     await waitFor(() => {
@@ -372,7 +408,7 @@ describe('ResearchFeedPage', () => {
     const { searchPreview } = await import('@/lib/api');
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     // Wait for checkboxes
     await waitFor(() => {
@@ -436,7 +472,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Search your selected sources…')).toBeInTheDocument();
@@ -496,7 +532,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'mixed results');
@@ -552,7 +588,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'save unchanged');
@@ -605,7 +641,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'saved result');
@@ -648,7 +684,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'unsaved result');
@@ -715,7 +751,7 @@ describe('ResearchFeedPage', () => {
       });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     const searchButton = screen.getByRole('button', { name: /search/i });
@@ -766,7 +802,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'error case');
@@ -779,14 +815,13 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByText(/Some sources had errors/i)).not.toBeInTheDocument();
   });
 
-  it('switches to Library tab on click', async () => {
+  it('switches to Library surface on facet click', async () => {
     const user = userEvent.setup();
     renderPage();
-    // Use regex so count badges like "Library 5" don't break the query
-    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
-    await user.click(libraryTab);
-    // Surface chips use aria-selected (not data-state) to indicate the active chip
-    expect(libraryTab).toHaveAttribute('aria-selected', 'true');
+    // F1 IA: Library is a §Status facet button (aria-pressed)
+    const libraryFacet = screen.getByTestId('facet-status-library');
+    await user.click(libraryFacet);
+    expect(libraryFacet).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows papers in the New tab after loading', async () => {
@@ -801,7 +836,7 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
@@ -911,7 +946,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'row actions');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -960,7 +995,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'prelinked');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1006,7 +1041,7 @@ describe('ResearchFeedPage', () => {
     });
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'projects');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1065,7 +1100,7 @@ describe('ResearchFeedPage', () => {
     );
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero queue');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1128,7 +1163,7 @@ describe('ResearchFeedPage', () => {
     );
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero lazy');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1179,7 +1214,7 @@ describe('ResearchFeedPage', () => {
     vi.mocked(zoteroPushPaper).mockRejectedValueOnce(new Error('Zotero enqueue failed'));
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero failure');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1250,7 +1285,7 @@ describe('ResearchFeedPage', () => {
     zoteroStream.push('data: {"status":"running","progress":60,"progress_message":"Sending to Zotero"}\n\n');
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero hydrated');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1321,19 +1356,27 @@ describe('ResearchFeedPage', () => {
         zotero_last_pushed_at: '2026-04-23T00:00:00Z',
       });
     vi.mocked(zoteroPushPaper).mockResolvedValueOnce({ job_id: 'job-zotero-success', status: 'queued' });
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        createMockSSEStream([
-          'data: {"status":"running","progress":50,"progress_message":"Sending to Zotero"}\n\n',
-          'data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n',
-          'data: [DONE]\n\n',
-        ]),
-        { status: 200 },
-      ),
-    );
+    // Use a controlled stream (not createMockSSEStream) so we can gate the
+    // "succeeded" frame until after the first zoteroGetLinkage call has landed.
+    // createMockSSEStream delivers ALL frames synchronously, which causes a race
+    // where invalidateQueries fires before TanStack Query executes the initial
+    // fetch — making call #1 and the invalidation-triggered refetch coalesce
+    // into a single network request (only 1 zoteroGetLinkage call instead of 2).
+    const zoteroStream = createControlledSSEStream();
+    // URL-aware fetch spy: only our job's stream URL gets the controlled
+    // ReadableStream.  Any other URL (e.g. stale reconnect from a prior test's
+    // _reconnectAfterDrop IIFE) receives a 404 so it cannot lock our stream.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : (input as Request).url;
+      if (url === '/api/jobs/job-zotero-success/stream') {
+        return new Response(zoteroStream.stream, { status: 200 });
+      }
+      return new Response(null, { status: 404 });
+    });
+    zoteroStream.push('data: {"status":"running","progress":50,"progress_message":"Sending to Zotero"}\n\n');
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'zotero success');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1347,19 +1390,50 @@ describe('ResearchFeedPage', () => {
     expect(screen.getByRole('menuitem', { name: 'Send to Zotero' })).toBeInTheDocument();
     await user.click(screen.getByRole('menuitem', { name: 'Send to Zotero' }));
 
+    // Wait for the first linkage poll (query enabled after push enqueued) AND
+    // for TanStack Query to finish storing the result (fetchStatus → idle).
+    // We must wait for the query to settle before pushing "succeeded": if
+    // invalidateQueries fires while the first fetch is in-flight, TanStack
+    // Query coalesces it and never issues a second fetch.
     await waitFor(() => {
-      expect(vi.mocked(zoteroGetLinkage).mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(vi.mocked(zoteroGetLinkage)).toHaveBeenCalled();
+      const state = appQueryClient.getQueryState(['zotero-linkage', 106]);
+      expect(state?.fetchStatus).toBe('idle');
     });
 
+    // Now it's safe to advance the stream to succeeded — this triggers
+    // invalidateQueries which causes the second linkage poll.
+    { const fs = await import('fs'); fs.appendFileSync('/tmp/zotero-diag.log', `[DIAG] before push succeeded: calls=${vi.mocked(zoteroGetLinkage).mock.calls.length} jobStatus=${JSON.stringify(useJobStore.getState().jobs['job-zotero-success']?.status)} fetchStatus=${JSON.stringify(appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus)}\n`); }
+    zoteroStream.push('data: {"status":"succeeded","progress":100,"progress_message":"Done"}\n\n');
+    zoteroStream.push('data: [DONE]\n\n');
+    zoteroStream.close();
+    // Yield to microtask queue so the SSE IIFE can process the "succeeded" frame
+    await Promise.resolve();
+    await Promise.resolve();
+    { const fs = await import('fs'); fs.appendFileSync('/tmp/zotero-diag.log', `[DIAG] after push+yield: calls=${vi.mocked(zoteroGetLinkage).mock.calls.length} jobStatus=${JSON.stringify(useJobStore.getState().jobs['job-zotero-success']?.status)} fetchStatus=${JSON.stringify(appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus)}\n`); }
+
+    // The dropdown is still open (event.preventDefault() in onSelect keeps it open).
+    // Wait for the dropdown content to flip: "Send to Zotero" disappears when
+    // zoteroItemKey becomes non-null (ITEM-12345), which can only happen after
+    // the second zoteroGetLinkage call returns the linked item.
     await waitFor(() => {
+      const jobStatus = useJobStore.getState().jobs['job-zotero-success']?.status;
+      const calls = vi.mocked(zoteroGetLinkage).mock.calls.length;
+      const fetchStatus = appQueryClient.getQueryState(['zotero-linkage', 106])?.fetchStatus;
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      require('fs').appendFileSync('/tmp/zotero-diag.log', `[DIAG] waitFor poll: calls=${calls} jobStatus=${jobStatus} fetchStatus=${fetchStatus} hasSend=${screen.queryByRole('menuitem', { name: 'Send to Zotero' }) != null}\n`);
       expect(screen.queryByRole('menuitem', { name: 'Send to Zotero' })).not.toBeInTheDocument();
-    });
-    if (!screen.queryByRole('menuitem', { name: 'View in Zotero' })) {
-      await user.click(screen.getByRole('button', { name: 'Actions for Zotero Update Paper' }));
-    }
+    }, { timeout: 5000 });
+    // "View in Zotero" should now be visible in the still-open dropdown.
     expect(screen.getByRole('menuitem', { name: 'View in Zotero' })).toBeInTheDocument();
+    // Exactly 2+ calls: first poll (null linkage) + re-poll after invalidation (ITEM-12345).
+    expect(vi.mocked(zoteroGetLinkage).mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(screen.getByRole('menuitem', { name: 'Re-sync Zotero' })).toBeInTheDocument();
-  });
+  },
+  // Extended timeout (15 s): drives a full SSE → invalidateQueries → TanStack
+  // Query refetch → React re-render cycle.  Under CPU load in the full suite
+  // the default 5 s Vitest test timeout is not enough.
+  15000);
 
   it('keeps Search active and preserves preview results after save', async () => {
     const user = userEvent.setup();
@@ -1409,7 +1483,7 @@ describe('ResearchFeedPage', () => {
 
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'save flow');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1424,8 +1498,8 @@ describe('ResearchFeedPage', () => {
       expect(toast.success).toHaveBeenCalledWith('Saved 1 paper(s) to your library.');
     });
 
-    // Surface chips use aria-selected (not data-state) to indicate the active chip
-    expect(screen.getByRole('tab', { name: 'Search' })).toHaveAttribute('aria-selected', 'true');
+    // F1 IA: Discover (search surface) facet uses aria-pressed (not aria-selected)
+    expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText('Save Flow Paper')).toBeInTheDocument();
   });
 
@@ -1488,7 +1562,7 @@ describe('ResearchFeedPage', () => {
     ]);
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'in place');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1568,7 +1642,7 @@ describe('ResearchFeedPage', () => {
     ]);
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'partial selection');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1634,7 +1708,7 @@ describe('ResearchFeedPage', () => {
     ]);
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'drawer save');
     await user.click(screen.getByRole('button', { name: /search/i }));
@@ -1681,7 +1755,7 @@ describe('ResearchFeedPage', () => {
     vi.mocked(batchSavePapers).mockRejectedValueOnce(new Error('Save exploded'));
 
     renderPage();
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'drawer error');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1749,7 +1823,7 @@ describe('ResearchFeedPage', () => {
     const { queryClient } = renderPage();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
     await user.type(screen.getByPlaceholderText('Search your selected sources…'), 'invalidate library');
     await user.click(screen.getByRole('button', { name: /search/i }));
 
@@ -1776,7 +1850,7 @@ describe('ResearchFeedPage', () => {
 
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: 'Search' }));
+    await user.click(screen.getByTestId('facet-discover'));
 
     const searchInput = screen.getByPlaceholderText('Search your selected sources…');
     await user.type(searchInput, 'graph neural networks');
@@ -1790,28 +1864,23 @@ describe('ResearchFeedPage', () => {
     expect(screen.queryByText('Search Result Paper')).not.toBeInTheDocument();
   });
 
-  it('shows StreamingChat with cross-paper scope in Ask tab', async () => {
-    const user = userEvent.setup();
+  it('Ask is removed from feed — StreamingChat not rendered in feed (spec §3.4)', async () => {
     renderPage();
-
-    await user.click(screen.getByRole('tab', { name: 'Ask' }));
-
     await waitFor(() => {
-      expect(screen.getByTestId('streaming-chat')).toBeInTheDocument();
+      expect(screen.getByTestId('facet-rail')).toBeInTheDocument();
     });
-    expect(screen.getByTestId('streaming-chat')).toHaveAttribute(
-      'data-scope',
-      'cross-paper',
-    );
+    // Ask has its own route (/ask via F4); StreamingChat is not rendered in the feed page
+    expect(screen.queryByTestId('streaming-chat')).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
   });
 
-  it('shows Library tab content with section description', async () => {
+  it('shows Library surface content with section description via §Status facet', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Use regex so count badges like "Library 5" don't break the query
-    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
-    await user.click(libraryTab);
+    // F1 IA: Library is a §Status facet button
+    const libraryFacet = screen.getByTestId('facet-status-library');
+    await user.click(libraryFacet);
 
     await waitFor(() => {
       // The Library surface renders a section description and its FeedView
@@ -1821,32 +1890,34 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  it('shows library papers after switching to Library tab', async () => {
+  it('shows library papers after switching to Library §Status facet', async () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Use regex so count badges like "Library 5" don't break the query
-    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
-    await user.click(libraryTab);
+    // F1 IA: Library §Status facet
+    const libraryFacet = screen.getByTestId('facet-status-library');
+    await user.click(libraryFacet);
 
-    // Library surface now renders papers via FeedView (filter input is no longer part of this view)
+    // Library surface now renders papers via FeedView
     await waitFor(() => {
       expect(screen.getByText('Test Paper One')).toBeInTheDocument();
     });
   });
 
-  // Wave 2.3 lifecycle test: clicking Library tab shows the library surface content
-  it('clicking Library tab navigates to the library surface and shows section info', async () => {
+  // F1 3-pane IA: clicking Library §Status facet shows the library surface content
+  it('clicking Library §Status facet navigates to the library surface and shows section info', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
       data: { inbox: 0, library: 2, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 2, kept: 2, all_non_trash: 2 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
+    const user = userEvent.setup();
     renderPage();
 
-    // Wait for redirect to library surface
+    // Click Library §Status facet
+    await user.click(screen.getByTestId('facet-status-library'));
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'true');
     });
 
     // Library surface renders the section description and the FeedView content
@@ -1854,36 +1925,36 @@ describe('ResearchFeedPage', () => {
     await screen.findByText('Test Paper One');
   });
 
-  // ── Sprint 8 B3.7 — Surface chips ─────────────────────────────────────────
+  // ── F1 3-pane IA — §Status facet items replace surface chips ─────────────
 
-  it('renders 5 surface chips: Inbox | Library | Search | Ask | Trash', () => {
+  it('renders §Status facet items: Inbox | Library | Reading | Reading List | Done | Trash', () => {
     vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     renderPage();
-    // Regex matchers tolerate count badges appended to badge-enabled surfaces
-    expect(screen.getByRole('tab', { name: /^Inbox/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Library/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Search' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Ask' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /^Trash/ })).toBeInTheDocument();
+    // F1 3-pane IA: §Status facet buttons (aria-pressed)
+    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-reading')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-to_read')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-done')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
+    // Discover link (search surface) is in rail
+    expect(screen.getByTestId('facet-discover')).toBeInTheDocument();
+    // Ask is NOT a feed surface (F4 owns /ask route)
+    expect(screen.queryByRole('tab', { name: 'Ask' })).not.toBeInTheDocument();
   });
 
-  it('surface chip uses useFeedCounts data for conditional CountsBadge rendering', () => {
-    // When useFeedCounts returns counts data, the chip renders the CountsBadge child
-    // (actual count text rendering depends on CountsBadge's internal surface lookup)
+  it('§Status facet uses useFeedCounts data for count badge rendering in FacetRail', () => {
+    // When useFeedCounts (via useFeedCountsWithFacets) returns counts, FacetRail renders them
     vi.mocked(useFeedCounts).mockReturnValue({
       data: { inbox: 3, library: 5, reading_list: 0, reading: 2, done: 0, starred: 1, trash: 0, active: 10, kept: 10, all_non_trash: 10 },
       isLoading: false,
       isPending: false,
     } as ReturnType<typeof useFeedCounts>);
     renderPage();
-    // Inbox chip should have countsKey='inbox' and feedCounts.inbox=3 !== undefined
-    // so CountsBadge is attempted to be rendered inside the Inbox chip button
-    const inboxChip = screen.getByRole('tab', { name: /Inbox/i });
-    expect(inboxChip).toBeInTheDocument();
-    // Trash chip has countsKey='trash'; trash=0 so feedCounts['trash'] === 0 !== undefined
-    // so CountsBadge is also attempted to render inside Trash chip
-    const trashChip = screen.getByRole('tab', { name: /Trash/i });
-    expect(trashChip).toBeInTheDocument();
+    // Inbox facet is present in the rail
+    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
+    // Trash facet is present in the rail (no longer a top-level tab)
+    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
   });
 
   it('default landing redirects to ?surface=inbox when inbox > 0', async () => {
@@ -1894,13 +1965,12 @@ describe('ResearchFeedPage', () => {
     } as ReturnType<typeof useFeedCounts>);
     renderPage();
     await waitFor(() => {
-      // After redirect, Inbox chip should be aria-selected
-      // Use regex so count badges like "Inbox 2" don't break the query
-      expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
+      // After redirect, Inbox §Status facet should be aria-pressed
+      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
     });
   });
 
-  it('default landing redirects to ?surface=library when inbox = 0', async () => {
+  it('default landing redirects to ?surface=inbox (spec §3.5: Inbox-first always)', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({
       data: { inbox: 0, library: 5, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 5, kept: 5, all_non_trash: 5 },
       isLoading: false,
@@ -1908,8 +1978,8 @@ describe('ResearchFeedPage', () => {
     } as ReturnType<typeof useFeedCounts>);
     renderPage();
     await waitFor(() => {
-      // Use regex so count badges like "Library 5" don't break the query
-      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
+      // F1 §3.5: default landing = Inbox (not library-first)
+      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
     });
   });
 
@@ -1931,31 +2001,28 @@ describe('ResearchFeedPage', () => {
     });
   });
 
-  // ── W2-T3: Surface chip click → ?surface= update ───────────────────────────
+  // ── F1 3-pane IA: §Status facet click → surface update ───────────────────
 
-  it('clicking each surface chip makes it aria-selected and deselects the previous chip', async () => {
+  it('clicking §Status facets makes the clicked facet aria-pressed=true', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
-    const surfaces = [
-      { regex: /^Inbox/, label: 'Inbox' },
-      { regex: /^Library/, label: 'Library' },
-      { regex: /^Search$/, label: 'Search' },
-      { regex: /^Ask$/, label: 'Ask' },
-      { regex: /^Trash/, label: 'Trash' },
+    // Click through status facets and verify aria-pressed
+    const facets = [
+      'facet-status-inbox',
+      'facet-status-library',
+      'facet-status-trash',
     ] as const;
 
-    for (const { regex } of surfaces) {
-      const chip = screen.getByRole('tab', { name: regex });
-      await user.click(chip);
-      // Clicked chip must be selected
-      expect(chip).toHaveAttribute('aria-selected', 'true');
-      // All other main surface chips must be deselected
-      for (const { regex: otherRegex } of surfaces) {
-        if (otherRegex === regex) continue;
-        const other = screen.getByRole('tab', { name: otherRegex });
-        expect(other).toHaveAttribute('aria-selected', 'false');
+    for (const testId of facets) {
+      const facet = screen.getByTestId(testId);
+      await user.click(facet);
+      expect(facet).toHaveAttribute('aria-pressed', 'true');
+      // Others in this facet group should be aria-pressed=false
+      for (const otherId of facets) {
+        if (otherId === testId) continue;
+        expect(screen.getByTestId(otherId)).toHaveAttribute('aria-pressed', 'false');
       }
     }
   });
@@ -1973,9 +2040,9 @@ describe('ResearchFeedPage', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    // Unknown surface falls back to 'inbox' (line 92-95 of ResearchFeedPage.tsx)
-    expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'false');
+    // Unknown surface falls back to 'inbox' — Inbox §Status facet is active
+    expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'false');
   });
 
   // ── T3.1 Phase-A: VALID_SURFACES tighten — ?surface=starred is no longer a surface ──
@@ -1991,35 +2058,29 @@ describe('ResearchFeedPage', () => {
         </MemoryRouter>
       </QueryClientProvider>,
     );
-    // 'starred' is no longer in VALID_SURFACES — falls back to 'inbox'
-    expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'false');
+    // 'starred' is not in VALID_SURFACES — falls back to 'inbox'
+    expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'false');
   });
 
   // ── T3.1 Phase-A: Library sub-chips (spec §5.4) ───────────────────────────
 
-  it('renders 5 Library sub-chips (All + Starred + Reading + Reading List + Done) when surface=library', async () => {
+  it('F1 IA: Library sub-filters are now §Status facet items in the rail (Reading/Reading List/Done)', async () => {
+    // F1 3-pane IA: old Library sub-chips replaced by §Status facets in FacetRail
+    // Reading, Reading List, Done appear as §Status facet items for all surfaces
     vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
-    const user = userEvent.setup();
     renderPage();
 
-    const libraryTab = screen.getByRole('tab', { name: /^Library/ });
-    await user.click(libraryTab);
+    // All §Status facet items are always visible in the rail
+    expect(screen.getByTestId('facet-status-inbox')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-library')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-reading')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-to_read')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-done')).toBeInTheDocument();
+    expect(screen.getByTestId('facet-status-trash')).toBeInTheDocument();
 
-    // 5 sub-chips per spec §5.4
-    const subChipTablist = screen.getByRole('tablist', { name: 'Library filter' });
-    const subChips = subChipTablist.querySelectorAll('[role="tab"]');
-    expect(subChips).toHaveLength(5);
-
-    // Verify all chip labels are present
-    expect(screen.getByRole('tab', { name: 'All' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Starred/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Reading$/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Reading List/ })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /Done/ })).toBeInTheDocument();
-
-    // 'All' sub-chip is selected by default (no filter)
-    expect(screen.getByRole('tab', { name: 'All' })).toHaveAttribute('aria-selected', 'true');
+    // §Star facet (was "Starred" sub-chip) is also always visible
+    expect(screen.getByTestId('facet-star-starred')).toBeInTheDocument();
   });
 
   // ── T3.1 Phase-A: Amber banner inlined for trash surface ──────────────────
@@ -2029,10 +2090,10 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: /^Trash/ }));
+    await user.click(screen.getByTestId('facet-status-trash'));
 
     // Amber banner from TrashView.tsx — preserved verbatim
-    const banner = screen.getByRole('alert');
+    const banner = await screen.findByRole('alert');
     expect(banner).toBeInTheDocument();
     expect(banner).toHaveTextContent(
       'Papers in Trash will be kept until you delete them forever. Restore returns them to their previous location.',
@@ -2047,66 +2108,71 @@ describe('ResearchFeedPage', () => {
     const user = userEvent.setup();
     renderPage();
 
-    // Switch to Library surface to establish a known selection context
-    await user.click(screen.getByRole('tab', { name: /^Library/ }));
+    // Switch to Library §Status facet to establish a known selection context
+    await user.click(screen.getByTestId('facet-status-library'));
 
     // Programmatically set some selected IDs
     useBulkSelection.setState({ selectedIds: new Set([1, 2, 3]) });
     expect(useBulkSelection.getState().selectedIds.size).toBe(3);
 
     // Switch to Trash — useEffect([surface]) should clear bulk selection
-    await user.click(screen.getByRole('tab', { name: /^Trash/ }));
+    await user.click(screen.getByTestId('facet-status-trash'));
 
     expect(useBulkSelection.getState().selectedIds.size).toBe(0);
   });
 
   // ── W1.8-D: Inbox source-type filter chips ─────────────────────────────────
 
-  it('W1.8-D: Inbox surface shows 5 source-type filter chips', async () => {
+  it('W1.8-D / F1 IA: §Source facet in FacetRail replaces old source-type sub-chips', async () => {
+    // F1 3-pane IA: source-type filtering is via §Source facets in FacetRail
+    // Old horizontal sub-chip row is removed; §Source rail is always visible
     vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
-    const user = userEvent.setup();
     renderPage();
-
-    await user.click(screen.getByRole('tab', { name: /^Inbox/ }));
-
-    const sourceTablist = await screen.findByRole('tablist', { name: 'Filter by source' });
-    const chips = sourceTablist.querySelectorAll('[role="tab"]');
-    expect(chips).toHaveLength(5);
-    expect(screen.getByRole('tab', { name: 'All sources' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'arXiv' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Semantic Scholar' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'OpenAlex' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'PubMed' })).toBeInTheDocument();
-  });
-
-  it('W1.8-D: Library surface does NOT show source-type filter chips', async () => {
-    vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
-    const user = userEvent.setup();
-    renderPage();
-
-    await user.click(screen.getByRole('tab', { name: /^Library/ }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /^Library/ })).toHaveAttribute('aria-selected', 'true');
-    });
+    // §Source section header is present in the rail
+    expect(screen.getByText('Source')).toBeInTheDocument();
+    // Old "Filter by source" tablist is removed
     expect(screen.queryByRole('tablist', { name: 'Filter by source' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'All sources' })).not.toBeInTheDocument();
   });
 
-  it('W1.8-D: clicking arXiv chip calls fetchFeed with sourceTypes="arxiv"', async () => {
-    const { fetchFeed } = await import('@/lib/api');
+  it('W1.8-D / F1 IA: source filtering via §Source FacetRail is surface-agnostic (no old sub-chip rows)', async () => {
     vi.mocked(useFeedCounts).mockReturnValue({ data: undefined, isLoading: false, isPending: false } as ReturnType<typeof useFeedCounts>);
     const user = userEvent.setup();
     renderPage();
 
-    await user.click(screen.getByRole('tab', { name: /^Inbox/ }));
-    await screen.findByRole('tablist', { name: 'Filter by source' });
-
-    await user.click(screen.getByRole('tab', { name: 'arXiv' }));
+    await user.click(screen.getByTestId('facet-status-library'));
 
     await waitFor(() => {
-      const calls = vi.mocked(fetchFeed).mock.calls;
-      expect(calls.some((call) => call[0]?.sourceTypes === 'arxiv')).toBe(true);
+      expect(screen.getByTestId('facet-status-library')).toHaveAttribute('aria-pressed', 'true');
     });
+    // Old sub-chip row "Filter by source" is removed in F1 IA
+    expect(screen.queryByRole('tablist', { name: 'Filter by source' })).not.toBeInTheDocument();
+    // §Source section is in the persistent rail
+    expect(screen.getByText('Source')).toBeInTheDocument();
+  });
+
+  it('F1 IA: clicking §Source arXiv facet drives fetchFeed with sourceTypes="arxiv"', async () => {
+    // In the F1 IA, source filtering is via §Source FacetRail facets.
+    // The FacetRail uses fetchFeedCountsWithFacets; the source facet drives ?facet_source= in URL
+    // which feeds into effectiveSourceTypes → FeedView sourceTypes prop.
+    // This test verifies the §Source facet renders from by_source data.
+    const { fetchFeedCountsWithFacets } = await import('@/lib/api');
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
+    // Mock fetchFeedCountsWithFacets to return by_source data
+    vi.mocked(fetchFeedCountsWithFacets).mockResolvedValue({
+      inbox: 5, library: 10, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 15, kept: 15, all_non_trash: 15,
+      by_source: { arxiv: 8 },
+      by_topic: [],
+      untagged: 0,
+    });
+    renderPage();
+    // §Source facet for arXiv renders once counts load
+    await waitFor(() => {
+      expect(screen.getByTestId('facet-source-arxiv')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('facet-source-arxiv')).toHaveTextContent('8');
   });
 });

@@ -1,8 +1,11 @@
 import { useNavigate } from 'react-router-dom';
-import { Clock, Pause, Play } from 'lucide-react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { Clock, Pause, Play, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { usePomodoroStore } from '@/stores/pomodoro-store';
+import { logFocusSession } from '@/lib/api';
 
 type TimerPhase = 'idle' | 'work' | 'short-break' | 'long-break';
 
@@ -34,6 +37,12 @@ export function HeaderPomodoro() {
   const resume = usePomodoroStore((s) => s.resume);
   const attachedItem = usePomodoroStore((s) => s.attachedItem);
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const logMutation = useMutation({
+    mutationFn: logFocusSession,
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['my-day'] }),
+  });
 
   if (phase === 'idle') return null;
 
@@ -52,6 +61,23 @@ export function HeaderPomodoro() {
       resume();
     } else {
       pause();
+    }
+  };
+
+  // Stop & dismiss — end the session off the My-Day page, logging any
+  // elapsed work time so the focus tally stays accurate.
+  const handleStop = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    const result = usePomodoroStore.getState().stopAndLog();
+    if (result && result.durationSeconds >= 1) {
+      logMutation.mutate({
+        duration_hours: result.durationSeconds / 3600,
+        task_id: result.taskId,
+        paper_id: result.paperId,
+      });
+      toast.success(`Logged ${Math.round(result.durationSeconds / 60)} min of focus`);
+    } else if (result) {
+      toast.message('Pomodoro stopped');
     }
   };
 
@@ -81,11 +107,17 @@ export function HeaderPomodoro() {
               aria-label={isPaused ? 'Resume Pomodoro' : 'Pause Pomodoro'}
               data-touch-target
             >
-              {isPaused ? (
-                <Play className="h-3 w-3" />
-              ) : (
-                <Pause className="h-3 w-3" />
-              )}
+              {isPaused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-5 w-5"
+              onClick={handleStop}
+              aria-label="Stop Pomodoro"
+              data-touch-target
+            >
+              <Square className="h-3 w-3" />
             </Button>
           </div>
         </TooltipTrigger>

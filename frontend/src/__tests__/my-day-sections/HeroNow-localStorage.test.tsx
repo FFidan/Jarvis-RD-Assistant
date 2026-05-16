@@ -1,8 +1,8 @@
 /**
- * HeroNow — Zustand ui-store persistence tests.
- * W4-23: heroMode moved from raw localStorage ('myday.heroMode') to
- * Zustand persist store (UI_STORE_KEY = 'jarvis-ui'). These tests verify
- * the Zustand-based persistence behavior.
+ * HeroNow — localStorage('myday.heroMode') persistence (spec §3.3).
+ * The v3 design persists the user's hero focus choice to a raw
+ * localStorage key (matching the runnable prototype + the e2e walk),
+ * independent of the shared ui-store.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -11,17 +11,17 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
 
-// ---------------------------------------------------------------------------
-// Mocks
-// ---------------------------------------------------------------------------
-
 const startWorkMock = vi.fn();
 
 let pomodoroState = {
   phase: 'work' as string,
-  attachedItem: { id: 1, title: 'Active task', type: 'task' } as { id: number; title: string; type: string } | null,
+  attachedItem: { id: 1, title: 'Active task', type: 'task' } as
+    | { id: number; title: string; type: string }
+    | null,
   pausedAt: null as number | null,
   secondsRemaining: 1500,
+  cyclesCompleted: 0,
+  targetCycles: 4,
 };
 
 vi.mock('@/stores/pomodoro-store', () => ({
@@ -29,7 +29,7 @@ vi.mock('@/stores/pomodoro-store', () => ({
     (selector?: (state: typeof pomodoroState) => unknown) => {
       return selector ? selector(pomodoroState) : pomodoroState;
     },
-    { getState: () => ({ startWork: startWorkMock }) },
+    { getState: () => ({ startWork: startWorkMock, resume: vi.fn(), pause: vi.fn() }) },
   ),
 }));
 
@@ -51,14 +51,14 @@ vi.mock('@/lib/api', () => ({
   ratePulseCard: vi.fn(),
   fetchMyDay: vi.fn(),
   getStats: vi.fn(),
+  fetchFeed: vi.fn(),
+  fetchThreads: vi.fn(),
+  resumeThread: vi.fn(),
+  updateTask: vi.fn(),
+  logFocusSession: vi.fn().mockResolvedValue({ status: 'ok', recorded_hours: 0 }),
 }));
 
-const { fetchPulseToday } = await import('@/lib/api');
-const { useUIStore } = await import('@/stores/ui-store');
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
+const { fetchPulseToday, fetchFeed, fetchThreads } = await import('@/lib/api');
 
 function renderWithProviders() {
   const queryClient = new QueryClient({
@@ -73,62 +73,54 @@ function renderWithProviders() {
   );
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('HeroNow — Zustand ui-store persistence', () => {
+describe('HeroNow — localStorage persistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    // Reset Zustand ui-store to default state
-    useUIStore.setState({ heroMode: 'pulse' });
-    // Default: Pomodoro active so both mode buttons are visible
     pomodoroState = {
       phase: 'work',
       attachedItem: { id: 1, title: 'Active task', type: 'task' },
       pausedAt: null,
       secondsRemaining: 1500,
+      cyclesCompleted: 0,
+      targetCycles: 4,
     };
     vi.mocked(fetchPulseToday).mockResolvedValue(null);
+    vi.mocked(fetchFeed).mockResolvedValue({ papers: [], total: 0 } as never);
+    vi.mocked(fetchThreads).mockResolvedValue([]);
   });
 
-  it('hydrates from ui-store "task" heroMode and shows Continue task as active mode', async () => {
-    // Pre-set heroMode in Zustand store before render
-    useUIStore.setState({ heroMode: 'task' });
-
+  it('hydrates from a stored "task" heroMode and shows the task hero', async () => {
+    localStorage.setItem('myday.heroMode', 'task');
     renderWithProviders();
-
-    // Continue task tab should be present (active Pomodoro)
-    const taskBtn = await screen.findByRole('tab', { name: 'Continue task' });
-    expect(taskBtn).toBeInTheDocument();
-    // Pulse #1 tab should also be present
-    expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
+    // HeroTask renders the active item title
+    expect(await screen.findByText('Active task')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Continue task' })).toBeInTheDocument();
   });
 
-  it('switching from pulse to task updates ui-store heroMode to "task"', async () => {
+  it('switching from pulse to task writes "task" to localStorage', async () => {
     const user = userEvent.setup();
-    useUIStore.setState({ heroMode: 'pulse' });
-
+    // Explicit stored "pulse" choice wins over the smart default.
+    localStorage.setItem('myday.heroMode', 'pulse');
     renderWithProviders();
-
-    // Wait for render
     await screen.findByText(/No Pulse for today yet/i);
 
-    // Both tabs present (active Pomodoro)
     const taskBtn = screen.getByRole('tab', { name: 'Continue task' });
     await user.click(taskBtn);
 
-    expect(useUIStore.getState().heroMode).toBe('task');
+    expect(localStorage.getItem('myday.heroMode')).toBe('task');
   });
 
-  it('defaults to "pulse" when ui-store heroMode is at its default', async () => {
-    // Default state — heroMode = 'pulse'
-    useUIStore.setState({ heroMode: 'pulse' });
-
+  it('defaults to pulse content when there is no stored choice and no active focus', async () => {
+    pomodoroState = {
+      phase: 'idle',
+      attachedItem: null,
+      pausedAt: null,
+      secondsRemaining: 0,
+      cyclesCompleted: 0,
+      targetCycles: 4,
+    };
     renderWithProviders();
-
-    // Pulse content renders (default pulse mode)
     expect(await screen.findByText(/No Pulse for today yet/i)).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Pulse #1' })).toBeInTheDocument();
   });

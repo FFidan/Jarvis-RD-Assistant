@@ -21,6 +21,7 @@ const ResearchFeedPage = lazy(() =>
   import('@/pages/ResearchFeedPage').then((m) => ({ default: m.ResearchFeedPage })),
 );
 import { PulseDeckPage } from '@/pages/PulseDeckPage';
+import { AskPage } from '@/pages/AskPage';
 import { getFirstRunStatus, getSetupStatus } from '@/lib/api';
 import { useAuthStore } from '@/stores/auth-store';
 import { PomodoroAutoLogger } from '@/components/layout/PomodoroAutoLogger';
@@ -202,7 +203,10 @@ export function App() {
                   <Route path="projects" element={<RouteErrorBoundary><ProjectsPage /></RouteErrorBoundary>} />
                   <Route path="cards" element={<RouteErrorBoundary><LearningCardsPage /></RouteErrorBoundary>} />
                   <Route path="feed" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><ResearchFeedPage /></Suspense></RouteErrorBoundary>} />
-                  <Route path="ask" element={<Navigate to="/feed?surface=ask" replace />} />
+                  {/* Feed spec §3.4 / Shell spec group Ⅳ: Ask is its own */}
+                  {/* nav destination, NOT a folded-in feed filter. The old */}
+                  {/* <Navigate to="/feed?surface=ask"> redirect is removed. */}
+                  <Route path="ask" element={<RouteErrorBoundary><AskPage /></RouteErrorBoundary>} />
                   <Route path="pulse" element={<RouteErrorBoundary><PulseDeckPage /></RouteErrorBoundary>} />
                   <Route path="paper/:paperId" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><PaperDetailPage /></Suspense></RouteErrorBoundary>} />
                   <Route path="citations" element={<RouteErrorBoundary><Suspense fallback={<PageFallback />}><CitationGraphPage /></Suspense></RouteErrorBoundary>} />

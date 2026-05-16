@@ -52,6 +52,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Badge } from '@/components/ui/badge';
 import { UserPlus, Trash2, Shield, User } from 'lucide-react';
+import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
@@ -259,6 +260,7 @@ export function AdminUsersPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div>
+          <AdminBreadcrumb page="Users" />
           <h1 className="text-2xl font-semibold">User management</h1>
           <p className="text-sm text-muted-foreground mt-1">
             Invite and manage users who can access this JARVIS instance.

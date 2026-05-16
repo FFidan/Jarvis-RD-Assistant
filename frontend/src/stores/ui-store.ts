@@ -3,15 +3,12 @@ import { persist } from 'zustand/middleware';
 
 export const UI_STORE_KEY = 'jarvis-ui';
 
-export type HeroMode = 'pulse' | 'task' | 'reading';
-
 interface UIState {
   sidebarCollapsed: boolean;
   selectedPaperId: number | null;
   checklistDismissed: boolean;
   paperDetailNoteDismissed: boolean;
   setupBannerDismissed: boolean;
-  heroMode: HeroMode;
   /** Last-used preset id on the Logs Events tab. Empty string = no preset. */
   logsPreset: string;
   toggleSidebar: () => void;
@@ -19,7 +16,6 @@ interface UIState {
   dismissChecklist: () => void;
   setPaperDetailNoteDismissed: (value: boolean) => void;
   dismissSetupBanner: () => void;
-  setHeroMode: (mode: HeroMode) => void;
   setLogsPreset: (id: string) => void;
 }
 
@@ -31,7 +27,6 @@ export const useUIStore = create<UIState>()(
       checklistDismissed: false,
       paperDetailNoteDismissed: false,
       setupBannerDismissed: false,
-      heroMode: 'pulse',
       logsPreset: '',
 
       toggleSidebar() {
@@ -49,9 +44,6 @@ export const useUIStore = create<UIState>()(
       dismissSetupBanner() {
         set({ setupBannerDismissed: true });
       },
-      setHeroMode(mode: HeroMode) {
-        set({ heroMode: mode });
-      },
       setLogsPreset(id: string) {
         set({ logsPreset: id });
       },
@@ -62,7 +54,6 @@ export const useUIStore = create<UIState>()(
         checklistDismissed: state.checklistDismissed,
         paperDetailNoteDismissed: state.paperDetailNoteDismissed,
         setupBannerDismissed: state.setupBannerDismissed,
-        heroMode: state.heroMode,
         logsPreset: state.logsPreset,
       }),
     },

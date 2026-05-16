@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Library, Download } from 'lucide-react';
+import { Plus, Library, Download, Play } from 'lucide-react';
 import type { Deck } from '@/types';
 import { fetchDecks, createDeck, exportAnki } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -21,9 +21,11 @@ import {
 interface DeckBrowserProps {
   selectedDeckId: number | null;
   onSelectDeck: (id: number) => void;
+  /** Called when user clicks "Start review" on a deck — launches a scoped session. */
+  onStartReview?: (deckId: number) => void;
 }
 
-export function DeckBrowser({ selectedDeckId, onSelectDeck }: DeckBrowserProps) {
+export function DeckBrowser({ selectedDeckId, onSelectDeck, onStartReview }: DeckBrowserProps) {
   const queryClient = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState('');
@@ -99,7 +101,22 @@ export function DeckBrowser({ selectedDeckId, onSelectDeck }: DeckBrowserProps) 
               <div className="flex w-full items-center justify-between">
                 <span className="font-medium truncate">{deck.name}</span>
                 <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                  {deck.due_count > 0 && (
+                  {deck.due_count > 0 && onStartReview && (
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-7 px-2 text-xs gap-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onStartReview(deck.id);
+                      }}
+                      title={`Start review — ${deck.due_count} card${deck.due_count !== 1 ? 's' : ''} due`}
+                    >
+                      <Play className="h-3 w-3" />
+                      Review {deck.due_count}
+                    </Button>
+                  )}
+                  {deck.due_count > 0 && !onStartReview && (
                     <Badge variant="destructive" className="text-xs">
                       {deck.due_count} due
                     </Badge>

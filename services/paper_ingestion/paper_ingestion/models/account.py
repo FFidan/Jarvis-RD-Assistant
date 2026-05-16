@@ -3,9 +3,12 @@
 Strictly the *authenticated caller's own* profile. Admin user-management
 (``/api/admin/users``) is a separate surface with its own models; nothing
 here grants cross-user read or write.
-"""
 
-from __future__ import annotations
+Note: ``from __future__ import annotations`` is intentionally absent — see
+``routers/my_day.py`` / ``docs/plans/2026-04-29-future-import-failure-analysis.md``
+for the verified PydanticUserError trace. These models are used as FastAPI
+request bodies; their annotations must remain concrete types.
+"""
 
 from datetime import datetime
 from typing import Annotated

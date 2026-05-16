@@ -1,12 +1,28 @@
+/**
+ * SettingsPage RBAC regression tests (2-pane IA).
+ *
+ * The tab-bar is replaced with a §-grouped rail (SettingsRail). These tests
+ * verify that:
+ *  - The Settings heading still renders.
+ *  - Personal §-sections (Account, Integrations, Research) are always visible.
+ *  - System §-sections (Sources, Models, System) are hidden for non-admin users.
+ *  - Non-admin deep-link to a system section → redirected to default (research/topics).
+ *  - Admin users see all sections.
+ *  - Default landing is research/topics (§VI Research → Topics).
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { SettingsPage } from '@/pages/SettingsPage';
+import { SettingsDetailPane } from '@/components/settings/SettingsDetailPane';
 import { useAuthStore } from '@/stores/auth-store';
+import * as api from '@/lib/api';
 
+// ---------------------------------------------------------------------------
 // Mock all api calls used by settings sections
+// ---------------------------------------------------------------------------
 vi.mock('@/lib/api', () => ({
   fetchTopics: vi.fn().mockResolvedValue([]),
   createTopic: vi.fn(),
@@ -60,22 +76,37 @@ vi.mock('@/lib/api', () => ({
   createPairingCode: vi.fn(),
   getPairingStatus: vi.fn().mockResolvedValue({ paired: false, chat_id: null }),
   unpairTelegram: vi.fn(),
+  fetchAccount: vi.fn().mockResolvedValue({
+    id: 1,
+    email: 'test@example.com',
+    role: 'admin',
+    display_name: 'Test User',
+    created_at: '2025-01-01T00:00:00Z',
+    last_login_at: null,
+  }),
+  updateAccount: vi.fn(),
+  confirmEmailChange: vi.fn(),
+  apiFetch: vi.fn(),
 }));
 
-function renderSettingsPage() {
+// ---------------------------------------------------------------------------
+// Render helpers
+// ---------------------------------------------------------------------------
+
+function renderSettingsPage(initialSearch = '') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[`/settings${initialSearch}`]}>
         <SettingsPage />
       </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-function renderSettingsPageAs(role: 'admin' | 'user' | null) {
+function renderSettingsPageAs(role: 'admin' | 'user' | null, initialSearch = '') {
   if (role !== null) {
     useAuthStore.setState({
       isAuthenticated: true,
@@ -91,13 +122,16 @@ function renderSettingsPageAs(role: 'admin' | 'user' | null) {
       user: null,
     });
   }
-  return renderSettingsPage();
+  return renderSettingsPage(initialSearch);
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 describe('SettingsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Reset auth store to a clean API-key session (no role) by default
     useAuthStore.setState({
       isAuthenticated: true,
       authTime: Date.now(),
@@ -108,85 +142,142 @@ describe('SettingsPage', () => {
 
   it('renders the settings heading', () => {
     renderSettingsPage();
-    expect(screen.getByText('Settings')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
   });
 
-  it('renders personal tabs for any authenticated user', () => {
+  it('renders §I Account section in nav for any authenticated user', async () => {
     renderSettingsPage();
-    expect(screen.getByRole('tab', { name: 'Topics' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Authors' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Models & Preferences' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Integrations' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Appearance' })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Profile & Email/i })).toBeInTheDocument(),
+    );
   });
 
-  it('hides system tabs for non-admin session user', () => {
+  it('renders §VI Research section nav items for any authenticated user', async () => {
+    renderSettingsPage();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Topics/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('button', { name: /Authors/i })).toBeInTheDocument();
+  });
+
+  it('hides §II Sources nav items for non-admin (role=user)', async () => {
     renderSettingsPageAs('user');
-    expect(screen.queryByRole('tab', { name: 'Sources' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Automation' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Extraction Templates' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Pulse' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Timer' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Providers' })).not.toBeInTheDocument();
+    // Wait for render to settle via heading role (avoids multiple-match with breadcrumb)
+    await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
+    // Sources section header should not be visible
+    expect(screen.queryByText('§II')).not.toBeInTheDocument();
   });
 
-  it('shows system tabs for admin session user', () => {
+  it('hides §IV System nav items for non-admin (role=user)', async () => {
+    renderSettingsPageAs('user');
+    await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
+    expect(screen.queryByText('§IV')).not.toBeInTheDocument();
+  });
+
+  it('shows §II Sources section header for admin', async () => {
     renderSettingsPageAs('admin');
-    expect(screen.getByRole('tab', { name: 'Sources' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Automation' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Extraction Templates' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Pulse' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Timer' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Providers' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('§II')).toBeInTheDocument());
   });
 
-  it('shows system tabs for API-key-only caller (no session user)', () => {
-    // API-key-only callers are treated as single-tenant owner — show all tabs
-    // to avoid a regression where self-hosted admins lose UI access.
+  it('shows §III Models and §IV System section headers for admin', async () => {
+    renderSettingsPageAs('admin');
+    await waitFor(() => expect(screen.getByText('§III')).toBeInTheDocument());
+    expect(screen.getByText('§IV')).toBeInTheDocument();
+  });
+
+  it('defaults to §VI Research / Topics content pane', async () => {
+    renderSettingsPage();
+    // The detail pane heading should say "Topics"
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Topics', level: 2 })).toBeInTheDocument(),
+    );
+  });
+
+  it('navigating to Account / Profile & Email rail item shows detail heading', async () => {
+    const user = userEvent.setup();
+    renderSettingsPage();
+    await waitFor(() => screen.getByRole('button', { name: /Profile & Email/i }));
+    await user.click(screen.getByRole('button', { name: /Profile & Email/i }));
+    // Detail pane h2 heading should update
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: /Profile & Email/i, level: 2 }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('non-admin deep-link to system section redirects to default (Topics heading)', async () => {
+    renderSettingsPageAs('user', '?section=sources&item=arxiv');
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Topics', level: 2 })).toBeInTheDocument(),
+    );
+  });
+
+  it('does not render Recommendations section (removed in legacy cleanup)', () => {
+    renderSettingsPage();
+    expect(screen.queryByText(/Recommendations/i)).not.toBeInTheDocument();
+  });
+
+  it('shows API-key-only session (null user) same as non-admin — hides system sections', async () => {
     renderSettingsPageAs(null);
-    expect(screen.queryByRole('tab', { name: 'Sources' })).not.toBeInTheDocument();
+    await waitFor(() => screen.getByRole('heading', { name: 'Settings' }));
+    expect(screen.queryByText('§II')).not.toBeInTheDocument();
+    expect(screen.queryByText('§IV')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Conflict-5 — IngestionSection filterGroups split
+//
+// §III Models → LLM must render the full IngestionSection (LLM Models group).
+// §VI Research → Spaced Repetition must render ONLY the Spaced Repetition
+// group via the SpacedRepetitionSection wrapper — no LLM Models / Preferences.
+// ---------------------------------------------------------------------------
+
+describe('SettingsDetailPane — IngestionSection filterGroups split (Conflict-5)', () => {
+  const splitConfig = [
+    { key: 'llm.smart_model', value: 'qwen3:14b' },
+    { key: 'llm.fast_model', value: 'qwen3:4b' },
+    { key: 'llm.embed_model', value: 'qwen3-embedding:0.6b' },
+    { key: 'fsrs.desired_retention', value: 0.9 },
+    { key: 'fsrs.learning_steps', value: [1, 10] },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.fetchConfig).mockResolvedValue(splitConfig);
+    vi.mocked(api.apiFetch).mockResolvedValue({ hardware: undefined, catalog: [] });
   });
 
-  it('defaults to Topics tab', () => {
-    renderSettingsPage();
-    const topicsTab = screen.getByRole('tab', { name: 'Topics' });
-    expect(topicsTab).toHaveAttribute('data-state', 'active');
+  function renderDetail(section: string, item: string) {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SettingsDetailPane section={section} item={item} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it('§III Models → LLM renders the LLM Models group', async () => {
+    renderDetail('models', 'llm');
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'LLM Models', level: 4 })).toBeInTheDocument(),
+    );
   });
 
-  it('switches to Authors tab on click', async () => {
-    const user = userEvent.setup();
-    renderSettingsPage();
-    const authorsTab = screen.getByRole('tab', { name: 'Authors' });
-    await user.click(authorsTab);
-    expect(authorsTab).toHaveAttribute('data-state', 'active');
-  });
-
-  it('switches to Automation tab on click (admin)', async () => {
-    renderSettingsPageAs('admin');
-    const user = userEvent.setup();
-    const autoTab = screen.getByRole('tab', { name: 'Automation' });
-    await user.click(autoTab);
-    expect(autoTab).toHaveAttribute('data-state', 'active');
-  });
-
-  it('switches to Pulse tab on click (admin)', async () => {
-    renderSettingsPageAs('admin');
-    const user = userEvent.setup();
-    const pulseTab = screen.getByRole('tab', { name: 'Pulse' });
-    await user.click(pulseTab);
-    expect(pulseTab).toHaveAttribute('data-state', 'active');
-  });
-
-  it('switches to Sources tab on click (admin)', async () => {
-    renderSettingsPageAs('admin');
-    const user = userEvent.setup();
-    const sourcesTab = screen.getByRole('tab', { name: 'Sources' });
-    await user.click(sourcesTab);
-    expect(sourcesTab).toHaveAttribute('data-state', 'active');
-  });
-
-  it('does not render Recommendations tab (removed)', () => {
-    renderSettingsPage();
-    expect(screen.queryByRole('tab', { name: 'Recommendations' })).not.toBeInTheDocument();
+  it('§VI Research → Spaced Repetition renders ONLY the Spaced Repetition group', async () => {
+    renderDetail('research', 'spaced-repetition');
+    await waitFor(() =>
+      expect(
+        screen.getByRole('heading', { name: 'Spaced Repetition', level: 4 }),
+      ).toBeInTheDocument(),
+    );
+    // The LLM Models group (and any Preferences group) must NOT leak in.
+    expect(screen.queryByRole('heading', { name: 'LLM Models', level: 4 })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Preferences', level: 4 })).not.toBeInTheDocument();
   });
 });

@@ -70,6 +70,11 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchFeedCounts: vi.fn().mockResolvedValue({
       inbox: 1, library: 1, starred: 0, archived: 0, reading: 0, trash: 0, all_active: 2,
     }),
+    fetchFeedCountsWithFacets: vi.fn().mockResolvedValue({
+      inbox: 1, library: 1, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0,
+      active: 1, kept: 1, all_non_trash: 1,
+      by_source: {}, by_topic: [], untagged: 0,
+    }),
   };
 });
 
@@ -115,8 +120,8 @@ describe('ResearchFeedPage — bulk selection clears on surface change (NEW-H5)'
       expect(useBulkSelection.getState().selectedIds.size).toBe(1);
     });
 
-    // Switch to the Trash surface chip
-    await user.click(screen.getByRole('tab', { name: 'Trash' }));
+    // Switch to the Trash surface via §Status facet (F1 IA: Trash is a facet, not a tab)
+    await user.click(screen.getByTestId('facet-status-trash'));
 
     // Selection should now be empty
     await waitFor(() => {
@@ -233,11 +238,10 @@ describe('ResearchFeedPage — invalid ?surface= falls back to inbox (NEW-M16)',
   it('surface=__proto__ renders inbox UI', async () => {
     renderAt('/feed?surface=__proto__');
 
-    // Inbox tab should be the active tab (aria-selected=true). The accessible
-    // name may include a count-badge suffix (e.g. "Inbox 1"), so match by regex.
+    // Inbox §Status facet should be active (aria-pressed=true) in the F1 facet rail.
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /^Inbox/ })).toHaveAttribute(
-        'aria-selected',
+      expect(screen.getByTestId('facet-status-inbox')).toHaveAttribute(
+        'aria-pressed',
         'true',
       );
     });

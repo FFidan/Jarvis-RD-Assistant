@@ -4,6 +4,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { AppProviders } from '@/providers/AppProviders';
 import { App } from '@/App';
+import { registerServiceWorker } from '@/lib/pwa';
 import '@/index.css';
 
 createRoot(document.getElementById('root')!).render(
@@ -13,3 +14,7 @@ createRoot(document.getElementById('root')!).render(
     </AppProviders>
   </StrictMode>,
 );
+
+// PWA foundation (Wave 3 P1a): register the offline service worker + capture
+// the install affordance. No-ops in dev / unsupported / insecure contexts.
+registerServiceWorker();

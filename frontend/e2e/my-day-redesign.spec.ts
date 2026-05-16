@@ -117,6 +117,55 @@ async function installMyDayMocks(page: Page): Promise<void> {
       body: JSON.stringify(STATS_MOCK),
     });
   });
+
+  // § Yesterday rollup — empty so the section stays silent by default
+  await page.route('**/api/my-day/yesterday**', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        date: '2026-05-14',
+        focused_hours: 0,
+        cards_reviewed: 0,
+        tasks_done: 0,
+        completed: [],
+        deferred: [],
+      }),
+    });
+  });
+
+  // § Open threads — none so ThreadsSection shows its empty affordance
+  await page.route('**/api/my-day/threads', async (route: Route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+  });
+
+  // EOD journal — no entry yet
+  await page.route('**/api/my-day/journal**', async (route: Route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          id: 1,
+          date: '2026-05-15',
+          prompts: {},
+          created_at: '',
+          updated_at: '',
+        }),
+      });
+      return;
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+  });
+
+  // Today's intent
+  await page.route('**/api/executive/intent/today', async (route: Route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ intent: null, updated_at: null }),
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -160,11 +209,14 @@ test.describe('My Day v5 redesign — smoke', () => {
     //   Today's pulse (404 → null; ≤1 card → null)
     // LearningFocusSection always renders (shows stats skeleton then data).
 
+    // § Yesterday is now an on-the-fly rollup — hidden when empty (default
+    // mock). § Open threads always renders (empty affordance). EOD is the
+    // shutdown ritual.
     const alwaysVisible = [
-      // '§ Yesterday' removed — YesterdaySection hidden until daily-rollup job ships (W2-19)
       '§ Now',
       "§ Today's intent",
       '§ Projects',
+      '§ Open threads',
       '§ Learning & focus',
       '§ End of day',
     ];
@@ -190,37 +242,49 @@ test.describe('My Day v5 redesign — smoke', () => {
     await expect(page.locator('text="§ Today\'s pulse"')).toHaveCount(0);
   });
 
-  // ── 3. Hero card shows mode picker with 3 tabs ───────────────────────────
+  // ── 3. Hero mode picker — Pulse #1 always shows; others conditional ──────
 
-  test('hero card shows mode picker with 3 tabs', async ({ page }) => {
+  test('hero mode picker shows Pulse #1 by default; conditional tabs hidden', async ({ page }) => {
     await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    // TabsTrigger labels from HeroNow.tsx (exact text)
+    // Pulse #1 is always present.
     await expect(page.getByRole('tab', { name: 'Pulse #1' })).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('tab', { name: 'Resume reading' })).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByRole('tab', { name: 'Continue task' })).toBeVisible({ timeout: 5_000 });
+    // No active Pomodoro / threads / reading in the empty mock → conditional
+    // tabs are not rendered.
+    await expect(page.getByRole('tab', { name: 'Continue task' })).toHaveCount(0);
+    await expect(page.getByRole('tab', { name: 'Resume thread' })).toHaveCount(0);
   });
 
-  // ── 4. Resume reading tab is disabled (Phase 2) ──────────────────────────
+  // ── 4. Continue task tab + persistence with an active Pomodoro ───────────
 
-  test('Resume reading tab is disabled (Phase 2 placeholder)', async ({ page }) => {
-    await page.goto('/my-day');
-    await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
-
-    // HeroNow wraps the disabled TabsTrigger in a <span> for Tooltip attachment;
-    // the trigger itself carries the disabled attribute.
-    const resumeTab = page.getByRole('tab', { name: 'Resume reading' });
-    await expect(resumeTab).toBeVisible({ timeout: 5_000 });
-    await expect(resumeTab).toBeDisabled();
-  });
-
-  // ── 5. Continue task tab persists to localStorage across reload ──────────
-
-  test('clicking Continue task tab persists choice in localStorage', async ({ page }) => {
-    // Clear any prior heroMode state before navigation
+  test('Continue task tab appears with an active Pomodoro and persists to localStorage', async ({
+    page,
+  }) => {
     await page.addInitScript(() => {
       localStorage.removeItem('myday.heroMode');
+      // Seed an active Pomodoro so the "Continue task" tab renders.
+      localStorage.setItem(
+        'jarvis-pomodoro',
+        JSON.stringify({
+          state: {
+            phase: 'work',
+            secondsRemaining: 1500,
+            phaseDurationMs: 1_500_000,
+            totalPausedMs: 0,
+            cyclesCompleted: 0,
+            targetCycles: 4,
+            workMinutes: 25,
+            shortBreakMinutes: 5,
+            longBreakMinutes: 15,
+            startedAt: Date.now(),
+            pausedAt: null,
+            attachedItem: { id: 1, title: 'Vector-field argument', type: 'task' },
+            completedSession: null,
+          },
+          version: 0,
+        }),
+      );
     });
 
     await page.goto('/my-day');
@@ -230,17 +294,34 @@ test.describe('My Day v5 redesign — smoke', () => {
     await expect(taskTab).toBeVisible({ timeout: 5_000 });
     await taskTab.click();
 
-    // Verify localStorage immediately after click
     const storedValue = await page.evaluate(() => localStorage.getItem('myday.heroMode'));
     expect(storedValue).toBe('task');
 
-    // Reload and verify persistence: Radix Tabs should restore data-state="active"
-    await installMyDayMocks(page); // re-install routes after reload wipes them
-    await page.reload();
+    // HeroTask exposes the new §1a controls.
+    await expect(page.getByRole('button', { name: /stop & log/i })).toBeVisible({
+      timeout: 5_000,
+    });
+  });
+
+  // ── 5. EOD shutdown ritual renders the 3 structured prompts ──────────────
+
+  test('End of day shutdown ritual renders the 3 prompts', async ({ page }) => {
+    await page.goto('/my-day');
     await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
 
-    const taskTabAfterReload = page.getByRole('tab', { name: 'Continue task' });
-    await expect(taskTabAfterReload).toHaveAttribute('data-state', 'active', { timeout: 5_000 });
+    await expect(page.getByLabel('One thing that worked')).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByLabel("What's still blocking me")).toBeVisible();
+    await expect(page.getByLabel('First move tomorrow')).toBeVisible();
+  });
+
+  // ── 5b. § Open threads shows the empty create affordance ─────────────────
+
+  test('Open threads section offers an inline create affordance when empty', async ({ page }) => {
+    await page.goto('/my-day');
+    await expect(page.locator('text=RESEARCH LOG').first()).toBeVisible({ timeout: 5_000 });
+
+    await expect(page.locator('text="§ Open threads"').first()).toBeVisible({ timeout: 5_000 });
+    await expect(page.getByRole('button', { name: /\+ new thread/i })).toBeVisible();
   });
 
   // ── 6. Page wrapper uses .bg-paper class ─────────────────────────────────

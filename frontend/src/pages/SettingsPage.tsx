@@ -1,167 +1,110 @@
+/**
+ * SettingsPage — 2-pane Settings IA (UI v3).
+ *
+ * Layout: `grid lg:grid-cols-[240px_1fr]`
+ *   Left: §-grouped SettingsRail (navigation)
+ *   Right: SettingsDetailPane (breadcrumb + active section component)
+ *
+ * URL routing: `?section=<slug>&item=<slug>`
+ *   Omitting both params defaults to section=research, item=topics
+ *   (preserves existing default tab=topics behaviour).
+ *
+ * RBAC — preserved exactly from the old tab-bar model:
+ *   PERSONAL_SECTIONS: accessible to all authenticated users.
+ *   SYSTEM_SECTIONS:   accessible to admin users only.
+ *   Non-admin deep-linking to a system section → redirect to default personal item.
+ */
 import { useSearchParams } from 'react-router-dom';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { TopicSection } from '@/components/settings/TopicSection';
-import { SourcesList } from '@/components/settings/SourcesList';
-import { AuthorSection } from '@/components/settings/AuthorSection';
-import { IngestionSection } from '@/components/settings/IngestionSection';
-import { AutomationSection } from '@/components/settings/AutomationSection';
-import { ExtractionTemplateSection } from '@/components/settings/ExtractionTemplateSection';
-import { PulseSection } from '@/components/settings/PulseSection';
-import { TimerSection } from '@/components/settings/TimerSection';
-import { PairTelegram } from '@/components/setup/PairTelegram';
-import { TelegramPairingSection } from '@/components/settings/TelegramPairingSection';
-import { ZoteroSection } from '@/components/settings/ZoteroSection';
-import { ProvidersSection } from '@/components/settings/ProvidersSection';
-import { AppearanceSection } from '@/components/settings/AppearanceSection';
-import { LangfuseLinkCard } from '@/components/settings/LangfuseLinkCard';
 import { useAuthStore } from '@/stores/auth-store';
+import { SettingsRail } from '@/components/settings/SettingsRail';
+import { SettingsDetailPane } from '@/components/settings/SettingsDetailPane';
 
-// Personal tab values — visible to every authenticated user.
-const PERSONAL_TABS = new Set([
-  'topics',
-  'authors',
-  'ingestion',
-  'appearance',
-  'integrations',
-]);
+// ---------------------------------------------------------------------------
+// RBAC section sets — mirrors old PERSONAL_TABS / SYSTEM_TABS
+// ---------------------------------------------------------------------------
 
-// System tab values — visible to admin users only.
-const SYSTEM_TABS = new Set([
-  'sources',
-  'automation',
-  'extraction',
-  'pulse',
-  'timer',
-  'providers',
-]);
+/** Sections accessible to every authenticated user. */
+const PERSONAL_SECTIONS = new Set(['account', 'integrations', 'research']);
 
-const ALL_VALID_TABS = new Set([...PERSONAL_TABS, ...SYSTEM_TABS]);
+/** Sections visible to admin users only. */
+const SYSTEM_SECTIONS = new Set(['sources', 'models', 'system']);
 
-const TAB_TRIGGER_CLASS =
-  'rounded-none px-3 py-2 -mb-px border-b-2 border-transparent ' +
-  'data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong ' +
-  'data-[state=active]:bg-transparent data-[state=active]:shadow-none';
+const ALL_VALID_SECTIONS = new Set([...PERSONAL_SECTIONS, ...SYSTEM_SECTIONS]);
+
+// Default landing per spec §3.5: §VI Research → Topics
+const DEFAULT_SECTION = 'research';
+const DEFAULT_ITEM = 'topics';
+
+// ---------------------------------------------------------------------------
+// SettingsPage
+// ---------------------------------------------------------------------------
 
 export function SettingsPage() {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === 'admin';
 
-  // Wave 7 (C.1) — URL-synced tab. Deep-links into /settings sub-sections
-  // preserve the active tab. Falls back to 'topics' for missing/invalid values
-  // or when a non-admin tries to access a system-only tab.
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedTab = searchParams.get('tab');
+  const requestedSection = searchParams.get('section');
+  const requestedItem = searchParams.get('item');
 
-  const activeTab = (() => {
-    if (!requestedTab || !ALL_VALID_TABS.has(requestedTab)) return 'topics';
-    // Redirect non-admins away from system tabs
-    if (SYSTEM_TABS.has(requestedTab) && !isAdmin) return 'topics';
-    return requestedTab;
+  // Resolve active section/item with RBAC redirect
+  const { activeSection, activeItem } = (() => {
+    // Unknown or missing section → default
+    if (!requestedSection || !ALL_VALID_SECTIONS.has(requestedSection)) {
+      return { activeSection: DEFAULT_SECTION, activeItem: DEFAULT_ITEM };
+    }
+    // Non-admin trying a system section → redirect to default personal
+    if (SYSTEM_SECTIONS.has(requestedSection) && !isAdmin) {
+      return { activeSection: DEFAULT_SECTION, activeItem: DEFAULT_ITEM };
+    }
+    // Valid section — use requested item or fall back to first reasonable default
+    const item = requestedItem ?? getDefaultItem(requestedSection);
+    return { activeSection: requestedSection, activeItem: item };
   })();
 
-  const handleTabChange = (value: string) => {
+  const handleSelect = (section: string, item: string) => {
     const next = new URLSearchParams(searchParams);
-    next.set('tab', value);
+    next.set('section', section);
+    next.set('item', item);
     setSearchParams(next, { replace: true });
   };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-[32px] leading-tight tracking-tight text-strong">Settings</h1>
+    <div className="flex flex-col h-full">
+      <div className="px-6 pt-6 pb-4 shrink-0">
+        <h1 className="text-[32px] leading-tight tracking-tight text-strong">Settings</h1>
+      </div>
 
-      <Tabs value={activeTab} onValueChange={handleTabChange}>
-        <TabsList className="bg-transparent border-b border-hair p-0 gap-2 overflow-x-auto scrollbar-thin flex-nowrap">
-          {/* Personal settings — always visible */}
-          <TabsTrigger className={TAB_TRIGGER_CLASS} value="topics">Topics</TabsTrigger>
-          <TabsTrigger className={TAB_TRIGGER_CLASS} value="authors">Authors</TabsTrigger>
-          <TabsTrigger className={TAB_TRIGGER_CLASS} value="ingestion">Models & Preferences</TabsTrigger>
-          <TabsTrigger className={TAB_TRIGGER_CLASS} value="integrations">Integrations</TabsTrigger>
-          <TabsTrigger className={TAB_TRIGGER_CLASS} value="appearance">Appearance</TabsTrigger>
+      {/* 2-pane grid */}
+      <div className="flex flex-1 min-h-0 border-t border-hair lg:grid lg:grid-cols-[240px_1fr]">
+        {/* Left rail */}
+        <SettingsRail
+          activeSection={activeSection}
+          activeItem={activeItem}
+          isAdmin={isAdmin}
+          onSelect={handleSelect}
+        />
 
-          {/* System settings — admin only */}
-          {isAdmin && (
-            <>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="sources">Sources</TabsTrigger>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="automation">Automation</TabsTrigger>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="extraction">Extraction Templates</TabsTrigger>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="pulse">Pulse</TabsTrigger>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="timer">Timer</TabsTrigger>
-              <TabsTrigger className={TAB_TRIGGER_CLASS} value="providers">Providers</TabsTrigger>
-            </>
-          )}
-        </TabsList>
-
-        {/* Personal tab contents */}
-        <TabsContent value="topics">
-          <TopicSection />
-        </TabsContent>
-
-        <TabsContent value="authors">
-          <AuthorSection />
-        </TabsContent>
-
-        <TabsContent value="ingestion">
-          <IngestionSection />
-        </TabsContent>
-
-        <TabsContent value="appearance">
-          <AppearanceSection />
-        </TabsContent>
-
-        <TabsContent value="integrations">
-          <div className="space-y-8">
-            {/* Per-user multi-tenant Telegram pairing (Sprint A) */}
-            <TelegramPairingSection />
-
-            {/* Legacy single-tenant pairing — kept for admin/setup-wizard use */}
-            <div className="space-y-4">
-              <div>
-                <h3 className="text-sm font-medium">System Telegram pairing</h3>
-                <p className="text-sm text-muted-foreground mt-0.5">
-                  Pair this JARVIS instance to a Telegram chat for system notifications
-                  (setup wizard / admin).
-                </p>
-              </div>
-              <PairTelegram />
-            </div>
-            <div className="space-y-4">
-              <ZoteroSection />
-            </div>
-          </div>
-        </TabsContent>
-
-        {/* System tab contents — only rendered when admin */}
-        {isAdmin && (
-          <>
-            <TabsContent value="sources">
-              <SourcesList />
-            </TabsContent>
-
-            <TabsContent value="automation">
-              <AutomationSection />
-            </TabsContent>
-
-            <TabsContent value="extraction">
-              <ExtractionTemplateSection />
-            </TabsContent>
-
-            <TabsContent value="pulse">
-              <PulseSection />
-            </TabsContent>
-
-            <TabsContent value="timer">
-              <TimerSection />
-            </TabsContent>
-
-            <TabsContent value="providers">
-              <div className="space-y-6">
-                <ProvidersSection />
-                <LangfuseLinkCard />
-              </div>
-            </TabsContent>
-          </>
-        )}
-      </Tabs>
+        {/* Right detail pane */}
+        <SettingsDetailPane section={activeSection} item={activeItem} />
+      </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Return a sensible default item for a section when none is specified. */
+function getDefaultItem(section: string): string {
+  switch (section) {
+    case 'account':     return 'profile';
+    case 'models':      return 'llm';
+    case 'system':      return 'automation';
+    case 'integrations': return 'telegram';
+    case 'research':    return 'topics';
+    case 'sources':     return ''; // dynamic — SettingsDetailPane handles empty
+    default:            return '';
+  }
 }

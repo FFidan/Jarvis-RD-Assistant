@@ -123,6 +123,17 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
     #      CREATE INDEX IF NOT EXISTS.
     # 82: user_id FK gap on 7 tables missed by 077/080 (H-3) — runtime-applied,
     #      idempotent DROP/ADD CONSTRAINT guards + pre-flight RAISE on orphan rows.
+    # 83: `thread` table — FK REFERENCES users(id) ON DELETE CASCADE. users is
+    #      itself deferred (mig 069, not in init.sql), so baking thread into
+    #      init.sql would fail a fresh install with 'relation "users" does not
+    #      exist' (exactly the regression commit 318b2f4b fixed). Belongs with
+    #      its parent in the runtime-applied chain.
+    # 84: `project_questions` table — FK REFERENCES projects(id) AND users(id).
+    #      users is deferred (mig 069); same constraint as 83 — runtime-applied
+    #      alongside its 069+ parent chain.
+    # 85: users.display_name + magic_link_tokens.pending_email ADD COLUMN —
+    #      both target tables are deferred (mig 069, not in init.sql), so this
+    #      ALTER cannot be baked in standalone; runtime-applied with mig 069.
     deferred = {
         33,
         52,
@@ -146,6 +157,9 @@ def test_init_sql_seed_list_covers_up_to_latest_migration() -> None:
         80,
         81,
         82,
+        83,
+        84,
+        85,
     }
     required = {v for v in range(1, max_migration + 1) if v not in deferred}
     missing = required - seeded_versions

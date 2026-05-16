@@ -39,6 +39,11 @@ interface FeedViewProps {
   scope?: FeedScope;
   /** Inbox source-type chip filter — null/undefined means all sources. */
   sourceTypes?: string | null;
+  /**
+   * Scoped list-filter (spec §3.4): client-side title/author text filter
+   * applied to the currently loaded page. Not sent to the backend.
+   */
+  listFilter?: string;
 }
 
 // Per-surface empty state copy
@@ -80,7 +85,7 @@ function getEmptyState(surface: SurfaceView): EmptyStateCopy {
 
 const DEFAULT_LIMIT: PageSize = 30;
 
-export function FeedView({ surface, filter, scope = 'library', sourceTypes }: FeedViewProps) {
+export function FeedView({ surface, filter, scope = 'library', sourceTypes, listFilter }: FeedViewProps) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -131,8 +136,18 @@ export function FeedView({ surface, filter, scope = 'library', sourceTypes }: Fe
     queryFn: () => fetchFeed({ view: surface as Parameters<typeof fetchFeed>[0]['view'], filter, scope, limit, offset, sourceTypes }),
   });
 
-  // Cast to FeedPaper[] — backend (Wave 1ab) already returns the Phase-A shape
-  const papers = (data?.papers ?? []) as FeedPaper[];
+  // Spec §3.4: client-side scoped list-filter (title/author, within active facets)
+  const papers = useMemo(() => {
+    // Cast inside memo so the expression doesn't escape and destabilise deps
+    const raw = (data?.papers ?? []) as FeedPaper[];
+    if (!listFilter) return raw;
+    const q = listFilter.toLowerCase();
+    return raw.filter(
+      (p) =>
+        p.title.toLowerCase().includes(q) ||
+        p.authors.some((a) => a.toLowerCase().includes(q)),
+    );
+  }, [data?.papers, listFilter]);
 
   const invalidateFeed = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ['papers-feed'] });

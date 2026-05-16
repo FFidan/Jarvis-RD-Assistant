@@ -417,6 +417,15 @@ export interface Project {
   next_milestone_due?: string | null;
   created_at: string;
   updated_at: string;
+  /**
+   * Projects IA redesign §3.6/§4c — chapter-rail row counts. Widened on
+   * ProjectResponse (services/learning_engine/learning_engine/models.py:209-210);
+   * backend always emits these (default 0). Optional here so pre-UI_v3
+   * importers/fixtures that build `Project` literals keep compiling — the
+   * runtime payload always carries them.
+   */
+  paper_count?: number;
+  open_question_count?: number;
 }
 
 export interface ProjectDetail extends Project {
@@ -424,6 +433,31 @@ export interface ProjectDetail extends Project {
   done_tasks: number;
   total_milestones: number;
   completed_milestones: number;
+  // paper_count / open_question_count inherited from Project — parity with
+  // ProjectDetailResponse (models.py:347-348).
+}
+
+/**
+ * A single open research question (Projects § OPEN QUESTIONS).
+ * Grounded against ProjectQuestionResponse in
+ * services/learning_engine/learning_engine/models.py:219-226.
+ */
+export interface ProjectQuestion {
+  id: number;
+  project_id: number;
+  body: string;
+  created_at: string;
+}
+
+/**
+ * A single row from GET /api/projects/{id}/activity (UNION feed).
+ * Grounded against ProjectActivityItem in
+ * services/learning_engine/learning_engine/models.py:229-235.
+ */
+export interface ProjectActivityItem {
+  kind: 'added_paper' | 'completed_task' | 'completed_milestone';
+  ts: string;
+  label: string;
 }
 
 export interface Task {
@@ -793,8 +827,29 @@ export type SurfaceView = 'inbox' | 'library' | 'search' | 'ask' | 'trash';
 // --- Phase A Feed Counts ---
 
 /**
- * Feed counts per spec §6 — 10 named views.
- * Grounded against FeedCountsResponse in models/papers.py:600-612.
+ * Per-topic count for the feed facet rail (§ Topic section).
+ * Grounded against TopicFacetCount in
+ * services/paper_ingestion/paper_ingestion/models/papers.py:621-626.
+ */
+export interface TopicFacetCount {
+  topic_id: number;
+  name: string;
+  count: number;
+}
+
+/**
+ * Feed counts per spec §6 — 10 named numeric views.
+ *
+ * Kept numeric-only so `keyof FeedCountsResponse` consumers (e.g.
+ * `CountsBadge`, indexing `data[surface]` arithmetically) stay sound. The
+ * UI_v3 facet-rail additions the backend emits on the SAME payload
+ * (`by_source` / `by_topic` / `untagged`) are typed on
+ * {@link FeedCountsWithFacets} below so the additive fields don't widen the
+ * numeric `keyof` surface.
+ *
+ * Grounded against FeedCountsResponse in
+ * services/paper_ingestion/paper_ingestion/models/papers.py:629-649
+ * (named-view fields).
  */
 export interface FeedCountsResponse {
   inbox: number;
@@ -808,6 +863,28 @@ export interface FeedCountsResponse {
   kept: number;
   all_non_trash: number;
 }
+
+/**
+ * UI_v3 § Source / § Topic facet-rail additions. The backend emits these on
+ * the same `GET /api/papers/feed/counts` payload as the named views (always
+ * present, default-empty when the caller has no library) — grounded against
+ * FeedCountsResponse in models/papers.py:646-649.
+ *
+ * Surface agents that need the facet rail consume
+ * {@link FeedCountsWithFacets}; the numeric-only {@link FeedCountsResponse}
+ * remains the indexable named-view contract.
+ */
+export interface FeedFacets {
+  /** § Source facet — per source_type counts scoped to user_library. */
+  by_source: Record<string, number>;
+  /** § Topic facet — per configured-topic counts. */
+  by_topic: TopicFacetCount[];
+  /** § Topic facet — library papers with no topic association. */
+  untagged: number;
+}
+
+/** The full `GET /api/papers/feed/counts` JSON: named views + facet rail. */
+export type FeedCountsWithFacets = FeedCountsResponse & FeedFacets;
 
 // --- Phase A Feedback CRUD ---
 
@@ -848,6 +925,12 @@ export interface JournalPrompts {
   first_move?: string;
   worked?: string;
   blocked?: string;
+  /**
+   * UI_v3 EOD "shutdown ritual" one optional free-note escape hatch.
+   * Grounded against JournalPrompts.note in
+   * services/paper_ingestion/paper_ingestion/models/journal.py:18.
+   */
+  note?: string;
 }
 
 export interface JournalEntry {
@@ -856,6 +939,107 @@ export interface JournalEntry {
   prompts: JournalPrompts;
   created_at: string;
   updated_at: string;
+}
+
+// --- My Day § Yesterday (UI_v3, on-the-fly rollup) ---
+
+/**
+ * A task surfaced in § Yesterday — completed or deferred.
+ * Grounded against YesterdayTask in
+ * services/paper_ingestion/paper_ingestion/models/my_day.py:19-24.
+ */
+export interface YesterdayTask {
+  id: number;
+  title: string;
+  status: string;
+}
+
+/**
+ * The § Yesterday card payload.
+ * Grounded against YesterdaySummary in
+ * services/paper_ingestion/paper_ingestion/models/my_day.py:27-41.
+ */
+export interface YesterdaySummary {
+  date: string; // ISO date YYYY-MM-DD
+  focused_hours: number;
+  cards_reviewed: number;
+  tasks_done: number;
+  completed: YesterdayTask[];
+  deferred: YesterdayTask[];
+}
+
+// --- My Day § Open threads (UI_v3 `thread` entity) ---
+
+/**
+ * A resumable mid-flight line of work.
+ * Grounded against ThreadResponse in
+ * services/paper_ingestion/paper_ingestion/models/thread.py:39-46.
+ */
+export interface Thread {
+  id: number;
+  title: string;
+  anchor: string | null;
+  progress: number; // 0..1
+  last_at: string;
+  status: string; // open | done | archived
+  created_at: string;
+}
+
+/**
+ * Returned by the two auto-seed producers (Pomodoro / EOD).
+ * Grounded against ThreadSeedResponse in
+ * services/paper_ingestion/paper_ingestion/models/thread.py:49-57.
+ * `created` is false when an equivalent open thread was touched instead of
+ * duplicated.
+ */
+export interface ThreadSeedResponse {
+  thread: Thread;
+  created: boolean;
+}
+
+// --- §I Account (UI_v3 self-service profile) ---
+
+/**
+ * Shape returned by GET /api/account and (nested) PATCH /api/account.
+ * Grounded against AccountResponse in
+ * services/paper_ingestion/paper_ingestion/models/account.py:23-31.
+ */
+export interface AccountResponse {
+  id: number;
+  email: string;
+  role: string;
+  display_name: string | null;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/**
+ * Result of PATCH /api/account. `account` reflects the *current* persisted
+ * row (email unchanged until the verification token is confirmed).
+ * Grounded against AccountUpdateResponse in
+ * services/paper_ingestion/paper_ingestion/models/account.py:49-58.
+ */
+export interface AccountUpdateResponse {
+  account: AccountResponse;
+  email_verification_sent: boolean;
+}
+
+// --- Analytics "Reflect" KPI band (UI_v3) ---
+
+/**
+ * Response for GET /api/analytics/summary — current/prior-period totals +
+ * streaks. Grounded against AnalyticsSummaryResponse in
+ * services/learning_engine/learning_engine/models.py:488-507.
+ */
+export interface AnalyticsSummaryResponse {
+  papers_read_total: number;
+  focus_hours_total: number;
+  cards_reviewed_total: number;
+  papers_read_prev: number;
+  focus_hours_prev: number;
+  cards_reviewed_prev: number;
+  focus_streak_days: number;
+  cards_review_streak_days: number;
 }
 
 // --- Priority Helper ---

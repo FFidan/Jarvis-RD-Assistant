@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ProjectsPage } from '@/pages/ProjectsPage';
 
-// Mock API module
+// Mock API module — include all functions called by the new IA components
 vi.mock('@/lib/api', async () => {
   const actual = await vi.importActual<typeof import('@/lib/api')>('@/lib/api');
   return {
@@ -12,11 +12,26 @@ vi.mock('@/lib/api', async () => {
     fetchProjects: vi.fn(),
     fetchTasks: vi.fn(),
     fetchMilestones: vi.fn(),
+    fetchProjectQuestions: vi.fn(),
+    fetchProjectActivity: vi.fn(),
+    fetchProjectPapers: vi.fn(),
   };
 });
 
-import { fetchProjects } from '@/lib/api';
+import {
+  fetchProjects,
+  fetchProjectQuestions,
+  fetchProjectActivity,
+  fetchTasks,
+  fetchMilestones,
+  fetchProjectPapers,
+} from '@/lib/api';
 const mockFetchProjects = vi.mocked(fetchProjects);
+const mockFetchQuestions = vi.mocked(fetchProjectQuestions);
+const mockFetchActivity = vi.mocked(fetchProjectActivity);
+const mockFetchTasks = vi.mocked(fetchTasks);
+const mockFetchMilestones = vi.mocked(fetchMilestones);
+const mockFetchPapers = vi.mocked(fetchProjectPapers);
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -34,6 +49,12 @@ function renderPage() {
 describe('ProjectsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default safe stubs for the IA sub-components
+    mockFetchQuestions.mockResolvedValue([]);
+    mockFetchActivity.mockResolvedValue([]);
+    mockFetchTasks.mockResolvedValue([]);
+    mockFetchMilestones.mockResolvedValue([]);
+    mockFetchPapers.mockResolvedValue([]);
   });
 
   it('renders project list with projects', async () => {
@@ -47,29 +68,35 @@ describe('ProjectsPage', () => {
         color: null,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
+        paper_count: 0,
+        open_question_count: 0,
       },
     ]);
 
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Test Project')).toBeInTheDocument();
+      // Project name appears in the chapter rail row
+      expect(screen.getAllByText('Test Project').length).toBeGreaterThan(0);
     });
-    expect(screen.getByText('active')).toBeInTheDocument();
+    // §3.2 — status chips use translated labels
+    expect(screen.getAllByText('reading').length).toBeGreaterThan(0);
   });
 
-  it('shows empty state when no projects exist', async () => {
+  it('shows empty state in rail when no projects exist', async () => {
     mockFetchProjects.mockResolvedValue([]);
 
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No projects yet')).toBeInTheDocument();
+      expect(screen.getByText('No chapters yet')).toBeInTheDocument();
     });
-    expect(screen.getByText('Create a project to organize papers and track research goals.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Create a project to start a research chapter.'),
+    ).toBeInTheDocument();
   });
 
-  it('shows select prompt in detail panel when no project is selected', async () => {
+  it('auto-selects first project and shows chapter pane (not "select a project" prompt)', async () => {
     mockFetchProjects.mockResolvedValue([
       {
         id: 1,
@@ -80,13 +107,26 @@ describe('ProjectsPage', () => {
         color: null,
         created_at: '2026-01-01T00:00:00Z',
         updated_at: '2026-01-01T00:00:00Z',
+        paper_count: 0,
+        open_question_count: 0,
       },
     ]);
 
     renderPage();
 
+    // With auto-select, the "Select a project" empty state should NOT appear
     await waitFor(() => {
-      expect(screen.getByText('Select a project')).toBeInTheDocument();
+      // Breadcrumb contains the project name
+      expect(screen.getAllByText('My Project').length).toBeGreaterThan(0);
+    });
+    expect(screen.queryByText('Select a project')).not.toBeInTheDocument();
+  });
+
+  it('shows § CHAPTERS header in the chapter rail', async () => {
+    mockFetchProjects.mockResolvedValue([]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/§ CHAPTERS · 0/i)).toBeInTheDocument();
     });
   });
 });

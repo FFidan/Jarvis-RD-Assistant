@@ -10,6 +10,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { getSystemReadiness, type ReadinessCheck } from '@/lib/api';
+import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 type StatusLevel = ReadinessCheck['status'];
 
@@ -38,6 +39,7 @@ export function AdminSystemHealthPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
+        <AdminBreadcrumb page="System health" />
         <h1 className="text-2xl font-semibold">System health</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Pre-deployment readiness checks for all services.

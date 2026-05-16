@@ -17,7 +17,7 @@ export function LearningFocusSection() {
     refetchInterval: 120_000,
   });
 
-  // Reuses same query key as IntentSection / PomodoroTimer callers
+  // Reuses the shared ['my-day'] query key (deduped with IntentSection et al.)
   const { data: myDay } = useQuery<MyDayResponse>({
     queryKey: ['my-day'],
     queryFn: fetchMyDay,

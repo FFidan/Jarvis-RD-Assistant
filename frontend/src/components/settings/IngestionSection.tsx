@@ -567,7 +567,18 @@ const GROUP_ORDER = ['LLM Models', 'Spaced Repetition', 'Preferences'];
 // IngestionSection
 // ---------------------------------------------------------------------------
 
-export function IngestionSection() {
+interface IngestionSectionProps {
+  /**
+   * Optional allow-list of group labels to render (must match the exact
+   * strings in {@link GROUP_ORDER}). When omitted the full set of groups is
+   * rendered (default, backward-compatible behavior). When provided, only the
+   * listed groups are shown — used by SpacedRepetitionSection to scope §VI
+   * Research → Spaced Repetition to the `fsrs.*` group alone (Conflict-5).
+   */
+  filterGroups?: string[];
+}
+
+export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const queryClient = useQueryClient();
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -645,14 +656,17 @@ export function IngestionSection() {
     return acc;
   }, {});
 
-  // Sort groups by preferred order
-  const sortedGroups = Object.keys(grouped).sort((a, b) => {
-    const ia = GROUP_ORDER.indexOf(a);
-    const ib = GROUP_ORDER.indexOf(b);
-    const oa = ia === -1 ? GROUP_ORDER.length : ia;
-    const ob = ib === -1 ? GROUP_ORDER.length : ib;
-    return oa - ob || a.localeCompare(b);
-  });
+  // Sort groups by preferred order, then optionally restrict to the
+  // caller-provided allow-list (default: all groups — backward compatible).
+  const sortedGroups = Object.keys(grouped)
+    .sort((a, b) => {
+      const ia = GROUP_ORDER.indexOf(a);
+      const ib = GROUP_ORDER.indexOf(b);
+      const oa = ia === -1 ? GROUP_ORDER.length : ia;
+      const ob = ib === -1 ? GROUP_ORDER.length : ib;
+      return oa - ob || a.localeCompare(b);
+    })
+    .filter((g) => filterGroups === undefined || filterGroups.includes(g));
 
   /**
    * Find the catalog entry matching the currently configured model for a given role.

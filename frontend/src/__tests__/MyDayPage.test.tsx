@@ -24,6 +24,13 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchAndProcessFoundationalPaper: vi.fn(),
     ratePulseCard: vi.fn(),
     fetchWeeklyDigest: vi.fn(),
+    fetchYesterday: vi.fn(),
+    fetchThreads: vi.fn(),
+    getJournalEntry: vi.fn(),
+    upsertJournalEntry: vi.fn(),
+    seedThreadFromEod: vi.fn(),
+    fetchIntentToday: vi.fn(),
+    saveIntentToday: vi.fn(),
   };
 });
 
@@ -95,6 +102,24 @@ describe('MyDayPage', () => {
   beforeEach(() => {
     vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
     vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchYesterday).mockResolvedValue({
+      date: '2026-05-14',
+      focused_hours: 0,
+      cards_reviewed: 0,
+      tasks_done: 0,
+      completed: [],
+      deferred: [],
+    });
+    vi.mocked(api.fetchThreads).mockResolvedValue([]);
+    vi.mocked(api.getJournalEntry).mockResolvedValue(null);
+    vi.mocked(api.upsertJournalEntry).mockResolvedValue({
+      id: 1,
+      date: '2026-05-15',
+      prompts: {},
+      created_at: '2026-05-15T00:00:00Z',
+      updated_at: '2026-05-15T00:00:00Z',
+    });
+    vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
     vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
@@ -122,13 +147,27 @@ describe('MyDayPage', () => {
     expect(screen.getByText('new')).toBeInTheDocument();
   });
 
-  it('does not render Yesterday section (removed pending daily-rollup job, W2-19)', async () => {
+  it('hides Yesterday section when there was no recorded activity', async () => {
     renderWithProviders();
     await screen.findByText(/RESEARCH LOG/);
-    // YesterdaySection was removed from MyDayPage until the daily-rollup job ships.
-    expect(
-      screen.queryByText(/yesterday's carryover summary/i),
-    ).not.toBeInTheDocument();
+    // YesterdaySection is an on-the-fly rollup (UI_v3); it stays silent when
+    // completed+deferred are both empty (default mock).
+    expect(screen.queryByText(/§ Yesterday/i)).not.toBeInTheDocument();
+  });
+
+  it('renders Yesterday section when the rollup has activity', async () => {
+    vi.mocked(api.fetchYesterday).mockResolvedValue({
+      date: '2026-05-14',
+      focused_hours: 2.5,
+      cards_reviewed: 4,
+      tasks_done: 1,
+      completed: [{ id: 11, title: 'Closed the solver benchmark', status: 'done' }],
+      deferred: [{ id: 12, title: 'Adjoint proof', status: 'deferred' }],
+    });
+    renderWithProviders();
+    expect(await screen.findByText(/§ Yesterday/i)).toBeInTheDocument();
+    expect(screen.getByText('Closed the solver benchmark')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /carry over/i })).toBeInTheDocument();
   });
 
   it('renders Now section with Pulse #1 mode tab', async () => {
@@ -178,11 +217,12 @@ describe('MyDayPage', () => {
     expect(await screen.findByText(/7d streak/)).toBeInTheDocument();
   });
 
-  it('hides End of day section (journal ships in Phase 2)', async () => {
+  it('renders End of day shutdown ritual with the 3 structured prompts', async () => {
     renderWithProviders();
-    await screen.findByText(/RESEARCH LOG/);
-    // EndOfDaySection returns null until Phase 2 journal endpoint ships
-    expect(screen.queryByText(/§ End of day/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/§ End of day/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('One thing that worked')).toBeInTheDocument();
+    expect(screen.getByLabelText("What's still blocking me")).toBeInTheDocument();
+    expect(screen.getByLabelText('First move tomorrow')).toBeInTheDocument();
   });
 
   it('does not render Triage section when no action items or foundational gaps', async () => {
@@ -243,6 +283,24 @@ describe('HeroPulse behaviour', () => {
   beforeEach(() => {
     vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
     vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchYesterday).mockResolvedValue({
+      date: '2026-05-14',
+      focused_hours: 0,
+      cards_reviewed: 0,
+      tasks_done: 0,
+      completed: [],
+      deferred: [],
+    });
+    vi.mocked(api.fetchThreads).mockResolvedValue([]);
+    vi.mocked(api.getJournalEntry).mockResolvedValue(null);
+    vi.mocked(api.upsertJournalEntry).mockResolvedValue({
+      id: 1,
+      date: '2026-05-15',
+      prompts: {},
+      created_at: '2026-05-15T00:00:00Z',
+      updated_at: '2026-05-15T00:00:00Z',
+    });
+    vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);
     vi.mocked(api.fetchMissingFoundationalPapers).mockResolvedValue([]);
@@ -324,6 +382,24 @@ describe('MyDayPage hash-scroll', () => {
   beforeEach(() => {
     vi.mocked(api.fetchMyDay).mockResolvedValue(mockMyDayData);
     vi.mocked(api.fetchProjects).mockResolvedValue([]);
+    vi.mocked(api.fetchYesterday).mockResolvedValue({
+      date: '2026-05-14',
+      focused_hours: 0,
+      cards_reviewed: 0,
+      tasks_done: 0,
+      completed: [],
+      deferred: [],
+    });
+    vi.mocked(api.fetchThreads).mockResolvedValue([]);
+    vi.mocked(api.getJournalEntry).mockResolvedValue(null);
+    vi.mocked(api.upsertJournalEntry).mockResolvedValue({
+      id: 1,
+      date: '2026-05-15',
+      prompts: {},
+      created_at: '2026-05-15T00:00:00Z',
+      updated_at: '2026-05-15T00:00:00Z',
+    });
+    vi.mocked(api.fetchIntentToday).mockResolvedValue({ intent: null, updated_at: null });
     vi.mocked(api.fetchPulseToday).mockResolvedValue(mockPulseDeck);
     vi.mocked(api.fetchFeedPapers).mockResolvedValue(mockFeedResponse);
     vi.mocked(api.getStats).mockResolvedValue(mockRetentionStats);

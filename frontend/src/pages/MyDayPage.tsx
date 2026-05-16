@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
 import { useLocation } from 'react-router-dom';
 import { DateMasthead } from '@/components/my-day/sections/DateMasthead';
-// YesterdaySection removed (W3-6); re-add when daily-rollup job ships
+import { YesterdaySection } from '@/components/my-day/sections/YesterdaySection';
 import { HeroNow } from '@/components/my-day/sections/HeroNow';
 import { IntentSection } from '@/components/my-day/sections/IntentSection';
 import { ProjectsSection } from '@/components/my-day/sections/ProjectsSection';
+import { ThreadsSection } from '@/components/my-day/sections/ThreadsSection';
 import { TodaysPulseSection } from '@/components/my-day/sections/TodaysPulseSection';
 import { TriageSection } from '@/components/my-day/sections/TriageSection';
 import { LearningFocusSection } from '@/components/my-day/sections/LearningFocusSection';
@@ -37,10 +38,11 @@ export function MyDayPage() {
     <div className="bg-paper min-h-screen">
       <main className="max-w-page mx-auto px-10 py-10 space-y-12">
         <DateMasthead />
-        {/* YesterdaySection removed (W3-6); re-add when daily-rollup job ships */}
+        <YesterdaySection />
         <HeroNow />
         <IntentSection />
         <ProjectsSection />
+        <ThreadsSection />
         <TodaysPulseSection />
         <TriageSection />
         <LearningFocusSection />

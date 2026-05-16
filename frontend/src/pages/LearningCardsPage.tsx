@@ -1,70 +1,204 @@
-import { useState } from 'react';
-import { GraduationCap, Plus, Sparkles } from 'lucide-react';
+/**
+ * LearningCardsPage — v3 IA: focused review session shell + Library view.
+ *
+ * Two destinations within /cards:
+ *   Review session  (default when due_now > 0, or ?mode=review)
+ *   Library         (?mode=library, or breadcrumb "Flashcards" link)
+ *
+ * Route default: shows Review if due_now > 0; Library otherwise.
+ *
+ * P2 OFFLINE SEAM (Wave 3 / functional-track):
+ * The `submitReviewFn` threaded into <ReviewMode> is the single boundary for
+ * the submit-review call. To wire offline-review + sync:
+ *   1. Implement `useOfflineReviewQueue()` → returns an outbox-backed submit fn.
+ *   2. Replace `submitReview` below with the hook's returned fn.
+ *   3. No other file needs changing — the seam is here, deliberately.
+ * See docs/superpowers/specs/2026-05-15-learning-cards-ia-redesign-design.md §Offline.
+ */
+
+import { useCallback, useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Plus, Sparkles } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { getStats, fetchDecks, submitReview } from '@/lib/api';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { StatsHeader } from '@/components/cards/StatsHeader';
 import { ReviewMode } from '@/components/cards/ReviewMode';
 import { DeckBrowser } from '@/components/cards/DeckBrowser';
 import { CardList } from '@/components/cards/CardList';
 import { CreateCardForm, GenerateCardsDialog } from '@/components/cards/CreateCardForm';
+import {
+  SessionBreadcrumb,
+  SessionProgressBar,
+  useSessionProgress,
+} from '@/components/cards/SessionShell';
+import { SessionComplete } from '@/components/cards/SessionComplete';
+
+type Mode = 'review' | 'library';
 
 export function LearningCardsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedDeckId, setSelectedDeckId] = useState<number | null>(null);
   const [showCreateCard, setShowCreateCard] = useState(false);
   const [showGenerate, setShowGenerate] = useState(false);
+  const [sessionDeckId, setSessionDeckId] = useState<number | null>(null);
+  const [sessionEnded, setSessionEnded] = useState(false);
 
+  // Fetch stats to determine default mode (review if due_now > 0).
+  const { data: stats } = useQuery({
+    queryKey: ['card-stats'],
+    queryFn: getStats,
+    refetchInterval: 30_000,
+  });
+
+  // Fetch decks for breadcrumb deck-name resolution.
+  const { data: decks = [] } = useQuery({
+    queryKey: ['decks'],
+    queryFn: fetchDecks,
+  });
+
+  // Resolve effective mode: URL param → stats-driven default.
+  const paramMode = searchParams.get('mode') as Mode | null;
+  const defaultMode: Mode =
+    paramMode === 'library' ? 'library'
+    : paramMode === 'review' ? 'review'
+    : stats && stats.due_now === 0 ? 'library'
+    : 'review';
+
+  const [mode, setMode] = useState<Mode>(defaultMode);
+
+  // Sync mode when stats arrive and no explicit param is set.
+  useEffect(() => {
+    if (!paramMode && stats) {
+      setMode(stats.due_now === 0 ? 'library' : 'review');
+    }
+  }, [stats, paramMode]);
+
+  // Session progress (client-side; resets when session starts).
+  const sessionTotal = sessionDeckId != null
+    ? (decks.find((d) => d.id === sessionDeckId)?.due_count ?? stats?.due_now ?? 0)
+    : (stats?.due_now ?? 0);
+
+  const { sessionReviewed, onReviewSuccess, sessionTotal: frozenTotal } =
+    useSessionProgress(sessionTotal); // frozenTotal: seeded from first non-zero due count
+
+  const deckName = sessionDeckId != null
+    ? (decks.find((d) => d.id === sessionDeckId)?.name ?? null)
+    : null;
+
+  const navigateToLibrary = useCallback(() => {
+    setMode('library');
+    setSearchParams({ mode: 'library' });
+    setSessionEnded(false);
+  }, [setSearchParams]);
+
+  const navigateToReview = useCallback(() => {
+    setSessionDeckId(null);
+    setMode('review');
+    setSearchParams({});
+    setSessionEnded(false);
+  }, [setSearchParams]);
+
+  const handleStartReview = useCallback(
+    (deckId: number) => {
+      setSessionDeckId(deckId);
+      setSessionEnded(false);
+      setMode('review');
+      setSearchParams({});
+    },
+    [setSearchParams],
+  );
+
+  const handleSessionEnd = useCallback(() => {
+    setSessionEnded(true);
+  }, []);
+
+  // ── Library view ──────────────────────────────────────────────────────────
+  if (mode === 'library') {
+    return (
+      <div className="space-y-6">
+        {/* Library header */}
+        <div className="flex items-center justify-between">
+          <h1 className="text-[32px] leading-tight tracking-tight text-strong">
+            Flashcards
+          </h1>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowGenerate(true)}>
+              <Sparkles className="mr-1 h-4 w-4" /> Generate
+            </Button>
+            <Button onClick={() => setShowCreateCard(true)}>
+              <Plus className="mr-1 h-4 w-4" /> New Card
+            </Button>
+            {stats && stats.due_now > 0 && (
+              <Button variant="default" onClick={navigateToReview}>
+                Review now ({stats.due_now})
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Stats bar lives in Library view (per spec §3.3) */}
+        <StatsHeader />
+
+        {/* Deck browser with "Start review" per deck */}
+        <DeckBrowser
+          selectedDeckId={selectedDeckId}
+          onSelectDeck={setSelectedDeckId}
+          onStartReview={handleStartReview}
+        />
+
+        {selectedDeckId && (
+          <div className="space-y-3">
+            <CardList deckId={selectedDeckId} />
+          </div>
+        )}
+
+        <CreateCardForm
+          open={showCreateCard}
+          onOpenChange={setShowCreateCard}
+          defaultDeckId={selectedDeckId}
+        />
+        <GenerateCardsDialog
+          open={showGenerate}
+          onOpenChange={setShowGenerate}
+          defaultDeckId={selectedDeckId}
+        />
+      </div>
+    );
+  }
+
+  // ── Review session view ───────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-[32px] leading-tight tracking-tight text-strong flex items-center gap-2">
-          <GraduationCap className="h-8 w-8" /> Learning Cards
-        </h1>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowGenerate(true)}>
-            <Sparkles className="mr-1 h-4 w-4" /> Generate
-          </Button>
-          <Button onClick={() => setShowCreateCard(true)}>
-            <Plus className="mr-1 h-4 w-4" /> New Card
-          </Button>
-        </div>
-      </div>
-      <p className="text-muted-foreground text-sm">Spaced repetition flashcards generated from your papers</p>
-
-      <StatsHeader />
-
-      <Tabs defaultValue="review">
-        <TabsList className="bg-transparent border-b border-hair p-0 gap-2">
-          <TabsTrigger value="review" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Review</TabsTrigger>
-          <TabsTrigger value="browse" className="rounded-none px-3 py-2 -mb-px border-b-2 border-transparent data-[state=active]:border-[hsl(var(--ring))] data-[state=active]:text-strong data-[state=active]:bg-transparent data-[state=active]:shadow-none">Browse</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="review" className="mt-4">
-          <ReviewMode />
-        </TabsContent>
-
-        <TabsContent value="browse" className="mt-4 space-y-6">
-          <DeckBrowser
-            selectedDeckId={selectedDeckId}
-            onSelectDeck={setSelectedDeckId}
-          />
-          {selectedDeckId && (
-            <div className="space-y-3">
-              <CardList deckId={selectedDeckId} />
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
-
-      <CreateCardForm
-        open={showCreateCard}
-        onOpenChange={setShowCreateCard}
-        defaultDeckId={selectedDeckId}
+      {/* Breadcrumb */}
+      <SessionBreadcrumb
+        deckName={deckName}
+        onNavigateToLibrary={navigateToLibrary}
       />
-      <GenerateCardsDialog
-        open={showGenerate}
-        onOpenChange={setShowGenerate}
-        defaultDeckId={selectedDeckId}
-      />
+
+      {/* Progress bar — hidden when session complete (no more cards) */}
+      {!sessionEnded && (
+        <SessionProgressBar
+          reviewed={sessionReviewed}
+          total={frozenTotal}
+        />
+      )}
+
+      {/* Card canvas or session-complete panel */}
+      {sessionEnded ? (
+        <SessionComplete
+          sessionReviewed={sessionReviewed}
+          onNavigateToLibrary={navigateToLibrary}
+        />
+      ) : (
+        <ReviewMode
+          sessionCardIndex={sessionReviewed + 1}
+          deckId={sessionDeckId}
+          submitReviewFn={submitReview}   // P2 OFFLINE SEAM: swap this in Wave 3
+          onReviewSuccess={onReviewSuccess}
+          onSessionEnd={handleSessionEnd}
+        />
+      )}
     </div>
   );
 }

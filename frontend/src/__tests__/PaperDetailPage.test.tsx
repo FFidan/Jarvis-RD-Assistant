@@ -1,3 +1,14 @@
+/**
+ * PaperDetailPage.test.tsx
+ *
+ * Regression-guard for the 3-pane Paper Detail layout.
+ *
+ * The old tab-based tests have been migrated to match the new scrolling
+ * research-log layout (F2 IA redesign). All existing data (summary, evidence,
+ * chunks, cross-refs, notes, contradictions) must still surface correctly;
+ * they are now always rendered in the scrolling column rather than behind
+ * tab clicks.
+ */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -215,15 +226,18 @@ describe('PaperDetailPage', () => {
 
     renderPage();
 
+    // Title appears in both h1 and breadcrumb; check for h1 specifically
     await waitFor(() => {
-      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
     expect(screen.getByText('Vaswani, A., Shazeer, N., Parmar, N.')).toBeInTheDocument();
     expect(screen.getByText('arxiv')).toBeInTheDocument();
     expect(screen.getByText('95000 citations')).toBeInTheDocument();
   });
 
-  it('shows all tab triggers', async () => {
+  // ── Section navigation (replaces old tab tests) ───────────────────────────
+
+  it('shows all §-section headings in the scrolling column', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
       summary: MOCK_SUMMARY,
@@ -234,15 +248,95 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('tab', { name: 'Summary' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
-    expect(screen.getByRole('tab', { name: 'Evidence' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Chunks' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Cross-References' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Annotations' })).toBeInTheDocument();
+
+    // All section headings visible in the scrolling column (no tab click needed)
+    expect(document.getElementById('section-brief')).toBeInTheDocument();
+    expect(document.getElementById('section-detailed')).toBeInTheDocument();
+    expect(document.getElementById('section-methodology')).toBeInTheDocument();
+    expect(document.getElementById('section-limitations')).toBeInTheDocument();
+    expect(document.getElementById('section-findings')).toBeInTheDocument();
+    expect(document.getElementById('section-crossrefs')).toBeInTheDocument();
+    expect(document.getElementById('section-notes')).toBeInTheDocument();
+    expect(document.getElementById('section-chunks')).toBeInTheDocument();
+    expect(document.getElementById('section-ask')).toBeInTheDocument();
   });
 
-  it('switches between tabs', async () => {
+  it('displays summary content without any tab click required', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    // All summary content visible immediately (no tab interaction).
+    // PaperResearchLog inlines brief/detailed/methodology/limitations and
+    // EvidenceTab renders findings; some text appears in >1 place so use
+    // getAllByText.
+    await waitFor(() => {
+      expect(screen.getAllByText('This paper proposes the Transformer architecture.').length).toBeGreaterThan(0);
+    });
+    expect(screen.getAllByText('A detailed description of the Transformer architecture.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Encoder-decoder architecture with multi-head attention.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Quadratic complexity with sequence length.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Self-attention is more efficient than recurrence').length).toBeGreaterThan(0);
+  });
+
+  it('displays cross-reference data', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Builds on sequence-to-sequence learning.')).toBeInTheDocument();
+    });
+  });
+
+  it('renders TL;DR in the header band', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Transformers replace recurrence with attention.')).toBeInTheDocument();
+    });
+  });
+
+  it('chunks section: shows expand toggle (lazy default)', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
+    });
+
+    // Chunks are collapsed by default — content not visible
+    expect(screen.queryByText('The Transformer model architecture...')).not.toBeInTheDocument();
+    // Toggle button is present
+    expect(screen.getByTestId('chunks-expand-toggle')).toBeInTheDocument();
+  });
+
+  it('chunks expand when toggle is clicked — shows chunk count line', async () => {
     const user = userEvent.setup();
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
@@ -253,25 +347,22 @@ describe('PaperDetailPage', () => {
 
     renderPage();
 
-    // Default tab is Summary
     await waitFor(() => {
-      expect(screen.getByText('This paper proposes the Transformer architecture.')).toBeInTheDocument();
+      expect(screen.getByTestId('chunks-expand-toggle')).toBeInTheDocument();
     });
 
-    // Switch to Evidence tab
-    await user.click(screen.getByRole('tab', { name: 'Evidence' }));
-    await waitFor(() => {
-      expect(screen.getByText('Verified Findings')).toBeInTheDocument();
-    });
+    await user.click(screen.getByTestId('chunks-expand-toggle'));
 
-    // Switch to Chunks tab
-    await user.click(screen.getByRole('tab', { name: 'Chunks' }));
+    // After expanding LazyChunksSection, ChunksTab renders "N chunks extracted"
     await waitFor(() => {
-      expect(screen.getByText('2 chunks extracted')).toBeInTheDocument();
+      expect(screen.getByText(/2 chunks extracted/)).toBeInTheDocument();
     });
+    // Individual chunk buttons are visible
+    expect(screen.getByText(/Chunk 0/)).toBeInTheDocument();
+    expect(screen.getByText(/Chunk 1/)).toBeInTheDocument();
   });
 
-  it('displays summary content in the Summary tab', async () => {
+  it('shows notes in the scrolling column', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
       summary: MOCK_SUMMARY,
@@ -281,32 +372,7 @@ describe('PaperDetailPage', () => {
 
     renderPage();
 
-    await waitFor(() => {
-      expect(screen.getByText('This paper proposes the Transformer architecture.')).toBeInTheDocument();
-    });
-    expect(screen.getByText('A detailed description of the Transformer architecture.')).toBeInTheDocument();
-    expect(screen.getByText('Encoder-decoder architecture with multi-head attention.')).toBeInTheDocument();
-    expect(screen.getByText('Quadratic complexity with sequence length.')).toBeInTheDocument();
-    expect(screen.getByText('Self-attention is more efficient than recurrence')).toBeInTheDocument();
-  });
-
-  it('shows notes tab with existing notes', async () => {
-    const user = userEvent.setup();
-    mockFetchPaperDetail.mockResolvedValue({
-      paper: MOCK_PAPER,
-      summary: MOCK_SUMMARY,
-      chunks: MOCK_CHUNKS,
-      user_state: null,
-    });
-
-    renderPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
-    });
-
-    // Switch to Annotations tab
-    await user.click(screen.getByRole('tab', { name: 'Annotations' }));
+    // Notes load via their own query; wait for them
     await waitFor(() => {
       expect(screen.getByText('Key insight about positional encoding.')).toBeInTheDocument();
     });
@@ -329,7 +395,7 @@ describe('PaperDetailPage', () => {
     expect(screen.getByText('Save Rating')).toBeInTheDocument();
   });
 
-  it('renders RAG chat section with scope toggle', async () => {
+  it('renders RAG chat section', async () => {
     mockFetchPaperDetail.mockResolvedValue({
       paper: MOCK_PAPER,
       summary: MOCK_SUMMARY,
@@ -401,7 +467,9 @@ describe('PaperDetailPage', () => {
   });
 
   it('shows verified contradictions in the paper sidebar', async () => {
-    mockFetchContradictions.mockResolvedValueOnce({
+    // Both the page count query and ContradictionsPanel call fetchContradictions;
+    // use mockResolvedValue (not Once) so both calls return the contradiction.
+    mockFetchContradictions.mockResolvedValue({
       total: 1,
       contradictions: [
         {
@@ -442,7 +510,7 @@ describe('PaperDetailPage', () => {
       status: 'verified',
       limit: 20,
     });
-    expect(screen.getByText('The papers disagree about recurrence requirements.')).toBeInTheDocument();
+    expect(screen.getByText(/The papers disagree about recurrence requirements/)).toBeInTheDocument();
     expect(screen.getByText(/We dispense with recurrence/)).toBeInTheDocument();
   });
 
@@ -463,7 +531,7 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No summary available')).toBeInTheDocument();
+      expect(screen.getByText(/Run Analyze to generate a summary/)).toBeInTheDocument();
     });
   });
 
@@ -479,7 +547,7 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
 
     expect(screen.getByText(/Paper Detail is the workspace/)).toBeInTheDocument();
@@ -519,10 +587,53 @@ describe('PaperDetailPage', () => {
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
     });
 
     expect(screen.queryByText(/Paper Detail is the workspace/)).not.toBeInTheDocument();
+  });
+
+  // ── Left rail (TOC + pipeline) ─────────────────────────────────────────────
+
+  it('renders the left-rail TOC with section labels', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: MOCK_PAPER,
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: MOCK_USER_STATE,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
+    });
+
+    // TOC navigation labels should appear in nav
+    const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
+    expect(nav).toBeInTheDocument();
+    expect(nav).toHaveTextContent('Brief');
+    expect(nav).toHaveTextContent('Methodology');
+  });
+
+  it('renders pipeline status in the TOC', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: { ...MOCK_PAPER, pdf_downloaded: true },
+      summary: MOCK_SUMMARY,
+      chunks: MOCK_CHUNKS,
+      user_state: null,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
+    });
+
+    // Pipeline section visible in TOC
+    expect(screen.getByText('§ Pipeline')).toBeInTheDocument();
+    expect(screen.getByText('Downloaded')).toBeInTheDocument();
+    expect(screen.getByText('Summarized')).toBeInTheDocument();
   });
 
   describe('?action=process scroll behaviour', () => {
@@ -566,7 +677,7 @@ describe('PaperDetailPage', () => {
       renderPage('42', '?action=process');
 
       await waitFor(() => {
-        expect(screen.getByText('Attention Is All You Need')).toBeInTheDocument();
+        expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
       });
 
       expect(scrollIntoViewSpy).toHaveBeenCalledTimes(1);

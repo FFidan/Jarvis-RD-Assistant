@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { fetchStackHealth, type ServiceHealth, type ServiceHealthStatus } from '@/lib/api';
 
@@ -84,9 +85,15 @@ function ServiceRow({ svc }: { svc: ServiceHealth }) {
 interface HealthDotsProps {
   /** When true the component renders a compact row of dots (sidebar-collapsed mode). */
   compact?: boolean;
+  /**
+   * When provided (admin users only), clicking the health pill navigates to
+   * this path instead of expanding in-place. Spec §3.4: admin users navigate
+   * to /admin/system-health; non-admin users keep in-place expand behavior.
+   */
+  adminLink?: string;
 }
 
-export function HealthDots({ compact = false }: HealthDotsProps) {
+export function HealthDots({ compact = false, adminLink }: HealthDotsProps) {
   const [expanded, setExpanded] = useState(false);
 
   const { data, isError } = useQuery({
@@ -137,6 +144,29 @@ export function HealthDots({ compact = false }: HealthDotsProps) {
   }
 
   // ----- Expanded sidebar mode -----
+
+  // Admin users: pill navigates to system-health page instead of expanding.
+  if (adminLink) {
+    return (
+      <div className="space-y-1 text-xs text-muted-foreground" data-testid="health-dots-root">
+        <Link
+          to={adminLink}
+          className={cn(
+            'flex w-full items-center gap-2 rounded px-2 py-1 text-xs font-medium transition-colors hover:bg-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            pillColor(overall),
+          )}
+          aria-label={`Stack health: ${pillLabel(overall, downCount, degradedCount)}. Click to view system health.`}
+          data-testid="health-pill-admin-link"
+        >
+          <span
+            className={cn('h-2 w-2 shrink-0 rounded-full', statusColor(overall))}
+          />
+          <span className="flex-1 text-left">{pillLabel(overall, downCount, degradedCount)}</span>
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1 text-xs text-muted-foreground" data-testid="health-dots-root">
       {/* Collapsed pill / toggle row */}

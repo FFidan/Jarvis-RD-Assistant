@@ -1,0 +1,26 @@
+{
+  "name": "JARVIS RD Assistant",
+  "short_name": "JARVIS",
+  "description": "Research assistant — install for offline reading of your library, summaries, extractions, and notes.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0b3a8a",
+  "background_color": "#fbfaf7",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any"
+    },
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "maskable"
+    }
+  ]
+}

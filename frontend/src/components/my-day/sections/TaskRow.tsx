@@ -61,14 +61,14 @@ export function TaskRow({ task, index, isTimerActive }: TaskRowProps) {
         </button>
       )}
 
-      {/* Focus button */}
+      {/* Focus button — always visible (§1d); binds this task to the Pomodoro */}
       <button
         data-touch-target
         onClick={() =>
           usePomodoroStore.getState().startWork({ id: task.id, title: task.title, type: 'task' })
         }
         disabled={isTimerActive}
-        className="opacity-0 group-hover:opacity-100 h-6 px-2 text-[10px] font-mono rounded text-[var(--ink-blue)] hover:bg-[var(--ink-blue-soft)] disabled:opacity-30 transition-opacity flex-shrink-0"
+        className="h-6 px-2 text-[10px] font-mono rounded text-[var(--ink-blue)] hover:bg-[var(--ink-blue-soft)] disabled:opacity-30 transition-colors flex-shrink-0"
         title={isTimerActive ? 'A Pomodoro is already running' : 'Start 25:00 Pomodoro on this task'}
       >
         ▶ Focus

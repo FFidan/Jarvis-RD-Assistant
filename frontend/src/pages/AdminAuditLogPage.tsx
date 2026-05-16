@@ -17,6 +17,7 @@ import { listAuditLog, type AuditLogEntry } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { AdminBreadcrumb } from '@/components/layout/AdminBreadcrumb';
 
 function formatDate(iso: string): string {
   try {
@@ -68,6 +69,7 @@ export function AdminAuditLogPage() {
   return (
     <div className="p-6 space-y-6">
       <div>
+        <AdminBreadcrumb page="Audit log" />
         <h1 className="text-2xl font-semibold">Audit log</h1>
         <p className="text-sm text-muted-foreground mt-1">
           Security and administrative events, newest first.
