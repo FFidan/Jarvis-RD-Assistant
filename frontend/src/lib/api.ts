@@ -364,6 +364,11 @@ export const updateUserRole = (userId: number, role: 'user' | 'admin') =>
 export const deleteUser = (userId: number) =>
   apiFetch<void>(`/api/admin/users/${userId}`, { method: 'DELETE' });
 
+export const sendSignInLink = (userId: number) =>
+  apiFetch<{ sent: boolean }>(`/api/admin/users/${userId}/send-link`, {
+    method: 'POST',
+  });
+
 // --- Admin audit log (WS-ADMIN-AUDIT) ---
 
 export interface AuditLogEntry {
@@ -466,7 +471,7 @@ export const getSetupStatus = () =>
 // --- WS-2F first-run wizard (pre-auth bootstrap) ---
 // These call /api/setup/* which is unauthenticated until the first admin exists.
 // Distinct surface from /api/system/setup-status above (post-login bootstrap).
-export interface FirstRunStatus { configured: boolean }
+export interface FirstRunStatus { configured: boolean; setup_mode?: 'single' | 'multi' }
 export interface FirstRunServiceStatus { name: string; ok: boolean; detail: string | null }
 export interface FirstRunSystemCheck { services: FirstRunServiceStatus[]; all_ok: boolean }
 export interface FirstRunSmtpBody {
@@ -731,8 +736,10 @@ export const deleteCard = (id: number) =>
   apiFetch<void>(`/api/cards/${id}`, { method: 'DELETE' });
 
 // --- Review ---
-export const getNextReview = (limit = 1) =>
-  apiFetch<Card[]>(`/api/review/next?limit=${limit}`);
+export const getNextReview = (limit = 1, deckId?: number) =>
+  apiFetch<Card[]>(
+    `/api/review/next?limit=${limit}${deckId != null ? `&deck_id=${deckId}` : ''}`,
+  );
 export const submitReview = (cardId: number, rating: number, durationMs?: number) =>
   apiFetch<ReviewResponse>(`/api/review/${cardId}`, {
     method: 'POST',

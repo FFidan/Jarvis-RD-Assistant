@@ -117,4 +117,46 @@ describe('FirstRunSetupPage', () => {
     // Should land on cloud LLM step next.
     expect(await screen.findByText(/Cloud LLM keys/i)).toBeInTheDocument();
   });
+
+  describe('SmtpStep copy adapts to setup_mode', () => {
+    it('single-user mode: shows API-key skip copy and default-variant skip button', async () => {
+      vi.mocked(api.getFirstRunStatus).mockResolvedValueOnce({
+        configured: false,
+        setup_mode: 'single',
+      });
+      const user = userEvent.setup();
+      renderWizard();
+      await screen.findByText('Welcome to JARVIS');
+      await user.click(screen.getByRole('button', { name: /continue/i }));
+
+      // Description text specific to single-user mode.
+      expect(
+        await screen.findByText(/log in with your API key/i),
+      ).toBeInTheDocument();
+      // Skip button has the single-user label (apostrophe may be ' or ').
+      expect(
+        screen.getByRole('button', { name: /Skip.*use my API key/i }),
+      ).toBeInTheDocument();
+    });
+
+    it('multi-user mode: shows magic-link copy and ghost-variant skip button', async () => {
+      vi.mocked(api.getFirstRunStatus).mockResolvedValueOnce({
+        configured: false,
+        setup_mode: 'multi',
+      });
+      const user = userEvent.setup();
+      renderWizard();
+      await screen.findByText('Welcome to JARVIS');
+      await user.click(screen.getByRole('button', { name: /continue/i }));
+
+      // Description text specific to multi-user mode.
+      expect(
+        await screen.findByText(/magic-link login emails/i),
+      ).toBeInTheDocument();
+      // Skip button has the plain label.
+      expect(
+        screen.getByRole('button', { name: /^skip$/i }),
+      ).toBeInTheDocument();
+    });
+  });
 });

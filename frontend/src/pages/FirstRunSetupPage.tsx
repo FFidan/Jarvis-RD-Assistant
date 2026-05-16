@@ -67,7 +67,7 @@ export function FirstRunSetupPage() {
   return (
     <div className="min-h-screen bg-background">
       {step === 1 && <SystemCheckStep onNext={goNext} />}
-      {step === 2 && <SmtpStep onBack={goBack} onNext={goNext} />}
+      {step === 2 && <SmtpStep onBack={goBack} onNext={goNext} singleUser={status?.setup_mode === 'single'} />}
       {step === 3 && (
         <AdminStep
           onBack={goBack}
@@ -174,7 +174,7 @@ function SystemCheckStep({ onNext }: { onNext: () => void }) {
 // Step 2: SMTP
 // ---------------------------------------------------------------------------
 
-function SmtpStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
+function SmtpStep({ onBack, onNext, singleUser }: { onBack: () => void; onNext: () => void; singleUser?: boolean }) {
   const [host, setHost] = useState('');
   const [port, setPort] = useState('587');
   const [user, setUser] = useState('');
@@ -210,17 +210,19 @@ function SmtpStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }
       stepNumber={2}
       totalSteps={TOTAL_STEPS}
       title="SMTP relay"
-      description="Used to send magic-link login emails. Skippable — dev mode logs links to stdout instead."
+      description={singleUser
+        ? "Single-user install — you log in with your API key, so email is optional. Configure SMTP only if you plan to add more users later."
+        : "Used to send magic-link login emails. Skippable — dev mode logs links to stdout instead."}
       footer={
         <>
           <Button variant="ghost" onClick={onBack}>
             Back
           </Button>
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={onNext}>
-              Skip
+            <Button variant={singleUser ? 'default' : 'ghost'} onClick={onNext}>
+              {singleUser ? 'Skip — I\'ll use my API key' : 'Skip'}
             </Button>
-            <Button onClick={onNext} disabled={saveMut.isPending}>
+            <Button variant={singleUser ? 'ghost' : 'default'} onClick={onNext} disabled={!singleUser && saveMut.isPending}>
               Continue <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>

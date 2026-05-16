@@ -7,12 +7,19 @@ A self-hosted AI research assistant that delivers citation-backed paper briefing
 ```bash
 git clone https://github.com/FFidan/Jarvis-RD-Assistant.git
 cd Jarvis-RD-Assistant
+./setup.sh --check   # recommended: preflight check (read-only, exits 0 on pass)
 ./setup.sh
 ```
 
 `setup.sh` generates strong random secrets, configures TLS, and brings the stack
 up. Open **http://localhost:3001** (or the HTTPS URL it prints). The first-run
 wizard creates the first admin account — no pre-existing credentials required.
+
+`setup.sh` asks whether this is a solo install or a team instance (`--mode
+single|multi`). Single-user mode logs in via `JARVIS_API_KEY` with no SMTP
+dependency; multi-user mode uses email magic-links and requires an SMTP relay.
+See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#single-user-vs-multi-user-mode) for
+details.
 
 **Non-interactive (CI / cloud-init):**
 

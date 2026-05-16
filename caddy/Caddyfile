@@ -1,5 +1,9 @@
+# Requires LETSENCRYPT_EMAIL and LETSENCRYPT_DOMAIN to be set in the
+# environment (docker-compose.yml passes them via the [letsencrypt] profile).
+# Fallback values prevent Caddyfile parse errors when the profile is not
+# active, but Let's Encrypt will not succeed without the real values.
 {
-	email {$LETSENCRYPT_EMAIL}
+	email {$LETSENCRYPT_EMAIL:noop@example.invalid}
 	servers {
 		max_header_size 16KB
 	}
@@ -10,7 +14,7 @@
 # without buying anything for a single-machine compose stack. If a future
 # multi-host deployment needs inner mTLS, see W1-4 in
 # docs/plans/2026-05-07-post-audit-fix-sweep.md.
-{$LETSENCRYPT_DOMAIN} {
+{$LETSENCRYPT_DOMAIN:localhost} {
 	request_body {
 		max_size 50MB
 	}

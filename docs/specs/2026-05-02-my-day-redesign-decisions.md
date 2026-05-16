@@ -118,7 +118,7 @@ The `handoff/COMPONENT_MAP.md` "Create" list translates 1:1 to our layout. New c
 - [frontend/src/components/my-day/ActionItemsCard.tsx](../../frontend/src/components/my-day/ActionItemsCard.tsx)
 - [frontend/src/components/my-day/MissingFoundationalCard.tsx](../../frontend/src/components/my-day/MissingFoundationalCard.tsx)
 - [frontend/src/components/my-day/LearningCardsSummary.tsx](../../frontend/src/components/my-day/LearningCardsSummary.tsx)
-- [frontend/src/components/my-day/PomodoroTimer.tsx](../../frontend/src/components/my-day/PomodoroTimer.tsx)
+- `frontend/src/components/my-day/PomodoroTimer.tsx` — **removed in the 2026-05-15 UI_v3 redesign** (confirmed dead code, zero imports; superseded by the EOD shutdown ritual + Hero/Header Pomodoro controls)
 - [frontend/src/components/my-day/PulsePreviewCard.tsx](../../frontend/src/components/my-day/PulsePreviewCard.tsx) — re-skinned into `PulseRow.tsx` for ranks 2–5; rank 1 lives in `HeroPulse`. The data hook (TanStack Query against `['pulse-today']`) is preserved verbatim.
 - [frontend/src/components/layout/HeaderPomodoro.tsx](../../frontend/src/components/layout/HeaderPomodoro.tsx) (already in topbar; verify it shows the active task title and add the `max-w-[120px] truncate` if missing)
 

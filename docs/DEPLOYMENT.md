@@ -51,6 +51,22 @@ After the stack is healthy, open the dashboard. The setup wizard runs
 automatically on first visit (`setup.completed = false` in DB). Complete the
 wizard to configure your timezone, Pulse schedule, and Telegram pairing.
 
+### Source HTTP cache
+
+JARVIS caches successful `GET` responses from external metadata sources
+(Semantic Scholar, arXiv, OpenAlex, Crossref, PubMed) in memory to reduce
+duplicate outbound requests and 429 rate-limit failures during discovery runs.
+The cache is on by default; only `GET`+`200` responses for those hosts are
+stored — errors are never cached.
+
+| Env var | Default | Description |
+|---|---|---|
+| `SOURCE_HTTP_CACHE_ENABLED` | `true` | Set `false` to disable the in-memory source GET cache entirely. |
+| `SOURCE_HTTP_CACHE_TTL_SECONDS` | `900` | How long (seconds) a cached response is considered fresh. Raise this to reduce API calls on high-frequency Pulse runs; lower it to pick up faster source updates. |
+
+These vars are read by `paper_ingestion` at startup. A service restart is
+required when changing them. No action is needed for the defaults.
+
 ### Pulse source caveats
 
 Manual Pulse regeneration can temporarily exhaust public-source rate limits.
@@ -518,11 +534,58 @@ Key `paper_ingestion` endpoints referenced in operator workflows:
 `setup.sh` supports a `--non-interactive` mode for CI pipelines, cloud-init
 scripts, and automated provisioning where stdin is not a terminal.
 
+### Pre-flight check
+
+Before running `setup.sh` for the first time, run the preflight doctor to catch
+missing dependencies and configuration problems early:
+
+```bash
+./setup.sh --check
+```
+
+`--check` is **read-only and idempotent** — it writes nothing to disk, does not
+modify `.env`, and never starts the stack. It verifies:
+
+- Docker Engine is installed and the daemon is reachable.
+- Docker Compose v2 is available (`docker compose version`).
+- `openssl` is on PATH (required for secret generation).
+- GPU/NVIDIA Container Toolkit presence (informational; not fatal).
+- `.env` file exists (warns if absent).
+
+Exit codes: **0** — all checks pass (PREFLIGHT: PASS). **1** — one or more
+checks failed (PREFLIGHT: FAIL). Run this as a sanity step before every fresh
+install or CI pipeline.
+
+### Single-user vs multi-user mode
+
+`setup.sh` accepts a `--mode` flag that controls authentication behaviour:
+
+```bash
+./setup.sh --mode single   # default
+./setup.sh --mode multi
+```
+
+When `--mode` is omitted and `--non-interactive` is **not** set, `setup.sh`
+prompts: *"Who will use this instance? [1] Just me  [2] A team"* — pick 1 for
+single, 2 for multi. The default when nothing is specified is `single`.
+
+| Mode | Env vars written | How users log in | SMTP required? |
+|---|---|---|---|
+| `single` | `JARVIS_SETUP_MODE=single`, `API_KEY_LOGIN_ENABLED=true` | Operator uses `JARVIS_API_KEY` via the api-key-session endpoint (`POST /api/auth/api-key-session`) | No — SMTP is optional (shown in the first-run wizard but can be skipped) |
+| `multi` | `JARVIS_SETUP_MODE=multi`, `API_KEY_LOGIN_ENABLED=false` | Email magic-link (team/shared instance) | Yes — configure SMTP relay in the first-run wizard or via `SMTP_*` env vars |
+
+**Single-user mode is not an auth downgrade.** It reuses the existing
+single-tenant-gated `POST /api/auth/api-key-session` endpoint; `JARVIS_API_KEY`
+still gates all REST calls. The only difference is that the dashboard's
+magic-link sign-in flow is bypassed in favour of the API key, removing the SMTP
+dependency for solo installs.
+
 ### Flags
 
 | Flag | Required | Description |
 |---|---|---|
 | `--non-interactive` | yes | Enable non-interactive mode. Every prompt is driven by flags or defaults; no `read` calls are attempted. |
+| `--mode <single\|multi>` | no (default: `single`) | Authentication mode. `single` — API-key login, no SMTP required. `multi` — magic-link login, SMTP relay expected. Interactive prompt when omitted and not `--non-interactive`. |
 | `--domain <host>` | letsencrypt only | Public hostname (e.g. `jarvis.example.com`). Populates `LETSENCRYPT_DOMAIN` and `TUNNEL_HOSTNAME`. |
 | `--admin-email <email>` | letsencrypt only | Let's Encrypt ACME account email. Populates `LETSENCRYPT_EMAIL`. |
 | `--profile <dev\|local-https\|letsencrypt>` | no (default: `dev`) | `dev` — `ENVIRONMENT=development`, localhost binding. `local-https` — self-signed cert, localhost binding. `letsencrypt` — Caddy + ACME; requires `--domain` + `--admin-email`; sets `ENVIRONMENT=production`. |

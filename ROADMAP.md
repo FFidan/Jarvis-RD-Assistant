@@ -44,6 +44,14 @@ Current release: **v0.4.1**.
   be announced when scoped.
 - **Discovery reliability.** Response caching for external metadata sources to
   reduce rate-limit failures during discovery.
+- **Documentation site + complete user guide.** A published companion site
+  with operator/developer docs (the in-repo Markdown remains the offline
+  source of truth for self-hosters) and a complete end-user manual: from
+  install and setup through every capability of the project (ingestion,
+  hybrid RAG, citation & knowledge graph, contradiction detection, the
+  Pulse recommender, FSRS flashcards, notes, projects, Telegram, the
+  multi-tenant model) and a full UI/UX walkthrough. The user-guide portion
+  follows the in-progress UI redesign so it ships current rather than stale.
 
 ## Not planned
 

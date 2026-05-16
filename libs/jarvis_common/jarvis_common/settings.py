@@ -89,6 +89,8 @@ class CoreSettings(BaseSettings):
     # when exactly one non-deleted user exists OR this flag is explicitly true
     # (operator opt-in for a small multi-user-but-single-owner deployment).
     api_key_login_enabled: bool = False
+    # Written by setup.sh into .env. Drives the first-run wizard SMTP step.
+    jarvis_setup_mode: Literal["single", "multi"] = "single"
 
     @model_validator(mode="after")
     def _promote_dev_flags(self) -> CoreSettings:
