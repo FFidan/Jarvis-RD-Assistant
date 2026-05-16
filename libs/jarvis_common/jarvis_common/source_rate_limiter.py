@@ -346,3 +346,114 @@ class PersistentSourceRateLimiter:
                 exc_info=True,
             )
             return False, None
+
+    async def reset(self) -> None:
+        """Explicitly clear this source's health (admin / self-heal action).
+
+        Sets ``last_status='ok'``, ``cooldown_until=NULL`` and
+        ``consecutive_failures=0`` for this ``(user_id, source_type)`` pair.
+
+        This mirrors the SQL effect of the ``"ok"`` branch of
+        :meth:`update_last_request`, but is a deliberate, explicit action
+        (operator clears a stuck source, or a self-heal pass clears an
+        expired-but-not-reset ``rate_limit`` row) rather than the side effect
+        of a successful poll. ``last_request_at`` / ``updated_at`` are stamped
+        ``now()`` so the row reflects when the reset happened.
+
+        DB errors are swallowed (logged) so a reset attempt never raises into
+        an admin endpoint or a self-heal path.
+        """
+        now = datetime.now(tz=UTC)
+        try:
+            async with self._pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO source_health
+                        (user_id, source_type, last_request_at, last_status,
+                         cooldown_until, consecutive_failures, updated_at)
+                    VALUES ($1, $2, $3, 'ok', NULL, 0, $3)
+                    ON CONFLICT (user_id, source_type) DO UPDATE
+                       SET last_status = 'ok',
+                           cooldown_until = NULL,
+                           consecutive_failures = 0,
+                           updated_at = EXCLUDED.updated_at
+                    """,
+                    self._user_id,
+                    self._source_type,
+                    now,
+                )
+        except Exception as exc:
+            _logger.warning(
+                "PersistentSourceRateLimiter[%s] DB reset failed: %s",
+                self._source_type,
+                exc,
+                exc_info=True,
+            )
+
+    async def health_snapshot(self) -> dict:
+        """Return a self-describing health snapshot for this source.
+
+        Returns
+        -------
+        dict
+            ``{"in_cooldown": bool, "cooldown_until": str|None,
+            "last_status": str|None, "last_request_at": str|None,
+            "stale": bool}`` where:
+
+            * ``in_cooldown`` — ``cooldown_until`` is set and strictly in the
+              future (same rule as :meth:`is_in_cooldown`).
+            * ``stale`` — ``last_status='rate_limit'`` while ``cooldown_until``
+              is null-or-past, i.e. a *stuck expired* rate-limit state that no
+              successful poll ever cleared. Such a row must never be presented
+              to a user as a live cooldown.
+            * timestamps are ISO-8601 strings (or ``None``).
+
+        On DB error a safe "no data" snapshot is returned (never raises).
+        """
+        safe: dict = {
+            "in_cooldown": False,
+            "cooldown_until": None,
+            "last_status": None,
+            "last_request_at": None,
+            "stale": False,
+        }
+        try:
+            async with self._pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT cooldown_until, last_status, last_request_at
+                      FROM source_health
+                     WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                       AND source_type = $2
+                    """,
+                    self._user_id,
+                    self._source_type,
+                )
+            if row is None:
+                return safe
+            now = datetime.now(tz=UTC)
+            cooldown_until: datetime | None = row["cooldown_until"]
+            last_status: str | None = row["last_status"]
+            last_request_at: datetime | None = row["last_request_at"]
+            in_cooldown = cooldown_until is not None and cooldown_until > now
+            cooldown_expired_or_unset = cooldown_until is None or cooldown_until <= now
+            stale = last_status == "rate_limit" and cooldown_expired_or_unset
+            return {
+                "in_cooldown": in_cooldown,
+                "cooldown_until": (
+                    cooldown_until.isoformat() if cooldown_until is not None else None
+                ),
+                "last_status": last_status,
+                "last_request_at": (
+                    last_request_at.isoformat() if last_request_at is not None else None
+                ),
+                "stale": stale,
+            }
+        except Exception as exc:
+            _logger.warning(
+                "PersistentSourceRateLimiter[%s] DB health_snapshot failed: %s",
+                self._source_type,
+                exc,
+                exc_info=True,
+            )
+            return safe

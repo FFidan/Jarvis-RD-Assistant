@@ -293,6 +293,151 @@ async def test_arxiv_no_magic_ceiling_in_query_url():
     assert "29991231]" not in sq
 
 
+# ---------------------------------------------------------------------------
+# B2: classification — only a real 429 (or 503+Retry-After) is "rate_limit"
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_b2_503_without_retry_after_is_error_not_rate_limit(monkeypatch):
+    """A plain 503 (no Retry-After) must classify as 'error', never 'rate_limit'.
+
+    A transient upstream blip must not strand arXiv in a multi-hour cooldown.
+    """
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=[httpx.Response(503), httpx.Response(503), httpx.Response(503)]
+    )
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    papers = await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "error"
+    assert source.last_poll_diagnostic["status"] != "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 503
+
+
+@respx.mock
+async def test_b2_503_with_retry_after_is_rate_limit(monkeypatch):
+    """arXiv occasionally throttles via 503 + Retry-After → classify rate_limit."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=[
+            httpx.Response(503, headers={"Retry-After": "30"}),
+            httpx.Response(503, headers={"Retry-After": "30"}),
+            httpx.Response(503, headers={"Retry-After": "30"}),
+        ]
+    )
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    papers = await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 503
+    assert source.last_poll_diagnostic["retry_after_s"] == 30
+
+
+@respx.mock
+async def test_b2_real_429_is_rate_limit_with_retry_after(monkeypatch):
+    """A genuine HTTP 429 classifies as rate_limit and carries Retry-After."""
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    monkeypatch.setattr("paper_ingestion.sources.arxiv_source.asyncio.sleep", fake_sleep)
+    respx.get(ARXIV_API_URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "60"}),
+            httpx.Response(429, headers={"Retry-After": "60"}),
+            httpx.Response(429, headers={"Retry-After": "60"}),
+        ]
+    )
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    papers = await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "rate_limit"
+    assert source.last_poll_diagnostic["status_code"] == 429
+    assert source.last_poll_diagnostic["retry_after_s"] == 60
+
+
+@respx.mock
+async def test_b2_empty_results_do_not_set_rate_limit():
+    """An empty (but valid) Atom feed must not produce a rate_limit diagnostic."""
+    empty_feed = (
+        b'<?xml version="1.0" encoding="UTF-8"?>'
+        b'<feed xmlns="http://www.w3.org/2005/Atom">'
+        b'<totalResults xmlns="http://a9.com/-/spec/opensearch/1.1/">0</totalResults>'
+        b"</feed>"
+    )
+    respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=empty_feed))
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    papers = await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert papers == []
+    # Valid empty feed clears the diagnostic — definitely never rate_limit.
+    assert source.last_poll_diagnostic is None
+
+
+@respx.mock
+async def test_b2_malformed_xml_is_error_not_rate_limit():
+    """Malformed XML (200 OK body) classifies as 'error', never 'rate_limit'."""
+    respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, text="<feed><entry"))
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    papers = await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert papers == []
+    assert source.last_poll_diagnostic is not None
+    assert source.last_poll_diagnostic["status"] == "error"
+    assert source.last_poll_diagnostic["status"] != "rate_limit"
+
+
+@respx.mock
+async def test_b2_user_agent_header_sent_on_every_request():
+    """Every arXiv request must carry a descriptive JARVIS-RD User-Agent."""
+    fixture = (FIXTURES / "arxiv_new_since.xml").read_bytes()
+    route = respx.get(ARXIV_API_URL).mock(return_value=httpx.Response(200, content=fixture))
+
+    source = _make_source()
+    since = datetime(2026, 4, 9, 0, 0, 0, tzinfo=UTC)
+
+    await source.fetch_new_since(since=since, topics=[], limit=5)
+
+    assert route.call_count >= 1
+    ua = route.calls[0].request.headers.get("User-Agent", "")
+    assert ua.startswith("JARVIS-RD/")
+    assert "research paper assistant" in ua
+
+
 @respx.mock
 async def test_fetch_new_since_timeout_records_sanitized_diagnostic():
     """arXiv timeouts should not expose raw request URLs or provider details."""

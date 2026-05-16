@@ -11,6 +11,7 @@ import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.scoring import ScoredCandidate
+
 from tests.conftest import _make_pool_and_conn
 
 
@@ -980,3 +981,65 @@ async def test_run_pulse_catches_stage2_client_unavailable(patch_pipeline):
     # degraded_reason must be set and reference the sentinel
     assert stats.get("degraded_reason") is not None
     assert "openai_client" in stats["degraded_reason"]
+
+
+# ---------------------------------------------------------------------------
+# B8 — PULSE_STAGE2_TIMEOUT_SECONDS env-tunable (default 900)
+# ---------------------------------------------------------------------------
+
+
+def test_stage2_timeout_default_is_900(monkeypatch):
+    """Default PULSE_STAGE2_TIMEOUT_SECONDS must be 900 (more generous than the old 600)."""
+    import importlib
+
+    import paper_ingestion.pulse.job as job_mod
+
+    monkeypatch.delenv("PULSE_STAGE2_TIMEOUT_SECONDS", raising=False)
+    importlib.reload(job_mod)
+
+    assert job_mod._stage2_timeout() == 900
+
+
+def test_stage2_timeout_env_override(monkeypatch):
+    """PULSE_STAGE2_TIMEOUT_SECONDS env var is respected by _stage2_timeout()."""
+    import importlib
+
+    import paper_ingestion.pulse.job as job_mod
+
+    monkeypatch.setenv("PULSE_STAGE2_TIMEOUT_SECONDS", "300")
+    importlib.reload(job_mod)
+
+    assert job_mod._stage2_timeout() == 300
+
+
+@pytest.mark.asyncio
+async def test_stage2_timeout_message_includes_configured_value(patch_pipeline):
+    """When stage2 times out, the degraded_reason message quotes the configured timeout value.
+
+    Patches _stage2_timeout() directly so that the existing patch_pipeline
+    fixture remains intact (no importlib.reload that would break those patches).
+    """
+    from unittest.mock import patch as stdlib_patch
+
+    from paper_ingestion.pulse.job import run_pulse
+
+    async def raise_timeout(*_a, **_kw):
+        raise TimeoutError()
+
+    patch_pipeline["mocks"]["stage2_llm_rerank"].side_effect = raise_timeout
+
+    async def stage3_impl(stage2_out, weights):
+        for sc in stage2_out:
+            sc.final_score = 0.5
+        return stage2_out
+
+    patch_pipeline["mocks"]["stage3_combine"].side_effect = stage3_impl
+    patch_pipeline["mocks"]["assemble_deck"].side_effect = lambda scored, size: scored[:size]
+
+    pool, _conn = _make_pool_and_conn()
+    with stdlib_patch("paper_ingestion.pulse.job._stage2_timeout", return_value=42):
+        stats = await run_pulse(pool, MagicMock(), MagicMock(), now=datetime.now(UTC))
+
+    assert stats["last_error"] is None
+    assert stats.get("degraded_reason") is not None
+    assert "42s" in stats["degraded_reason"]

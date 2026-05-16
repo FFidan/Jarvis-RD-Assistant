@@ -10,6 +10,7 @@ import httpx
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
 from paper_ingestion.pulse.profile import UserProfile
+
 from tests.conftest import FakeRecord, _make_pool_and_conn
 
 # ---------------------------------------------------------------------------
@@ -558,12 +559,35 @@ async def test_include_diagnostics_clears_stale_source_diagnostic_after_success(
 # ---------------------------------------------------------------------------
 
 
-def _stub_rate_limiter(in_cooldown: bool, until: "datetime | None" = None):
-    """Return a mock PersistentSourceRateLimiter whose is_in_cooldown is pre-set."""
+def _stub_rate_limiter(
+    in_cooldown: bool,
+    until: "datetime | None" = None,
+    *,
+    stale: bool = False,
+    last_status: str | None = None,
+    last_request_at: "datetime | None" = None,
+):
+    """Return a mock PersistentSourceRateLimiter with a pre-set health_snapshot.
+
+    ``is_in_cooldown`` is kept for legacy callers; the discovery cooldown gate
+    now consumes ``health_snapshot()`` and may call ``reset()`` for stale rows.
+    """
     from unittest.mock import AsyncMock
 
     rl = MagicMock()
     rl.is_in_cooldown = AsyncMock(return_value=(in_cooldown, until))
+    rl.health_snapshot = AsyncMock(
+        return_value={
+            "in_cooldown": in_cooldown,
+            "cooldown_until": until.isoformat() if until is not None else None,
+            "last_status": last_status or ("rate_limit" if (in_cooldown or stale) else "ok"),
+            "last_request_at": (
+                last_request_at.isoformat() if last_request_at is not None else None
+            ),
+            "stale": stale,
+        }
+    )
+    rl.reset = AsyncMock(return_value=None)
     return rl
 
 
@@ -710,3 +734,100 @@ async def test_discover_writes_cooldown_skip_row_to_history():
     sql: str = call_args[0][0]
     assert "source_run_history" in sql
     assert "cooldown_skip" in sql
+
+
+@pytest.mark.asyncio
+async def test_discover_self_heals_stale_rate_limit_and_proceeds():
+    """A stale (expired-but-unreset) rate_limit row is reset, then polled.
+
+    This is the arXiv-stuck bug: last_status='rate_limit', cooldown_until in
+    the past. It must NOT be reported as a live cooldown; instead reset() is
+    called and the source runs normally this pass.
+    """
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+    stub = _CooldownStub([_paper("arxiv:42", "Recovered")])
+
+    def fake_get(name):
+        return _make_source_class(stub)
+
+    rl_mock = _stub_rate_limiter(
+        in_cooldown=False,
+        until=None,
+        stale=True,
+        last_status="rate_limit",
+        last_request_at=week_ago,
+    )
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=rl_mock,
+        ),
+    ):
+        result, source_counts, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    # Self-heal: reset() was called for the stale row.
+    rl_mock.reset.assert_awaited_once()
+    # The source ran (not skipped) and produced its paper.
+    assert stub.fetch_new_since_calls == 1
+    assert len(result) == 1
+    assert result[0].external_id == "arxiv:42"
+    # Diagnostic must NOT claim a live cooldown for a week-old stale failure.
+    diag = diagnostics["_CooldownStub"]
+    assert diag["status"] != "cooldown"
+    assert diag["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_discover_cooldown_message_is_dated_and_plain_language():
+    """The cooldown diagnostic is plain-language, dated, and UTC-explicit."""
+    from datetime import timedelta
+
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [_source_row("arxiv", 1)]
+
+    cooldown_until = datetime(2026, 5, 9, 0, 39, 1, tzinfo=UTC) + timedelta(days=30)
+    stub = _CooldownStub()
+
+    def fake_get(name):
+        return _make_source_class(stub)
+
+    rl_mock = _stub_rate_limiter(in_cooldown=True, until=cooldown_until)
+
+    with (
+        patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get),
+        patch(
+            "paper_ingestion.pulse.discovery.PersistentSourceRateLimiter",
+            return_value=rl_mock,
+        ),
+    ):
+        _, _, diagnostics = await discover_candidates(
+            pool,
+            MagicMock(),
+            _make_profile(),
+            since=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+    msg = diagnostics["_CooldownStub"]["message"]
+    # Dated (YYYY-MM-DD), timezone-explicit (UTC), plain-language, self-heal.
+    assert "UTC" in msg
+    assert cooldown_until.strftime("%Y-%m-%d %H:%M") in msg
+    assert "retry automatically" in msg
+    # The old bare "{:%H:%M}" with no date must be gone.
+    assert msg != "In cooldown until 00:39"
+    assert diagnostics["_CooldownStub"]["status"] == "cooldown"

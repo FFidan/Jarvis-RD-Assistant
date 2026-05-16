@@ -27,6 +27,8 @@ APP_BASE_URL                app_base_url                routers/auth.py, routers
 AUTO_FETCH_INTERVAL_HOURS   auto_fetch_interval_hours   main.py, pipelines/auto_fetch.py
 PULSE_STAGE2_MODEL          pulse_stage2_model          pulse/scoring.py
 PULSE_STAGE2_MAX_RETRIES    pulse_stage2_max_retries    pulse/scoring.py
+PULSE_STAGE2_TIMEOUT_SECONDS pulse_stage2_timeout_seconds pulse/job.py
+PULSE_LLM_CONCURRENCY       pulse_llm_concurrency       pulse/scoring.py
 SEMANTIC_SCHOLAR_API_KEY    semantic_scholar_api_key    routers/search_helpers.py,
                                                          sources/semantic_scholar_source.py
 PUBMED_API_KEY              pubmed_api_key              sources/pubmed_source.py
@@ -162,6 +164,25 @@ class PaperIngestionSettings(JarvisCommonSettings):
     pulse_stage2_max_retries: int = Field(
         default=1,
         description=("Max retry attempts for Pulse Stage-2 LLM calls (PULSE_STAGE2_MAX_RETRIES)."),
+    )
+    pulse_stage2_timeout_seconds: int = Field(
+        default=900,
+        description=(
+            "Wall-clock timeout for the Stage-2 LLM rerank step in seconds "
+            "(PULSE_STAGE2_TIMEOUT_SECONDS).  On expiry the pipeline falls back "
+            "to embedding-only ranking and marks the deck as degraded. "
+            "Default 900 s is generous for large decks on slow local models."
+        ),
+    )
+    pulse_llm_concurrency: int = Field(
+        default=4,
+        description=(
+            "Max concurrent LLM calls during Stage-2 scoring "
+            "(PULSE_LLM_CONCURRENCY).  Effective Ollama parallelism is bounded "
+            "by OLLAMA_NUM_PARALLEL (compose default: 2), so values above that "
+            "only add queue depth without throughput gain. Default 4 gives a "
+            "modest queue buffer without wasteful over-subscription."
+        ),
     )
 
     # --- External API keys ---------------------------------------------

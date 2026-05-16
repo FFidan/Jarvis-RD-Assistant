@@ -9,6 +9,9 @@ import logging
 import re
 import time as _time
 from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 from typing import Any
 
 import httpx
@@ -35,13 +38,55 @@ _ARXIV_FIELD_PREFIX = re.compile(r"\b(ti|au|abs|co|jr|cat|rn|id|all):")
 _ARXIV_REQUEST_LOCK: asyncio.Lock = asyncio.Lock()
 
 
+# arXiv asks API clients to identify themselves with a descriptive User-Agent
+# so abuse can be traced to a client rather than blanket-blocked. There is no
+# API key / higher tier for arXiv — a polite UA + the 3 s single-connection
+# cadence is the whole contract.
+def _derive_client_version() -> str:
+    """Best-effort package version for the User-Agent; static fallback."""
+    try:
+        return _pkg_version("jarvis-rd-assistant")
+    except PackageNotFoundError:
+        return "0.2.1"
+    except Exception:  # pragma: no cover - defensive; metadata API is stable
+        return "0.2.1"
+
+
+_ARXIV_USER_AGENT = (
+    f"JARVIS-RD/{_derive_client_version()} "
+    "(research paper assistant; +https://github.com/ferhatfidan/JARVIS_RD_Assistant)"
+)
+
+
 def _retry_after_s(value: str | None) -> float | None:
+    """Parse an HTTP ``Retry-After`` header value into seconds.
+
+    Accepts the two RFC 7231 forms:
+    * delta-seconds — a non-negative integer/float number of seconds.
+    * HTTP-date — an absolute date; converted to the remaining delay relative
+      to ``now`` (clamped to ``>= 0``).
+
+    Returns ``None`` when the header is absent or unparseable.
+    """
     if value is None:
+        return None
+    value = value.strip()
+    if not value:
         return None
     try:
         return max(0.0, float(value))
     except (TypeError, ValueError):
+        pass
+    # Fall back to HTTP-date form (e.g. "Wed, 21 Oct 2026 07:28:00 GMT").
+    try:
+        retry_dt = parsedate_to_datetime(value)
+    except (TypeError, ValueError):
         return None
+    if retry_dt is None:
+        return None
+    if retry_dt.tzinfo is None:
+        retry_dt = retry_dt.replace(tzinfo=UTC)
+    return max(0.0, (retry_dt - datetime.now(tz=UTC)).total_seconds())
 
 
 @register_source
@@ -67,8 +112,64 @@ class ArxivSource(PaperSource):
         self._rate_limiter = SourceRateLimiter(rate_per_second=1.0 / RATE_LIMIT_DELAY)
 
     async def _rate_limit(self) -> None:
-        """Enforce arXiv's conservative polling cadence."""
+        """Enforce arXiv's conservative polling cadence (>=3 s, single connection).
+
+        The in-process :class:`SourceRateLimiter` is configured at
+        ``1 / RATE_LIMIT_DELAY`` req/s and every call site additionally holds
+        the module-level :data:`_ARXIV_REQUEST_LOCK`, so all ArxivSource
+        instances in this process share one connection slot — matching arXiv's
+        published "no more than one request every three seconds, one
+        connection at a time" guidance.
+        """
         await self._rate_limiter.acquire()
+
+    def _build_headers(self) -> dict[str, str]:
+        """Headers sent on every arXiv request.
+
+        arXiv has no API key; the only client-identification contract is a
+        descriptive ``User-Agent``. Always present so arXiv can attribute
+        traffic to this client.
+        """
+        return {"User-Agent": _ARXIV_USER_AGENT}
+
+    def _record_transient_poll_diagnostic(self, response: httpx.Response) -> None:
+        """Classify a transient arXiv HTTP failure into a poll diagnostic.
+
+        Overrides :meth:`PaperSource._record_transient_poll_diagnostic` so that
+        the *only* responses classified as ``"rate_limit"`` are a genuine HTTP
+        429, or a 503 that carries a ``Retry-After`` header (arXiv occasionally
+        signals throttling via 503 + Retry-After). Every other transient
+        (500 / 502 / 504, or a 503 with no Retry-After) is ``"error"`` — never
+        ``"rate_limit"`` — so a plain upstream blip can never strand the source
+        in a multi-hour rate-limit cooldown.
+
+        XML/Atom parse failures, decode errors, empty results and connection
+        errors are handled elsewhere in this module and likewise never reach
+        the ``"rate_limit"`` classification.
+        """
+        status_code = response.status_code
+        retry_after_raw = _retry_after_s(response.headers.get("Retry-After"))
+        retry_after = None if retry_after_raw is None else int(round(retry_after_raw))
+        is_rate_limit = status_code == 429 or (status_code == 503 and retry_after is not None)
+        if is_rate_limit:
+            self._set_poll_diagnostic(
+                status="rate_limit",
+                message="arXiv rate limit reached. It will retry automatically later.",
+                status_code=status_code,
+                retry_after_s=retry_after,
+                settings_hint=None,
+            )
+        else:
+            self._set_poll_diagnostic(
+                status="error",
+                message=(
+                    f"arXiv upstream returned HTTP {status_code}. "
+                    "Check provider status and retry later."
+                ),
+                status_code=status_code,
+                retry_after_s=retry_after,
+                settings_hint=None,
+            )
 
     def consolidate_topics(self, topics: list[TopicRef]) -> list[SourceQuery]:
         """Merge all topics into one arXiv OR-query (or 2 if > 1500 chars).
@@ -146,7 +247,10 @@ class ArxivSource(PaperSource):
                 async with _ARXIV_REQUEST_LOCK:
                     await self._rate_limit()
                     response = await self.http_client.get(
-                        ARXIV_API_URL, params=params, timeout=30.0
+                        ARXIV_API_URL,
+                        params=params,
+                        headers=self._build_headers(),
+                        timeout=30.0,
                     )
                 if response.status_code in (429, 500, 502, 503, 504):
                     if attempt < _MAX_FETCH_ATTEMPTS - 1:

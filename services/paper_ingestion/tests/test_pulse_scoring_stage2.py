@@ -514,3 +514,70 @@ async def test_stage2_raises_sentinel_when_openai_client_none():
         await _scoring.stage2_llm_rerank(
             stage1_out, profile, verifier=_make_verifier(), openai_client=None
         )
+
+
+# ---------------------------------------------------------------------------
+# B8 — PULSE_LLM_CONCURRENCY env-tunable (default 4)
+# ---------------------------------------------------------------------------
+
+
+def test_pulse_llm_concurrency_default_is_4(monkeypatch):
+    """Default PULSE_LLM_CONCURRENCY must be 4 (not the old hard-coded 8)."""
+    import importlib
+
+    import paper_ingestion.pulse.scoring as scoring_mod
+
+    monkeypatch.delenv("PULSE_LLM_CONCURRENCY", raising=False)
+    importlib.reload(scoring_mod)
+
+    assert scoring_mod._LLM_CONCURRENCY == 4
+
+
+def test_pulse_llm_concurrency_env_override(monkeypatch):
+    """PULSE_LLM_CONCURRENCY env var overrides the module-level constant after reload."""
+    import importlib
+
+    import paper_ingestion.pulse.scoring as scoring_mod
+
+    monkeypatch.setenv("PULSE_LLM_CONCURRENCY", "2")
+    importlib.reload(scoring_mod)
+
+    assert scoring_mod._LLM_CONCURRENCY == 2
+
+
+@pytest.mark.asyncio
+async def test_stage2_concurrency_respects_env_override(monkeypatch):
+    """Semaphore created inside stage2_llm_rerank uses the env-overridden concurrency value."""
+    import importlib
+
+    import paper_ingestion.pulse.scoring as scoring_mod
+
+    monkeypatch.setenv("PULSE_LLM_CONCURRENCY", "2")
+    importlib.reload(scoring_mod)
+
+    num_candidates = 6
+    papers = [_make_paper(i) for i in range(num_candidates)]
+    stage1_out = [_make_scored(p) for p in papers]
+    profile = _make_profile()
+
+    in_flight = []
+    max_in_flight = [0]
+
+    async def mock_call(*args, **kwargs):
+        in_flight.append(1)
+        max_in_flight[0] = max(max_in_flight[0], len(in_flight))
+        await asyncio.sleep(0.01)
+        in_flight.pop()
+        return _make_scoring_output(7, 5)
+
+    with patch(
+        "paper_ingestion.pulse.scoring.call_llm_structured",
+        side_effect=mock_call,
+    ):
+        result = await scoring_mod.stage2_llm_rerank(
+            stage1_out, profile, verifier=_make_verifier(), openai_client=MagicMock()
+        )
+
+    assert len(result) == num_candidates
+    # Max concurrency must not exceed the overridden limit of 2
+    assert max_in_flight[0] <= 2

@@ -34,6 +34,7 @@ from jarvis_common.llm_client import observe
 from jarvis_common.task_registry import KIND_TO_TASK
 
 from paper_ingestion._state import get_services
+from paper_ingestion.config import get_paper_ingestion_settings as _get_cfg
 from paper_ingestion.pulse.citation_signals import compute_citation_signals
 from paper_ingestion.pulse.deck import assemble_deck, persist_deck
 from paper_ingestion.pulse.discovery import discover_candidates
@@ -50,7 +51,14 @@ from paper_ingestion.services.pdf_workflow import upsert_paper
 
 logger = logging.getLogger(__name__)
 
-_STAGE2_TIMEOUT_SECONDS = 600
+
+def _stage2_timeout() -> int:
+    """Return the Stage-2 LLM rerank wall-clock timeout from settings.
+
+    Reads PULSE_STAGE2_TIMEOUT_SECONDS at call time so monkeypatch.setenv
+    takes effect without requiring an importlib.reload().
+    """
+    return _get_cfg().pulse_stage2_timeout_seconds
 
 
 def _fallback_stage2(stage1_out: list[ScoredCandidate]) -> list[ScoredCandidate]:
@@ -232,7 +240,7 @@ async def run_pulse(
 
             stage2_out = await asyncio.wait_for(
                 _stage2_with_progress(),
-                timeout=_STAGE2_TIMEOUT_SECONDS,
+                timeout=_stage2_timeout(),
             )
             # Count actual LLM calls: candidates where llm_relevance was set
             stats["llm_calls"] = sum(1 for sc in stage2_out if sc.llm_relevance is not None)
@@ -246,9 +254,9 @@ async def run_pulse(
             stage2_out = _fallback_stage2(stage1_out)
         except TimeoutError:
             # B4: LLM timeout is degraded (deck still produced), not fatal
+            _timeout_s = _stage2_timeout()
             degraded_reason = (
-                f"LLM scoring timed out at {_STAGE2_TIMEOUT_SECONDS}s; "
-                "deck used embedding-only fallback."
+                f"LLM scoring timed out at {_timeout_s}s; deck used embedding-only fallback."
             )
             stats["degraded_reason"] = degraded_reason
             logger.warning("pulse.stage2 timed out — falling back to stage1")

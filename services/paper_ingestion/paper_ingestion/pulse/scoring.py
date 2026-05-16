@@ -49,7 +49,9 @@ class Stage2ClientUnavailableError(RuntimeError):
     """openai_client is None at stage2 entry — caller should mark deck degraded."""
 
 
-_LLM_CONCURRENCY = 8
+# Default 4: effective Ollama parallelism is bounded by OLLAMA_NUM_PARALLEL
+# (compose default: 2), so 8 just queues uselessly without throughput gain.
+_LLM_CONCURRENCY = _get_cfg().pulse_llm_concurrency
 _LLM_MODEL = _get_cfg().pulse_stage2_model or "fast"
 _LLM_MAX_TOKENS = 512  # enough for reasoning + JSON; was 256 (too small for thinking models)
 _LLM_TEMPERATURE = 0.0

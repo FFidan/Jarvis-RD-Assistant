@@ -20,7 +20,7 @@ import asyncio
 import hashlib
 import logging
 import math
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -229,13 +229,30 @@ async def discover_candidates(
             min_interval_seconds=0,  # gate only checks cooldown_until, not interval
             db_pool=db_pool,
         )
-        in_cd, until = await rate_limiter.is_in_cooldown()
-        if in_cd:
-            plugin_name = src.__class__.__name__
+        plugin_name = src.__class__.__name__
+        snapshot = await rate_limiter.health_snapshot()
+        if snapshot["in_cooldown"]:
+            until_iso = snapshot["cooldown_until"]
+            until_dt = datetime.fromisoformat(until_iso) if isinstance(until_iso, str) else None
+            # Plain-language, dated, timezone-explicit, "it self-recovers"
+            # message — a week-old timestamp shown as a bare "00:39" used to
+            # read like a live cooldown to a non-technical researcher.
+            if until_dt is not None:
+                until_utc = until_dt.astimezone(UTC)
+                message = (
+                    f"{src_type or plugin_name} is paused after hitting a rate limit — "
+                    f"it will retry automatically (until "
+                    f"{until_utc:%Y-%m-%d %H:%M} UTC)."
+                )
+            else:
+                message = (
+                    f"{src_type or plugin_name} is paused after hitting a rate limit — "
+                    "it will retry automatically shortly."
+                )
             source_diagnostics[plugin_name] = {
                 "status": "cooldown",
-                "cooldown_until": until.isoformat() if until else None,
-                "message": (f"In cooldown until {until:%H:%M}" if until else "In cooldown"),
+                "cooldown_until": until_iso,
+                "message": message,
                 "status_code": None,
                 "retry_after_s": None,
                 "settings_hint": None,
@@ -252,9 +269,20 @@ async def discover_candidates(
             logger.info(
                 "pulse.discover: source %s in cooldown until %s — skipping",
                 plugin_name,
-                until,
+                until_iso,
             )
             continue
+        if snapshot["stale"]:
+            # Stuck expired rate_limit: the cooldown lapsed but no successful
+            # poll ever cleared last_status. Self-heal so a stale failure never
+            # masquerades as a live cooldown, then poll normally this run.
+            await rate_limiter.reset()
+            logger.info(
+                "pulse.discover: source %s had a stale expired rate-limit "
+                "state (last_request_at=%s); reset and proceeding",
+                plugin_name,
+                snapshot["last_request_at"],
+            )
         ready_sources.append(src)
 
     results = await asyncio.gather(
