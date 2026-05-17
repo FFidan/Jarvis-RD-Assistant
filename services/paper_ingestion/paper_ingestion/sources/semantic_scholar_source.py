@@ -453,9 +453,27 @@ class SemanticScholarSource(PaperSource):
                 except Exception:
                     logger.exception("Failed to parse S2 paper: %s", pid)
                     continue
-                if paper.published_date is None:
-                    continue
-                if paper.published_date < since_date:
+                # S2 date-filter rationale:
+                # The S2 search API only supports year-granularity (year=YYYY-); it
+                # cannot filter by month or day.  Two cases arise for papers that
+                # lack a precise publicationDate:
+                #   1. Both publicationDate AND year are absent → published_date=None.
+                #      S2 returned the paper under year>=since_date.year, so it is
+                #      plausibly new.  Keep it rather than silently losing it.
+                #   2. publicationDate is absent but year is present → _parse_paper
+                #      synthesises date(year, 1, 1) as a conservative placeholder.
+                #      Jan 1 may pre-date since_date even within the same year, so
+                #      the naive `< since_date` check would wrongly drop it.  Since
+                #      S2 already bounded the query to year>=since_date.year, keep
+                #      year-only papers unconditionally.
+                # Only drop papers that carry a *precise* publicationDate that is
+                # genuinely before since_date.
+                has_precise_date = item.get("publicationDate") is not None
+                if (
+                    has_precise_date
+                    and paper.published_date is not None
+                    and paper.published_date < since_date
+                ):
                     continue
                 seen_ids.add(pid)
                 papers.append(paper)
