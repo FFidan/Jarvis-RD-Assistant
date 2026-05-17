@@ -13,6 +13,7 @@ dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
     "instructor>=1.5",
+    "lxml>=5.0.0",
     "langfuse>=2.50",
     "openai>=1.50",
     "procrastinate[aiopg]>=0.49",

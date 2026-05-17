@@ -18,6 +18,10 @@ COPY scripts/generate-certs.sh /docker-entrypoint.d/00-generate-certs.sh
 RUN chmod +x /docker-entrypoint.d/00-generate-certs.sh
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/nginx-security-headers.conf
-COPY nginx-rate-limit.conf /etc/nginx/conf.d/nginx-rate-limit.conf
+# Prefix with 00- so this file sorts before default.conf in conf.d include
+# order — the log_format "real_ip" defined here must be parsed before the
+# access_log directive in default.conf references it (nginx processes includes
+# sequentially in alphabetical order within each glob).
+COPY nginx-rate-limit.conf /etc/nginx/conf.d/00-nginx-rate-limit.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 3000

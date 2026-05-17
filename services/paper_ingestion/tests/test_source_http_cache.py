@@ -11,6 +11,8 @@ Six cases:
 4. POST: never cached, inner called each time.
 5. SOURCE_HTTP_CACHE_ENABLED=false: pure passthrough, hits==0.
 6. Binary content-type (PDF): never cached even for an allowlisted host.
+
+Plus PI-D/PI-E lock-in (tests 7-9) and SEC-3 regression (tests 14-15).
 """
 
 from __future__ import annotations
@@ -327,3 +329,58 @@ async def test_empty_body_xml_host_not_cached():
     assert transport.hits == 1
     assert r1.content == b""
     assert r2.content == r3.content == _ATOM_OK
+
+
+# ---------------------------------------------------------------------------
+# 14. SEC-3 — entity-expansion payload is rejected by the XML gate
+# ---------------------------------------------------------------------------
+
+# A modest billion-laughs variant: 3 expansion levels, stays CPU/memory safe
+# in any parser but any stdlib-based expander would expand the entities while
+# lxml with resolve_entities=False refuses to parse it at all.
+_BILLION_LAUGHS = b"""\
+<?xml version="1.0"?>
+<!DOCTYPE feed [
+  <!ENTITY a "AAAA">
+  <!ENTITY b "&a;&a;&a;&a;">
+  <!ENTITY c "&b;&b;&b;&b;">
+]>
+<feed>&c;</feed>"""
+
+
+async def test_entity_expansion_payload_not_cached():
+    """A body with internal entity declarations is rejected by the hardened
+    XML gate and must not enter the cache — guarding against a MITM'd upstream
+    sending a billion-laughs payload that would DoS the downstream feed parser."""
+    inner = _CountingInner([(200, _BILLION_LAUGHS), (200, _ATOM_OK)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_ARXIV)  # entity-expansion body — NOT cached
+        r2 = await client.get(_ARXIV)  # well-formed Atom — cached
+        r3 = await client.get(_ARXIV)  # served from cache
+
+    assert inner.calls == 2, "entity-expansion body must not be cached"
+    assert transport.hits == 1
+    assert r1.content == _BILLION_LAUGHS  # caller still gets the body
+    assert r2.content == r3.content == _ATOM_OK
+
+
+# ---------------------------------------------------------------------------
+# 15. SEC-3 — well-formed Atom with no entities still admitted (regression)
+# ---------------------------------------------------------------------------
+
+
+async def test_normal_atom_still_admitted_after_sec3_hardening():
+    """The hardened parser must not regress normal well-formed Atom feeds.
+    Existing _ATOM_OK body must still be cached by the gate post-SEC-3."""
+    inner = _CountingInner([(200, _ATOM_OK)])
+    transport = CachingTransport(inner)
+
+    async with httpx.AsyncClient(transport=transport) as client:
+        r1 = await client.get(_ARXIV)
+        r2 = await client.get(_ARXIV)
+
+    assert inner.calls == 1
+    assert transport.hits == 1
+    assert r1.content == r2.content == _ATOM_OK

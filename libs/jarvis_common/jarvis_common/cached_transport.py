@@ -13,9 +13,9 @@ import logging
 import os
 import time
 from collections import OrderedDict
-from xml.etree.ElementTree import ParseError, XMLPullParser
 
 import httpx
+import lxml.etree as _etree
 
 logger = logging.getLogger(__name__)
 
@@ -81,20 +81,36 @@ def _safe_headers(raw: list[tuple[bytes, bytes]]) -> list[tuple[bytes, bytes]]:
     return [(name, value) for name, value in raw if name.lower() not in _STRIP_HEADERS]
 
 
-def _is_well_formed_xml(body: bytes) -> bool:
-    """True if ``body`` is a complete, well-formed XML document.
+# Module-level parser so the config is constructed once, not per-call.
+# Mirrors the _SAFE_PARSER in paper_ingestion.sources._xml_safe — both must
+# stay in sync if options change. Jarvis-common must not import from services
+# (tach boundary), so the config is duplicated here intentionally.
+_SAFE_XML_PARSER = _etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    dtd_validation=False,
+    huge_tree=False,
+)
 
-    Pull-parses without entity expansion or tree construction — a cheap
-    well-formedness gate that also avoids the entity-expansion risk of feeding
-    an untrusted upstream body to ``ElementTree.fromstring``.
+
+def _is_well_formed_xml(body: bytes) -> bool:
+    """True if ``body`` is a well-formed XML document with no entity references.
+
+    Uses lxml with entity resolution, network access, DTD loading, and
+    huge_tree all disabled. A body that still contains entity references after
+    parsing (e.g. billion-laughs payloads a MITM'd upstream could send) is
+    treated as unsafe and rejected — the entity references survive in the tree
+    only because expansion was refused, not because the body is safe to cache
+    and replay to the downstream feed parser.
     """
-    parser = XMLPullParser()
     try:
-        parser.feed(body)
-        parser.close()
-    except ParseError:
+        root = _etree.fromstring(body, parser=_SAFE_XML_PARSER)
+    except _etree.XMLSyntaxError:
         return False
-    return True
+    # Any surviving _Entity nodes mean the body declared entities that lxml
+    # refused to expand — reject so adversarial bodies never enter the cache.
+    return not any(True for _ in root.iter(_etree.Entity))
 
 
 def _is_cacheable_body(host: str, body: bytes) -> bool:
