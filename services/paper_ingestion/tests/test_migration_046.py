@@ -91,8 +91,10 @@ async def test_migration_046_live_pg(live_pg_dsn: str) -> None:
             )
 
             # Insert three test rows using pre-046 status values.
-            # (Migration 046 is already applied via run_migrations; we backfill manually
-            # to simulate what the migration would do on a live DB that had legacy rows.)
+            # (Migration 046 was already applied directly above via
+            # pool.execute(MIGRATION.read_text()); we backfill manually to
+            # simulate what the migration would do on a live DB that had
+            # legacy rows.)
             await conn.execute(
                 """
                 INSERT INTO paper_user_state (paper_id, user_id, status, starred, archived, saved)

@@ -7,7 +7,9 @@
  *             ContradictionsPanel) — preserved functionally from previous layout.
  *
  * Both rails collapse to Sheet on small screens.
- * Zero backend change — all data is from the existing fetchPaperDetail query.
+ * The § Pipeline rail's failure state comes from the paper-detail payload's
+ * `processing_failed` (latest paper.process/analyze job status='failed') —
+ * the same persisted signal ActionsSidebar polls via getJob.
  */
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -163,6 +165,9 @@ export function PaperDetailPage() {
 
   const { paper, summary, chunks, user_state } = data;
   const hasProjectLinks = Boolean(data.has_project_links);
+  // Same persisted failure signal ActionsSidebar polls via getJob — surfaced
+  // on the paper-detail payload so the left Pipeline rail shows ✗.
+  const processingFailed = Boolean(data.processing_failed);
 
   // ── Derived counts for TOC badges ─────────────────────────────────────────
   const evidenceCount = summary?.key_findings?.length ?? 0;
@@ -280,6 +285,7 @@ export function PaperDetailPage() {
                     pdfDownloaded: paper.pdf_downloaded,
                     chunkCount: chunks.length,
                     hasSummary: summary !== null,
+                    processingFailed,
                   }}
                   onNavigate={handleTocNavigate}
                 />
@@ -336,6 +342,7 @@ export function PaperDetailPage() {
                     pdfDownloaded: paper.pdf_downloaded,
                     chunkCount: chunks.length,
                     hasSummary: summary !== null,
+                    processingFailed,
                   }}
                   onNavigate={handleTocNavigate}
                 />

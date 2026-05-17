@@ -10,7 +10,7 @@
  * tab clicks.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
@@ -634,6 +634,50 @@ describe('PaperDetailPage', () => {
     expect(screen.getByText('§ Pipeline')).toBeInTheDocument();
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
     expect(screen.getByText('Summarized')).toBeInTheDocument();
+  });
+
+  it('left Pipeline rail shows ✗ on the processing step when the paper-detail processing_failed signal is set', async () => {
+    // processing_failed is the SAME persisted job-failure signal ActionsSidebar
+    // polls via getJob — PaperDetailPage must thread it into PaperTOC.
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: { ...MOCK_PAPER, pdf_downloaded: true },
+      summary: null,
+      chunks: [],
+      user_state: null,
+      processing_failed: true,
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
+    });
+
+    const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
+    // The "Processing…" step label is rendered destructive (failed) — proving
+    // PaperTOC received processingFailed=true from the live payload.
+    const processingLabel = within(nav).getByText('Processing…');
+    expect(processingLabel.className).toContain('text-destructive');
+  });
+
+  it('left Pipeline rail does NOT show ✗ when processing_failed is absent (legacy/cached payload)', async () => {
+    mockFetchPaperDetail.mockResolvedValue({
+      paper: { ...MOCK_PAPER, pdf_downloaded: true },
+      summary: null,
+      chunks: [],
+      user_state: null,
+      // processing_failed intentionally omitted
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1, name: 'Attention Is All You Need' })).toBeInTheDocument();
+    });
+
+    const nav = screen.getByRole('navigation', { name: 'Paper navigation' });
+    const processingLabel = within(nav).getByText('Processing…');
+    expect(processingLabel.className).not.toContain('text-destructive');
   });
 
   describe('?action=process scroll behaviour', () => {

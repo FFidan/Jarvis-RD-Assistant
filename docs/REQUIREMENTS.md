@@ -188,7 +188,6 @@ Changes to `libs/jarvis_common` require rebuilding affected Docker containers.
 | `DEV_MODE` | `false` | Bypass API key auth in services (dev only) |
 | `JARVIS_API_KEY` | `` | API key for inter-service auth; required in production |
 | `SEMANTIC_SCHOLAR_API_KEY` | `` | Optional; increases S2 rate limit from 100/5min to 1000/5min. Also unlocks the multi-seed recommendation endpoint used by the Phase 1 Pulse discovery pipeline. |
-| `VITE_LANGFUSE_PUBLIC_DASHBOARD` | `` | Optional Langfuse cloud dashboard URL; when set, a link card appears in Settings → Providers |
 
 ### Phase 1 Discovery & Pulse additions (shipped 2026-04-11)
 

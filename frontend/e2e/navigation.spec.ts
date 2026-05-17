@@ -10,7 +10,7 @@ test.describe('Navigation', () => {
     const sidebarLinks = [
       { label: 'Home', path: '/' },
       { label: 'My Day', path: '/my-day' },
-      { label: 'Research Feed', path: '/feed' },
+      { label: 'Library', path: '/feed' },
       { label: 'Analytics', path: '/analytics' },
       { label: 'Projects', path: '/projects' },
       { label: 'Learning Cards', path: '/cards' },
@@ -50,11 +50,11 @@ test.describe('Navigation', () => {
   });
 
   test('browser back button works after navigation', async ({ page }) => {
-    // Navigate: Home → Settings → Research Feed
+    // Navigate: Home → Settings → Library
     await page.getByRole('link', { name: 'Settings' }).click();
     await expect(page).toHaveURL(/\/settings$/);
 
-    await page.getByRole('link', { name: 'Research Feed' }).click();
+    await page.getByRole('link', { name: 'Library' }).click();
     await expect(page).toHaveURL(/\/feed$/);
 
     // Go back to Settings

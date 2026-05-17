@@ -8,10 +8,10 @@ import {
   Star,
   FileText,
   Tag,
-  Wifi,
+  Compass,
   WifiOff,
 } from 'lucide-react';
-import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter } from '@/types';
+import type { FeedCountsWithFacets, SurfaceView, LibraryFilter, InboxSourceFilter, FeedScope } from '@/types';
 
 // --------------------------------------------------------------------------
 // Types
@@ -44,6 +44,8 @@ interface FacetRailProps {
   selection: FacetSelection;
   onSelect: (next: Partial<FacetSelection>) => void;
   isOnline?: boolean;
+  /** Active library/corpus scope — drives scope-honest facet copy (C-FACET-BE). */
+  feedScope?: FeedScope;
 }
 
 // --------------------------------------------------------------------------
@@ -187,7 +189,7 @@ function OnlineOnlyNotice() {
 // FacetRail
 // --------------------------------------------------------------------------
 
-export function FacetRail({ counts, selection, onSelect, isOnline = true }: FacetRailProps) {
+export function FacetRail({ counts, selection, onSelect, isOnline = true, feedScope = 'library' }: FacetRailProps) {
   // Derive active status item for §Status section
   function isStatusActive(item: StatusItem): boolean {
     if (item.surface !== selection.surface) return false;
@@ -240,12 +242,37 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
   const starActive = selection.surface === 'library' && selection.filter === 'starred';
   const starCount = counts?.starred ?? 0;
 
+  // Scope-honest copy for Source/Topic empty states.
+  const isCorpus = feedScope === 'corpus';
+  const sourceEmptyCopy = isCorpus
+    ? 'No papers found in the shared corpus for this source.'
+    : 'No papers in your library yet — papers you save or that match your topics appear here.';
+  const topicEmptyCopy = isCorpus
+    ? 'No papers in the shared corpus are tagged with a topic yet.'
+    : 'No library papers tagged with a topic yet — add a topic in Settings and turn on “Auto-add matches”.';
+
   return (
     <nav
       aria-label="Feed facets"
       className="flex w-48 shrink-0 flex-col border-r border-hair bg-paper py-2"
       data-testid="facet-rail"
     >
+      {/* § Discover — visually primary block at the TOP of the rail */}
+      <div
+        className="mx-2 mb-2 rounded-md border border-primary/20 bg-primary/5 px-1 py-1"
+        data-testid="facet-discover-block"
+      >
+        <FacetItem
+          icon={<Compass size={14} />}
+          label="Discover papers"
+          active={selection.surface === 'search'}
+          onClick={() =>
+            onSelect({ surface: 'search', filter: null, sourceFacet: null, topicFacet: null })
+          }
+          data-testid="facet-discover"
+        />
+      </div>
+
       {/* § Status */}
       <SectionHeader>Status</SectionHeader>
       {STATUS_ITEMS.map((item) => (
@@ -292,7 +319,7 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
         ))
       ) : isOnline ? (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60" data-testid="facet-source-empty">
-          No papers in your library yet — papers you save or that match your topics appear here.
+          {sourceEmptyCopy}
         </p>
       ) : (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60 flex items-center gap-1">
@@ -334,7 +361,7 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
         </>
       ) : isOnline ? (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60" data-testid="facet-topic-empty">
-          No library papers tagged with a topic yet — add a topic in Settings and turn on &ldquo;Auto-add matches&rdquo;.
+          {topicEmptyCopy}
         </p>
       ) : (
         <p className="px-3 py-1.5 text-xs text-muted-foreground/60 flex items-center gap-1">
@@ -342,19 +369,6 @@ export function FacetRail({ counts, selection, onSelect, isOnline = true }: Face
           Unavailable offline
         </p>
       )}
-
-      {/* § Discovery / Search — go to search surface */}
-      <div className="mt-auto border-t border-hair pt-2">
-        <FacetItem
-          icon={<Wifi size={14} />}
-          label="Discover"
-          active={selection.surface === 'search'}
-          onClick={() =>
-            onSelect({ surface: 'search', filter: null, sourceFacet: null, topicFacet: null })
-          }
-          data-testid="facet-discover"
-        />
-      </div>
     </nav>
   );
 }

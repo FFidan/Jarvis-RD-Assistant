@@ -127,6 +127,106 @@ async def test_run_process_pdf_wraps_embedding_failures():
     assert "LITELLM_MASTER_KEY" in message
 
 
+@pytest.mark.asyncio
+async def test_run_process_pdf_persists_completed_chunks_on_embedding_batch_error():
+    """B-EMBED per-batch resume: when an EmbeddingBatchError carries chunks
+    from batches that DID upsert, run_process_pdf must persist those chunk
+    rows (so a retry resumes via Phase-1 idempotency + ON CONFLICT) before
+    re-raising a recoverable RuntimeError."""
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0  # no existing chunks
+    conn.transaction = MagicMock(
+        return_value=MagicMock(
+            __aenter__=AsyncMock(return_value=None),
+            __aexit__=AsyncMock(return_value=False),
+        )
+    )
+    pool = _make_pool(conn)
+
+    completed_chunks = [
+        SimpleNamespace(
+            chunk_index=0,
+            content="Embedded chunk A",
+            page_number=1,
+            start_char=0,
+            end_char=16,
+        ),
+        SimpleNamespace(
+            chunk_index=1,
+            content="Embedded chunk B",
+            page_number=1,
+            start_char=17,
+            end_char=33,
+        ),
+    ]
+    completed_point_ids = ["vec-a", "vec-b"]
+
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=EmbeddingBatchError(
+            "batch 3/5 failed: connection reset",
+            completed_chunks=completed_chunks,
+            completed_point_ids=completed_point_ids,
+        )
+    )
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await run_process_pdf(
+            paper_id=77,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )
+
+    # The completed chunks were persisted via _persist_chunk_rows ->
+    # conn.executemany with the resumable rows (proves end-to-end wiring).
+    conn.executemany.assert_awaited_once()
+    persisted_rows = conn.executemany.await_args.args[1]
+    assert [r[1] for r in persisted_rows] == [0, 1]  # chunk_index
+    assert [r[0] for r in persisted_rows] == [77, 77]  # paper_id
+    assert [r[6] for r in persisted_rows] == ["vec-a", "vec-b"]  # point_id
+    # Still surfaced as a recoverable/retryable failure.
+    message = str(exc_info.value)
+    assert "2 chunks saved" in message
+    assert "retry to resume" in message
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_embedding_batch_error_with_no_completed_chunks_skips_persist():
+    """When no batch succeeded, there is nothing to persist — the handler must
+    not call executemany and still re-raises a recoverable RuntimeError."""
+    from paper_ingestion.ingestion.embedder import EmbeddingBatchError
+
+    conn = AsyncMock()
+    conn.fetchval.return_value = 0
+    pool = _make_pool(conn)
+    pdf_processor = MagicMock()
+    pdf_processor.process = AsyncMock(
+        side_effect=EmbeddingBatchError(
+            "batch 1/5 failed immediately",
+            completed_chunks=[],
+            completed_point_ids=[],
+        )
+    )
+    embedder = MagicMock()
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await run_process_pdf(
+            paper_id=78,
+            pdf_path=Path("/tmp/paper.pdf"),
+            db_pool=pool,
+            pdf_processor=pdf_processor,
+            embedder=embedder,
+        )
+
+    conn.executemany.assert_not_awaited()
+    assert "0 chunks saved" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # ING-001: total_batches ceiling division
 # ---------------------------------------------------------------------------

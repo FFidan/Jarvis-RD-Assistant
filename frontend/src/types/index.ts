@@ -90,6 +90,10 @@ export interface PaperDetail {
   chunks: Chunk[];
   user_state: UserState | null;
   has_project_links?: boolean;
+  /** True when the latest paper.process/paper.analyze job for this paper
+   *  terminated in `failed` — same persisted signal ActionsSidebar polls.
+   *  Optional: legacy/cached payloads may omit it (treated as not-failed). */
+  processing_failed?: boolean;
 }
 
 // --- Feed ---

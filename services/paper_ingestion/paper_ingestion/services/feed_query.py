@@ -332,26 +332,29 @@ _SQL_UNTAGGED_CORPUS = """
 async def fetch_feed_facet_counts(
     conn: asyncpg.Connection | asyncpg.pool.PoolConnectionProxy,  # type: ignore[type-arg]
     user_id: int | None,
+    scope: str = "library",
 ) -> tuple[dict[str, int], list[dict[str, Any]], int]:
     """Return (by_source, by_topic_rows, untagged) facet counts.
 
-    All three aggregations are scoped to *user_id*'s user_library when
-    user_id is not None; they fall back to the canonical corpus otherwise
-    (single-user / no-auth mode), mirroring the pattern in get_feed_counts.
+    When *scope* is ``"library"`` (default) and *user_id* is not None, the
+    three aggregations are scoped to that user's user_library rows.  When
+    *scope* is ``"corpus"`` — or when *user_id* is None (no-auth mode) —
+    the corpus-wide SQL variants are used instead, mirroring the branching
+    in ``get_feed_counts`` and ``build_feed_queries``.
 
     Returns:
         by_source  — ``{source_type: count}`` mapping.
         by_topic   — list of ``{topic_id, name, count}`` dicts, desc by count.
-        untagged   — count of library papers with no paper_topics row.
+        untagged   — count of papers with no paper_topics row.
     """
-    if user_id is not None:
-        source_rows = await conn.fetch(_SQL_BY_SOURCE_USER, user_id)
-        topic_rows = await conn.fetch(_SQL_BY_TOPIC_USER, user_id)
-        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_USER, user_id)
-    else:
+    if scope == "corpus" or user_id is None:
         source_rows = await conn.fetch(_SQL_BY_SOURCE_CORPUS)
         topic_rows = await conn.fetch(_SQL_BY_TOPIC_CORPUS)
         untagged_row = await conn.fetchrow(_SQL_UNTAGGED_CORPUS)
+    else:
+        source_rows = await conn.fetch(_SQL_BY_SOURCE_USER, user_id)
+        topic_rows = await conn.fetch(_SQL_BY_TOPIC_USER, user_id)
+        untagged_row = await conn.fetchrow(_SQL_UNTAGGED_USER, user_id)
 
     by_source: dict[str, int] = {row["source_type"]: row["cnt"] for row in source_rows}
     by_topic: list[dict[str, Any]] = [

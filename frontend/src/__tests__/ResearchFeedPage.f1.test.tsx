@@ -278,7 +278,8 @@ describe('ResearchFeedPage — F1 3-pane IA', () => {
   it('shows library info text when surface=library', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
-      expect(screen.getByText(/browse, search, and filter all papers/i)).toBeInTheDocument();
+      // C-FEED: copy updated to "My library — papers you've saved or own."
+      expect(screen.getByText(/my library.*saved.*own/i)).toBeInTheDocument();
     });
   });
 });

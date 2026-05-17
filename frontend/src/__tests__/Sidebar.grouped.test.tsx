@@ -132,7 +132,24 @@ describe('Sidebar — grouped nav (non-admin)', () => {
     expect(screen.getByRole('link', { name: 'Home' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'My Day' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Pulse Deck' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Research Feed' })).toBeInTheDocument();
+    // "Research Feed" renamed to "Library"; "Discover" added as sibling
+    expect(screen.getByRole('link', { name: 'Library' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Research Feed' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Discover' })).toBeInTheDocument();
+  });
+
+  it('Discover link points to /feed?surface=search', () => {
+    renderSidebar({ role: 'user' });
+
+    const discoverLink = screen.getByRole('link', { name: 'Discover' });
+    expect(discoverLink).toHaveAttribute('href', '/feed?surface=search');
+  });
+
+  it('nav-discover testid is unique (appears exactly once)', () => {
+    renderSidebar({ role: 'user' });
+
+    const els = document.querySelectorAll('[data-testid="nav-discover"]');
+    expect(els.length).toBe(1);
   });
 
   it('renders group Ⅱ Read items', () => {

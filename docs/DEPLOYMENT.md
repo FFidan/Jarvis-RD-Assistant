@@ -234,6 +234,10 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
 - `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
+### Configuration principle: environment variables are for security boot-gates only
+
+Environment variables in JARVIS are reserved for two purposes: (1) security-critical flags that must bind before the auth layer starts (the `dev_*` flags, `JARVIS_API_KEY`, `JARVIS_CONFIG_KEY`, `CORS_ORIGINS`, HTTPS/TLS settings), and (2) bootstrap secrets needed before the database exists (database password, encryption keys, LLM master key). All other configuration — model assignments, Pulse schedules, Telegram pairing, notification preferences — is managed via the web app and persisted in the database. This keeps the `dev_*` flags as explicit, high-visibility operator decisions rather than defaults buried in `.env` that can be forgotten before sharing an instance.
+
 ### Encrypted config key rotation
 
 Provider keys stored through Settings use `user_config.encrypted_value` and are decrypted with `JARVIS_CONFIG_KEY`. On startup, paper_ingestion and learning_engine validate encrypted rows before schedulers or workers start. In non-dev mode, services fail fast when encrypted rows exist and the key is missing, malformed, or wrong.

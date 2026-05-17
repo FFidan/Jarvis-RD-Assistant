@@ -131,4 +131,34 @@ describe('CommandPaletteSearch (F1)', () => {
 
     expect(await screen.findByText(/couldn't search right now/i)).toBeInTheDocument();
   });
+
+  it('fails into the error state after 8 s timeout instead of hanging', async () => {
+    // searchPreview never resolves — simulates a slow embedding/search backend.
+    mockSearchPreview.mockReturnValue(new Promise(() => {}));
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    renderPalette();
+
+    act(() => useCommandPalette.getState().open());
+
+    const input = await screen.findByPlaceholderText(/search your papers/i);
+    await user.type(input, 'slow');
+
+    // Advance past debounce (250 ms) — search is now in-flight.
+    await act(async () => {
+      vi.advanceTimersByTime(300);
+    });
+
+    // Still loading — has not yet timed out.
+    expect(useCommandPalette.getState().loading).toBe(true);
+    expect(useCommandPalette.getState().errored).toBe(false);
+
+    // Advance past the 8 000 ms search timeout.
+    await act(async () => {
+      vi.advanceTimersByTime(8_000);
+    });
+
+    expect(useCommandPalette.getState().loading).toBe(false);
+    expect(useCommandPalette.getState().errored).toBe(true);
+    expect(await screen.findByText(/couldn't search right now/i)).toBeInTheDocument();
+  });
 });

@@ -410,6 +410,7 @@ export interface ReadinessCheck {
   name: string;
   status: 'green' | 'amber' | 'red';
   detail: string;
+  remediation?: string;
 }
 
 export interface ReadinessResponse {
@@ -890,9 +891,14 @@ export async function fetchFeedCounts(): Promise<FeedCountsResponse> {
  * backend always emits (models/papers.py:646-649). The Feed surface agent
  * consumes this for the §-facet rail; `fetchFeedCounts` stays numeric-only so
  * existing `keyof`-indexing consumers (CountsBadge) are untouched.
+ *
+ * Pass `scope` to honour the active library/corpus scope for facet counts
+ * (C-FACET-BE: backend `get_feed_counts` accepts ?scope= and passes it to
+ * `fetch_feed_facet_counts`).
  */
-export async function fetchFeedCountsWithFacets(): Promise<FeedCountsWithFacets> {
-  return apiFetch('/api/papers/feed/counts');
+export async function fetchFeedCountsWithFacets(scope: 'library' | 'corpus' = 'library'): Promise<FeedCountsWithFacets> {
+  const qs = scope === 'corpus' ? '?scope=corpus' : '';
+  return apiFetch(`/api/papers/feed/counts${qs}`);
 }
 
 // --- Phase A lifecycle mutations (Wave 2.1, additive) ---

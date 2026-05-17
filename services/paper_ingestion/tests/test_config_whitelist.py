@@ -1,7 +1,14 @@
 """Tests for config key whitelist and settings validation."""
 
 import pytest
-from paper_ingestion.routers.settings import _ALLOWED_CONFIG_KEYS
+from paper_ingestion.routers.settings import (
+    _ALLOWED_CONFIG_KEYS,
+    _CONFIG_VALIDATORS,
+    SYSTEM_KEYS,
+    _classify_config_key,
+)
+
+_LANGFUSE_KEY = "observability.langfuse_dashboard_url"
 
 # Keys the frontend renders in IngestionSection.tsx CONFIG_METADATA
 _FRONTEND_KEYS = {
@@ -64,3 +71,46 @@ def test_llm_role_keys_subset_of_whitelist():
 
     missing = set(ROLE_TO_ALIAS.keys()) - _ALLOWED_CONFIG_KEYS
     assert not missing, f"ROLE_TO_ALIAS keys not in whitelist: {missing}"
+
+
+# --- observability.langfuse_dashboard_url (webapp-driven Langfuse link) ---
+
+
+def test_langfuse_dashboard_url_allowed_and_system_scoped():
+    """The Langfuse dashboard URL is a deployment-wide (admin-only) config key."""
+    assert _LANGFUSE_KEY in _ALLOWED_CONFIG_KEYS
+    assert _LANGFUSE_KEY in SYSTEM_KEYS
+    assert _classify_config_key(_LANGFUSE_KEY) == "system"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",  # empty clears the link
+        "https://cloud.langfuse.com/project/abc",
+        "https://langfuse.example.com",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002/",
+    ],
+)
+def test_langfuse_dashboard_url_accepts_safe_values(value: str):
+    validator = _CONFIG_VALIDATORS[_LANGFUSE_KEY]
+    validator(value)  # must not raise
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://evil.example.com",  # plain http to a non-loopback host
+        "ftp://localhost:3002",  # non-http(s) scheme
+        "not a url",
+        "https://",  # scheme without a host
+        "javascript:alert(1)",
+        3002,  # non-string
+        None,
+    ],
+)
+def test_langfuse_dashboard_url_rejects_unsafe_values(value: object):
+    validator = _CONFIG_VALIDATORS[_LANGFUSE_KEY]
+    with pytest.raises(ValueError):
+        validator(value)

@@ -1,50 +1,109 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { LangfuseLinkCard } from '@/components/settings/LangfuseLinkCard';
+import { useAuthStore } from '@/stores/auth-store';
+import type { ConfigEntry } from '@/types';
 
-// We need to control import.meta.env.VITE_LANGFUSE_PUBLIC_DASHBOARD between tests.
-// Vitest exposes import.meta.env as a plain object so we can mutate it directly.
+vi.mock('@/lib/api', () => ({
+  fetchConfig: vi.fn(),
+  setConfig: vi.fn(),
+}));
 
-const ENV_KEY = 'VITE_LANGFUSE_PUBLIC_DASHBOARD';
+import { fetchConfig, setConfig } from '@/lib/api';
 
-afterEach(() => {
-  // Clean up the env var after each test so module-level reads are consistent
-  // when the module is re-imported. For these tests the component is a function
-  // component that reads the module-level constant set at import time, so we
-  // test two scenarios by using vi.resetModules() between them.
-  vi.resetModules();
-});
+const CONFIG_KEY = 'observability.langfuse_dashboard_url';
 
-describe('LangfuseLinkCard', () => {
-  it('renders nothing when VITE_LANGFUSE_PUBLIC_DASHBOARD is not set', async () => {
-    // Ensure env var is absent
-    delete (import.meta.env as Record<string, unknown>)[ENV_KEY];
+const asMock = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
 
-    // Re-import the component so the module-level const is re-evaluated
-    const { LangfuseLinkCard: Card } = await import(
-      '@/components/settings/LangfuseLinkCard'
-    );
+const wrap = (ui: React.ReactNode) => {
+  const qc = new QueryClient({
+    defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+  });
+  return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
+};
 
-    const { container } = render(<Card />);
-    expect(container.firstChild).toBeNull();
+const setUser = (role: 'user' | 'admin') =>
+  useAuthStore.setState({ user: { id: 1, email: 'a@b.c', role } });
+
+const config = (value: string): ConfigEntry[] => [{ key: CONFIG_KEY, value }];
+
+describe('LangfuseLinkCard (webapp-configured)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    asMock(setConfig).mockResolvedValue({ key: CONFIG_KEY, value: '' });
   });
 
-  it('renders a link to the dashboard when VITE_LANGFUSE_PUBLIC_DASHBOARD is set', async () => {
-    const testUrl = 'https://cloud.langfuse.com/project/test-project';
-    (import.meta.env as Record<string, unknown>)[ENV_KEY] = testUrl;
+  it('shows an admin URL input when nothing is configured', async () => {
+    setUser('admin');
+    asMock(fetchConfig).mockResolvedValue([]);
+    wrap(<LangfuseLinkCard />);
 
-    const { LangfuseLinkCard: Card } = await import(
-      '@/components/settings/LangfuseLinkCard'
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Langfuse dashboard URL/i)).toBeInTheDocument(),
     );
+    expect(screen.getByRole('button', { name: /Save/i })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('link', { name: /Open Langfuse dashboard/i }),
+    ).not.toBeInTheDocument();
+  });
 
-    render(<Card />);
+  it('renders an external link when a safe URL is configured', async () => {
+    setUser('admin');
+    const url = 'https://cloud.langfuse.com/project/abc';
+    asMock(fetchConfig).mockResolvedValue(config(url));
+    wrap(<LangfuseLinkCard />);
 
-    const link = screen.getByRole('link', { name: /Open Langfuse dashboard/i });
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute('href', testUrl);
+    const link = await screen.findByRole('link', { name: /Open Langfuse dashboard/i });
+    expect(link).toHaveAttribute('href', url);
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', 'noreferrer noopener');
+  });
 
-    // Clean up
-    delete (import.meta.env as Record<string, unknown>)[ENV_KEY];
+  it('accepts a local http://localhost dashboard URL as safe', async () => {
+    setUser('admin');
+    asMock(fetchConfig).mockResolvedValue(config('http://localhost:3002'));
+    wrap(<LangfuseLinkCard />);
+
+    const link = await screen.findByRole('link', { name: /Open Langfuse dashboard/i });
+    expect(link).toHaveAttribute('href', 'http://localhost:3002');
+  });
+
+  it('tells a non-admin it is unconfigured without an input', async () => {
+    setUser('user');
+    asMock(fetchConfig).mockResolvedValue([]);
+    wrap(<LangfuseLinkCard />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/ask an administrator/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByLabelText(/Langfuse dashboard URL/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks an unsafe URL client-side and does not call setConfig', async () => {
+    setUser('admin');
+    asMock(fetchConfig).mockResolvedValue([]);
+    wrap(<LangfuseLinkCard />);
+
+    const input = await screen.findByLabelText(/Langfuse dashboard URL/i);
+    fireEvent.change(input, { target: { value: 'http://evil.example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    await waitFor(() => expect(screen.getByText(/https:\/\//i)).toBeInTheDocument());
+    expect(setConfig).not.toHaveBeenCalled();
+  });
+
+  it('saves a valid URL via setConfig', async () => {
+    setUser('admin');
+    asMock(fetchConfig).mockResolvedValue([]);
+    wrap(<LangfuseLinkCard />);
+
+    const input = await screen.findByLabelText(/Langfuse dashboard URL/i);
+    fireEvent.change(input, { target: { value: 'https://langfuse.example.com' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+    await waitFor(() =>
+      expect(setConfig).toHaveBeenCalledWith(CONFIG_KEY, 'https://langfuse.example.com'),
+    );
   });
 });

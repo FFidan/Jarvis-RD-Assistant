@@ -167,8 +167,9 @@ describe('ResearchFeedPage — F4 per-filter subtitles', () => {
   it('shows generic library subtitle when no filter is active', async () => {
     renderPage('?surface=library');
     await waitFor(() => {
+      // C-FEED: copy updated to "My library — papers you've saved or own."
       expect(
-        screen.getByText(/browse, search, and filter all papers in your library/i),
+        screen.getByText(/my library.*saved.*own/i),
       ).toBeInTheDocument();
     });
   });

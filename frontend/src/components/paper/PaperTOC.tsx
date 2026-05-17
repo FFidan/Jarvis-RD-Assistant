@@ -7,7 +7,7 @@
  *               Contradictions/Notes.
  *  § Pipeline — read-only processing status derived from existing paper data.
  */
-import { Check, Circle, Loader2 } from 'lucide-react';
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ---- Types ----------------------------------------------------------------
@@ -22,6 +22,8 @@ export interface PipelineStatus {
   pdfDownloaded: boolean;
   chunkCount: number;
   hasSummary: boolean;
+  /** Set when B-EMBED surfaces a terminal processing failure on the paper. */
+  processingFailed?: boolean;
 }
 
 interface PaperTOCProps {
@@ -38,28 +40,34 @@ interface PaperTOCProps {
 function PipelineStep({
   done,
   inProgress,
+  failed,
   label,
 }: {
   done: boolean;
   inProgress: boolean;
+  failed: boolean;
   label: string;
 }) {
   return (
     <div className="flex items-center gap-2 text-sm">
-      {done ? (
-        <Check className="h-4 w-4 shrink-0 text-[var(--status-ok)]" />
+      {failed ? (
+        <XCircle className="h-4 w-4 shrink-0 text-destructive" />
+      ) : done ? (
+        <CheckCircle2 className="h-4 w-4 shrink-0 text-[var(--status-ok)]" />
       ) : inProgress ? (
-        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[var(--status-warn)]" />
+        <Loader2 className="h-4 w-4 shrink-0 animate-spin text-blue-500" />
       ) : (
-        <Circle className="h-4 w-4 shrink-0 text-muted-foreground/40" />
+        <div className="h-4 w-4 rounded-full border shrink-0" />
       )}
       <span
         className={cn(
-          done
-            ? 'text-foreground'
-            : inProgress
-              ? 'text-[var(--status-warn)]'
-              : 'text-muted-foreground',
+          failed
+            ? 'font-medium text-destructive'
+            : done
+              ? 'text-muted-foreground line-through'
+              : inProgress
+                ? 'font-medium'
+                : 'text-muted-foreground',
         )}
       >
         {label}
@@ -77,9 +85,10 @@ export function PaperTOC({
   onNavigate,
   className,
 }: PaperTOCProps) {
-  const { pdfDownloaded, chunkCount, hasSummary } = pipeline;
+  const { pdfDownloaded, chunkCount, hasSummary, processingFailed = false } = pipeline;
 
-  // Pipeline step derivation
+  // Pipeline step derivation — mirrors ActionsSidebar step-status logic.
+  // processingFailed marks the processing step as failed (set by B-EMBED terminal failure).
   const summarizing = pdfDownloaded && chunkCount > 0 && !hasSummary;
 
   return (
@@ -135,16 +144,19 @@ export function PaperTOC({
           <PipelineStep
             done={pdfDownloaded}
             inProgress={false}
+            failed={false}
             label="Downloaded"
           />
           <PipelineStep
             done={chunkCount > 0}
-            inProgress={pdfDownloaded && chunkCount === 0}
+            inProgress={pdfDownloaded && chunkCount === 0 && !processingFailed}
+            failed={processingFailed && chunkCount === 0}
             label={chunkCount > 0 ? `${chunkCount} chunks` : 'Processing…'}
           />
           <PipelineStep
             done={hasSummary}
             inProgress={summarizing}
+            failed={false}
             label={hasSummary ? 'Summarized' : 'Summarizing…'}
           />
         </div>

@@ -226,7 +226,21 @@ describe('FacetRail', () => {
     expect(call.topicFacet).toBe('untagged');
   });
 
-  // ── Discover link ─────────────────────────────────────────────────────────
+  // ── Discover block at top ─────────────────────────────────────────────────
+
+  it('renders the primary Discover block at the TOP of the rail (before Status)', () => {
+    render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} />);
+    const rail = screen.getByTestId('facet-rail');
+    const discoverBlock = screen.getByTestId('facet-discover-block');
+    const statusInbox = screen.getByTestId('facet-status-inbox');
+    // Discover block must appear before any Status item in the DOM
+    expect(rail.compareDocumentPosition(discoverBlock) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(
+      discoverBlock.compareDocumentPosition(statusInbox) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
 
   it('clicking Discover calls onSelect with surface=search', () => {
     render(<FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} />);
@@ -244,5 +258,33 @@ describe('FacetRail', () => {
       />,
     );
     expect(screen.getByTestId('facet-discover')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  // ── Scope-honest facet copy ───────────────────────────────────────────────
+
+  it('shows library-scoped empty copy when feedScope=library (default)', () => {
+    render(
+      <FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline feedScope="library" />,
+    );
+    expect(screen.getByTestId('facet-source-empty')).toHaveTextContent(
+      'No papers in your library yet',
+    );
+    expect(screen.getByTestId('facet-topic-empty')).toHaveTextContent(
+      'No library papers tagged with a topic yet',
+    );
+  });
+
+  it('shows corpus-scoped empty copy when feedScope=corpus — no "your library" wording', () => {
+    render(
+      <FacetRail counts={EMPTY_COUNTS} selection={BASE_SELECTION} onSelect={onSelect} isOnline feedScope="corpus" />,
+    );
+    const sourceEmpty = screen.getByTestId('facet-source-empty');
+    const topicEmpty = screen.getByTestId('facet-topic-empty');
+    // Must not mention "your library" in corpus scope
+    expect(sourceEmpty.textContent).not.toMatch(/your library/i);
+    expect(topicEmpty.textContent).not.toMatch(/your library/i);
+    // Corpus-specific copy should mention corpus/shared
+    expect(sourceEmpty.textContent).toMatch(/corpus|shared/i);
+    expect(topicEmpty.textContent).toMatch(/corpus|shared/i);
   });
 });

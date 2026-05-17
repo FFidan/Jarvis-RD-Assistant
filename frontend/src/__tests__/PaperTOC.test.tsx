@@ -3,7 +3,7 @@
  * Tests for the left-rail TOC + pipeline status component.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PaperTOC, type TOCSection, type PipelineStatus } from '@/components/paper/PaperTOC';
 
@@ -100,5 +100,74 @@ describe('PaperTOC — pipeline status', () => {
     expect(screen.getByText('Downloaded')).toBeInTheDocument();
     expect(screen.getByText('5 chunks')).toBeInTheDocument();
     expect(screen.getByText('Summarized')).toBeInTheDocument();
+  });
+});
+
+describe('PaperTOC — pipeline tri-state icons', () => {
+  // Helpers — lucide icons render an <svg> with a title equal to the component display name.
+  // We locate icon SVGs by querying the closest flex-row container for each step label.
+
+  function getStepRow(label: string | RegExp) {
+    return screen.getByText(label).closest('div.flex') as HTMLElement;
+  }
+
+  it('done step renders CheckCircle2 icon (text-[var(--status-ok)])', () => {
+    renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false });
+    const row = getStepRow('Downloaded');
+    // Lucide icons render as <svg>; the done step has exactly one SVG (CheckCircle2).
+    const svgs = row.querySelectorAll('svg');
+    expect(svgs.length).toBe(1);
+    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+    const svg = svgs[0]!;
+    // CheckCircle2 carries the ok-status colour class.
+    const iconClass = svg.className.baseVal ?? svg.getAttribute('class') ?? '';
+    expect(iconClass).toContain('text-[var(--status-ok)]');
+    // The step label has line-through when done.
+    const span = within(row).getByText('Downloaded');
+    expect(span.className).toContain('line-through');
+  });
+
+  it('active (in-progress) step renders spinning Loader2 icon', () => {
+    // PDF downloaded, no chunks yet → Processing… is active.
+    renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false });
+    const row = getStepRow('Processing…');
+    const svg = row.querySelector('svg');
+    expect(svg).not.toBeNull();
+    // Loader2 has the animate-spin class applied to it.
+    expect(svg!.className.baseVal ?? svg!.getAttribute('class')).toMatch(/animate-spin/);
+  });
+
+  it('failed step renders XCircle icon with destructive styling', () => {
+    renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false, processingFailed: true });
+    const row = getStepRow('Processing…');
+    const svg = row.querySelector('svg');
+    expect(svg).not.toBeNull();
+    // XCircle should carry text-destructive.
+    const iconClass = svg!.className.baseVal ?? svg!.getAttribute('class') ?? '';
+    expect(iconClass).toContain('text-destructive');
+    // The step label itself should also be styled destructive + font-medium.
+    const span = within(row).getByText('Processing…');
+    expect(span.className).toContain('text-destructive');
+    expect(span.className).toContain('font-medium');
+  });
+
+  it('pending step renders empty circle div (no SVG)', () => {
+    // Nothing downloaded → all three steps pending.
+    renderTOC({ pdfDownloaded: false, chunkCount: 0, hasSummary: false });
+    const row = getStepRow('Downloaded');
+    // Pending uses a plain <div> with rounded-full border, not an SVG icon.
+    const svg = row.querySelector('svg');
+    expect(svg).toBeNull();
+    const placeholder = row.querySelector('div.rounded-full');
+    expect(placeholder).not.toBeNull();
+  });
+
+  it('processingFailed=false does NOT show failed icon on processing step', () => {
+    renderTOC({ pdfDownloaded: true, chunkCount: 0, hasSummary: false, processingFailed: false });
+    const row = getStepRow('Processing…');
+    const svg = row.querySelector('svg');
+    // Active (Loader2) — should have animate-spin, not text-destructive.
+    const iconClass = svg ? (svg.className.baseVal ?? svg.getAttribute('class') ?? '') : '';
+    expect(iconClass).not.toContain('text-destructive');
   });
 });

@@ -452,6 +452,7 @@ class ReadinessCheck(BaseModel):
     name: str
     status: ReadinessStatus
     detail: str
+    remediation: str = ""
 
 
 class ReadinessResponse(BaseModel):
@@ -485,6 +486,30 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
     checks: list[ReadinessCheck] = []
 
     # Granular dev flags — each must be off for production.
+    # Per-check remediation strings (what to set + concrete risk).
+    _dev_remediation: dict[str, str] = {
+        "dev_auth_bypass": (
+            "Set DEV_AUTH_BYPASS=false and DEV_MODE=false before sharing this URL — "
+            "anyone who can reach this page can sign in as any user."
+        ),
+        "dev_error_detail": (
+            "Set DEV_ERROR_DETAIL=false in production — full error tracebacks leak "
+            "internal file paths and logic to anyone who triggers an error."
+        ),
+        "dev_cors_open": (
+            "Set DEV_CORS_OPEN=false and restrict CORS_ORIGINS to your domain before "
+            "going live — otherwise any website can silently act on behalf of a user."
+        ),
+        "dev_smtp_log_only": (
+            "Set DEV_SMTP_LOG_ONLY=false and configure SMTP credentials (SMTP_HOST, "
+            "SMTP_USER, SMTP_PASS) for production — otherwise sign-in emails print to "
+            "logs and users never receive them."
+        ),
+        "dev_crypto_relaxed": (
+            "Set DEV_CRYPTO_RELAXED=false in production — login tokens use weaker "
+            "security and stay valid longer if stolen."
+        ),
+    }
     for flag_name in _DEV_FLAG_NAMES:
         enabled = bool(getattr(core, flag_name))
         checks.append(
@@ -492,6 +517,7 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
                 name=flag_name,
                 status="red" if enabled else "green",
                 detail="enabled" if enabled else "disabled",
+                remediation=_dev_remediation.get(flag_name, ""),
             )
         )
 
@@ -502,19 +528,48 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
             name="environment",
             status="green" if env_value == "production" else "amber",
             detail=env_value,
+            remediation=(
+                "Set ENVIRONMENT=production before going live — some safeguards "
+                "(rate-limits, security headers) only activate in production mode."
+            ),
         )
     )
 
     # API key — presence + minimum length, never echoed.
     api_key = secrets.jarvis_api_key
     if api_key is None:
-        checks.append(ReadinessCheck(name="api_key", status="red", detail="missing"))
+        checks.append(
+            ReadinessCheck(
+                name="api_key",
+                status="red",
+                detail="missing",
+                remediation=(
+                    "Generate a 32-byte key with: openssl rand -hex 32. "
+                    "Then set JARVIS_API_KEY to that value."
+                ),
+            )
+        )
     elif len(api_key.get_secret_value()) >= 32:
         checks.append(
-            ReadinessCheck(name="api_key", status="green", detail="configured (>=32 chars)")
+            ReadinessCheck(
+                name="api_key",
+                status="green",
+                detail="configured (>=32 chars)",
+                remediation="",
+            )
         )
     else:
-        checks.append(ReadinessCheck(name="api_key", status="red", detail="too short"))
+        checks.append(
+            ReadinessCheck(
+                name="api_key",
+                status="red",
+                detail="too short",
+                remediation=(
+                    "Generate a new 32-byte key with: openssl rand -hex 32. "
+                    "Then set JARVIS_API_KEY to that value."
+                ),
+            )
+        )
 
     # SMTP — magic links fall back to stdout when unset.
     smtp_configured = secrets.smtp_host is not None
@@ -524,6 +579,10 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
             status="green" if smtp_configured else "amber",
             detail=(
                 "configured" if smtp_configured else "not configured — magic links go to stdout"
+            ),
+            remediation=(
+                "Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM "
+                "before inviting real users — otherwise sign-in emails print to logs."
             ),
         )
     )
@@ -536,6 +595,10 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
             name="https",
             status="green" if scheme == "https" else "amber",
             detail=scheme,
+            remediation=(
+                "Ensure TLS is terminated at the edge — Caddy/nginx handles this "
+                "automatically when pointed at a real domain."
+            ),
         )
     )
 
@@ -544,9 +607,23 @@ async def get_system_readiness(request: Request) -> ReadinessResponse:
         async with request.app.state.db_pool.acquire() as conn:
             row = await conn.fetchrow("SELECT COUNT(*) AS n FROM audit_log")
         n = row["n"] if row is not None else 0
-        checks.append(ReadinessCheck(name="audit_log", status="green", detail=f"{n} rows"))
+        checks.append(
+            ReadinessCheck(
+                name="audit_log",
+                status="green",
+                detail=f"{n} rows",
+                remediation="",
+            )
+        )
     except Exception as exc:  # noqa: BLE001 — surface class name, not raw message
-        checks.append(ReadinessCheck(name="audit_log", status="amber", detail=type(exc).__name__))
+        checks.append(
+            ReadinessCheck(
+                name="audit_log",
+                status="amber",
+                detail=type(exc).__name__,
+                remediation="The audit_log table could not be queried. Check connectivity.",
+            )
+        )
 
     aggregate = max(checks, key=lambda c: _STATUS_RANK[c.status]).status
     return ReadinessResponse(status=aggregate, checks=checks)

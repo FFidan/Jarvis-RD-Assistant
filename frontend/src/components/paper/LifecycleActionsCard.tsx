@@ -19,6 +19,7 @@ import { useState } from 'react';
 import type { LifecycleState } from '@/types';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { InfoTooltip } from '@/components/ui/info-tooltip';
 import { HardDeleteModal } from '@/components/feed/HardDeleteModal';
 import {
   Star,
@@ -262,7 +263,13 @@ export function LifecycleActionsCard({
   return (
     <div className="space-y-4">
       <Separator />
-      <h3 className="text-lg font-semibold">Lifecycle</h3>
+      <h3 className="flex items-center gap-1 text-lg font-semibold">
+        Lifecycle
+        <InfoTooltip
+          content="Where this paper sits in your reading workflow: Inbox (unsorted) → Saved (to read) → Reading → Done (finished). Move papers to Trash to remove them."
+          side="right"
+        />
+      </h3>
 
       <div className="flex flex-wrap items-center gap-2">
         {renderActionButtons()}

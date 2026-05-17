@@ -194,6 +194,11 @@ class PaperDetailResponse(BaseModel):
     user_state: UserStateResponse | None = None
     recent_feedback: RecentFeedback | None = None  # NEW per spec §9.1
     has_project_links: bool = False
+    # True when the most recent paper.process / paper.analyze job for this
+    # paper+user terminated in `failed` (procrastinate_jobs.status). Lets the
+    # left Pipeline rail (PaperTOC) show ✗ from the SAME persisted failure
+    # source ActionsSidebar already polls via getJob — no parallel status.
+    processing_failed: bool = False
 
 
 # --- Search / Request Models ---

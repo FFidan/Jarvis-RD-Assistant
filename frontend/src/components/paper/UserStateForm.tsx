@@ -97,15 +97,18 @@ export function UserStateForm({ paperId, userState }: UserStateFormProps) {
         />
       </div>
 
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={flagged}
-          onChange={(e) => setFlagged(e.target.checked)}
-          className="h-4 w-4 rounded border-gray-300 accent-primary"
-        />
-        Flagged
-      </label>
+      <div className="space-y-1">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={flagged}
+            onChange={(e) => setFlagged(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 accent-primary"
+          />
+          Flagged
+          <InfoTooltip content="Mark this paper for follow-up — makes it easy to find and revisit important papers later." />
+        </label>
+      </div>
 
       <Button
         className="w-full"

@@ -73,16 +73,66 @@ function makeStackHealth(vectorOk = false): StackHealthSummary {
 const allGreenResponse = {
   status: 'green' as const,
   checks: [
-    { name: 'dev_auth_bypass', status: 'green' as const, detail: 'disabled' },
-    { name: 'dev_error_detail', status: 'green' as const, detail: 'disabled' },
-    { name: 'dev_cors_open', status: 'green' as const, detail: 'disabled' },
-    { name: 'dev_smtp_log_only', status: 'green' as const, detail: 'disabled' },
-    { name: 'dev_crypto_relaxed', status: 'green' as const, detail: 'disabled' },
-    { name: 'environment', status: 'green' as const, detail: 'production' },
-    { name: 'api_key', status: 'green' as const, detail: 'configured (>=32 chars)' },
-    { name: 'smtp', status: 'green' as const, detail: 'configured' },
-    { name: 'https', status: 'green' as const, detail: 'https' },
-    { name: 'audit_log', status: 'green' as const, detail: '42 rows' },
+    {
+      name: 'dev_auth_bypass',
+      status: 'green' as const,
+      detail: 'disabled',
+      remediation: 'Set DEV_AUTH_BYPASS=false and DEV_MODE=false before sharing this URL.',
+    },
+    {
+      name: 'dev_error_detail',
+      status: 'green' as const,
+      detail: 'disabled',
+      remediation: 'Set DEV_ERROR_DETAIL=false in production.',
+    },
+    {
+      name: 'dev_cors_open',
+      status: 'green' as const,
+      detail: 'disabled',
+      remediation: 'Set DEV_CORS_OPEN=false and restrict CORS_ORIGINS to your domain.',
+    },
+    {
+      name: 'dev_smtp_log_only',
+      status: 'green' as const,
+      detail: 'disabled',
+      remediation: 'Set DEV_SMTP_LOG_ONLY=false and configure SMTP credentials.',
+    },
+    {
+      name: 'dev_crypto_relaxed',
+      status: 'green' as const,
+      detail: 'disabled',
+      remediation: 'Set DEV_CRYPTO_RELAXED=false in production.',
+    },
+    {
+      name: 'environment',
+      status: 'green' as const,
+      detail: 'production',
+      remediation: 'Set ENVIRONMENT=production before going live.',
+    },
+    {
+      name: 'api_key',
+      status: 'green' as const,
+      detail: 'configured (>=32 chars)',
+      remediation: '',
+    },
+    {
+      name: 'smtp',
+      status: 'green' as const,
+      detail: 'configured',
+      remediation: 'Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM.',
+    },
+    {
+      name: 'https',
+      status: 'green' as const,
+      detail: 'https',
+      remediation: 'Ensure TLS is terminated at the edge.',
+    },
+    {
+      name: 'audit_log',
+      status: 'green' as const,
+      detail: '42 rows',
+      remediation: '',
+    },
   ],
 };
 
@@ -90,16 +140,66 @@ const allGreenResponse = {
 const devModeResponse = {
   status: 'red' as const,
   checks: [
-    { name: 'dev_auth_bypass', status: 'red' as const, detail: 'enabled' },
-    { name: 'dev_error_detail', status: 'red' as const, detail: 'enabled' },
-    { name: 'dev_cors_open', status: 'red' as const, detail: 'enabled' },
-    { name: 'dev_smtp_log_only', status: 'red' as const, detail: 'enabled' },
-    { name: 'dev_crypto_relaxed', status: 'red' as const, detail: 'enabled' },
-    { name: 'environment', status: 'amber' as const, detail: 'development' },
-    { name: 'api_key', status: 'green' as const, detail: 'configured (>=32 chars)' },
-    { name: 'smtp', status: 'amber' as const, detail: 'not configured — magic links go to stdout' },
-    { name: 'https', status: 'amber' as const, detail: 'http' },
-    { name: 'audit_log', status: 'green' as const, detail: '0 rows' },
+    {
+      name: 'dev_auth_bypass',
+      status: 'red' as const,
+      detail: 'enabled',
+      remediation: 'Set DEV_AUTH_BYPASS=false and DEV_MODE=false before sharing this URL.',
+    },
+    {
+      name: 'dev_error_detail',
+      status: 'red' as const,
+      detail: 'enabled',
+      remediation: 'Set DEV_ERROR_DETAIL=false in production.',
+    },
+    {
+      name: 'dev_cors_open',
+      status: 'red' as const,
+      detail: 'enabled',
+      remediation: 'Set DEV_CORS_OPEN=false and restrict CORS_ORIGINS to your domain.',
+    },
+    {
+      name: 'dev_smtp_log_only',
+      status: 'red' as const,
+      detail: 'enabled',
+      remediation: 'Set DEV_SMTP_LOG_ONLY=false and configure SMTP credentials.',
+    },
+    {
+      name: 'dev_crypto_relaxed',
+      status: 'red' as const,
+      detail: 'enabled',
+      remediation: 'Set DEV_CRYPTO_RELAXED=false in production.',
+    },
+    {
+      name: 'environment',
+      status: 'amber' as const,
+      detail: 'development',
+      remediation: 'Set ENVIRONMENT=production before going live.',
+    },
+    {
+      name: 'api_key',
+      status: 'green' as const,
+      detail: 'configured (>=32 chars)',
+      remediation: '',
+    },
+    {
+      name: 'smtp',
+      status: 'amber' as const,
+      detail: 'not configured — magic links go to stdout',
+      remediation: 'Configure SMTP_HOST, SMTP_USER, SMTP_PASS, and SMTP_FROM.',
+    },
+    {
+      name: 'https',
+      status: 'amber' as const,
+      detail: 'http',
+      remediation: 'Ensure TLS is terminated at the edge.',
+    },
+    {
+      name: 'audit_log',
+      status: 'green' as const,
+      detail: '0 rows',
+      remediation: '',
+    },
   ],
 };
 
@@ -183,7 +283,7 @@ describe('AdminSystemHealthPage', () => {
     await user.hover(tooltipTrigger);
 
     await waitFor(() => {
-      const matches = screen.getAllByText(/Anyone who can reach this URL/i);
+      const matches = screen.getAllByText(/Security bypass that allows unrestricted sign-in/i);
       expect(matches.length).toBeGreaterThan(0);
     });
   });
@@ -202,7 +302,7 @@ describe('AdminSystemHealthPage', () => {
     await user.hover(tooltipTrigger);
 
     await waitFor(() => {
-      const matches = screen.getAllByText(/magic-link sign-in emails/i);
+      const matches = screen.getAllByText(/Email delivery configuration/i);
       expect(matches.length).toBeGreaterThan(0);
     });
   });
@@ -361,5 +461,82 @@ describe('AdminSystemHealthPage', () => {
 
     const vectorRow = screen.getByTestId('live-svc-row-vector');
     expect(vectorRow).not.toHaveTextContent(/Optional log shipper/i);
+  });
+
+  // -------------------------------------------------------------------------
+  // Per-check remediation rendering
+  // -------------------------------------------------------------------------
+
+  it('renders remediation text for dev_auth_bypass when red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set DEV_AUTH_BYPASS=false/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders remediation text for dev_error_detail when red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set DEV_ERROR_DETAIL=false/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders remediation text for dev_cors_open when red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set DEV_CORS_OPEN=false/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders remediation text for dev_smtp_log_only when red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set DEV_SMTP_LOG_ONLY=false/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders remediation text for dev_crypto_relaxed when red', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set DEV_CRYPTO_RELAXED=false/i)).toBeInTheDocument();
+    });
+  });
+
+  it('renders remediation text for environment when amber', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(devModeResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Set ENVIRONMENT=production before going live/i)).toBeInTheDocument();
+    });
+  });
+
+  it('does not render remediation text when it is empty', async () => {
+    getSystemReadinessMock.mockResolvedValueOnce(allGreenResponse);
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('api_key')).toBeInTheDocument();
+    });
+
+    // api_key has empty remediation; should not appear in that row's detail section
+    const apiKeyRow = screen
+      .getByText('api_key')
+      .closest('tr');
+    // The detail cell should show only "configured (>=32 chars)"
+    const detailCell = apiKeyRow?.querySelector('td:nth-child(3)');
+    expect(detailCell?.textContent).toContain('configured (>=32 chars)');
+    // No remediation text should be present (would be in orange-600 color if rendered)
+    expect(detailCell?.querySelector('.text-orange-600')).toBeNull();
   });
 });

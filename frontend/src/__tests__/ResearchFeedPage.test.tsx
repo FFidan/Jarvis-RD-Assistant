@@ -302,9 +302,54 @@ describe('ResearchFeedPage', () => {
     appQueryClient.clear();
   });
 
-  it('renders the page heading', () => {
+  it('renders the page heading as "Library"', () => {
     renderPage();
-    expect(screen.getByText('Research Feed')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /library/i })).toBeInTheDocument();
+  });
+
+  // ── C-FEED: Discover discoverability + scope-honest copy ─────────────────
+
+  it('renders the primary Discover block at the top of the rail (facet-discover-block)', () => {
+    renderPage();
+    expect(screen.getByTestId('facet-discover-block')).toBeInTheDocument();
+    // The discover block contains the facet-discover button
+    expect(screen.getByTestId('facet-discover-block')).toContainElement(
+      screen.getByTestId('facet-discover'),
+    );
+    // The discover block appears before the Status section items in the DOM
+    const rail = screen.getByTestId('facet-rail');
+    const discoverBlock = screen.getByTestId('facet-discover-block');
+    const inboxItem = screen.getByTestId('facet-status-inbox');
+    const railChildren = Array.from(rail.querySelectorAll('[data-testid]'));
+    const discoverIdx = railChildren.indexOf(discoverBlock);
+    const inboxIdx = railChildren.indexOf(inboxItem);
+    expect(discoverIdx).toBeLessThan(inboxIdx);
+  });
+
+  it('shows empty-library Discover CTA when library count is 0 and scope=library', async () => {
+    vi.mocked(useFeedCounts).mockReturnValue({
+      data: { inbox: 0, library: 0, reading_list: 0, reading: 0, done: 0, starred: 0, trash: 0, active: 0, kept: 0, all_non_trash: 0 },
+      isLoading: false,
+      isPending: false,
+    } as ReturnType<typeof useFeedCounts>);
+    // Render on library surface directly
+    const { container: _c } = render(
+      <QueryClientProvider client={appQueryClient}>
+        <MemoryRouter initialEntries={['/feed?surface=library']}>
+          <Routes>
+            <Route path="/feed" element={<ResearchFeedPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('library-empty-discover')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('empty-library-discover-btn')).toHaveTextContent(/discover papers/i);
+    // Should also mention library is empty
+    expect(screen.getByTestId('library-empty-discover')).toHaveTextContent(
+      /your library is empty/i,
+    );
   });
 
   it('renders §Status facet items (Inbox, Library, Trash) in facet rail — replaces old tab bar', () => {
@@ -1877,8 +1922,9 @@ describe('ResearchFeedPage', () => {
 
     await waitFor(() => {
       // The Library surface renders a section description and its FeedView
+      // C-FEED: copy updated to "My library — papers you've saved or own."
       expect(
-        screen.getByText('Browse, search, and filter all papers in your library.'),
+        screen.getByText(/my library.*saved.*own/i),
       ).toBeInTheDocument();
     });
   });
@@ -1914,7 +1960,8 @@ describe('ResearchFeedPage', () => {
     });
 
     // Library surface renders the section description and the FeedView content
-    expect(screen.getByText('Browse, search, and filter all papers in your library.')).toBeInTheDocument();
+    // C-FEED: copy updated to "My library — papers you've saved or own."
+    expect(screen.getByText(/my library.*saved.*own/i)).toBeInTheDocument();
     await screen.findByText('Test Paper One');
   });
 

@@ -74,7 +74,7 @@ async def test_readiness_shape_and_baseline(_app):
     assert set(body.keys()) == {"status", "checks"}
     assert isinstance(body["checks"], list)
     for check in body["checks"]:
-        assert set(check.keys()) == {"name", "status", "detail"}
+        assert set(check.keys()) == {"name", "status", "detail", "remediation"}
         assert check["status"] in {"green", "amber", "red"}
 
     names = {c["name"] for c in body["checks"]}

@@ -6,6 +6,7 @@ import re
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import asyncpg
 import httpx
@@ -95,6 +96,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "smtp.user",
         "smtp.from",
         "smtp.pass",
+        # Observability — deployment-wide Langfuse dashboard link (admin-only).
+        "observability.langfuse_dashboard_url",
     }
 )
 
@@ -217,6 +220,8 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "smtp.user",
         "smtp.from",
         "smtp.pass",
+        # Observability — one deployment-wide Langfuse dashboard link; admin-only.
+        "observability.langfuse_dashboard_url",
     }
 )
 # Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
@@ -496,6 +501,31 @@ def _validate_zotero_cron(v: Any) -> None:
         raise ValueError(f"invalid cron expression: {exc}") from exc
 
 
+def _validate_langfuse_dashboard_url(v: Any) -> None:
+    """Validate observability.langfuse_dashboard_url.
+
+    Accepts an empty string (clears the link), any ``https://`` URL with a
+    host, or an ``http://`` URL whose host is loopback (``localhost`` /
+    ``127.0.0.1``) so a local-dev Langfuse reachable only over plain HTTP
+    still works. Everything else is rejected — the value is rendered as a
+    user-facing link, so non-http(s) schemes (e.g. ``javascript:``) and
+    plain-HTTP non-loopback hosts must not be storable.
+    """
+    if not isinstance(v, str):
+        raise ValueError("observability.langfuse_dashboard_url must be a string")
+    if v == "":
+        return
+    parsed = urlparse(v)
+    if parsed.scheme == "https" and parsed.netloc:
+        return
+    if parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1"):
+        return
+    raise ValueError(
+        "observability.langfuse_dashboard_url must be empty, an https:// URL, "
+        "or an http://localhost / http://127.0.0.1 URL"
+    )
+
+
 _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     # FSRS
     "fsrs.desired_retention": _validate_fsrs_retention,
@@ -522,6 +552,8 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.poll_enabled": _validate_bool,
     "zotero.poll_cron": _validate_zotero_cron,
     "zotero.auto_push_on_star": _validate_bool,
+    # Observability
+    "observability.langfuse_dashboard_url": _validate_langfuse_dashboard_url,
     # Cloud LLM provider keys
     "llm.anthropic.api_key": _validate_nonempty_str,
     "llm.openai.api_key": _validate_nonempty_str,

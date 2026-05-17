@@ -47,25 +47,25 @@ const SERVICE_STATUS_CLASSES: Record<ServiceHealthStatus, string> = {
  */
 const CHECK_EXPLANATIONS: Record<string, string> = {
   dev_auth_bypass:
-    'Anyone who can reach this URL can sign in as any user without a password. Turn this off before sharing access — set DEV_AUTH_BYPASS=false (and DEV_MODE=false).',
+    'Security bypass that allows unrestricted sign-in.',
   dev_error_detail:
-    'Full error tracebacks are being sent to API clients. Anyone who triggers an error can read internal file paths and logic. Set DEV_ERROR_DETAIL=false in production.',
+    'Full error tracebacks exposed to API clients.',
   dev_cors_open:
-    'Any website can call this server\'s API from a visitor\'s browser. A malicious site could silently act on behalf of a signed-in user. Set DEV_CORS_OPEN=false and restrict CORS_ORIGINS to your domain before going live.',
+    'Cross-origin API access unrestricted.',
   dev_smtp_log_only:
-    'Magic-link sign-in emails are printed to the server log instead of being delivered. Real users will never receive their sign-in link. Set DEV_SMTP_LOG_ONLY=false and configure SMTP credentials for production.',
+    'Sign-in emails printed to logs instead of sent.',
   dev_crypto_relaxed:
-    'Login tokens use weaker security settings and stay valid longer if stolen. Disable before real users sign in — set DEV_CRYPTO_RELAXED=false in production.',
+    'Weakened session token security.',
   environment:
-    'The deployment environment is not set to "production". Some safeguards (rate-limits, security headers) only activate in production mode. Set ENVIRONMENT=production before going live.',
+    'Deployment environment setting.',
   api_key:
-    'The JARVIS API key controls access to the whole application. It must be present and at least 32 characters long; generate one with: openssl rand -hex 32, then set JARVIS_API_KEY.',
+    'Primary access control credential.',
   smtp:
-    'No SMTP configured — magic-link sign-in emails print to the server log instead of being delivered. Fine for local use; configure SMTP_HOST (and related vars) before inviting real users.',
+    'Email delivery configuration.',
   https:
-    'Served over plain HTTP. Passwords and session tokens are visible to anyone on the same network. Production must terminate TLS — the bundled Caddy/nginx handles this automatically when pointed at a real domain.',
+    'Transport-layer encryption.',
   audit_log:
-    'Tracks security-relevant events (logins, admin actions). Green means the audit_log table is reachable and contains rows; amber means the table could not be queried.',
+    'Security event logging.',
 };
 
 function StatusBadge({ status }: { status: StatusLevel }) {
@@ -244,22 +244,31 @@ export function AdminSystemHealthPage() {
                 <tbody>
                   {data.checks.map((check) => (
                     <tr key={check.name} className="border-b last:border-0">
-                      <td className="px-4 py-3 font-medium">
-                        <span className="inline-flex items-center gap-1.5">
-                          {check.name}
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-medium">{check.name}</span>
                           {CHECK_EXPLANATIONS[check.name] && (
                             <InfoTooltip
                               content={CHECK_EXPLANATIONS[check.name]}
                               side="right"
                             />
                           )}
-                        </span>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={check.status} />
                       </td>
                       <td className="px-4 py-3 text-muted-foreground break-all">
-                        {check.detail || '—'}
+                        <div className="space-y-2">
+                          {check.detail && (
+                            <div className="text-xs">{check.detail}</div>
+                          )}
+                          {check.remediation && (
+                            <div className="text-xs text-orange-600 dark:text-orange-400 font-medium">
+                              {check.remediation}
+                            </div>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}

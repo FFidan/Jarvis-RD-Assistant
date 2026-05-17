@@ -62,3 +62,19 @@ Current release: **v0.4.1**.
 ---
 
 *Priorities may shift based on user feedback. Nothing here is a guarantee.*
+
+---
+
+## Deferred backlog — refreshed 2026-05-17 (post CI-green + verified-gap-closure program)
+
+CI-Green + Verified-Real Gap Closure shipped to master `a7bfb18f` (GitHub CI GREEN — red since 2026-05-15 now fixed). Genuinely-deferred future work (reflects reality, not memory):
+
+1. **Hermes conversational agent layer** — gate ~2026-05-17; the largest remaining feature; explicitly excluded from the CI-green program.
+2. **Performance & hardware-fit** (NEW workstream, own /deep-plan): vLLM-vs-Ollama spike on target high-VRAM hardware *behind the LiteLLM alias abstraction*; perf/memory/GPU profiling of hot paths (Pulse stage-2 scoring, embedding throughput, feed/facet queries, VRAM-residency under concurrent load); per-detected-VRAM default model recommendations + more in-app hardware-fit guidance (no-yaml/env principle). Surfaced because the live embed-smoke was gated by a slow CPU-4B embed on the throwaway dev box.
+3. **046/047-class init.sql↔migration-test-harness drift** — `test_migration_046/047` fixed + `live_pg_dsn` connect-retry added this program, but the broader init.sql-snapshot ↔ historical-migration-test pattern remains pre-existing debt.
+4. **GUI installer (script-hardening vs desktop GUI)** + **companion docs-site sub-choices** — pre-existing open questions; untouched; still open.
+5. **Qdrant corpus re-embed checkpoint** — deliberately NOT done (embed model unchanged); latent/conditional — only if the embedding model is ever changed.
+
+Resolved/moot (NOT deferred): "local-only push" posture (origin == master; GitHub CI is now the oracle); the "other-agent open work" (offline-sync endpoint / caddy crash / micro-deferrals) was verified ALREADY-SHIPPED at `5863ce5f` and excluded for that reason — do not re-flag.
+
+See vault `~/ObsidianVault/projects/JARVIS_RD_Assistant/{open-questions,decisions}.md` 2026-05-17 entries.

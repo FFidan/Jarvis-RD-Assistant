@@ -258,10 +258,13 @@ async def test_get_paper_detail_returns_summary_chunks_and_user_state():
     assert result.user_state.flagged is False
     assert result.recent_feedback is None
     assert result.has_project_links is True
+    # No failed paper.process/analyze job → left Pipeline rail stays non-failed.
+    assert result.processing_failed is False
     paper_conv.assert_called_once()
     summary_conv.assert_called_once()
     chunk_conv.assert_called_once()
-    conn.fetchval.assert_awaited_once()
+    # Two fetchvals now: project-link count + last-process-job status.
+    assert conn.fetchval.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -313,6 +316,83 @@ async def test_get_paper_detail_starred_independent_of_state():
 
 
 @pytest.mark.asyncio
+async def test_get_paper_detail_processing_failed_true_when_last_job_failed():
+    """When the latest paper.process/paper.analyze job for this paper+user
+    terminated in `failed`, the response carries processing_failed=True so the
+    left Pipeline rail (PaperTOC) shows ✗ from the SAME persisted signal
+    ActionsSidebar polls via getJob — no parallel status."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [
+        _paper_row(id=7),
+        None,  # no summary
+        None,  # no user_state
+        None,  # no feedback
+    ]
+    conn.fetch.return_value = []
+    # fetchval order: (1) project-link COUNT → 0, (2) last process-job status.
+    conn.fetchval = AsyncMock(side_effect=[0, "failed"])
+
+    paper_model = PaperResponse(
+        id=7,
+        external_id="paper-7",
+        source_type=SourceType.ARXIV,
+        title="Paper 7",
+        authors=["Ada"],
+        url="https://example.com/papers/7",
+        created_at=datetime.now(UTC),
+    )
+
+    with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+    ):
+        result = await papers.get_paper_detail.__wrapped__(
+            MagicMock(),
+            paper_id=7,
+            db_pool=pool,
+        )
+
+    assert result.processing_failed is True
+    # The status query targets the same procrastinate_jobs source jobs polling
+    # uses (task_name IN paper.process/paper.analyze).
+    status_sql = conn.fetchval.await_args_list[1].args[0]
+    assert "procrastinate_jobs" in status_sql
+    assert "paper.process" in status_sql
+    assert "paper.analyze" in status_sql
+
+
+@pytest.mark.asyncio
+async def test_get_paper_detail_processing_failed_false_when_last_job_succeeded():
+    """A non-failed latest job leaves processing_failed=False."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.side_effect = [_paper_row(id=8), None, None, None]
+    conn.fetch.return_value = []
+    conn.fetchval = AsyncMock(side_effect=[0, "other"])
+
+    paper_model = PaperResponse(
+        id=8,
+        external_id="paper-8",
+        source_type=SourceType.ARXIV,
+        title="Paper 8",
+        authors=["Ada"],
+        url="https://example.com/papers/8",
+        created_at=datetime.now(UTC),
+    )
+
+    with (
+        patch.object(papers, "assert_paper_ownership", AsyncMock(return_value=None)),
+        patch.object(papers, "row_to_paper_response", return_value=paper_model),
+    ):
+        result = await papers.get_paper_detail.__wrapped__(
+            MagicMock(),
+            paper_id=8,
+            db_pool=pool,
+        )
+
+    assert result.processing_failed is False
+
+
+@pytest.mark.asyncio
 async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
     """get_paper_detail should expose a false project-link flag when count is zero."""
     pool, conn = _make_pool_and_conn()
@@ -346,7 +426,9 @@ async def test_get_paper_detail_sets_has_project_links_false_when_unlinked():
         )
 
     assert result.has_project_links is False
-    conn.fetchval.assert_awaited_once()
+    assert result.processing_failed is False
+    # Two fetchvals now: project-link count + last-process-job status.
+    assert conn.fetchval.await_count == 2
 
 
 # ---------------------------------------------------------------------------

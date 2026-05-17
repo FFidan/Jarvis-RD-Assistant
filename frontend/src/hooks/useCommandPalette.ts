@@ -3,6 +3,7 @@ import { useCommandPalette } from '@/stores/command-palette-store';
 import { searchPreview } from '@/lib/api';
 
 const DEBOUNCE_MS = 250;
+const SEARCH_TIMEOUT_MS = 8_000;
 
 /**
  * Controller hook for the global ⌘K command palette.
@@ -76,8 +77,11 @@ export function useCommandPaletteController() {
 
     let cancelled = false;
     const timer = setTimeout(async () => {
+      const timeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('search_timeout')), SEARCH_TIMEOUT_MS),
+      );
       try {
-        const response = await searchPreview(trimmed);
+        const response = await Promise.race([searchPreview(trimmed), timeout]);
         if (cancelled) return;
         setResults(response.results);
         setErrored(false);

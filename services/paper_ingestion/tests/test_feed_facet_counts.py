@@ -178,7 +178,9 @@ async def test_get_feed_counts_includes_facets():
         [{"topic_id": 2, "name": "NLP", "cnt": 6}, {"topic_id": 3, "name": "RL", "cnt": 4}],
     ]
 
-    result = await papers.get_feed_counts.__wrapped__(_mock_request(), db_pool=pool)
+    result = await papers.get_feed_counts.__wrapped__(
+        _mock_request(), db_pool=pool, scope="library"
+    )
 
     # Existing 10-bucket fields still present.
     assert result.inbox == 5
@@ -208,7 +210,9 @@ async def test_get_feed_counts_empty_facets_when_no_library():
     ]
     conn.fetch.side_effect = [[], []]  # no source rows, no topic rows
 
-    result = await papers.get_feed_counts.__wrapped__(_mock_request(), db_pool=pool)
+    result = await papers.get_feed_counts.__wrapped__(
+        _mock_request(), db_pool=pool, scope="library"
+    )
 
     assert result.by_source == {}
     assert result.by_topic == []
@@ -280,3 +284,117 @@ async def test_feed_facet_counts_untagged_is_user_scoped():
     assert "user_library" in sql_used, "untagged query must scope to user_library"
     assert uid_used == 55
     assert untagged == 7
+
+
+# ---------------------------------------------------------------------------
+# scope="corpus" — authenticated user requesting full-corpus facets
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_feed_facet_counts_corpus_scope_ignores_user_library_for_authed_user():
+    """When scope='corpus', corpus SQL is used even if user_id is not None.
+
+    This is the core regression: previously user_id=42 + corpus scope still
+    ran the user_library-JOIN SQL and returned only the user's own papers.
+    """
+    conn = AsyncMock()
+    # Corpus has more papers than the user's library would.
+    conn.fetch.side_effect = [
+        [{"source_type": "arxiv", "cnt": 500}, {"source_type": "openalex", "cnt": 200}],
+        [{"topic_id": 1, "name": "ML", "cnt": 300}],
+    ]
+    conn.fetchrow.return_value = {"cnt": 50}
+
+    by_source, by_topic, untagged = await fetch_feed_facet_counts(conn, user_id=42, scope="corpus")
+
+    assert by_source == {"arxiv": 500, "openalex": 200}
+    assert by_topic == [{"topic_id": 1, "name": "ML", "count": 300}]
+    assert untagged == 50
+
+    # Corpus SQL must NOT join user_library.
+    source_sql = conn.fetch.call_args_list[0].args[0]
+    topic_sql = conn.fetch.call_args_list[1].args[0]
+    assert "user_library" not in source_sql, "corpus source SQL must not join user_library"
+    assert "user_library" not in topic_sql, "corpus topic SQL must not join user_library"
+
+    untagged_sql = conn.fetchrow.call_args.args[0]
+    assert "user_library" not in untagged_sql, "corpus untagged SQL must not join user_library"
+
+    # No user_id bind parameter passed to corpus queries.
+    assert conn.fetch.call_args_list[0].args == (source_sql,)
+    assert conn.fetch.call_args_list[1].args == (topic_sql,)
+    assert conn.fetchrow.call_args.args == (untagged_sql,)
+
+
+@pytest.mark.asyncio
+async def test_fetch_feed_facet_counts_library_scope_is_unchanged():
+    """scope='library' (default) keeps user_library JOIN and user_id bind."""
+    conn = AsyncMock()
+    conn.fetch.side_effect = [
+        [{"source_type": "pubmed", "cnt": 5}],
+        [{"topic_id": 2, "name": "CV", "cnt": 2}],
+    ]
+    conn.fetchrow.return_value = {"cnt": 1}
+
+    by_source, _, untagged = await fetch_feed_facet_counts(conn, user_id=10, scope="library")
+
+    assert by_source == {"pubmed": 5}
+    assert untagged == 1
+
+    source_sql = conn.fetch.call_args_list[0].args[0]
+    assert "user_library" in source_sql
+
+    # user_id must be bound.
+    assert conn.fetch.call_args_list[0].args[1] == 10
+
+
+@pytest.mark.asyncio
+async def test_get_feed_counts_threads_corpus_scope_to_facets():
+    """get_feed_counts handler passes scope='corpus' to fetch_feed_facet_counts.
+
+    When the user requests corpus scope, facets must reflect the full corpus
+    (no user_library join), not just the user's own library.
+    """
+    pool, conn = _make_pool_and_conn()
+
+    conn.fetchrow.side_effect = [
+        _ten_bucket_row(),
+        {"cnt": 99},  # untagged from fetch_feed_facet_counts corpus path
+    ]
+    # Corpus-wide counts: much larger than any single user's library.
+    conn.fetch.side_effect = [
+        [{"source_type": "arxiv", "cnt": 1000}, {"source_type": "semantic_scholar", "cnt": 800}],
+        [{"topic_id": 5, "name": "NLP", "cnt": 600}],
+    ]
+
+    result = await papers.get_feed_counts.__wrapped__(_mock_request(), db_pool=pool, scope="corpus")
+
+    assert result.by_source == {"arxiv": 1000, "semantic_scholar": 800}
+    assert result.by_topic[0].count == 600
+    assert result.untagged == 99
+
+    # Verify corpus SQL was used (no user_library join).
+    source_sql = conn.fetch.call_args_list[0].args[0]
+    assert "user_library" not in source_sql, "corpus-scoped facet must not join user_library"
+
+
+@pytest.mark.asyncio
+async def test_get_feed_counts_default_scope_is_library():
+    """get_feed_counts with no scope argument defaults to 'library' (unchanged behavior)."""
+    pool, conn = _make_pool_and_conn()
+
+    conn.fetchrow.side_effect = [_ten_bucket_row(), {"cnt": 2}]
+    conn.fetch.side_effect = [
+        [{"source_type": "arxiv", "cnt": 3}],
+        [{"topic_id": 1, "name": "RL", "cnt": 2}],
+    ]
+
+    result = await papers.get_feed_counts.__wrapped__(
+        _mock_request(), db_pool=pool, scope="library"
+    )
+
+    assert result.by_source == {"arxiv": 3}
+    # user_library join must be present for library scope.
+    source_sql = conn.fetch.call_args_list[0].args[0]
+    assert "user_library" in source_sql

@@ -203,12 +203,16 @@ to the backend, important for short-lived workers.
 
 ## 8. Settings UI integration
 
-A "View in Langfuse" link appears in the Settings page when
-`VITE_LANGFUSE_PUBLIC_DASHBOARD` env var is set at frontend build time.
-The link target is the env value verbatim.
+Settings → System → Observability shows an "Open Langfuse dashboard" link
+when an admin has set the `observability.langfuse_dashboard_url` config key
+(stored via the standard `/api/config` store, editable in that pane). The
+link target is the configured value verbatim. Accepted values: an `https://`
+URL, or an `http://localhost` / `http://127.0.0.1` URL (local-dev Langfuse);
+the backend `_validate_langfuse_dashboard_url` guard rejects anything else.
 
-When the env var is absent, the link is not rendered. The Settings UI MUST
-NOT show a broken link or an error placeholder.
+When unset, admins see an inline URL input; non-admins see a plain "ask an
+administrator" note. The Settings UI MUST NOT show a broken link or an
+error placeholder.
 
 The link is informational only — JARVIS does not embed Langfuse iframes,
 proxy Langfuse API calls, or otherwise depend on Langfuse availability.

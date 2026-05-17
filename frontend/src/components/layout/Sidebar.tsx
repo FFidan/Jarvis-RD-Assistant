@@ -2,7 +2,7 @@
  * Sidebar — grouped roman-numeral navigation per the Shell/Sidebar+Admin IA spec.
  *
  * Groups:
- *   Ⅰ Today    — Home · My Day · Pulse Deck · Research Feed
+ *   Ⅰ Today    — Home · My Day · Pulse Deck · Library · Discover
  *   Ⅱ Read     — Projects · Knowledge Graph · Citation Graph · Extraction Table
  *   Ⅲ Learn    — Learning Cards · Analytics
  *   Ⅳ Ask      — Ask
@@ -19,6 +19,7 @@ import {
   Sun,
   Sparkles,
   Newspaper,
+  Search,
   MessageCircleQuestion,
   BarChart3,
   FolderKanban,
@@ -53,6 +54,7 @@ interface NavItem {
   path: string;
   label: string;
   icon: LucideIcon;
+  testid?: string;
 }
 
 interface NavGroup {
@@ -72,7 +74,8 @@ const navGroups: NavGroup[] = [
       { path: '/', label: 'Home', icon: Home },
       { path: '/my-day', label: 'My Day', icon: Sun },
       { path: '/pulse', label: 'Pulse Deck', icon: Sparkles },
-      { path: '/feed', label: 'Research Feed', icon: Newspaper },
+      { path: '/feed', label: 'Library', icon: Newspaper },
+      { path: '/feed?surface=search', label: 'Discover', icon: Search, testid: 'nav-discover' },
     ],
   },
   {
@@ -132,6 +135,7 @@ function NavLinkItem({ item, isActive, collapsed }: NavLinkProps) {
   const link = (
     <Link
       to={item.path}
+      data-testid={item.testid}
       data-tour-id={item.path === '/settings' ? 'sidebar-settings' : undefined}
       className={cn(
         'flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors',

@@ -289,6 +289,25 @@ async def get_paper_detail(
             "SELECT COUNT(*) FROM project_papers WHERE paper_id = $1",
             paper_id,
         )
+        # Most-recent paper.process / paper.analyze job for this paper+user.
+        # Surfaces the SAME persisted failure signal ActionsSidebar polls via
+        # getJob (procrastinate_jobs.status='failed') so the left Pipeline rail
+        # can show ✗ — no parallel status, no new table.
+        last_process_job_status = await conn.fetchval(
+            """
+            SELECT CASE pj.status
+                     WHEN 'failed' THEN 'failed'
+                     ELSE 'other' END
+            FROM procrastinate_jobs pj
+            WHERE pj.task_name IN ('paper.process', 'paper.analyze')
+              AND pj.args->>'paper_id' = $1::text
+              AND pj.args->>'user_id' = $2::text
+            ORDER BY pj.id DESC
+            LIMIT 1
+            """,
+            paper_id,
+            user_id,
+        )
 
     paper = row_to_paper_response(paper_row)
     summary = row_to_summary_response(summary_row) if summary_row else None
@@ -316,6 +335,7 @@ async def get_paper_detail(
         else None
     )
     has_project_links = bool(project_link_count)
+    processing_failed = last_process_job_status == "failed"
 
     return PaperDetailResponse(
         paper=paper,
@@ -324,6 +344,7 @@ async def get_paper_detail(
         user_state=user_state,
         recent_feedback=recent_feedback,
         has_project_links=has_project_links,
+        processing_failed=processing_failed,
     )
 
 
@@ -464,10 +485,20 @@ async def delete_paper_feedback(
 @limiter.limit("60/minute")
 async def get_feed_counts(
     request: Request,
+    scope: str = Query(default="library", max_length=16),
     db_pool: asyncpg.Pool = Depends(get_db_pool),
     user_id: int = Depends(get_current_user_id),
 ):
     """Return per-bucket paper counts for the current user (10 named views)."""
+    # Normalise sentinel: .__wrapped__ callers bypass FastAPI DI so `scope`
+    # may arrive as the Query(…) FieldInfo object rather than a plain str.
+    if not isinstance(scope, str):
+        scope = "library"
+    if scope not in {"library", "corpus"}:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown scope {scope!r}. Valid values: ['corpus', 'library']",
+        )
 
     def _sum(view_key: str, alias: str) -> str:
         return (
@@ -519,8 +550,10 @@ async def get_feed_counts(
             row = await conn.fetchrow(sql)
         assert row is not None  # aggregate query always returns one row
 
-        # UI v3 facet rail: by_source / by_topic / untagged — same user_library scope.
-        by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(conn, user_id)
+        # UI v3 facet rail: by_source / by_topic / untagged — honour requested scope.
+        by_source, by_topic_rows, untagged = await fetch_feed_facet_counts(
+            conn, user_id, scope=scope
+        )
 
     return FeedCountsResponse(
         inbox=row["inbox"],

@@ -31,7 +31,7 @@ import { FeedListFilter } from '@/components/feed/FeedListFilter';
 import { PdfUploadZone } from '@/components/feed/PdfUploadZone';
 import { useBulkSelection } from '@/stores/bulk-selection-store';
 import { useFeedCountsWithFacets } from '@/hooks/use-feed-counts-with-facets';
-import { BookOpen as BookOpenIcon, Upload } from 'lucide-react';
+import { BookOpen as BookOpenIcon, Upload, Compass } from 'lucide-react';
 
 // ─── URL-param helpers ───────────────────────────────────────────────────────
 
@@ -133,8 +133,10 @@ export function ResearchFeedPage() {
   // ── feed counts (numeric only — CountsBadge consumers) ───────────────────
   const { data: counts } = useFeedCounts();
 
-  // ── feed counts with facets (§-facet rail) ───────────────────────────────
-  const { data: countsWithFacets } = useFeedCountsWithFacets();
+  // ── feed counts with facets (§-facet rail) — scoped to active feedScope ──
+  // C-FACET-BE: backend get_feed_counts accepts ?scope= and honours it for
+  // by_source / by_topic / untagged facet counts via fetch_feed_facet_counts.
+  const { data: countsWithFacets } = useFeedCountsWithFacets(feedScope);
 
   // ── default-landing redirect — spec §3.5 + offline contract ─────────────
   // Online: default → Inbox. Offline: default → Library (cached read surface).
@@ -365,18 +367,19 @@ export function ResearchFeedPage() {
       <div className="shrink-0 px-4 pb-3 pt-4 sm:px-6">
         <h1 className="flex items-center gap-2 text-[28px] leading-tight tracking-tight text-strong">
           <BookOpenIcon className="h-7 w-7" />
-          Research Feed
+          Library
         </h1>
       </div>
 
       {/* ── 3-pane layout ──────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        {/* Left: §-facet rail — passes isOnline so Source/Topic show online-only offline */}
+        {/* Left: §-facet rail — passes isOnline + feedScope for scope-honest copy */}
         <FacetRail
           counts={countsWithFacets}
           selection={facetSelection}
           onSelect={handleFacetSelect}
           isOnline={online}
+          feedScope={feedScope}
         />
 
         {/* Right: main list pane */}
@@ -479,13 +482,15 @@ export function ResearchFeedPage() {
             <div>
               <div className="mb-1 flex items-center gap-2">
                 <SectionInfo>
-                  {filter === 'reading'
-                    ? 'Papers you\'re currently reading.'
-                    : filter === 'to_read'
-                      ? 'Papers saved to read later.'
-                      : filter === 'done'
-                        ? 'Papers you\'ve finished.'
-                        : 'Browse, search, and filter all papers in your library.'}
+                  {feedScope === 'corpus'
+                    ? 'All discovered papers — the shared global corpus across all sources.'
+                    : filter === 'reading'
+                      ? 'Papers you\'re currently reading.'
+                      : filter === 'to_read'
+                        ? 'Papers saved to read later.'
+                        : filter === 'done'
+                          ? 'Papers you\'ve finished.'
+                          : 'My library — papers you\'ve saved or own.'}
                 </SectionInfo>
                 {!online && (
                   <span className="ml-1 shrink-0" data-testid="library-offline-indicator">
@@ -497,12 +502,60 @@ export function ResearchFeedPage() {
                   </span>
                 )}
               </div>
-              <FeedView
-                surface="library"
-                filter={filter}
-                scope={feedScope}
-                listFilter={listFilter || undefined}
-              />
+
+              {/* Empty-library default: guide fresh users to Discover instead of a dead list */}
+              {counts && counts.library === 0 && feedScope === 'library' && !filter ? (
+                <div
+                  className="flex flex-col items-center gap-4 rounded-lg border border-dashed border-hair bg-muted/20 px-6 py-10 text-center"
+                  data-testid="library-empty-discover"
+                >
+                  <Compass className="h-10 w-10 text-muted-foreground/50" aria-hidden />
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">Your library is empty</p>
+                    <p className="text-sm text-muted-foreground">
+                      Discover papers or upload a PDF to start building your library.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      data-testid="empty-library-discover-btn"
+                      onClick={() =>
+                        setSearchParams((prev) => {
+                          const p = new URLSearchParams(prev);
+                          p.set('surface', 'search');
+                          return p;
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Compass size={14} aria-hidden />
+                      Discover papers
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSearchParams((prev) => {
+                          const p = new URLSearchParams(prev);
+                          p.set('surface', 'search');
+                          return p;
+                        })
+                      }
+                      className="inline-flex items-center gap-1.5 rounded-md border border-hair bg-muted/40 px-4 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <Upload size={14} aria-hidden />
+                      Upload PDF
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <FeedView
+                  surface="library"
+                  filter={filter}
+                  scope={feedScope}
+                  listFilter={listFilter || undefined}
+                />
+              )}
             </div>
           )}
 
