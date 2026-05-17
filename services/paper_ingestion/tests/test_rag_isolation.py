@@ -158,3 +158,57 @@ async def test_prepare_cross_paper_rag_threads_user_id():
     assert embedder.search_chunks_global.call_args.kwargs["user_id"] == 99
     # No chunks returned → expect the no-results short-circuit
     assert getattr(result, "answer", "").startswith("No relevant")
+
+
+async def test_cross_paper_rag_two_tenant_isolation():
+    """Two-tenant isolation: tenant A's query must not see tenant B's private chunks.
+
+    Regression guard for the Filter(should=[user_id==X, is_null]) scoping in
+    ``search_chunks_global``.  If ``_user_scope_filter`` is bypassed or its
+    ``should`` clauses are removed, Qdrant would return B's chunk to A, and
+    this test fails.
+
+    Mechanism: we let Qdrant return the raw chunk list (bypassing the real
+    Qdrant client) and then verify that the Qdrant ``query_filter`` passed for
+    tenant A's call would exclude tenant B's chunks — i.e. the filter has a
+    ``FieldCondition(user_id == A)`` and an ``IsNullCondition``, but no
+    unconditional match for B.
+    """
+    from qdrant_client.models import FieldCondition, IsNullCondition
+
+    tenant_a = 1
+    tenant_b = 2
+
+    # Canonical chunk (user_id=None) — should be visible to everyone
+    chunk_canonical = _hit(paper_id=20, user_id=None, score=0.80)
+
+    # The real Qdrant client applies the filter server-side; here we verify
+    # the filter *passed* to query_points enforces the correct scoping for tenant_a.
+    embedder = _make_embedder([chunk_canonical])  # Qdrant "returns" only canonical
+    await embedder.search_chunks_global("attention mechanisms", user_id=tenant_a)
+
+    qf = embedder.qdrant.query_points.call_args.kwargs["query_filter"]
+
+    # Must have a non-null filter (proves scoping is active for tenant_a)
+    assert qf is not None, "No filter passed — cross-tenant leak possible"
+
+    user_clauses = [c for c in qf.should if isinstance(c, FieldCondition)]
+    null_clauses = [c for c in qf.should if isinstance(c, IsNullCondition)]
+
+    # Exactly one user-match clause, scoped to tenant_a — NOT tenant_b
+    assert len(user_clauses) == 1, f"Expected 1 FieldCondition, got {user_clauses}"
+    assert user_clauses[0].match.value == tenant_a, (
+        f"Filter scoped to wrong user: {user_clauses[0].match.value!r} != {tenant_a}"
+    )
+    assert user_clauses[0].match.value != tenant_b, "Filter would admit tenant B's chunks"
+
+    # Canonical (null) clause present so shared corpus remains visible
+    assert len(null_clauses) == 1, "Missing IsNullCondition — canonical chunks would be excluded"
+
+    # No clause that would unconditionally admit tenant_b's private chunks
+    b_clauses = [
+        c for c in qf.should if isinstance(c, FieldCondition) and c.match.value == tenant_b
+    ]
+    assert len(b_clauses) == 0, (
+        "Filter contains a clause that would admit tenant B's private chunks"
+    )

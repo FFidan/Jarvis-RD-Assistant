@@ -51,7 +51,7 @@ async def _refresh_recommendations_for_user(app: Any, user_id: int) -> int:
     embedder = app.state.embedder
 
     async with db_pool.acquire() as conn:
-        liked_weight, project_weight, enabled = await _read_weights(conn)
+        liked_weight, project_weight, enabled = await _read_weights(conn, user_id)
 
     if not enabled:
         _logger.info("recommendation: disabled via config, skipping")
@@ -153,23 +153,39 @@ def _safe_float(val: object, default: float) -> float:
         return default
 
 
-async def _read_weights(conn: asyncpg.Connection) -> tuple[float, float, bool]:
+async def _read_weights(conn: asyncpg.Connection, user_id: int) -> tuple[float, float, bool]:
+    """Return (liked_weight, project_weight, enabled) for *user_id*.
+
+    User-row-wins: if a per-user row exists for the caller's user_id it takes
+    precedence over the global (user_id IS NULL) row, mirroring the idiom used
+    in ``load_profile`` for pulse config.
+    """
     rows = await conn.fetch(
-        "SELECT key, value FROM user_config"
+        "SELECT key, value, user_id FROM user_config"
         " WHERE key IN"
         " ('recommendation.liked_weight',"
         " 'recommendation.project_weight',"
         " 'recommendation.enabled')"
-        " AND user_id IS NULL"
+        " AND (user_id IS NOT DISTINCT FROM $1 OR user_id IS NULL)"
+        " ORDER BY key, user_id NULLS LAST",
+        user_id,
     )
-    cfg = {r["key"]: r["value"] for r in rows}
+    # Per-key: user-specific row (non-NULL user_id) wins over global NULL row.
+    # Rows are ordered per-key with user-specific rows first (NULLS LAST on user_id).
+    _cfg_raw: dict[str, object] = {}
+    for r in rows:
+        k = r["key"]
+        if k not in _cfg_raw or r.get("user_id") is not None:
+            _cfg_raw[k] = r["value"]
     liked = _safe_float(
-        cfg.get("recommendation.liked_weight", _DEFAULT_LIKED_WEIGHT), _DEFAULT_LIKED_WEIGHT
+        _cfg_raw.get("recommendation.liked_weight", _DEFAULT_LIKED_WEIGHT),
+        _DEFAULT_LIKED_WEIGHT,
     )
     project = _safe_float(
-        cfg.get("recommendation.project_weight", _DEFAULT_PROJECT_WEIGHT), _DEFAULT_PROJECT_WEIGHT
+        _cfg_raw.get("recommendation.project_weight", _DEFAULT_PROJECT_WEIGHT),
+        _DEFAULT_PROJECT_WEIGHT,
     )
-    enabled_val = cfg.get("recommendation.enabled", True)
+    enabled_val = _cfg_raw.get("recommendation.enabled", True)
     enabled = bool(enabled_val) if not isinstance(enabled_val, bool) else enabled_val
     return liked, project, enabled
 

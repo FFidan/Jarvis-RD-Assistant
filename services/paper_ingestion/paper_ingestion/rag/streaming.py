@@ -162,9 +162,12 @@ async def prepare_cross_paper_rag(
     Parameters
     ----------
     user_id:
-        Optional caller user ID for future multi-tenant chunk scoping.
-        Currently threaded through but not used in the search calls — single-
-        user mode passes None from all call sites (H20/WS-6C).
+        Caller user ID for per-tenant Qdrant scoping.  When set, every
+        ``embedder.search_chunks_global`` call receives a
+        ``Filter(should=[user_id==X, is_null(user_id)])`` that restricts
+        results to chunks owned by that user **or** canonical chunks
+        (``user_id`` payload IS NULL).  Passing ``None`` disables the
+        filter (legacy / single-tenant code paths).
 
     Returns a :class:`CrossPaperRagPrep` on success, or a
     :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are
