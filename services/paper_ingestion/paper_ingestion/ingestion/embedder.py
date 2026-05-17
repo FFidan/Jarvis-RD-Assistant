@@ -46,7 +46,8 @@ CHUNK_OVERLAP_TOKENS = 50
 # Stable namespace for deterministic Qdrant point IDs derived from (paper_id, chunk_index).
 # Using uuid5(namespace, "paper_id:chunk_index") guarantees the same point ID across retries
 # so Qdrant upsert is idempotent and a failed Phase-3 (DB write) cannot accumulate duplicates.
-_CHUNK_POINT_ID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # UUID namespace DNS
+# uuid.NAMESPACE_DNS is the standard RFC 4122 public DNS namespace — a stable, well-known value.
+_CHUNK_POINT_ID_NAMESPACE = uuid.NAMESPACE_DNS
 
 _KNOWN_EMBEDDING_DIMENSIONS: dict[str, int] = {
     "nomic-embed-text": 768,

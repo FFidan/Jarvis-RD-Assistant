@@ -154,7 +154,7 @@ class TestFilterUnread:
     @pytest.mark.asyncio
     async def test_empty_input(self) -> None:
         conn = AsyncMock()
-        result = await _filter_unread(conn, [], user_id=None)
+        result = await _filter_unread(conn, [], user_id=1)
         assert result == set()
         conn.fetch.assert_not_called()
 
@@ -162,14 +162,14 @@ class TestFilterUnread:
     async def test_returns_unread_ids(self) -> None:
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[{"id": 1}, {"id": 3}])
-        result = await _filter_unread(conn, [1, 2, 3], user_id=None)
+        result = await _filter_unread(conn, [1, 2, 3], user_id=1)
         assert result == {1, 3}
 
     @pytest.mark.asyncio
     async def test_all_read_returns_empty(self) -> None:
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        result = await _filter_unread(conn, [10, 20], user_id=None)
+        result = await _filter_unread(conn, [10, 20], user_id=1)
         assert result == set()
 
     @pytest.mark.asyncio
@@ -177,7 +177,7 @@ class TestFilterUnread:
         """The paper_ids list must be forwarded to the SQL query as $1."""
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [5, 6, 7], user_id=None)
+        await _filter_unread(conn, [5, 6, 7], user_id=1)
         args = conn.fetch.call_args
         # second positional arg ($1) is the paper_ids list; third ($2) is user_id
         positional = args.args
@@ -190,7 +190,7 @@ class TestFilterUnread:
         # were dropped in migration 047 and must NOT appear in the SQL.
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=None)
+        await _filter_unread(conn, [1], user_id=1)
         sql = conn.fetch.await_args.args[0]
         assert "'trash'" in sql, "SQL must reference trash state"
         assert "'done'" in sql, "SQL must reference done state"
@@ -205,7 +205,7 @@ class TestFilterUnread:
         # (starred papers are still recommended). The SQL must NOT exclude on starred.
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=None)
+        await _filter_unread(conn, [1], user_id=1)
         sql = conn.fetch.await_args.args[0]
         assert "starred" not in sql, "starred state must not gate recommendation eligibility"
 
@@ -214,7 +214,7 @@ class TestFilterUnread:
         # Phase-A L3: SQL must contain the recommendation_feedback 60-day hard exclusion.
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[])
-        await _filter_unread(conn, [1], user_id=None)
+        await _filter_unread(conn, [1], user_id=1)
         sql = conn.fetch.await_args.args[0]
         assert "recommendation_feedback" in sql, (
             "SQL must reference recommendation_feedback for L3 exclusion"
@@ -232,7 +232,7 @@ class TestFilterUnread:
         conn = AsyncMock()
         # Simulate DB returning no rows (paper excluded by the EXISTS condition)
         conn.fetch = AsyncMock(return_value=[])
-        result = await _filter_unread(conn, [10], user_id=None)
+        result = await _filter_unread(conn, [10], user_id=1)
         assert 10 not in result, (
             "Paper with 59d-old negative feedback must be excluded (within 60d window)"
         )
@@ -247,7 +247,7 @@ class TestFilterUnread:
         conn = AsyncMock()
         # Simulate DB returning the paper (boundary-exclusive: 60d is NOT excluded)
         conn.fetch = AsyncMock(return_value=[{"id": 11}])
-        result = await _filter_unread(conn, [11], user_id=None)
+        result = await _filter_unread(conn, [11], user_id=1)
         assert 11 in result, (
             "Paper with exactly 60d-old negative feedback must be ELIGIBLE "
             "(strict > means boundary is exclusive: 60d old does NOT trigger exclusion)"
@@ -258,7 +258,7 @@ class TestFilterUnread:
         """Negative feedback 61 days old is outside the 60d window → paper eligible."""
         conn = AsyncMock()
         conn.fetch = AsyncMock(return_value=[{"id": 12}])
-        result = await _filter_unread(conn, [12], user_id=None)
+        result = await _filter_unread(conn, [12], user_id=1)
         assert 12 in result, (
             "Paper with 61d-old negative feedback must be eligible (expired window)"
         )
@@ -276,11 +276,10 @@ class TestFilterUnread:
                 "VALUES ('test-trash-1', 'arxiv', 'T', '{}', 'http://x') RETURNING id"
             )
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) "
-                "VALUES ($1, NULL, 'trash')",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, 'trash')",
                 paper_id,
             )
-            result = await _filter_unread(conn, [paper_id], user_id=None)
+            result = await _filter_unread(conn, [paper_id], user_id=1)
             assert paper_id not in result, "Trash papers must be excluded from candidates"
 
     @pytest.mark.asyncio
@@ -295,10 +294,10 @@ class TestFilterUnread:
                 "VALUES ('test-done-1', 'arxiv', 'Done Paper', '{}', 'http://done') RETURNING id"
             )
             await conn.execute(
-                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, NULL, 'done')",
+                "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, 'done')",
                 paper_id,
             )
-            result = await _filter_unread(conn, [paper_id], user_id=None)
+            result = await _filter_unread(conn, [paper_id], user_id=1)
             assert paper_id not in result, "Done papers must be excluded from candidates"
 
     @pytest.mark.asyncio
@@ -316,11 +315,11 @@ class TestFilterUnread:
                     ext_id,
                 )
                 await conn.execute(
-                    "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, NULL, $2)",
+                    "INSERT INTO paper_user_state (paper_id, user_id, state) VALUES ($1, 1, $2)",
                     paper_id,
                     state_val,
                 )
-                result = await _filter_unread(conn, [paper_id], user_id=None)
+                result = await _filter_unread(conn, [paper_id], user_id=1)
                 assert paper_id in result, f"Paper with state='{state_val}' must remain eligible"
 
     @pytest.mark.asyncio
@@ -335,10 +334,10 @@ class TestFilterUnread:
             await conn.execute(
                 "INSERT INTO recommendation_feedback"
                 " (paper_id, user_id, signal, source, created_at)"
-                " VALUES ($1, NULL, 'negative', 'pulse_thumbs', NOW() - INTERVAL '30 days')",
+                " VALUES ($1, 1, 'negative', 'pulse_thumbs', NOW() - INTERVAL '30 days')",
                 paper_id,
             )
-            result = await _filter_unread(conn, [paper_id], user_id=None)
+            result = await _filter_unread(conn, [paper_id], user_id=1)
             assert paper_id not in result, (
                 "Paper with negative feedback within 60 days must be excluded"
             )
@@ -360,10 +359,10 @@ class TestFilterUnread:
             await conn.execute(
                 "INSERT INTO recommendation_feedback"
                 " (paper_id, user_id, signal, source, created_at)"
-                " VALUES ($1, NULL, 'negative', 'pulse_thumbs', NOW() - INTERVAL '61 days')",
+                " VALUES ($1, 1, 'negative', 'pulse_thumbs', NOW() - INTERVAL '61 days')",
                 paper_id,
             )
-            result = await _filter_unread(conn, [paper_id], user_id=None)
+            result = await _filter_unread(conn, [paper_id], user_id=1)
             assert paper_id in result, (
                 "Paper with negative feedback older than 60 days must be eligible again"
             )
@@ -792,7 +791,9 @@ class TestRefreshRecommendationsFanout:
         """The per-user core asserts a concrete user_id (no NULL-owned writes)."""
         app = _build_app()
         with pytest.raises(AssertionError):
-            await _refresh_recommendations_for_user(app, user_id=None)
+            # Deliberately invalid: verifies the per-user core rejects a NULL
+            # user_id (no NULL-owned writes). The type error is the point.
+            await _refresh_recommendations_for_user(app, user_id=None)  # type: ignore[arg-type]
 
     @pytest.mark.asyncio
     async def test_nightly_path_fans_out_over_non_deleted_users(self, monkeypatch) -> None:

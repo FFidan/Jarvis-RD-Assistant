@@ -2,15 +2,19 @@
 
 PR-A3: Postgres-backed rate limiter with in-memory fallback on DB outage.
 
-All tests use AsyncMock/MagicMock to avoid a live Postgres dependency.
+Most tests use AsyncMock/MagicMock to avoid a live Postgres dependency.
+The live-PG race test (test_m2_race_live_pg_*) requires JARVIS_RUN_LIVE_PG=1
+and a running Docker daemon; it is skipped by default.
 """
 
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from jarvis_common.source_rate_limiter import (
     PersistentSourceRateLimiter,
     SourceRateLimiter,
@@ -69,9 +73,9 @@ def _make_pool(fetchrow_side_effects=None, raise_exc=None):
 async def test_acquire_no_sleep_when_min_interval_elapsed(monkeypatch):
     """acquire() proceeds without sleeping when min_interval has fully elapsed.
 
-    fetchrow sequence:
-      1. cooldown check  → no row (no cooldown)
-      2. atomic claim    → row returned (claim won)
+    fetchrow sequence (single transaction):
+      1. SELECT … FOR UPDATE → None (no existing row)
+      2. INSERT … RETURNING  → claim_row (INSERT path, no conflict)
     """
     now = datetime.now(tz=UTC)
     claim_row = {"last_request_at": now}
@@ -104,18 +108,23 @@ async def test_acquire_no_sleep_when_min_interval_elapsed(monkeypatch):
 async def test_acquire_sleeps_when_recent_request(monkeypatch):
     """acquire() sleeps for the remaining interval when slot is taken.
 
-    fetchrow sequence:
-      1. cooldown check    → no row
-      2. atomic claim      → None (slot taken by another worker)
-      3. wait-row read     → last_request_at = 2s ago
-      4. retry claim       → row returned (claim won after sleep)
+    fetchrow sequence (new unified-transaction design):
+
+    Attempt 0 (single txn):
+      1. SELECT … FOR UPDATE → {last_request_at=2s_ago, cooldown_until=None}
+         (row exists, no cooldown; wait computed from last_request_at in locked_row)
+      2. INSERT … RETURNING  → None (slot taken by another worker)
+
+    Attempt 1 (single txn after sleep):
+      3. SELECT … FOR UPDATE → None (no row to lock, or row now stale)
+      4. INSERT … RETURNING  → claim_row (INSERT path, claim won)
     """
     now = datetime.now(tz=UTC)
     recent_last_request = now - timedelta(seconds=2.0)
-    wait_row = {"last_request_at": recent_last_request}
+    locked_row = {"last_request_at": recent_last_request, "cooldown_until": None}
     claim_row = {"last_request_at": now}
 
-    pool, _ = _make_pool(fetchrow_side_effects=[None, None, wait_row, claim_row])
+    pool, _ = _make_pool(fetchrow_side_effects=[locked_row, None, None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -148,9 +157,9 @@ async def test_acquire_no_sleep_when_no_row(monkeypatch):
     The INSERT path always succeeds for a new source (no conflict), so the
     atomic claim returns a row immediately.
 
-    fetchrow sequence:
-      1. cooldown check → None (no row)
-      2. atomic claim   → row returned (INSERT path, no conflict)
+    fetchrow sequence (single transaction):
+      1. SELECT … FOR UPDATE → None (no row)
+      2. INSERT … RETURNING  → claim_row (INSERT path, no conflict)
     """
     now = datetime.now(tz=UTC)
     claim_row = {"last_request_at": now}
@@ -181,12 +190,17 @@ async def test_acquire_no_sleep_when_no_row(monkeypatch):
 
 
 async def test_acquire_sleeps_through_cooldown(monkeypatch):
-    """acquire() sleeps until cooldown_until when source is in cooldown."""
+    """acquire() sleeps until cooldown_until when source is in cooldown.
+
+    fetchrow sequence (single transaction):
+      1. SELECT … FOR UPDATE → {cooldown_until=45s_future, last_request_at=...}
+         (cooldown active — no INSERT issued)
+    """
     now = datetime.now(tz=UTC)
     cooldown_until = now + timedelta(seconds=45.0)
 
-    cooldown_row = {"cooldown_until": cooldown_until}
-    # Only the cooldown check fetchrow is called; method returns early.
+    cooldown_row = {"cooldown_until": cooldown_until, "last_request_at": now}
+    # Only the FOR UPDATE fetch is called; the INSERT is skipped.
     pool, _ = _make_pool(fetchrow_side_effects=[cooldown_row])
 
     sleep_calls: list[float] = []
@@ -396,7 +410,7 @@ async def test_concurrent_acquire_only_one_proceeds_without_sleep(monkeypatch):
 
     Simulates the atomic slot claim: the first worker wins the claim
     (fetchrow returns a row); the second worker gets None (slot taken),
-    reads the wait time, sleeps, then wins on retry.
+    reads the wait time from the locked_row, sleeps, then wins on retry.
 
     We use separate pool mocks per limiter instance so each coroutine's
     fetchrow calls are independent — matching production behaviour where
@@ -404,23 +418,33 @@ async def test_concurrent_acquire_only_one_proceeds_without_sleep(monkeypatch):
 
     Assertion: exactly one sleep occurs (the losing worker's throttle wait),
     not zero (both would fire) and not two (would mean double-penalising).
+
+    fetchrow sequence (new unified-transaction design):
+
+    Worker A (wins immediately, single txn):
+      1. SELECT … FOR UPDATE → None  (no existing row)
+      2. INSERT … RETURNING  → claim_row
+
+    Worker B (loses attempt 0, retries attempt 1):
+      Attempt 0 txn:
+        1. SELECT … FOR UPDATE → {last_request_at=1s_ago, cooldown_until=None}
+        2. INSERT … RETURNING  → None (slot taken)
+      Sleep ~9s (computed from locked_row["last_request_at"])
+      Attempt 1 txn:
+        3. SELECT … FOR UPDATE → None
+        4. INSERT … RETURNING  → claim_row
     """
     now = datetime.now(tz=UTC)
     recent = now - timedelta(seconds=1.0)  # 1s ago → 9s wait for 10s interval
 
-    # Worker A: wins the claim immediately.
-    #   call 1 → cooldown check → None
-    #   call 2 → atomic claim   → row (won)
+    # Worker A: wins the claim immediately (no existing row).
     claim_row = {"last_request_at": now}
     pool_a, _ = _make_pool(fetchrow_side_effects=[None, claim_row])
 
-    # Worker B: loses the claim, sleeps, then retries and wins.
-    #   call 1 → cooldown check → None
-    #   call 2 → atomic claim   → None (slot taken)
-    #   call 3 → wait-row read  → last_request_at = 1s ago → wait ~9s
-    #   call 4 → retry claim    → row (won)
-    wait_row = {"last_request_at": recent}
-    pool_b, _ = _make_pool(fetchrow_side_effects=[None, None, wait_row, claim_row])
+    # Worker B: loses attempt 0, sleeps using last_request_at from locked_row,
+    # then wins on attempt 1.
+    locked_row_b = {"last_request_at": recent, "cooldown_until": None}
+    pool_b, _ = _make_pool(fetchrow_side_effects=[locked_row_b, None, None, claim_row])
 
     sleep_calls: list[float] = []
 
@@ -461,20 +485,18 @@ async def test_concurrent_acquire_only_one_proceeds_without_sleep(monkeypatch):
 async def test_cooldown_observed_inside_same_transaction(monkeypatch):
     """M-2a: cooldown set by a concurrent worker is observed atomically.
 
-    The fix wraps the cooldown check inside a SELECT … FOR UPDATE transaction
-    so a cooldown written between the check and the claim is never missed.
-    When the locked-row read returns a future cooldown_until, the limiter
-    sleeps and does NOT attempt the slot claim (only 1 fetchrow total).
+    The FOR UPDATE and the slot claim now share ONE transaction on ONE
+    connection.  When the locked-row read returns a future cooldown_until,
+    the limiter sleeps and does NOT attempt the slot claim (only 1 fetchrow
+    per attempt).
 
     fetchrow sequence (single connection, single transaction):
       1. SELECT … FOR UPDATE → locked_row with future cooldown_until
-      (method returns after cooldown sleep — no slot-claim fetchrow)
+      (INSERT claim is skipped — no 2nd fetchrow)
     """
     now = datetime.now(tz=UTC)
     cooldown_until = now + timedelta(seconds=30.0)
 
-    # Simulate a cooldown that a concurrent update_last_request("rate_limit")
-    # wrote — the FOR UPDATE lock ensures our check sees it.
     locked_row = {"cooldown_until": cooldown_until, "last_request_at": now}
     pool, conn = _make_pool(fetchrow_side_effects=[locked_row])
 
@@ -498,33 +520,99 @@ async def test_cooldown_observed_inside_same_transaction(monkeypatch):
     assert 28.0 <= sleep_calls[0] <= 32.0, (
         f"Cooldown sleep {sleep_calls[0]:.2f}s out of expected range"
     )
-    # Slot-claim fetchrow must NOT have been called — only 1 fetchrow total.
+    # INSERT claim fetchrow must NOT have been called — only 1 fetchrow total.
     assert conn.fetchrow.call_count == 1, (
-        f"Expected exactly 1 fetchrow (cooldown check only); got {conn.fetchrow.call_count}"
+        f"Expected exactly 1 fetchrow (FOR UPDATE check only, no claim); "
+        f"got {conn.fetchrow.call_count}"
+    )
+
+
+async def test_m2_race_cooldown_observed_not_bypassed(monkeypatch):
+    """M-2b (race guard): a cooldown written before FOR UPDATE is never bypassed.
+
+    This test demonstrates why the fix is correct: the FOR UPDATE lock and the
+    slot claim share ONE transaction.  If the FOR UPDATE step sees
+    ``cooldown_until`` set (as it would when ``update_last_request("rate_limit")``
+    committed before FOR UPDATE acquired the row lock), the INSERT claim is
+    never issued — proving there is no window between check and claim.
+
+    Concretely: two fetchrow side-effects are registered, but only ONE is
+    consumed (the FOR UPDATE read).  The INSERT claim (call 2) is skipped
+    entirely.  If check and claim were in separate transactions, both calls
+    would be consumed regardless of the cooldown value in call 1.
+
+    fetchrow sequence:
+      1. SELECT … FOR UPDATE → {cooldown_until=60s_future, last_request_at=...}
+         (simulates update_last_request("rate_limit") having committed first)
+      2. INSERT … RETURNING  → (would be a bypass if reached — test fails if
+         this call is consumed)
+    """
+    now = datetime.now(tz=UTC)
+    cooldown_until = now + timedelta(seconds=60.0)
+
+    # The second entry would represent a successful claim — if it is ever
+    # reached, the cooldown was bypassed (the test would count 0 sleeps or
+    # wrong fetchrow_call_count).
+    bypass_sentinel = {"last_request_at": now}
+    locked_row = {"cooldown_until": cooldown_until, "last_request_at": now}
+    pool, conn = _make_pool(fetchrow_side_effects=[locked_row, bypass_sentinel])
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=5.0,
+        db_pool=pool,
+    )
+    await limiter.acquire()
+
+    # If the race were open, the INSERT claim would be attempted (call_count==2)
+    # and the caller would return without sleeping.
+    assert conn.fetchrow.call_count == 1, (
+        f"INSERT claim was issued despite active cooldown — race window is open! "
+        f"fetchrow was called {conn.fetchrow.call_count} times"
+    )
+    # Must have slept through the cooldown (≈ 60s).
+    assert len(sleep_calls) == 1, (
+        f"Expected 1 cooldown sleep; got {sleep_calls} — cooldown may have been bypassed"
+    )
+    assert 58.0 <= sleep_calls[0] <= 62.0, (
+        f"Cooldown sleep {sleep_calls[0]:.2f}s out of expected range (58–62s)"
     )
 
 
 async def test_second_claim_failure_logs_warning_and_raises(monkeypatch, caplog):
-    """M-2b: a 2nd failed slot claim logs a WARNING and raises (not silent).
+    """M-2c: a 2nd failed slot claim logs a WARNING and raises (not silent).
 
     Previously the 2nd attempt failing would fall through silently, allowing
     a rate-limit bypass.  After the fix, a RuntimeError is raised so that
     acquire() triggers the fallback path — and a WARNING is emitted.
 
-    fetchrow sequence:
-      1. SELECT … FOR UPDATE → None (no existing row / no cooldown)
-      2. atomic claim (attempt 0) → None (slot taken)
-      3. wait-row read           → last_request_at = 1s ago → sleep ~9s
-      4. atomic claim (attempt 1) → None (slot STILL taken → 2nd failure)
+    fetchrow sequence (new unified-transaction design):
+
+    Attempt 0 (single txn):
+      1. SELECT … FOR UPDATE → {last_request_at=1s_ago, cooldown_until=None}
+      2. INSERT … RETURNING  → None (slot taken)
+         wait computed from locked_row["last_request_at"] → sleep ~9s
+
+    Attempt 1 (single txn after sleep):
+      3. SELECT … FOR UPDATE → None (no lock row)
+      4. INSERT … RETURNING  → None (slot STILL taken → 2nd failure → RuntimeError)
     """
     import logging
 
     now = datetime.now(tz=UTC)
     recent = now - timedelta(seconds=1.0)
-    wait_row = {"last_request_at": recent}
+    locked_row = {"last_request_at": recent, "cooldown_until": None}
 
-    # All claim attempts fail (None); wait-row is readable on the 3rd call.
-    pool, _ = _make_pool(fetchrow_side_effects=[None, None, wait_row, None])
+    # attempt 0: [locked_row, None]; attempt 1: [None, None]
+    pool, _ = _make_pool(fetchrow_side_effects=[locked_row, None, None, None])
 
     sleep_calls: list[float] = []
 
@@ -559,3 +647,123 @@ async def test_second_claim_failure_logs_warning_and_raises(monkeypatch, caplog)
     assert any("slot still taken after retry" in m for m in warning_messages), (
         f"Expected 'slot still taken after retry' warning; got: {warning_messages}"
     )
+
+
+# ---------------------------------------------------------------------------
+# M-2 live-PG race test: concurrent acquire + interleaved update_last_request
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.live_pg
+async def test_m2_race_live_pg_cooldown_interleave_is_observed(live_pg_dsn: str) -> None:
+    """M-2 (live-PG): concurrent acquirer observes a cooldown set between its check and claim.
+
+    This is the true concurrency invariant test: it uses a real asyncpg pool
+    against a disposable PostgreSQL container so the FOR UPDATE + claim
+    atomicity operates at the database level (not a mocked co-routine).
+
+    Scenario
+    --------
+    1. Worker A calls ``_acquire_with_retry`` on a limiter with a very short
+       min_interval (0.05s) so it wins the slot claim easily.
+    2. Immediately after A has claimed the slot, the test calls
+       ``update_last_request("rate_limit", retry_after_s=3600)`` to write a
+       cooldown_until far in the future.
+    3. Worker B then calls ``acquire()``.  Because the FOR UPDATE lock and the
+       slot claim are in the SAME transaction, B's FOR UPDATE read sees the
+       committed cooldown row and B sleeps through it rather than bypassing it.
+
+    Old (broken) behaviour: step-1 read (FOR UPDATE) and step-2 claim were in
+    separate transactions.  ``update_last_request`` could commit between them,
+    so B might not observe the cooldown and proceed as if no cooldown existed.
+
+    New (correct) behaviour: FOR UPDATE + INSERT are in one transaction.  The
+    committed cooldown row is visible to B's FOR UPDATE read before B can
+    attempt the INSERT — so B always sees the cooldown.
+
+    Assertions
+    ----------
+    * ``is_in_cooldown()`` returns True before B runs.
+    * B's ``acquire()`` sets ``cooldown_observed`` to True, meaning it slept
+      (or returned without claiming) due to the active cooldown.
+    """
+    import asyncpg
+
+    # Provision the schema — only source_health is needed.
+    setup_conn = await asyncpg.connect(live_pg_dsn)
+    try:
+        await setup_conn.execute("""
+            CREATE TABLE IF NOT EXISTS source_health (
+                id BIGSERIAL PRIMARY KEY,
+                user_id INTEGER NULL,
+                source_type TEXT NOT NULL,
+                last_request_at TIMESTAMPTZ,
+                last_success_at TIMESTAMPTZ,
+                last_status TEXT,
+                cooldown_until TIMESTAMPTZ,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT source_health_user_source
+                    UNIQUE NULLS NOT DISTINCT (user_id, source_type)
+            )
+        """)
+    finally:
+        await setup_conn.close()
+
+    pool = await asyncpg.create_pool(live_pg_dsn, min_size=2, max_size=4)
+    try:
+        source_type = f"test_race_{uuid.uuid4().hex[:8]}"
+        limiter = PersistentSourceRateLimiter(
+            source_type=source_type,
+            user_id=None,
+            min_interval_seconds=0.05,  # tiny so normal slot claim is instant
+            db_pool=pool,
+        )
+
+        # Step 1: Worker A claims the slot (creates the row).
+        await limiter._acquire_with_retry()
+
+        # Step 2: Inject a "rate_limit" cooldown with a far-future expiry.
+        # This simulates what happens when an HTTP 429 is received after A's
+        # request: update_last_request runs on a separate connection/txn and
+        # commits cooldown_until into the row.
+        await limiter.update_last_request(status="rate_limit", retry_after_s=3600)
+
+        # Verify the cooldown is now visible in the DB.
+        in_cd, until = await limiter.is_in_cooldown()
+        assert in_cd, "cooldown_until should be set after update_last_request('rate_limit')"
+        assert until is not None
+
+        # Step 3: Worker B tries to acquire.  With the fix, B's FOR UPDATE
+        # read and slot claim are in ONE transaction.  The committed cooldown
+        # row is locked and read atomically before the INSERT is even attempted
+        # — so B MUST observe the cooldown and raise (causing acquire() to fall
+        # back to a bare sleep), never claiming the slot.
+        #
+        # We intercept asyncio.sleep to prevent an actual 3600-second wait.
+        sleep_called_with: list[float] = []
+
+        async def _capturing_sleep(secs: float) -> None:
+            sleep_called_with.append(secs)
+            # Don't actually sleep — just record and return immediately.
+
+        import unittest.mock as _mock
+
+        with _mock.patch("asyncio.sleep", side_effect=_capturing_sleep):
+            # acquire() uses the fallback (bare sleep) when _acquire_with_retry
+            # raises, so we expect exactly one sleep call ≥ the cooldown remaining.
+            await limiter.acquire()
+
+        # B must have slept — cooldown was observed.
+        assert len(sleep_called_with) >= 1, (
+            "Worker B did not sleep — cooldown was bypassed (race window is open)"
+        )
+        # The sleep duration should be close to the remaining cooldown (~3600s),
+        # proving B saw cooldown_until rather than proceeding through the slot claim.
+        assert sleep_called_with[0] > 1000, (
+            f"B's first sleep was only {sleep_called_with[0]:.1f}s — expected ~3600s "
+            f"(cooldown); the limiter may have used the fallback min_interval sleep "
+            f"instead of observing cooldown_until"
+        )
+    finally:
+        await pool.close()

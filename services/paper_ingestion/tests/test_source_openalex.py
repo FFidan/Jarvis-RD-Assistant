@@ -73,6 +73,39 @@ def test_reconstruct_abstract_empty_dict_returns_none():
     assert _reconstruct_abstract({}) is None
 
 
+def test_reconstruct_abstract_gap_positions_no_double_spaces():
+    """Gapped inverted index (positions 1 and 3 assigned, position 2 empty)
+    must not produce double spaces, and word order must be preserved.
+
+    OpenAlex can omit positions for punctuation or formatting tokens.
+    The reconstructed abstract must be single-spaced clean text.
+    """
+    # Position 0="Neural", 1="networks", pos 2 is a gap, 3="learn", 4="representations"
+    idx = {
+        "Neural": [0],
+        "networks": [1],
+        "learn": [3],
+        "representations": [4],
+    }
+    result = _reconstruct_abstract(idx)
+    assert result is not None
+    assert "  " not in result, f"Double space found in: {result!r}"
+    # Words appear in position order
+    assert result.index("Neural") < result.index("networks")
+    assert result.index("networks") < result.index("learn")
+    assert result.index("learn") < result.index("representations")
+
+
+def test_reconstruct_abstract_multiple_gaps_no_double_spaces():
+    """Multiple consecutive gap positions also produce single-spaced output."""
+    # Positions 0,1 filled; 2,3,4 gap; 5 filled
+    idx = {"first": [0], "second": [1], "sixth": [5]}
+    result = _reconstruct_abstract(idx)
+    assert result is not None
+    assert "  " not in result, f"Double space found in: {result!r}"
+    assert result == "first second sixth"
+
+
 def test_reconstruct_abstract_from_fixture():
     """Fixture entry with abstract_inverted_index is correctly reconstructed."""
     work = SEARCH_FIXTURE["results"][0]

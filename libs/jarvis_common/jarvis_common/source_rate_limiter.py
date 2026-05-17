@@ -138,116 +138,115 @@ class PersistentSourceRateLimiter:
     async def _acquire_with_retry(self) -> None:
         """Inner acquire: atomic cooldown-check + slot claim (one retry).
 
-        Both the cooldown check and the slot claim happen inside the **same**
-        transaction using ``SELECT … FOR UPDATE`` so that a cooldown written by
-        a concurrent worker between those two steps is always observed.
+        The cooldown check (``SELECT … FOR UPDATE``) and the slot claim
+        (``INSERT … ON CONFLICT … RETURNING``) run in the **same**
+        ``async with conn.transaction():`` block on the **same** connection.
+        This means the FOR UPDATE row-lock is held continuously until the
+        INSERT/UPDATE is issued in the same transaction, so no concurrent
+        ``update_last_request("rate_limit", …)`` can slip a new
+        ``cooldown_until`` between the check and the claim.
 
-        H-1 preservation: the connection is released (context-manager exited)
-        before any ``asyncio.sleep`` call.  The sleep therefore never holds an
-        open DB connection.
+        H-1 preservation: the connection context-manager (``pool.acquire()``)
+        exits *before* any ``asyncio.sleep`` call.  Sleep values are captured
+        as plain floats inside the transaction block and only acted on after
+        the connection is fully released.
         """
-        # ── 1. Cooldown check + atomic slot claim (single transaction) ───────
-        # We lock the existing row (if any) with FOR UPDATE so that a
-        # concurrent ``update_last_request("rate_limit", …)`` that committed
-        # cooldown_until between our read and our INSERT cannot be missed.
-        # The INSERT path (first-ever request, no conflict) takes the lock
-        # implicitly via the unique-index insert.
-        cooldown_wait: float | None = None
-        async with self._pool.acquire() as conn:
-            async with conn.transaction():
-                locked_row = await conn.fetchrow(
-                    """
-                    SELECT cooldown_until, last_request_at
-                      FROM source_health
-                     WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
-                       AND source_type = $2
-                       FOR UPDATE
-                    """,
-                    self._user_id,
-                    self._source_type,
-                )
-                if locked_row is not None:
-                    cooldown_until: datetime | None = locked_row["cooldown_until"]
-                    if cooldown_until is not None:
-                        now = datetime.now(tz=UTC)
-                        if cooldown_until > now:
-                            cooldown_wait = (cooldown_until - now).total_seconds()
-                            # Don't claim the slot — just note the wait and bail
-                            # out of the transaction cleanly (no writes).
-
-        # Release the connection BEFORE sleeping (H-1: never hold conn across sleep).
-        if cooldown_wait is not None:
-            _logger.debug(
-                "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
-                self._source_type,
-                cooldown_wait,
-            )
-            await asyncio.sleep(cooldown_wait)
-            return
-
-        # ── 2. Atomic slot claim (up to 2 attempts) ──────────────────────────
-        # The INSERT path handles the first-ever request for this source (no
-        # existing row); ON CONFLICT targets the UNIQUE(user_id, source_type)
-        # constraint.  The WHERE clause on DO UPDATE makes the update
-        # conditional: it only fires (and returns a row) when the slot is free.
-        # A concurrent worker that already updated last_request_at within the
-        # interval will cause the WHERE to be false → no row returned → slot
-        # is taken.
+        # ── Attempt loop (up to 2 tries) ─────────────────────────────────────
+        # Each attempt opens ONE connection, runs ONE transaction that:
+        #   a) locks the existing row (if any) with SELECT … FOR UPDATE,
+        #   b) checks cooldown_until — if active, records cooldown_wait and
+        #      aborts the transaction without writing,
+        #   c) otherwise issues the conditional INSERT … ON CONFLICT slot claim.
+        # The connection is released before sleeping (H-1).
         for attempt in range(2):
+            cooldown_wait: float | None = None
+            claimed: bool = False
+            wait_after_miss: float | None = None  # set on attempt-0 miss
+
             async with self._pool.acquire() as conn:
-                claimed_row = await conn.fetchrow(
-                    """
-                    INSERT INTO source_health
-                        (user_id, source_type, last_request_at, updated_at)
-                    VALUES ($1, $2, now(), now())
-                    ON CONFLICT (user_id, source_type) DO UPDATE
-                       SET last_request_at = now(),
-                           updated_at      = now()
-                     WHERE source_health.last_request_at IS NULL
-                        OR source_health.last_request_at
-                               < now() - ($3 || ' seconds')::interval
-                    RETURNING last_request_at
-                    """,
-                    self._user_id,
-                    self._source_type,
-                    str(self._min_interval),
-                )
-
-            if claimed_row is not None:
-                # Slot claimed — proceed immediately.
-                return
-
-            if attempt == 0:
-                # Slot taken by another worker; read its last_request_at and
-                # sleep for the remaining interval before retrying.
-                async with self._pool.acquire() as conn:
-                    wait_row = await conn.fetchrow(
+                async with conn.transaction():
+                    locked_row = await conn.fetchrow(
                         """
-                        SELECT last_request_at
+                        SELECT cooldown_until, last_request_at
                           FROM source_health
                          WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
                            AND source_type = $2
+                           FOR UPDATE
                         """,
                         self._user_id,
                         self._source_type,
                     )
-                if wait_row is not None and wait_row["last_request_at"] is not None:
-                    elapsed = (datetime.now(tz=UTC) - wait_row["last_request_at"]).total_seconds()
-                    wait = max(0.0, self._min_interval - elapsed)
-                else:
-                    wait = self._min_interval
+
+                    if locked_row is not None:
+                        cooldown_until: datetime | None = locked_row["cooldown_until"]
+                        if cooldown_until is not None:
+                            now_cd = datetime.now(tz=UTC)
+                            if cooldown_until > now_cd:
+                                cooldown_wait = (cooldown_until - now_cd).total_seconds()
+                                # Do not claim the slot — fall through and let
+                                # the transaction commit cleanly (no writes).
+
+                    if cooldown_wait is None:
+                        # Cooldown not active — attempt the conditional slot claim
+                        # inside the same transaction so the FOR UPDATE lock
+                        # covers the gap between check and write.
+                        claimed_row = await conn.fetchrow(
+                            """
+                            INSERT INTO source_health
+                                (user_id, source_type, last_request_at, updated_at)
+                            VALUES ($1, $2, now(), now())
+                            ON CONFLICT (user_id, source_type) DO UPDATE
+                               SET last_request_at = now(),
+                                   updated_at      = now()
+                             WHERE source_health.last_request_at IS NULL
+                                OR source_health.last_request_at
+                                       < now() - ($3 || ' seconds')::interval
+                            RETURNING last_request_at
+                            """,
+                            self._user_id,
+                            self._source_type,
+                            str(self._min_interval),
+                        )
+                        if claimed_row is not None:
+                            claimed = True
+                        elif attempt == 0:
+                            # Slot taken; read last_request_at to compute wait.
+                            # locked_row already has last_request_at from the
+                            # FOR UPDATE fetch above — use it directly.
+                            if locked_row is not None and locked_row["last_request_at"] is not None:
+                                elapsed = (
+                                    datetime.now(tz=UTC) - locked_row["last_request_at"]
+                                ).total_seconds()
+                                wait_after_miss = max(0.0, self._min_interval - elapsed)
+                            else:
+                                wait_after_miss = self._min_interval
+
+            # ── Connection released above (H-1) — sleep outside of it ────────
+            if cooldown_wait is not None:
+                _logger.debug(
+                    "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
+                    self._source_type,
+                    cooldown_wait,
+                )
+                await asyncio.sleep(cooldown_wait)
+                return
+
+            if claimed:
+                return
+
+            if wait_after_miss is not None:
+                # attempt == 0: slot taken by another worker; sleep then retry.
                 _logger.debug(
                     "PersistentSourceRateLimiter[%s] slot taken; sleeping %.1fs",
                     self._source_type,
-                    wait,
+                    wait_after_miss,
                 )
-                # Release connection BEFORE sleeping (H-1).
-                await asyncio.sleep(wait)
+                await asyncio.sleep(wait_after_miss)
+                # loop continues → attempt == 1
             else:
-                # attempt == 1: second claim failed after sleeping.  This is
-                # abnormal (two workers racing on a very short interval, or
-                # clock skew).  Log a warning and signal the caller so it can
-                # use the fallback path — never silently bypass rate-limiting.
+                # attempt == 1: second claim failed after sleeping.  Abnormal
+                # (two workers racing on a very short interval, or clock skew).
+                # Raise so acquire() falls back — never silently skip limiting.
                 _logger.warning(
                     "PersistentSourceRateLimiter[%s] slot still taken after retry; "
                     "rate-limit enforced via fallback",

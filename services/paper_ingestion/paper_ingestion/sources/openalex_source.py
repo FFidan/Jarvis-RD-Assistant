@@ -87,7 +87,10 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str | None:
             if 0 <= pos < len(tokens):
                 tokens[pos] = word
 
-    return " ".join(tokens).strip() or None
+    # Skip empty slots (gap positions with no assigned word) so the join
+    # does not produce double spaces. Word order is preserved because empty
+    # slots carry no token — they are just positional placeholders.
+    return " ".join(t for t in tokens if t) or None
 
 
 @register_source

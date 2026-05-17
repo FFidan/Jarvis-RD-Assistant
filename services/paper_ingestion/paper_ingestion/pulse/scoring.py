@@ -9,7 +9,7 @@ import asyncio
 import logging
 import math
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -148,7 +148,7 @@ async def stage1_embedding_filter(
         Top-k candidates sorted by preliminary score descending.
     """
     # Resolve reference date once so all candidates use the same "today".
-    effective_now: date = now if now is not None else date.today()
+    effective_now: date = now if now is not None else datetime.now(tz=UTC).date()
 
     if not candidates:
         return []

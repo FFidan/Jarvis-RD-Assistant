@@ -3,8 +3,9 @@
 TDD: tests written before implementation.
 """
 
-from datetime import date, timedelta
-from unittest.mock import AsyncMock
+import math
+from datetime import UTC, date, datetime, timedelta
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from paper_ingestion.models import PaperCreate, SourceType, TopicRef
@@ -339,3 +340,58 @@ async def test_stage1_with_negative_centroid_orthogonal_no_penalty():
     # cosine([0,1,0,0], [1,0,0,0]) = 0.0 → penalty = 0.0 → embedding unchanged at 0.0
     assert "l2_penalty" not in result[0].signals
     assert abs(result[0].signals["embedding"]) < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# UTC date contract (M-8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage1_default_now_uses_utc_date():
+    """stage1 uses datetime.now(UTC).date() — not the local-timezone date.today().
+
+    We freeze datetime.now(UTC) to an arbitrary UTC instant and verify the
+    recency decay is computed against that UTC date.  A naive date.today() call
+    would use the local timezone, which on a non-UTC host could produce a
+    different calendar date (e.g. one day behind UTC).  The assertion fails if
+    the implementation is reverted to date.today().
+    """
+    # Pin UTC "now" to midnight-plus-one-second on 2025-01-15 UTC.
+    # A host running UTC-12 would have date.today() → 2025-01-14 at that instant,
+    # producing age_days=1 and a different recency score.
+    frozen_utc_dt = datetime(2025, 1, 15, 0, 0, 1, tzinfo=UTC)
+    frozen_utc_date = frozen_utc_dt.date()  # 2025-01-15
+
+    # Paper published on the UTC date — age_days should be 0 → recency == 1.0
+    paper = PaperCreate(
+        external_id="arxiv:utc-test",
+        source_type=SourceType.ARXIV,
+        title="UTC Test Paper",
+        authors=["Author"],
+        abstract="abstract",
+        published_date=frozen_utc_date,
+        url="https://arxiv.org/abs/utc-test",
+    )
+    profile = _make_profile(centroid=None)
+    embedder = _make_embedder([[1.0, 0.0]])
+
+    class _FakeDatetime(datetime):
+        """datetime subclass that overrides now() to return frozen_utc_dt."""
+
+        @classmethod
+        def now(cls, tz=None):  # type: ignore[override]
+            if tz is UTC:
+                return frozen_utc_dt
+            return super().now(tz=tz)
+
+    with patch("paper_ingestion.pulse.scoring.datetime", _FakeDatetime):
+        result = await stage1_embedding_filter([paper], profile, embedder, top_k=10)
+
+    assert len(result) == 1
+    # age_days == 0 → exp(0 / 30) == 1.0
+    assert abs(result[0].signals["recency"] - 1.0) < 1e-6, (
+        "recency should be 1.0 when published_date matches UTC date; "
+        "a date.today() fallback on a non-UTC host would give age_days=1 "
+        f"(recency={math.exp(-1 / 30.0):.6f}) instead"
+    )
