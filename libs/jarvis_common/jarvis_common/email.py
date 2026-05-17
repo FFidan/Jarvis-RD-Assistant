@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 
 import asyncpg
 
+from jarvis_common.crypto import resolve_secret_row
 from jarvis_common.event_log import log_event
 from jarvis_common.settings import get_core_settings, get_secrets_settings
 
@@ -23,15 +25,104 @@ logger = logging.getLogger(__name__)
 _REQUIRED_SMTP_VARS = ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM")
 
 
-def _smtp_configured() -> bool:
-    """Return True iff every required SMTP env var has a non-empty value.
+@dataclass(frozen=True)
+class _EffectiveSmtp:
+    """Resolved SMTP relay config: DB (``user_config``) layered over env."""
+
+    host: str
+    port: int
+    user: str | None
+    password: str | None
+    sender: str
+
+    @property
+    def deliverable(self) -> bool:
+        """True iff host + sender are present (the minimum to send an envelope)."""
+        return bool(self.host) and bool(self.sender)
+
+
+def _env_smtp() -> _EffectiveSmtp:
+    """Read SMTP from process-cached env (``SecretsSettings``)."""
+    s = get_secrets_settings()
+    return _EffectiveSmtp(
+        host=s.smtp_host.get_secret_value() if s.smtp_host else "",
+        port=int(s.smtp_port.get_secret_value()) if s.smtp_port else 587,
+        user=s.smtp_user.get_secret_value() if s.smtp_user else None,
+        password=s.smtp_pass.get_secret_value() if s.smtp_pass else None,
+        sender=s.smtp_from.get_secret_value() if s.smtp_from else "",
+    )
+
+
+async def _effective_smtp(pool: asyncpg.Pool | None) -> _EffectiveSmtp:
+    """Return the SMTP config the sender should actually use.
+
+    The first-run wizard writes SMTP to ``user_config`` (system-wide rows,
+    ``user_id IS NULL``); ``smtp.pass`` is Fernet-encrypted via the same
+    crypto helper ``_persist_config`` uses. We read those rows and layer them
+    over the env (``SecretsSettings``) values per-field, so a wizard-saved
+    relay takes effect WITHOUT a service restart + hand-edited .env. Any
+    field absent/empty in the DB falls back to the env value.
+    """
+    env = _env_smtp()
+    if pool is None:
+        return env
+
+    keys = ("smtp.host", "smtp.port", "smtp.user", "smtp.from", "smtp.pass")
+    try:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT key, value, encrypted_value FROM user_config "
+                "WHERE key = ANY($1::text[]) AND user_id IS NULL",
+                list(keys),
+            )
+    except Exception:  # noqa: BLE001 — DB unreachable → fall back to env
+        logger.debug("smtp user_config read failed; using env", exc_info=True)
+        return env
+    by_key = {r["key"]: r for r in rows}
+
+    def _plain(key: str) -> str | None:
+        row = by_key.get(key)
+        if row is None:
+            return None
+        # asyncpg JSONB codec auto-decodes — value is already a scalar.
+        value = row["value"]
+        if value is None or str(value) == "":
+            return None
+        return str(value)
+
+    host = _plain("smtp.host") or env.host
+    port_raw = _plain("smtp.port")
+    port = env.port
+    if port_raw is not None:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            port = env.port
+    user = _plain("smtp.user") or env.user
+    sender = _plain("smtp.from") or env.sender
+
+    password = env.password
+    pass_row = by_key.get("smtp.pass")
+    if pass_row is not None and pass_row["encrypted_value"] is not None:
+        try:
+            decrypted = resolve_secret_row(pass_row)
+        except Exception:  # noqa: BLE001 — bad key/tamper → keep env password
+            logger.warning("smtp.pass decrypt failed; falling back to env", exc_info=True)
+        else:
+            if decrypted:
+                password = decrypted
+
+    return _EffectiveSmtp(host=host, port=port, user=user, password=password, sender=sender)
+
+
+async def _smtp_configured(pool: asyncpg.Pool | None = None) -> bool:
+    """Return True iff SMTP is configured via the DB OR env.
 
     SMTP_USER and SMTP_PASS are intentionally NOT required (some relays use
-    IP-allowlist auth). HOST, PORT, and FROM are the minimum to compose +
-    deliver an envelope.
+    IP-allowlist auth). HOST and FROM are the minimum to compose + deliver an
+    envelope. The wizard-written ``user_config`` rows count the same as env.
     """
-    s = get_secrets_settings()
-    return all(getattr(s, name.lower()) is not None for name in _REQUIRED_SMTP_VARS)
+    return (await _effective_smtp(pool)).deliverable
 
 
 def _dev_mode() -> bool:
@@ -83,7 +174,12 @@ async def send_magic_link(
     operators can correlate events without the log becoming a bearer-token
     store.
     """
-    if _dev_mode() or not _smtp_configured():
+    # Resolve the effective relay once: wizard-written user_config layered
+    # over env. This is what makes a wizard-saved SMTP relay send mail with
+    # NO restart / hand-edited .env — the DB is the durable source of truth.
+    smtp = await _effective_smtp(pool)
+
+    if _dev_mode() or not smtp.deliverable:
         # Always emit a structured log so docker-compose logs pick it up
         # even when the system_events insert fails (e.g. fresh DB).
         # NOTE: never log `link` or any fragment of it — it is a bearer token.
@@ -111,29 +207,22 @@ async def send_magic_link(
 
     import aiosmtplib  # noqa: PLC0415
 
-    s = get_secrets_settings()
-    host = s.smtp_host.get_secret_value() if s.smtp_host else ""
-    port = int(s.smtp_port.get_secret_value()) if s.smtp_port else 587
-    user = s.smtp_user.get_secret_value() if s.smtp_user else None
-    password = s.smtp_pass.get_secret_value() if s.smtp_pass else None
-    sender = s.smtp_from.get_secret_value() if s.smtp_from else ""
-
     message = EmailMessage()
-    message["From"] = sender
+    message["From"] = smtp.sender
     message["To"] = email
     message["Subject"] = "Sign in to JARVIS"
     message.set_content(_PLAIN_BODY_TEMPLATE.format(link=link))
 
     # Port 465 → implicit TLS; everything else → STARTTLS where supported.
-    use_tls = port == 465
+    use_tls = smtp.port == 465
     start_tls = not use_tls
 
     await aiosmtplib.send(
         message,
-        hostname=host,
-        port=port,
-        username=user,
-        password=password,
+        hostname=smtp.host,
+        port=smtp.port,
+        username=smtp.user,
+        password=smtp.password,
         use_tls=use_tls,
         start_tls=start_tls,
     )

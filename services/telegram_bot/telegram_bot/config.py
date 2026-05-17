@@ -2,16 +2,50 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import asyncpg
 from jarvis_common import init_pg_connection
 from jarvis_common.app_factory import build_database_url
 from jarvis_common.config import JarvisCommonSettings
+from jarvis_common.crypto import resolve_secret_row
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import SettingsConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+async def _read_db_bot_token(database_url: str) -> str | None:
+    """Return the wizard-saved Telegram bot token from ``user_config``.
+
+    The first-run wizard persists ``telegram.bot_token`` (Fernet-encrypted,
+    ``user_id IS NULL``). Reading it here makes a UI-saved token the source of
+    truth — no .env edit, just a container restart. Returns ``None`` (and never
+    raises) when the row is absent or the DB/key is unavailable, so the env /
+    Docker-secret value remains the fallback.
+    """
+    conn: asyncpg.Connection | None = None
+    try:
+        conn = await asyncio.wait_for(
+            asyncpg.connect(database_url, server_settings={"jit": "off"}),
+            timeout=5.0,
+        )
+        await init_pg_connection(conn)
+        row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config "
+            "WHERE key = 'telegram.bot_token' AND user_id IS NULL",
+        )
+        if row is None:
+            return None
+        token = resolve_secret_row(row)
+        return token or None
+    except Exception:  # noqa: BLE001 — best-effort; env/secret is the fallback
+        logger.debug("telegram.bot_token DB lookup failed; using env", exc_info=True)
+        return None
+    finally:
+        if conn is not None:
+            await conn.close()
 
 
 class BotConfig(JarvisCommonSettings):
@@ -91,8 +125,26 @@ class BotConfig(JarvisCommonSettings):
         """
         cfg = cls()
 
-        if not cfg.telegram_token:
-            logger.critical("TELEGRAM_BOT_TOKEN is not set")
+        # Resolve database URL first (Docker-Secret-aware) — we need it both
+        # for the DB-stored token lookup and for the running bot.
+        try:
+            resolved_url = build_database_url()
+        except RuntimeError as exc:
+            logger.critical("Cannot build DATABASE_URL: %s", exc)
+            raise SystemExit(1) from exc
+
+        # DB-first token: a token saved via the first-run wizard
+        # (user_config.telegram.bot_token) wins over the env/Docker-secret
+        # value, so changing it is a UI save + container restart, never an
+        # .env edit. Falls back to the env token when the DB has none.
+        token = cfg.telegram_token
+        db_token = asyncio.run(_read_db_bot_token(resolved_url))
+        if db_token:
+            token = db_token
+            logger.info("Telegram bot token loaded from user_config (DB)")
+
+        if not token:
+            logger.critical("TELEGRAM_BOT_TOKEN is not set (no env value and no DB row)")
             raise SystemExit(1)
 
         if cfg.telegram_chat_id is None:
@@ -100,19 +152,11 @@ class BotConfig(JarvisCommonSettings):
                 "TELEGRAM_CHAT_ID is not set — bot will use DB pairing flow for outbound messages"
             )
 
-        # Resolve database URL via Docker-Secret-aware helper; overrides the
-        # plain DATABASE_URL field when a secrets file is mounted.
-        try:
-            resolved_url = build_database_url()
-        except RuntimeError as exc:
-            logger.critical("Cannot build DATABASE_URL: %s", exc)
-            raise SystemExit(1) from exc
-
         if not cfg.jarvis_api_key:
             logger.warning("JARVIS_API_KEY not set — all API calls will be unauthenticated")
 
-        # Return a new instance with the resolved database_url applied.
-        return cfg.model_copy(update={"database_url": resolved_url})
+        # Return a new instance with the resolved database_url + effective token.
+        return cfg.model_copy(update={"database_url": resolved_url, "telegram_token": token})
 
 
 async def create_db_pool(database_url: str) -> asyncpg.Pool:

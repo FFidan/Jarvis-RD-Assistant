@@ -390,8 +390,9 @@ async def test_get_smtp_config_returns_masked_shape_when_unconfigured() -> None:
     }
     assert "password" not in dumped
     assert "gAAA-ciphertext" not in str(dumped)
-    # Sender reads env-cached SecretsSettings, not user_config → restart needed.
-    assert res.restart_required is True
+    # UI-1: the sender now resolves SMTP from user_config at send time
+    # (jarvis_common.email._effective_smtp), so no restart is needed.
+    assert res.restart_required is False
 
 
 @pytest.mark.asyncio
@@ -607,6 +608,9 @@ def _unique_ip() -> str:
         ("configure_smtp", "10 per 1 minute"),
         ("create_first_admin", "3 per 1 minute"),
         ("configure_cloud_llm_keys", "10 per 1 minute"),
+        ("configure_telegram_bot_token", "10 per 1 minute"),
+        ("get_telegram_bot_token_status", "30 per 1 minute"),
+        ("configure_setup_mode", "10 per 1 minute"),
     ],
 )
 def test_setup_handlers_registered_in_limiter(handler_name: str, expected_limit: str) -> None:
@@ -664,3 +668,238 @@ async def test_system_check_returns_429_after_threshold(setup_app_fixture) -> No
         assert resp.status_code == 429, (
             f"Expected 429 on call 11 to /api/setup/system-check, got {resp.status_code}"
         )
+
+
+# ---------------------------------------------------------------------------
+# UI-2: cloud-LLM key re-push (no restart)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cloud_llm_keys_repushes_active_cloud_alias(monkeypatch) -> None:
+    """Saving a key for a provider that is the active alias pushes it live."""
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
+    from jarvis_common.crypto import _load_fernet  # noqa: PLC0415
+
+    _load_fernet.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)  # bootstrap, gate open
+    conn.execute = AsyncMock()
+    # llm.smart_model routes to an Anthropic cloud model; others absent.
+    conn.fetchrow = AsyncMock(
+        side_effect=lambda *a, **k: (
+            {"value": "anthropic/claude-sonnet-4-5"} if a[1] == "llm.smart_model" else None
+        )
+    )
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    called: list[tuple] = []
+
+    async def _fake_update(alias_key, model_id, db_pool=None):
+        called.append((alias_key, model_id))
+        return True
+
+    reloaded: list[bool] = []
+
+    async def _fake_reload():
+        reloaded.append(True)
+        return True
+
+    import paper_ingestion.services.litellm_config as llc  # noqa: PLC0415
+
+    monkeypatch.setattr(llc, "update_litellm_model", _fake_update)
+    monkeypatch.setattr(llc, "reload_litellm", _fake_reload)
+
+    body = setup_router.CloudLlmKeysBody(anthropic="sk-ant-newkey")
+    res = await setup_router.configure_cloud_llm_keys(body, request)
+
+    assert res.saved_providers == ["anthropic"]
+    assert res.applied_now == ["anthropic"]
+    assert res.restart_required is False
+    assert called == [("llm.smart_model", "anthropic/claude-sonnet-4-5")]
+    assert reloaded == [True]
+
+
+@pytest.mark.asyncio
+async def test_cloud_llm_keys_repush_failure_sets_restart_required(monkeypatch) -> None:
+    """A RuntimeError from the live push does not bubble; restart_required=True."""
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
+    from jarvis_common.crypto import _load_fernet  # noqa: PLC0415
+
+    _load_fernet.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock()
+    conn.fetchrow = AsyncMock(
+        side_effect=lambda *a, **k: (
+            {"value": "anthropic/claude-sonnet-4-5"} if a[1] == "llm.smart_model" else None
+        )
+    )
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    async def _boom(alias_key, model_id, db_pool=None):
+        raise RuntimeError("LiteLLM /config/update failed")
+
+    import paper_ingestion.services.litellm_config as llc  # noqa: PLC0415
+
+    monkeypatch.setattr(llc, "update_litellm_model", _boom)
+    monkeypatch.setattr(llc, "reload_litellm", AsyncMock(return_value=True))
+
+    body = setup_router.CloudLlmKeysBody(anthropic="sk-ant-newkey")
+    res = await setup_router.configure_cloud_llm_keys(body, request)
+
+    assert res.saved_providers == ["anthropic"]
+    assert res.applied_now == []
+    assert res.restart_required is True
+
+
+@pytest.mark.asyncio
+async def test_cloud_llm_keys_no_repush_when_no_active_cloud_alias(monkeypatch) -> None:
+    """Saving a key with no matching active alias persists but does not push."""
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
+    from jarvis_common.crypto import _load_fernet  # noqa: PLC0415
+
+    _load_fernet.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock()
+    # All aliases are local Ollama models — no cloud prefix.
+    conn.fetchrow = AsyncMock(return_value={"value": "mistral-nemo"})
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    import paper_ingestion.services.litellm_config as llc  # noqa: PLC0415
+
+    monkeypatch.setattr(
+        llc, "update_litellm_model", AsyncMock(side_effect=AssertionError("must not push"))
+    )
+    monkeypatch.setattr(llc, "reload_litellm", AsyncMock(return_value=True))
+
+    body = setup_router.CloudLlmKeysBody(openai="sk-openai")
+    res = await setup_router.configure_cloud_llm_keys(body, request)
+
+    assert res.saved_providers == ["openai"]
+    assert res.applied_now == []
+    assert res.restart_required is False
+
+
+# ---------------------------------------------------------------------------
+# UI-4: Telegram bot token endpoints
+# ---------------------------------------------------------------------------
+
+_VALID_TG_TOKEN = "123456789:AAFakeTokenSecret_abcdefghij-KLMNOP"
+
+
+@pytest.mark.asyncio
+async def test_telegram_token_persists_encrypted(monkeypatch) -> None:
+    monkeypatch.setenv("JARVIS_CONFIG_KEY", "pgyJ7t8w9KYMFgZ-9_M89P0VbyzqWj4Xz9LgSjlvKxs=")
+    from jarvis_common.crypto import _load_fernet  # noqa: PLC0415
+
+    _load_fernet.cache_clear()
+
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    body = setup_router.TelegramBotTokenBody(token=_VALID_TG_TOKEN)
+    res = await setup_router.configure_telegram_bot_token(body, request)
+
+    assert res.saved is True
+    assert res.restart_required is True
+    assert conn.execute.await_count == 1
+    # Encrypted path → ciphertext (BYTEA), not the plaintext token.
+    args = conn.execute.call_args.args
+    stored = args[2]  # $2 = encrypted_value
+    assert isinstance(stored, bytes)
+    assert _VALID_TG_TOKEN.encode() not in stored
+
+
+@pytest.mark.asyncio
+async def test_telegram_token_invalid_format_rejected() -> None:
+    with pytest.raises(Exception):  # noqa: B017 — pydantic ValidationError
+        setup_router.TelegramBotTokenBody(token="not-a-valid-token-but-long-enough")
+
+
+@pytest.mark.asyncio
+async def test_telegram_token_status_masked_true_false() -> None:
+    # has_token True when an encrypted row exists.
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.fetchrow = AsyncMock(return_value={"value": None, "encrypted_value": b"gAAA-cipher"})
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    res = await setup_router.get_telegram_bot_token_status(request)
+    assert res.has_token is True
+    dumped = res.model_dump()
+    assert set(dumped) == {"has_token"}
+    assert "gAAA-cipher" not in str(dumped)
+
+    # has_token False when no row.
+    conn.fetchrow = AsyncMock(return_value=None)
+    res2 = await setup_router.get_telegram_bot_token_status(request)
+    assert res2.has_token is False
+
+
+@pytest.mark.asyncio
+async def test_telegram_token_rejected_for_non_admin_when_configured() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # admins exist
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_role="user")
+
+    body = setup_router.TelegramBotTokenBody(token=_VALID_TG_TOKEN)
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.configure_telegram_bot_token(body, request)
+    assert exc_info.value.status_code == 403
+
+
+# ---------------------------------------------------------------------------
+# UI-5: single↔multi mode toggle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_setup_mode_persists() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=0)
+    conn.execute = AsyncMock()
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool)
+
+    body = setup_router.SetupModeBody(mode="multi")
+    res = await setup_router.configure_setup_mode(body, request)
+
+    assert res.mode == "multi"
+    assert res.restart_required is True
+    assert conn.execute.await_count == 1
+    # Plaintext JSONB path → raw string passed as $2 (not double-encoded).
+    args = conn.execute.call_args.args
+    assert args[1] == "setup.mode"
+    assert args[2] == "multi"
+
+
+@pytest.mark.asyncio
+async def test_setup_mode_enum_violation_rejected() -> None:
+    with pytest.raises(Exception):  # noqa: B017 — pydantic ValidationError
+        setup_router.SetupModeBody(mode="hybrid")
+
+
+@pytest.mark.asyncio
+async def test_setup_mode_rejected_for_non_admin_when_configured() -> None:
+    conn = AsyncMock()
+    conn.fetchval = AsyncMock(return_value=1)  # admins exist
+    pool = _build_mock_pool(conn)
+    request = _build_request(pool, user_role="user")
+
+    body = setup_router.SetupModeBody(mode="single")
+    with pytest.raises(HTTPException) as exc_info:
+        await setup_router.configure_setup_mode(body, request)
+    assert exc_info.value.status_code == 403

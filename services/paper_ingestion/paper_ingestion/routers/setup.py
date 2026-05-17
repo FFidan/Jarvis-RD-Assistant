@@ -33,6 +33,7 @@ admin is logged in. Both can coexist.
 """
 
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from typing import Annotated, Any, Literal
@@ -41,7 +42,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from jarvis_common.crypto import encrypt_secret
 from jarvis_common.session_middleware import SESSION_COOKIE_NAME
 from jarvis_common.settings import get_core_settings
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from paper_ingestion.deps import limiter
 
@@ -112,10 +113,10 @@ class SmtpConfigResponse(BaseModel):
     """Current SMTP relay config for the settings UI.
 
     The password is never returned — only ``has_password`` indicates whether a
-    secret is stored. ``restart_required`` is always True: the magic-link
-    sender reads SMTP from process-cached env (``SecretsSettings``), not from
-    ``user_config``, so saved changes only take effect after the service is
-    restarted with the matching SMTP env vars set.
+    secret is stored. ``restart_required`` is ``False``: the magic-link sender
+    now resolves SMTP from ``user_config`` (layered over env) at send time via
+    ``jarvis_common.email._effective_smtp``, so wizard-saved changes take
+    effect immediately — no service restart or hand-edited .env required.
     """
 
     host: str | None = None
@@ -123,7 +124,7 @@ class SmtpConfigResponse(BaseModel):
     user: str | None = None
     from_email: str | None = None
     has_password: bool = False
-    restart_required: bool = True
+    restart_required: bool = False
 
 
 class AdminBody(BaseModel):
@@ -144,6 +145,53 @@ class CloudLlmKeysBody(BaseModel):
 
 class CloudLlmKeysResponse(BaseModel):
     saved_providers: list[str]
+    # Providers whose newly-saved key was pushed live to LiteLLM because an
+    # active alias (smart/fast/embed) already routes to that provider.
+    applied_now: list[str] = []
+    # True only if a live LiteLLM admin push raised — the new key is persisted
+    # and WILL apply on the next boot rehydration, but did not take effect now.
+    restart_required: bool = False
+
+
+# Telegram bot token shape — mirrors setup.sh's regex
+# (``^[0-9]+:[A-Za-z0-9_-]{20,}$``): numeric bot id, colon, ≥20-char secret.
+_TELEGRAM_TOKEN_RE = re.compile(r"^[0-9]+:[A-Za-z0-9_-]{20,}$")
+
+
+class TelegramBotTokenBody(BaseModel):
+    token: Annotated[str, Field(min_length=20, max_length=512)]
+
+    @field_validator("token")
+    @classmethod
+    def _validate_token_shape(cls, v: str) -> str:
+        if not _TELEGRAM_TOKEN_RE.fullmatch(v):
+            raise ValueError(
+                "Invalid Telegram bot token format "
+                "(expected '<bot_id>:<secret>' with a ≥20-char secret)."
+            )
+        return v
+
+
+class TelegramBotTokenResponse(BaseModel):
+    saved: bool
+    # The bot consumes its token at container start, so a save here needs the
+    # telegram_bot container restarted (never a file edit) to take effect.
+    restart_required: bool = True
+
+
+class TelegramBotTokenStatusResponse(BaseModel):
+    has_token: bool
+
+
+class SetupModeBody(BaseModel):
+    mode: Literal["single", "multi"]
+
+
+class SetupModeResponse(BaseModel):
+    mode: Literal["single", "multi"]
+    # Core settings read the mode at app startup, so a change needs a service
+    # restart (never a file edit) to take effect.
+    restart_required: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -410,15 +458,7 @@ async def get_smtp_config(request: Request) -> SmtpConfigResponse:
     """
     await require_unconfigured_or_admin(request)
     pool = request.app.state.db_pool
-    config = await _read_smtp_config(pool)
-    if config.restart_required and (config.host or config.from_email or config.has_password):
-        # Surface the env-vs-user_config gap so the UI (F3) can tell the
-        # operator a restart is needed for the running magic-link sender.
-        logger.info(
-            "setup smtp: config present in user_config; service restart with "
-            "matching SMTP_* env vars is required for the magic-link sender to use it"
-        )
-    return config
+    return await _read_smtp_config(pool)
 
 
 @router.post(
@@ -562,7 +602,131 @@ async def configure_cloud_llm_keys(
         await _persist_config(pool, _CLOUD_LLM_KEY_MAP[provider], value.strip(), encrypted=True)
         saved.append(provider)
 
-    return CloudLlmKeysResponse(saved_providers=saved)
+    # Re-push live: boot rehydration (_rehydrate_litellm_aliases) only re-routes
+    # at startup, so a key edited while a cloud alias is ALREADY the active model
+    # would otherwise need a restart. For each saved provider, if an active alias
+    # routes to a model whose LiteLLM prefix is that provider, re-apply it now so
+    # update_litellm_model picks up the fresh key via /config/update.
+    applied_now: list[str] = []
+    restart_required = False
+    if saved:
+        from paper_ingestion.services.litellm_config import (  # noqa: PLC0415
+            ROLE_TO_ALIAS,
+            reload_litellm,
+            update_litellm_model,
+        )
+
+        # The provider names here ("openai"/"anthropic"/"gemini") are exactly
+        # the LiteLLM model-string prefixes (gemini/ = Google), so a model like
+        # "anthropic/claude-..." matches provider "anthropic" by its prefix.
+        active: dict[str, str] = {}
+        for alias_key in ROLE_TO_ALIAS:
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    "SELECT value FROM user_config WHERE key = $1 AND user_id IS NULL",
+                    alias_key,
+                )
+            if row is not None and row["value"]:
+                active[alias_key] = str(row["value"])
+
+        pushed_any = False
+        for alias_key, model_id in active.items():
+            prefix = model_id.split("/", 1)[0] if "/" in model_id else ""
+            if prefix not in saved:
+                continue
+            try:
+                await update_litellm_model(alias_key, model_id, db_pool=pool)
+                pushed_any = True
+                if prefix not in applied_now:
+                    applied_now.append(prefix)
+            except RuntimeError:
+                logger.warning(
+                    "cloud-llm-keys: live LiteLLM push failed for alias %s "
+                    "(provider %s); key persisted, applies on next boot",
+                    alias_key,
+                    prefix,
+                    exc_info=True,
+                )
+                restart_required = True
+
+        if pushed_any:
+            try:
+                await reload_litellm()
+            except RuntimeError:
+                logger.warning(
+                    "cloud-llm-keys: LiteLLM reload signal failed; "
+                    "config applies on next LiteLLM restart",
+                    exc_info=True,
+                )
+                restart_required = True
+
+    return CloudLlmKeysResponse(
+        saved_providers=saved,
+        applied_now=applied_now,
+        restart_required=restart_required,
+    )
+
+
+@router.post(
+    "/telegram-bot-token",
+    response_model=TelegramBotTokenResponse,
+    dependencies=[],
+)
+@limiter.limit("10/minute")
+async def configure_telegram_bot_token(
+    body: TelegramBotTokenBody, request: Request
+) -> TelegramBotTokenResponse:
+    """Persist the Telegram bot token (Fernet-encrypted).
+
+    The token is consumed by the telegram_bot container at start, so this is
+    durable in ``user_config`` (the source of truth) but needs a telegram_bot
+    container restart to take effect — never a file edit.
+    """
+    await require_unconfigured_or_admin(request)
+    pool = request.app.state.db_pool
+    await _persist_config(pool, "telegram.bot_token", body.token, encrypted=True)
+    return TelegramBotTokenResponse(saved=True, restart_required=True)
+
+
+@router.get(
+    "/telegram-bot-token",
+    response_model=TelegramBotTokenStatusResponse,
+    dependencies=[],
+)
+@limiter.limit("30/minute")
+async def get_telegram_bot_token_status(
+    request: Request,
+) -> TelegramBotTokenStatusResponse:
+    """Report whether a Telegram bot token is stored. Never echoes the token."""
+    await require_unconfigured_or_admin(request)
+    pool = request.app.state.db_pool
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT value, encrypted_value FROM user_config "
+            "WHERE key = 'telegram.bot_token' AND user_id IS NULL",
+        )
+    has_token = row is not None and (row["encrypted_value"] is not None or row["value"] is not None)
+    return TelegramBotTokenStatusResponse(has_token=has_token)
+
+
+@router.post(
+    "/mode",
+    response_model=SetupModeResponse,
+    dependencies=[],
+)
+@limiter.limit("10/minute")
+async def configure_setup_mode(body: SetupModeBody, request: Request) -> SetupModeResponse:
+    """Persist the single↔multi-user mode.
+
+    Core settings read the mode at app startup, so this is durable in
+    ``user_config`` but needs a service restart to take effect — never a
+    file edit. (Layering user_config over env in ``get_core_settings`` is a
+    separate, out-of-scope follow-up.)
+    """
+    await require_unconfigured_or_admin(request)
+    pool = request.app.state.db_pool
+    await _persist_config(pool, "setup.mode", body.mode, encrypted=False)
+    return SetupModeResponse(mode=body.mode, restart_required=True)
 
 
 __all__ = ["router", "require_unconfigured_or_admin"]

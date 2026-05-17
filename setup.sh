@@ -357,7 +357,7 @@ fi
 # survive intact.
 existing_env_value() {
   [ -f .env ] || return 1
-  grep -q "^$1=.\+" .env 2>/dev/null || return 1
+  grep -qE "^$1=.+" .env 2>/dev/null || return 1
   grep "^$1=" .env | head -n 1 | cut -d'=' -f2-
 }
 
