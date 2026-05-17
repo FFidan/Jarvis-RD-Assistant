@@ -146,7 +146,8 @@ async def test_new_key_applies_fsrs_and_both_writes(monkeypatch) -> None:
     insert_sql = insert_call.args[0]
     assert "INSERT INTO review_logs" in insert_sql
     assert "idempotency_key" in insert_sql
-    assert "ON CONFLICT (user_id, idempotency_key) DO NOTHING" in insert_sql
+    assert "ON CONFLICT (user_id, idempotency_key)" in insert_sql
+    assert "WHERE idempotency_key IS NOT NULL DO NOTHING" in insert_sql
     assert "RETURNING id" in insert_sql
     # INSERT positional args: card_id, rating, dur, reviewed_at, log, user_id, key
     assert insert_call.args[1] == ev.card_id

@@ -213,7 +213,8 @@ async def sync_reviews(
                         (card_id, rating, review_duration_ms, reviewed_at,
                          fsrs_log, user_id, idempotency_key)
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
-                    ON CONFLICT (user_id, idempotency_key) DO NOTHING
+                    ON CONFLICT (user_id, idempotency_key)
+                        WHERE idempotency_key IS NOT NULL DO NOTHING
                     RETURNING id
                     """,
                     event.card_id,

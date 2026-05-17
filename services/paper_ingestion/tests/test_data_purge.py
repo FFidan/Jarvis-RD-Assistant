@@ -18,7 +18,9 @@ from paper_ingestion.jobs.data_purge import (
 # ---------------------------------------------------------------------------
 
 
-def _make_pool(fetch_rows: list[dict], execute_result: str = "DELETE 2") -> AsyncMock:
+def _make_pool(
+    fetch_rows: list[dict], execute_result: str = "DELETE 2"
+) -> tuple[MagicMock, AsyncMock]:
     """Return an asyncpg Pool mock wired with fetch + execute returns."""
     conn = AsyncMock()
     conn.fetch.return_value = fetch_rows
@@ -109,8 +111,10 @@ async def test_purge_qdrant_filter_uses_user_id() -> None:
     kwargs = qdrant.delete.call_args.kwargs
     selector = kwargs["points_selector"]
     assert isinstance(selector, Filter)
-    assert len(selector.must) == 1
-    cond = selector.must[0]
+    must = selector.must
+    assert isinstance(must, list)
+    assert len(must) == 1
+    cond = must[0]
     assert isinstance(cond, FieldCondition)
     assert cond.key == "user_id"
     assert isinstance(cond.match, MatchValue)
@@ -148,6 +152,7 @@ async def test_purge_no_expired_users_skips_everything() -> None:
     with patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit:
         await data_purge_task(app)
 
+    assert qdrant is not None
     qdrant.delete.assert_not_awaited()
     pool.execute.assert_not_awaited()
     mock_audit.assert_not_awaited()
