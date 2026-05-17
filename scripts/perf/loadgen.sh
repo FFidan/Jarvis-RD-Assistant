@@ -8,10 +8,23 @@
 #     GET endpoint set that profile.sh times sequentially.  Simulates a burst
 #     of N browser tabs all hitting the API at once.
 #
-#   Scenario B — Pulse sustained-load:
+#   Scenario B — sustained GET load:
 #     Repeats PERF_CONCURRENCY concurrent requests against the /health and
 #     /api/papers/feed endpoints over PERF_SUSTAIN_SECS seconds.  Simulates
-#     Pulse background-refresh traffic.
+#     sustained background-refresh traffic.  (Historically mislabelled
+#     "Pulse" — it does NOT drive Pulse; Scenario C does.)
+#
+#   Scenario C — authenticated LLM hot-path drive:
+#     Bootstraps a real owner session via POST /api/auth/api-key-session
+#     (exchanges the existing JARVIS_API_KEY for a jarvis_session cookie —
+#     no email/magic-link needed), then drives the four flag-gated
+#     perf_probe.py sites so they actually emit spans:
+#       • POST /api/papers/search-hybrid → embed_texts_post + hybrid_search_bm25_sql
+#       • POST /api/ask (decompose)      → prepare_cross_paper_rag + embed_texts_post
+#       • POST /api/pulse/generate       → pulse_stage2_llm (async worker; 3/hour)
+#     Probe JSONL is written container-side and collected by profile.sh.
+#     Degrades gracefully (logs + skips, exit 0) if the session can't be
+#     minted (multi-tenant / no admin) or the corpus is empty.
 #
 # Environment knobs (all optional — sensible defaults shown):
 #   PERF_CONCURRENCY       Number of simultaneous curl workers per batch.
@@ -19,6 +32,10 @@
 #                          or higher for stress testing.
 #   PERF_SUSTAIN_SECS      Duration of the Scenario B sustained window.
 #                          Default: 15 seconds.
+#   RAG_CONCURRENCY        Concurrency for the heavy Scenario C /api/ask
+#                          (cross-paper RAG) batch.  Default: min(PERF_CONCURRENCY,3)
+#                          — RAG is LLM-bound; a high fan-out just queues on the
+#                          single shared ollama and skews latency.
 #   OUT_DIR                Where to write output files.
 #                          Default: artifacts/perf/<UTC-timestamp>/ (auto-created).
 #   PAPER_INGESTION_HOST_PORT  Override the backend port (default 8010).
@@ -62,6 +79,17 @@ PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}"
 
 # PERF_SUSTAIN_SECS: how long Scenario B fires repeated concurrent batches.
 PERF_SUSTAIN_SECS="${PERF_SUSTAIN_SECS:-15}"
+
+# RAG_CONCURRENCY: Scenario C /api/ask fan-out. RAG is LLM-bound on one shared
+# ollama; default to a small value (≤3) so the probe measures real per-request
+# latency, not head-of-line queueing behind a deep request backlog.
+if [[ -n "${RAG_CONCURRENCY:-}" ]]; then
+  :
+elif (( PERF_CONCURRENCY < 3 )); then
+  RAG_CONCURRENCY="${PERF_CONCURRENCY}"
+else
+  RAG_CONCURRENCY=3
+fi
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -113,6 +141,45 @@ _fire_batch() {
   # Concatenate per-worker files into a single results file; each worker wrote
   # to its own file so there is no concurrent-append race on a shared fd.
   cat "${TMPDIR_LG}"/result_*.txt > "${TMPDIR_LG}/results.txt" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
+# Scenario-C variant: fire N concurrent authenticated JSON POSTs.
+# Uses the jarvis_session cookie jar (not X-API-Key) so user-scoped endpoints
+# accept the request and the real LLM hot-paths execute.
+#
+# Args: $1=scenario_label  $2=path  $3=json_body  $4=concurrency
+# ---------------------------------------------------------------------------
+_fire_post_batch() {
+  local scenario="$1" path="$2" body="$3" conc="$4" i
+  rm -f "${TMPDIR_LG}"/result_*.txt
+  for (( i=1; i<=conc; i++ )); do
+    (
+      result=$(curl -s -o /dev/null \
+                    --max-time "${RAG_MAX_SECONDS:-180}" \
+                    -w "%{time_total},%{http_code}" \
+                    -X POST "${PAPER_INGEST_BASE}${path}" \
+                    -b "${COOKIE_JAR}" \
+                    -H "Content-Type: application/json" \
+                    -H "Accept: application/json" \
+                    -d "${body}" 2>/dev/null \
+               || echo "ERR,000")
+      echo "${scenario},${path},${result}"
+    ) > "${TMPDIR_LG}/result_${i}.txt" &
+  done
+  wait
+  cat "${TMPDIR_LG}"/result_*.txt > "${TMPDIR_LG}/results.txt" 2>/dev/null || true
+}
+
+# Collect a results.txt batch into the detail CSV + a latency file.
+# Args: $1=latency_file
+_drain_results() {
+  local latfile="$1" row lat
+  while IFS= read -r row; do
+    echo "${row}" >> "${DETAIL_CSV}"
+    lat=$(echo "${row}" | awk -F',' '{print $3}')
+    [[ "${lat}" != "ERR" ]] && echo "${lat}" >> "${latfile}"
+  done < "${TMPDIR_LG}/results.txt"
 }
 
 # ---------------------------------------------------------------------------
@@ -244,6 +311,74 @@ B_ELAPSED=$(( B_END - B_START ))
 _emit_stats "scenario_b_pulse" "${TMPDIR_LG}/scen_b_latencies.txt" "${B_ELAPSED}" \
   >> "${SUMMARY_CSV}"
 log "Scenario B complete in ${B_ELAPSED}s"
+
+# ---------------------------------------------------------------------------
+# Scenario C — authenticated LLM hot-path drive
+# Mints a real owner session from the API key, then drives the four
+# perf_probe.py sites so they emit spans.  Best-effort: any precondition
+# failure logs a warning and skips (exit 0 contract preserved).
+# ---------------------------------------------------------------------------
+COOKIE_JAR="${TMPDIR_LG}/jarvis_session.cookies"
+
+log "Scenario C: authenticated LLM hot-path drive"
+auth_code=$(curl -s -o "${TMPDIR_LG}/auth_resp.json" -w '%{http_code}' \
+              --max-time 15 -X POST "${PAPER_INGEST_BASE}/api/auth/api-key-session" \
+              -H "X-API-Key: ${API_KEY}" -H "Content-Type: application/json" \
+              -c "${COOKIE_JAR}" -d '{}' 2>/dev/null || echo "000")
+
+if [[ "${auth_code}" != "200" ]] || ! grep -q 'jarvis_session' "${COOKIE_JAR}" 2>/dev/null; then
+  log "WARN: api-key-session → HTTP ${auth_code} (need single-tenant + an admin"
+  log "      user, or API_KEY_LOGIN_ENABLED). Skipping Scenario C — the LLM"
+  log "      hot-path probes will not emit this run."
+else
+  log "  session minted (owner: $(grep -o '\"email\":\"[^\"]*\"' "${TMPDIR_LG}/auth_resp.json" 2>/dev/null | head -1))"
+
+  # Corpus presence — informational; pulse/RAG spans need ≥1 embedded paper.
+  corpus_n=$(curl -s --max-time 10 -b "${COOKIE_JAR}" \
+               "${PAPER_INGEST_BASE}/api/papers/brief" 2>/dev/null \
+             | grep -o '"id"' | wc -l | tr -d ' ' || echo 0)
+  log "  corpus: ~${corpus_n} papers visible"
+  [[ "${corpus_n}" == "0" ]] && log "  WARN: empty corpus — pulse/RAG spans may be empty (query-embed + BM25 still fire)"
+
+  # Fire Pulse FIRST: it's an async deferred job (rate-limit 3/hour). Firing
+  # early lets the worker run pulse_stage2_llm concurrently with the search/RAG
+  # batches below so its span lands before profile.sh collects the JSONL.
+  pulse_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+                 -X POST "${PAPER_INGEST_BASE}/api/pulse/generate" \
+                 -b "${COOKIE_JAR}" -H "Content-Type: application/json" \
+                 -d '{}' 2>/dev/null || echo "000")
+  echo "scenario_c_pulse,/api/pulse/generate,0,${pulse_code}" >> "${DETAIL_CSV}"
+  log "  POST /api/pulse/generate → HTTP ${pulse_code} (async; stage-2 runs in worker)"
+
+  # Batch 1 — hybrid search: embed_texts_post + hybrid_search_bm25_sql
+  : > "${TMPDIR_LG}/scen_c_search_lat.txt"
+  C1_START="$(date +%s)"
+  _fire_post_batch "scenario_c_search" "/api/papers/search-hybrid" \
+    '{"query":"transformer attention mechanism","limit":10}' "${PERF_CONCURRENCY}"
+  _drain_results "${TMPDIR_LG}/scen_c_search_lat.txt"
+  C1_ELAPSED=$(( $(date +%s) - C1_START )); [[ ${C1_ELAPSED} -le 0 ]] && C1_ELAPSED=1
+  _emit_stats "scenario_c_search_hybrid" "${TMPDIR_LG}/scen_c_search_lat.txt" "${C1_ELAPSED}" \
+    >> "${SUMMARY_CSV}"
+  log "  search-hybrid ×${PERF_CONCURRENCY} done in ${C1_ELAPSED}s"
+
+  # Batch 2 — cross-paper RAG: prepare_cross_paper_rag + embed_texts_post
+  : > "${TMPDIR_LG}/scen_c_rag_lat.txt"
+  C2_START="$(date +%s)"
+  _fire_post_batch "scenario_c_rag" "/api/ask" \
+    '{"question":"What methods and results are discussed across these papers?","decompose":true}' \
+    "${RAG_CONCURRENCY}"
+  _drain_results "${TMPDIR_LG}/scen_c_rag_lat.txt"
+  C2_ELAPSED=$(( $(date +%s) - C2_START )); [[ ${C2_ELAPSED} -le 0 ]] && C2_ELAPSED=1
+  _emit_stats "scenario_c_rag_ask" "${TMPDIR_LG}/scen_c_rag_lat.txt" "${C2_ELAPSED}" \
+    >> "${SUMMARY_CSV}"
+  log "  /api/ask ×${RAG_CONCURRENCY} (decompose) done in ${C2_ELAPSED}s"
+
+  # Give the async Pulse worker a window to emit pulse_stage2_llm before
+  # profile.sh collects the probe JSONL. Best-effort, bounded.
+  settle="${PERF_PULSE_SETTLE_SECS:-25}"
+  log "  settling ${settle}s for the async Pulse stage-2 worker span"
+  sleep "${settle}"
+fi
 
 # ---------------------------------------------------------------------------
 # Done

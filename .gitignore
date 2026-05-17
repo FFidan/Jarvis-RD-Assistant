@@ -37,6 +37,7 @@ docs/personal/
 # Generated data (large, user-specific)
 shared/pdf_storage/
 shared/snapshots/
+shared/perf/
 
 # IDE
 .vscode/

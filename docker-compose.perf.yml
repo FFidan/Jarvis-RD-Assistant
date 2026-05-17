@@ -20,3 +20,12 @@ services:
       - SYS_PTRACE
     security_opt:
       - apparmor:unconfined
+    # In-process LLM hot-path span probes (perf_probe.py). The probe writes
+    # JSONL inside the container; bind-mount a host dir so scripts/profile.sh
+    # can collect it into the timestamped artifact dir. Off in the default
+    # compose path — only this profiling override turns it on.
+    environment:
+      PERF_PROBE_ENABLED: "1"
+      PERF_PROBE_PATH: /data/perf/perf-probe.jsonl
+    volumes:
+      - ./shared/perf:/data/perf

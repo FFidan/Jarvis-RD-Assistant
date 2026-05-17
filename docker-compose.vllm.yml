@@ -55,6 +55,13 @@
 
 services:
   vllm:
+    # IMAGE PULL — not VRAM — is the bench's practical gate. `:latest` is the
+    # largest (~7–12 GB) and non-reproducible. For a recorded bench, override
+    # VLLM_IMAGE with a specific pinned release (smaller, reproducible). For a
+    # cheap-but-valid relative test also set VLLM_MODEL=Qwen/Qwen2.5-3B-
+    # Instruct-AWQ — vLLM's batching advantage is exercised by PERF_CONCURRENCY,
+    # not model size. See docs/perf/2026-05-18-vllm-vs-ollama-decision.md
+    # §"Lean 16 GB bench".
     image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
     profiles: [vllm]
     restart: "no"

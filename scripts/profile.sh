@@ -51,6 +51,17 @@ if [[ -f "${API_KEY_FILE}" ]]; then
   API_KEY="$(cat "${API_KEY_FILE}")"
 fi
 
+# In-process perf probes (perf_probe.py) run INSIDE the paper_ingestion
+# container and write to /data/perf/perf-probe.jsonl, which the perf compose
+# override bind-mounts here. Ensure the dir exists and is container-writable,
+# and truncate any prior run's spans so this artifact reflects only this run.
+PROBE_HOST_DIR="${REPO_ROOT}/shared/perf"
+PROBE_HOST_FILE="${PROBE_HOST_DIR}/perf-probe.jsonl"
+mkdir -p "${PROBE_HOST_DIR}"
+chmod 777 "${PROBE_HOST_DIR}" 2>/dev/null || true
+: > "${PROBE_HOST_FILE}" 2>/dev/null || true
+chmod 666 "${PROBE_HOST_FILE}" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
 # 0. GPU probe — start in background (best-effort)
 # ---------------------------------------------------------------------------
@@ -218,6 +229,19 @@ if [[ -n "${GPU_PROBE_PID}" ]]; then
   rm -f "${GPU_PROBE_SENTINEL}"
   log "GPU probe stopped. Timeseries → ${OUT_DIR}/gpu-timeseries.jsonl"
   log "Run metadata → ${OUT_DIR}/run-metadata.json"
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Collect in-container perf-probe spans into the artifact dir
+# ---------------------------------------------------------------------------
+if [[ -s "${PROBE_HOST_FILE}" ]]; then
+  cp "${PROBE_HOST_FILE}" "${OUT_DIR}/perf-probe.jsonl"
+  probe_lines="$(wc -l < "${OUT_DIR}/perf-probe.jsonl" | tr -d ' ')"
+  log "Collected ${probe_lines} perf-probe span(s) → ${OUT_DIR}/perf-probe.jsonl"
+else
+  log "WARN: ${PROBE_HOST_FILE} empty — no in-process probe spans captured."
+  log "      Confirm the stack was booted via 'make profile-stack-up' (perf"
+  log "      override sets PERF_PROBE_ENABLED=1 + the /data/perf bind-mount)."
 fi
 
 log "Profiling complete. Artifacts in ${OUT_DIR}"

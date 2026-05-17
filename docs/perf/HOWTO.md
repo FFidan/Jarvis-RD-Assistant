@@ -116,23 +116,52 @@ The `perf_probe.py` module inside `paper_ingestion` reads `PERF_PROBE_ENABLED` f
 process environment at import time. Setting it in the host shell only passes it to the
 `loadgen.sh` child process; the running Docker container is unaffected.
 
-To capture span data from the four wired sites (Pulse Stage-2 LLM, embed POST, BM25 SQL,
-cross-paper RAG):
+`docker-compose.perf.yml` now bakes this in: `paper_ingestion` gets
+`PERF_PROBE_ENABLED=1` + `PERF_PROBE_PATH=/data/perf/perf-probe.jsonl` and a
+`./shared/perf:/data/perf` bind-mount; `profile.sh` truncates that file per-run
+and collects it into the artifact dir. So the capture path is:
 
 ```bash
-# 1. Add to docker-compose.perf.yml under paper_ingestion → environment:
-#      PERF_PROBE_ENABLED: "1"
+# 1. REBUILD from current source first (MANDATORY — see caveat below):
+docker compose -f docker-compose.yml build paper_ingestion learning_engine dashboard
 
-# 2. Recreate the container:
+# 2. Boot with the perf override (probes on, mount wired):
 make profile-stack-up   # uses docker-compose.perf.yml
 
 # 3. Run the profile:
 make profile
-# → artifacts/perf/<ts>/perf-probe.jsonl will contain JSONL span records
+# → artifacts/perf/<ts>/perf-probe.jsonl
 ```
 
-The probe writes `{"name": "<span>", "elapsed_s": …, …}` JSONL lines. Each record includes
-the span name and any keyword fields passed to `probe_span(name, **fields)`.
+The probe writes `{"span": "<name>", "ms": …, "ts": …, …}` JSONL lines.
+
+**Caveat 1 — rebuild or you get nothing.** The deployed `jarvis/paper_ingestion`
+image is a pinned tag, not a live bind-mount of the source. If it was built
+before the probe code (or any code you want to measure) landed, the running
+container has no probes and the JSONL is silently empty. Always rebuild the app
+images from the commit under test before profiling.
+
+**loadgen Scenario C drives the probed paths (since 2026-05-17).**
+`loadgen.sh` Scenario C mints a real owner session via `POST
+/api/auth/api-key-session` (exchanges the existing `JARVIS_API_KEY` for a
+`jarvis_session` cookie — no email/magic-link) and drives all four wired
+spans: `POST /api/papers/search-hybrid` (→ `embed_texts_post` +
+`hybrid_search_bm25_sql`), `POST /api/ask` decompose (→
+`prepare_cross_paper_rag` + `embed_texts_post`), `POST /api/pulse/generate`
+(→ `pulse_stage2_llm`, async worker). With probes armed it now collects real
+spans (verified: 54 spans, evidence-based bottleneck recorded in
+`docs/perf/2026-05-18-baseline-report.md` §"Dominant bottleneck DETERMINED").
+
+Preconditions / knobs:
+- Session mint needs **exactly one non-deleted user + an admin**, or
+  `API_KEY_LOGIN_ENABLED=true` (else Scenario C logs a warning and skips —
+  exit 0 preserved).
+- A **seeded corpus** makes `pulse_stage2_llm`/`prepare_cross_paper_rag`
+  absolute numbers meaningful; with an empty corpus they still emit (floors)
+  and `embed_texts_post`/`hybrid_search_bm25_sql` are corpus-independent.
+- `RAG_CONCURRENCY` (default ≤3) bounds the heavy `/api/ask` fan-out;
+  `PERF_PULSE_SETTLE_SECS` (default 25) lets the async Pulse worker emit its
+  span before `profile.sh` collects the JSONL.
 
 ## Re-running unchanged on the 48 GB box
 
