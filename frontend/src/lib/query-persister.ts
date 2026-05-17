@@ -74,6 +74,33 @@ import {
 export const PERSIST_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 export const GC_TIME = PERSIST_MAX_AGE; // must be >= PERSIST_MAX_AGE
 
+/**
+ * `SENSITIVE_GC_TIME` — short in-memory TTL for sensitive query kinds
+ * (admin / logs / config). These are already excluded from IDB persistence by
+ * `shouldDehydrateQuery` and cleared on logout, so this is an additional
+ * defence-in-depth layer: a session crash or missed logout cannot leave
+ * sensitive data in the in-memory cache for days. 5 minutes is enough for any
+ * realistic UI interaction while keeping no stale sensitive state across a
+ * browser idle period.
+ *
+ * The corresponding `setQueryDefaults` calls in `query-client.ts` apply this
+ * to queries whose `queryKey[0]` is `'admin'`, `'logs'`, or `'config'`.
+ */
+export const SENSITIVE_GC_TIME = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Query-key families whose entries should use `SENSITIVE_GC_TIME`.
+ * Kept here (co-located with NON_GOAL_KEYS) so audits have a single place to
+ * check: exclude from IDB + short-lived in memory.
+ *
+ * Exported so `query-client.ts` can register `setQueryDefaults` for each.
+ */
+export const SENSITIVE_QUERY_KEYS: ReadonlyArray<string> = [
+  'admin',
+  'logs',
+  'config',
+] as const;
+
 /** Bumped when the dehydrated shape changes — invalidates old snapshots. */
 const PERSIST_BUSTER = 'jarvis-qp-v1';
 

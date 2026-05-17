@@ -188,7 +188,7 @@ async def test_update_thread_each_allowed_field(field: str, value: object, col_f
     """Each allowlisted column can be updated individually (partial-update semantics)."""
     pool, conn = _make_pool_and_conn()
     conn.fetchrow.return_value = _row(**{field: value})
-    body = ThreadUpdate(**{field: value})
+    body = ThreadUpdate.model_validate({field: value})
     with _patch_uid(42):
         await threads.update_thread.__wrapped__(
             _mock_request(), thread_id=1, body=body, db_pool=pool
