@@ -2,11 +2,13 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
+import asyncpg
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
+from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion.config import get_paper_ingestion_settings
-from paper_ingestion.deps import limiter
+from paper_ingestion.deps import get_db_pool, limiter
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 
@@ -15,8 +17,19 @@ SNAPSHOT_STORAGE_PATH = get_paper_ingestion_settings().snapshot_storage_path
 
 @router.get("/{paper_id}/{page}")
 @limiter.limit("120/minute")
-async def get_snapshot(request: Request, paper_id: int, page: int) -> FileResponse:
+async def get_snapshot(
+    request: Request,
+    paper_id: int,
+    page: int,
+    db_pool: asyncpg.Pool = Depends(get_db_pool),
+    user_id: int = Depends(get_current_user_id),
+) -> FileResponse:
     """Serve a PDF page snapshot PNG.
+
+    Public-source papers (arXiv, S2, OpenAlex, PubMed) are accessible to any
+    authenticated user (D4 shared corpus decision).  Uploaded/local papers are
+    scoped to the caller's user_library; a non-owner gets an opaque 404 that
+    does not reveal whether the paper exists.
 
     Parameters
     ----------
@@ -31,6 +44,25 @@ async def get_snapshot(request: Request, paper_id: int, page: int) -> FileRespon
     # Path traversal protection
     if not snapshot_path.is_relative_to(base):
         raise HTTPException(400, "Invalid path")
+
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT p.source_type,
+                   EXISTS (
+                       SELECT 1 FROM user_library ul
+                       WHERE ul.paper_id = p.id AND ul.user_id = $2
+                   ) AS in_library
+            FROM papers p
+            WHERE p.id = $1
+            """,
+            paper_id,
+            user_id,
+        )
+
+    # Unknown paper_id → opaque 404 (same as missing snapshot below)
+    if row is None or (row["source_type"] == "local" and not row["in_library"]):
+        raise HTTPException(404, f"Snapshot not found: paper {paper_id}, page {page}")
 
     if not snapshot_path.exists():
         raise HTTPException(404, f"Snapshot not found: paper {paper_id}, page {page}")

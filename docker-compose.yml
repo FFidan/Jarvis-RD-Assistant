@@ -545,18 +545,25 @@ services:
     environment:
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
       TELEMETRY_ENABLED: "false"
-      # Langfuse v2 reads these from env only (no _FILE convention — which is
-      # why the old entrypoint shim existed). Interpolated from .env, whose
-      # values are kept byte-identical to ./secrets/langfuse_*.txt; the
-      # langfuse-postgres service initialised its DB from that same password
-      # file, so there is no credential divergence. Local-dev, loopback-bound.
-      DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD}@langfuse-postgres:5432/langfuse
-      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
-      SALT: ${LANGFUSE_SALT}
-    # Use the image's own entrypoint (dumb-init -- ./web/entrypoint.sh, then
-    # node ./web/server.js). The previous shim overrode it with a hard-coded
-    # v1 path (/app/packages/langfuse/server.js) absent in v2.95.x and cat-ed
-    # root-owned /run/secrets/* as the non-root `nextjs` user — both fatal.
+    secrets:
+      - langfuse_pg_password
+      - langfuse_nextauth_secret
+      - langfuse_salt
+    # Entrypoint shim: langfuse does not honour _FILE convention.
+    # Fail-fast if any secret file is empty, then reconstruct env vars from
+    # file contents before handing off to the upstream Node entrypoint.
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        for f in langfuse_pg_password langfuse_nextauth_secret langfuse_salt; do
+          if [ ! -s "/run/secrets/$$f" ]; then
+            echo "FATAL: /run/secrets/$$f is empty or missing." >&2; exit 1
+          fi
+        done
+        export DATABASE_URL="postgres://langfuse:$$(cat /run/secrets/langfuse_pg_password)@langfuse-postgres:5432/langfuse"
+        export NEXTAUTH_SECRET="$$(cat /run/secrets/langfuse_nextauth_secret)"
+        export SALT="$$(cat /run/secrets/langfuse_salt)"
+        exec node /app/packages/langfuse/server.js
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
       interval: 30s
