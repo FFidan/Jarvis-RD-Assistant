@@ -32,6 +32,10 @@ x-shared-env: &shared-env
   PULSE_STAGE2_MAX_RETRIES: ${PULSE_STAGE2_MAX_RETRIES:-1}
   JARVIS_TRUST_CF_CONNECTING_IP: ${JARVIS_TRUST_CF_CONNECTING_IP:-false}
   TELEGRAM_BOT_URL: ${TELEGRAM_BOT_URL:-http://telegram_bot:8002}
+  OBSERVABILITY_ENABLED: ${OBSERVABILITY_ENABLED:-false}
+  LANGFUSE_HOST: ${LANGFUSE_HOST:-}
+  LANGFUSE_PUBLIC_KEY_FILE: /run/secrets/langfuse_init_pk
+  LANGFUSE_SECRET_KEY_FILE: /run/secrets/langfuse_init_sk
 
 services:
   # ==========================================================================
@@ -307,6 +311,8 @@ services:
       - litellm_master_key
       - jarvis_config_key
       - infra_ingest_key
+      - langfuse_init_pk
+      - langfuse_init_sk
     volumes:
       - ./shared/pdf_storage:/data/pdfs
       - ./shared/snapshots:/data/snapshots
@@ -366,6 +372,8 @@ services:
       - postgres_password
       - litellm_master_key
       - jarvis_config_key
+      - langfuse_init_pk
+      - langfuse_init_sk
     mem_limit: 2g
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import httpx; httpx.get('http://localhost:8001/health').raise_for_status()\""]
@@ -553,10 +561,29 @@ services:
       DATABASE_URL: postgresql://langfuse:${LANGFUSE_PG_PASSWORD}@langfuse-postgres:5432/langfuse
       NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET}
       SALT: ${LANGFUSE_SALT}
-    # Use the image's own entrypoint (dumb-init -- ./web/entrypoint.sh, then
-    # node ./web/server.js). The previous shim overrode it with a hard-coded
-    # v1 path (/app/packages/langfuse/server.js) absent in v2.95.x and cat-ed
-    # root-owned /run/secrets/* as the non-root `nextjs` user — both fatal.
+      AUTH_DISABLE_SIGNUP: "true"
+      LANGFUSE_INIT_ORG_ID: jarvis
+      LANGFUSE_INIT_ORG_NAME: JARVIS
+      LANGFUSE_INIT_PROJECT_ID: jarvis
+      LANGFUSE_INIT_PROJECT_NAME: JARVIS
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-operator@jarvis.local}
+      LANGFUSE_INIT_USER_NAME: JARVIS Operator
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
+    secrets:
+      - langfuse_init_pk
+      - langfuse_init_sk
+    # Entrypoint shim: read pk/sk from Docker Secret files at runtime ($$
+    # escapes compose interpolation so the shell expands $(cat ...) on start),
+    # then exec the image's real entrypoint. `docker inspect` confirmed the
+    # image entrypoint is ["dumb-init","--","./web/entrypoint.sh"] (unqualified
+    # dumb-init, not /usr/bin/dumb-init), so we exec entrypoint.sh directly.
+    entrypoint: ["sh","-c"]
+    command:
+      - |
+        [ -n "$$LANGFUSE_INIT_USER_PASSWORD" ] || { echo "ERROR: set LANGFUSE_INIT_USER_PASSWORD in .env before enabling observability"; exit 1; }
+        export LANGFUSE_INIT_PROJECT_PUBLIC_KEY="$$(cat /run/secrets/langfuse_init_pk)"
+        export LANGFUSE_INIT_PROJECT_SECRET_KEY="$$(cat /run/secrets/langfuse_init_sk)"
+        exec ./web/entrypoint.sh node ./web/server.js --keepAliveTimeout 110000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
       interval: 30s
@@ -732,3 +759,7 @@ secrets:
     file: ./secrets/vector_writer_password.txt
   infra_ingest_key:
     file: ./secrets/infra_ingest_key.txt
+  langfuse_init_pk:
+    file: ./secrets/langfuse_init_pk.txt
+  langfuse_init_sk:
+    file: ./secrets/langfuse_init_sk.txt

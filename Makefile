@@ -74,6 +74,12 @@ ci-smoke:
 ## Run all quality checks: dependency parity + lint + typecheck + test
 check: secure-secrets deps-check lint typecheck test
 
+## Bring up Langfuse + JARVIS services with observability tracing enabled
+observability-up:
+	./scripts/gen-langfuse-keys.sh
+	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
+	  docker compose --profile observability up -d langfuse paper_ingestion learning_engine
+
 ## Docker shortcuts
 up:
 	$(COMPOSE) up -d
