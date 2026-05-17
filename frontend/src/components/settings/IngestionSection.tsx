@@ -39,9 +39,30 @@ interface ModelCatalogEntryApi {
   supports_thinking?: boolean;
 }
 
+/** Per-alias recommendation entry returned by GET /api/system/models hardware_recommendation. */
+interface HardwareRecommendationAlias {
+  alias: string;
+  model: string;
+  confirm_on_target: boolean;
+  notes: string;
+}
+
+/**
+ * Hardware-fit advisory returned by GET /api/system/models (B3-1 contract).
+ * Optional — older backends omit this field; UI degrades gracefully.
+ */
+interface HardwareRecommendation {
+  vram_mb: number | null;
+  bucket: 'CPU_ONLY' | 'ENTRY' | 'MID' | 'MID_HIGH' | 'HIGH';
+  summary: string;
+  aliases: HardwareRecommendationAlias[];
+}
+
 interface SystemModelsApi {
   hardware?: HardwareInfoApi;
   catalog?: ModelCatalogEntryApi[];
+  /** Advisory per-VRAM model recommendation. Optional — absent on older backends. */
+  hardware_recommendation?: HardwareRecommendation;
 }
 
 /**
@@ -156,6 +177,61 @@ function HardwareStrip({ hardware }: HardwareStripProps) {
         </span>
       )}
     </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HardwareRecommendationBanner — B3-2 (per-VRAM advisory)
+// ---------------------------------------------------------------------------
+
+interface HardwareRecommendationBannerProps {
+  recommendation: HardwareRecommendation;
+}
+
+/**
+ * Advisory banner surfacing the backend's per-VRAM model recommendation.
+ * This is informational only — the operator still picks via the model picker.
+ * Renders the summary line + per-alias recommended-model rows.
+ * Handles the vram_mb:null / aliases:[] case gracefully (GPU probe failed).
+ */
+function HardwareRecommendationBanner({ recommendation }: HardwareRecommendationBannerProps) {
+  const { summary, aliases } = recommendation;
+  const hasAliases = aliases.length > 0;
+
+  return (
+    <div
+      className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs dark:border-blue-800 dark:bg-blue-950"
+      data-testid="hw-recommendation-banner"
+    >
+      <p className="font-medium text-blue-900 dark:text-blue-100">{summary}</p>
+      <p className="mt-0.5 text-blue-700 dark:text-blue-300">
+        Advisory — does not change your active model automatically.
+      </p>
+      {hasAliases && (
+        <ul className="mt-2 space-y-1" data-testid="hw-recommendation-alias-list">
+          {aliases.map((entry) => (
+            <li key={entry.alias} className="flex flex-wrap items-center gap-x-2 text-blue-800 dark:text-blue-200">
+              <span className="font-medium">{entry.alias}</span>
+              <span className="text-muted-foreground">→</span>
+              <span className="font-mono">{entry.model}</span>
+              {entry.confirm_on_target && (
+                <span
+                  className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-amber-800 dark:bg-amber-900 dark:text-amber-200"
+                  data-testid={`confirm-on-target-${entry.alias}`}
+                  role="note"
+                  aria-label="Confirm on target hardware before switching"
+                >
+                  confirm on target
+                </span>
+              )}
+              {entry.notes && (
+                <span className="text-blue-600 dark:text-blue-400">{entry.notes}</span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -600,6 +676,8 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
   const catalog = systemModels?.catalog ?? [];
   // machine_id from hardware response (Contract 06 §3)
   const machineId = hardware?.machine_id ?? 'local';
+  // B3-2: per-VRAM advisory recommendation (optional — absent on older backends)
+  const hardwareRecommendation = systemModels?.hardware_recommendation;
 
   const setMut = useMutation({
     mutationFn: ({ key, value }: { key: string; value: unknown }) => setConfig(key, value),
@@ -803,14 +881,21 @@ export function IngestionSection({ filterGroups }: IngestionSectionProps = {}) {
           {group === 'LLM Models' && hardware && (
             <HardwareStrip hardware={hardware} />
           )}
+          {/* B3-2: Per-VRAM advisory recommendation banner */}
+          {group === 'LLM Models' && hardwareRecommendation && (
+            <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
+          )}
           <div className="space-y-2">
             {(grouped[group] ?? []).map(renderEntry)}
           </div>
         </div>
       ))}
-      {/* Render hardware strip even if LLM Models group is absent (edge case) */}
+      {/* Render hardware strip + recommendation even if LLM Models group is absent (edge case) */}
       {!llmGroup && hardware && (
         <HardwareStrip hardware={hardware} />
+      )}
+      {!llmGroup && hardwareRecommendation && (
+        <HardwareRecommendationBanner recommendation={hardwareRecommendation} />
       )}
     </div>
   );

@@ -462,6 +462,151 @@ describe('IngestionSection — thinking-mode toggle', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Hardware Recommendation Banner (B3-2 — per-VRAM advisory)
+// ---------------------------------------------------------------------------
+
+const hwRecommendationMid = {
+  vram_mb: 16384,
+  bucket: 'MID',
+  summary: 'Mid-tier GPU (10–19 GB) detected. Default stack fits with headroom.',
+  aliases: [
+    { alias: 'smart', model: 'qwen3:8b', confirm_on_target: false, notes: '' },
+    { alias: 'fast', model: 'qwen3:4b', confirm_on_target: false, notes: '' },
+    { alias: 'embed', model: 'qwen3-embedding:4b', confirm_on_target: false, notes: 'Use 4b for better quality' },
+  ],
+};
+
+const hwRecommendationHigh = {
+  vram_mb: 49152,
+  bucket: 'HIGH',
+  summary: 'High-end GPU (≥40 GB) detected. Full 32B stack fits.',
+  aliases: [
+    { alias: 'smart', model: 'qwen3:32b', confirm_on_target: true, notes: 'Confirm on target hardware before switching' },
+    { alias: 'fast', model: 'qwen3:8b', confirm_on_target: false, notes: '' },
+    { alias: 'embed', model: 'qwen3-embedding:4b', confirm_on_target: false, notes: '' },
+  ],
+};
+
+const hwRecommendationNullVram = {
+  vram_mb: null,
+  bucket: 'CPU_ONLY',
+  summary: 'GPU probe failed or no GPU detected. Running on CPU.',
+  aliases: [],
+};
+
+describe('IngestionSection — hardware recommendation banner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows summary + alias rows for a MID bucket recommendation', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationMid,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+
+    // Summary text shown
+    expect(screen.getByText('Mid-tier GPU (10–19 GB) detected. Default stack fits with headroom.')).toBeInTheDocument();
+
+    // Per-alias recommended model rows (use getAllByText for models that may also
+    // appear in the ModelSelector mock which renders the configured value)
+    const aliasList = screen.getByTestId('hw-recommendation-alias-list');
+    expect(aliasList.textContent).toContain('qwen3:8b');
+    expect(aliasList.textContent).toContain('qwen3:4b');
+    expect(aliasList.textContent).toContain('qwen3-embedding:4b');
+
+    // Alias labels visible
+    expect(screen.getByText('smart')).toBeInTheDocument();
+    expect(screen.getByText('fast')).toBeInTheDocument();
+    expect(screen.getByText('embed')).toBeInTheDocument();
+  });
+
+  it('marks advisory framing — does not claim auto-change', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationMid,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+
+    // Banner must contain advisory framing text
+    const banner = screen.getByTestId('hw-recommendation-banner');
+    expect(banner.textContent).toMatch(/advisory|recommended|does not change/i);
+  });
+
+  it('shows confirm-on-target badge for aliases with confirm_on_target:true', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationHigh,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+
+    // qwen3:32b row should have a confirm-on-target indicator
+    expect(screen.getByTestId('confirm-on-target-smart')).toBeInTheDocument();
+
+    // aliases without confirm_on_target should NOT show the indicator
+    expect(screen.queryByTestId('confirm-on-target-fast')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('confirm-on-target-embed')).not.toBeInTheDocument();
+  });
+
+  it('renders gracefully when vram_mb is null and aliases is empty (GPU probe failed)', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationNullVram,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+
+    // Summary is shown
+    expect(screen.getByText('GPU probe failed or no GPU detected. Running on CPU.')).toBeInTheDocument();
+
+    // No alias rows rendered (aliases: [])
+    expect(screen.queryByTestId('hw-recommendation-alias-list')).not.toBeInTheDocument();
+  });
+
+  it('does NOT render banner when hardware_recommendation is absent', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue(systemModelsWithFitDetail);
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hardware-strip')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByTestId('hw-recommendation-banner')).not.toBeInTheDocument();
+  });
+});
+
 describe('IngestionSection — degraded backend (no fit_detail)', () => {
   it('renders without crashing when fit_detail is absent', async () => {
     const { fetchConfig, apiFetch } = await import('@/lib/api');
