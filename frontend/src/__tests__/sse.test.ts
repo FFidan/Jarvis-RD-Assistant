@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { streamSSE, type StreamEvent } from '@/lib/sse';
+import { streamSSE, streamAnalyze, type StreamEvent, type AnalyzeEvent } from '@/lib/sse';
 
 // Mock auth store — must be defined before importing sse to ensure
 // the module-level import in sse.ts resolves to this mock.
@@ -162,5 +162,74 @@ describe('streamSSE', () => {
 
     expect(events).toHaveLength(1);
     expect(cancelMock).toHaveBeenCalledOnce();
+  });
+
+  it('warns and skips malformed frames while yielding subsequent valid frames (streamSSE)', async () => {
+    const stream = createMockReadableStream([
+      'data: {"type":"token","content":"before"}\n\n',
+      'data: not-valid-json{{{broken\n\n',
+      'data: {"type":"token","content":"after"}\n\n',
+      'data: [DONE]\n\n',
+    ]);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamSSE('/api/ask/stream', { question: 'test' })) {
+      events.push(event);
+    }
+
+    // Malformed frame is skipped; both valid frames are yielded.
+    expect(events).toHaveLength(2);
+    expect(events[0]?.content).toBe('before');
+    expect(events[1]?.content).toBe('after');
+
+    // console.warn was called once for the malformed frame.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const [label, snippet] = warnSpy.mock.calls[0] as [string, string];
+    expect(label).toBe('[sse] malformed frame skipped');
+    // Snippet is a truncated string, not the raw exception.
+    expect(typeof snippet).toBe('string');
+    expect(snippet.length).toBeLessThanOrEqual(120);
+  });
+});
+
+describe('streamAnalyze', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('warns and skips malformed frames while yielding subsequent valid frames (streamAnalyze)', async () => {
+    const stream = createMockReadableStream([
+      'data: {"type":"step","step":"downloading","status":"started"}\n\n',
+      'data: }{broken json}\n\n',
+      'data: {"type":"complete","paper_id":42}\n\n',
+      'data: [DONE]\n\n',
+    ]);
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(stream, { status: 200 }),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const events: AnalyzeEvent[] = [];
+    for await (const event of streamAnalyze(42)) {
+      events.push(event);
+    }
+
+    // Malformed frame is skipped; both valid frames are yielded.
+    expect(events).toHaveLength(2);
+    expect(events[0]?.type).toBe('step');
+    expect(events[1]?.type).toBe('complete');
+
+    // console.warn was called once for the malformed frame.
+    expect(warnSpy).toHaveBeenCalledOnce();
+    const [label, snippet] = warnSpy.mock.calls[0] as [string, string];
+    expect(label).toBe('[sse] malformed frame skipped');
+    expect(typeof snippet).toBe('string');
+    expect(snippet.length).toBeLessThanOrEqual(120);
   });
 });

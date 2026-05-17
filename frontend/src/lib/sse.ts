@@ -129,7 +129,7 @@ export async function* streamSSE(
     try {
       yield JSON.parse(data) as StreamEvent;
     } catch {
-      /* skip malformed SSE frames */
+      console.warn('[sse] malformed frame skipped', data.slice(0, 120));
     }
   }
 }
@@ -168,7 +168,7 @@ export async function* streamAnalyze(
     try {
       yield JSON.parse(data) as AnalyzeEvent;
     } catch {
-      /* skip malformed SSE frames */
+      console.warn('[sse] malformed frame skipped', data.slice(0, 120));
     }
   }
 }
