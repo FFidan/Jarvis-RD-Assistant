@@ -2,7 +2,195 @@
 
 All notable changes to JARVIS RD Assistant are documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/).
+## [unreleased]
 
+
+### Bug Fixes
+- Narrow APIRoute for route-path assertions (RB-3 follow-up)
+- Owner-override resolver on Telegram-reachable LE endpoints + accurate cross-service boundary doc (RB-3)
+- Split session-expiry side-effect out of render body (FE-1)
+- Register AuthVerifyPage redirect timer with useEffect cleanup (L-4)
+- Warn on skipped malformed SSE frames instead of silent drop (L-5)
+- Short gcTime for sensitive admin/logs/config queries (FE-D)
+- Model_validate for dynamic-key ThreadUpdate construction (M-4 review follow-up)
+- Retain recent undated papers instead of silently dropping them (M-9)
+- UTC date for recency decay in stage1 scoring (M-8)
+- Collapse gap positions so reconstructed abstracts are single-spaced (M-10)
+- Real ChunkForEmbedding + proper qdrant mock in M-3 tests (PI-8 review follow-up)
+- Single-transaction cooldown-check+claim closes the interleave race (M-2 review)
+- Justified type-ignore for deliberate-None negative test (M-1 review follow-up)
+- Type-honest _filter_unread user_id in recommender tests (M-1 review)
+- Deterministic Qdrant point ids prevent orphan/duplicate vectors on retry (M-3)
+- Proper Mock + isinstance-narrowed qdrant assertions in RAG isolation test (SEC-4 review)
+- Atomic cooldown-check+claim and non-silent 2nd-claim failure (M-2)
+- User-row-wins weights precedence mirroring load_profile (M-1)
+- Correct cross-paper user-scoping docstring + two-tenant isolation test (SEC-4)
+- Pass db_pool to source ctor so per-source rate-limiter persists (SEC-1)
+- Narrow qdrant Filter.must types in data_purge assertions (RB-2 review follow-up)
+- Real per-uid Qdrant vector counts in audit + correct test patch targets (RB-2 review)
+- Declare lxml in jarvis-common group so cached_transport imports standalone (SEC-3 review)
+- Real path-traversal test + SourceType enum in snapshot scope (SEC-2 review)
+- Type-honest Rating enum in live review-sync test (RB-1 follow-up)
+- Partial-index ON CONFLICT predicate + live-PG fresh-insert regression (RB-1)
+- Type-correct Qdrant-filter assertions in test_data_purge (RB-2 follow-up)
+- Harden cache-admission XML gate against entity-expansion DoS (SEC-3) + lock-in PI-D/PI-E tests
+- Stamp X-Real-IP from Caddy + nginx real_ip_header X-Real-IP so rate-limit buckets per client (RB-4)
+- Scope uploaded-PDF snapshots to user_library (SEC-2)
+- Purge Qdrant vectors + audit-log on user hard-delete (RB-2)
+- Webapp-configurable Langfuse dashboard URL
+- Remove redundant header Discover CTA (4th entry point)
+- Wire PaperTOC processingFailed to live failure signal
+- Discover at top + header CTA + empty-state default + scope-honest facet/library copy
+- Plain per-check remediation + record env-only-for-security-boot-gates principle
+- Left pipeline list shows done/active/failed parity with the action sidebar
+- Bounded search timeout so the palette fails fast instead of hanging
+- Explain Lifecycle states + Flagged in plain language
+- Facet counts honor the active library/corpus scope
+- Configurable timeout + ReadTimeout retry + per-batch resume; GPU-resident via smaller dev chat models (no re-embed)
+- Dedupe adds the canonical paper to the caller's library instead of a dead 409
+- JobStatusResponse.user_id is int not str (runtime ResponseValidationError)
+- Build pre-collapse schema for mig 046/047 tests instead of post-047 init.sql
+- Trust init.sql schema_migrations bootstrap; run_migrations applies 073+ (incl 074) + live_pg connect-retry
+- Pass native dict to JSONB params — codec was double-encoding (B5 regression)
+- Teach unsafe-resolver guard CC-03 get_current_user_id + allowlist api-key-session
+- Apply nginx api burst 20->40 (F-01) + accurate command-palette _reset docstring
+- Single tooltip + capability-driven gates + presets + inline source config (F2)
+- Accurate break-stop logging + no rehydrate flicker + phase-aware controls (F6)
+- Live-services superset + Vector clarity + plain tooltips (F5)
+- Per-filter subtitles + honest facet copy + discoverable upload (F4)
+- Mobile-web-app-capable meta + nginx api_zone burst 20->40 (F8/Ops)
+- Ruff import-sort (B2/B8 tests) + accurate clear-cooldown docstring
+- Self-heal stuck rate-limit + honest dated diagnostic + UA/pacing/classify (B2)
+- Journal GET date param str->date — fixes EOD 500 (B1, P1)
+- Exclude credentials from source-cache key; strip hop-by-hop headers (PI-D/PI-E)
+- 082 self-healing NULL-user reassign (no crash-loop) + 087 pulse_models user_id index (RB-D/DB-F04)
+- Require_admin on extraction-template + topic CUD (PI-B/PI-C)
+- PNG manifest icons + OfflineIndicator role=status + ResearchFeedPage exhaustive-deps (FE-E)
+- Size api_zone for dashboard fan-out + widen trusted-proxy default + stop counting self-inflicted 503s in error badge (RB-A)
+- Prod boot-gate enforces LITELLM_MASTER_KEY/POSTGRES_PASSWORD strength + APP_BASE_URL (SEC-A/SEC-B)
+- Defense-in-depth user scoping on project-activity UNION + telegram project_detail (LE-OB4/TG-N2)
+- Correct dead job-store invalidation keys so surfaces auto-refresh after batch jobs (FE-C)
+- Unconditional SW API-cache purge on activate + controller-null logout race + clear review outbox on logout (FE-B/FE-A)
+- Empty telegram secret on skip + first-run model-pull budget/banner + multi-mode login banner (RB-B/RB-C/INS-A)
+- Scope promote_zotero_note to owning user (PI-A IDOR)
+- Defer mig 086 in runner test (F1 blocker) + atomic dedupe-gated cards UPDATE in sync (F2)
+- Drop compose empty-string LETSENCRYPT_* passthrough so Caddyfile defaults apply (Task E review fix)
+- Fold deck_id into getNextReview, full Roman numerals, dedupe nav-group testid
+- Restore admin health-pill quick per-service popover + keep full-report link (F4 regression)
+- Resolve letsencrypt Caddyfile crash on empty LETSENCRYPT_* env vars
+- Guard IDB persister attach when indexedDB absent (prod robustness) + fake-indexeddb in test setup (vitest exit 0)
+- Vi.hoisted fixtures so PaperDetailPage.offline suite collects + runs (was 0/13)
+- Replace require() with ESM import in ResearchFeedPage test (no-require-imports; closeout lint-clean)
+- Drain zoteroGetLinkage once-queue in beforeEach — full vitest run deterministic green
+- Make Wave-2 test fixtures type-correct; drop orphaned JournalSection test (tsc -b green)
+- Replace Unicode smart-quotes with ASCII in EndOfDaySection JSX expression (tsc -b TS1127)
+- Repair f1 test vi.mock hoisting + drop dead Ask branch
+- Restore paper lifecycle actions in 3-pane right rail; rm orphaned SummaryTab; scroll-spy anchor; lint
+- Wire UI_v3 mocked e2e specs into test:e2e:mocked; restore design mockups; drop orphaned ui-store.heroMode
+- Live counts on §MILESTONES/§TASKS headers; untrack provisional projects.jpg
+- Real IngestionSection filterGroups split — §VI shows only Spaced Repetition (Conflict-5)
+- EOD first-move hint reflects journal-only persistence (no false forward-seed promise)
+- Drop __future__ annotations breaking account OpenAPI; defer migrations 083-085 to runtime runner
+- Reject pending_email (email-change) tokens at /auth/verify — close passwordless-login bypass; +type fixes
+- Anchor _compute_streak on UTC date to match executive.py exactly
+- Type-cast facet row fields so TopicFacetCount construction is sound (pyright)
+- Widen _assert_project_owner conn type to PoolConnectionProxy (pyright)
+- Cache header-type consistency + single-user Continue stays clickable
+
+
+### Documentation
+- MkDocs-Material operator/developer docs site → GitHub Pages (WS2, hybrid, no file moves)
+- Refresh deferred backlog post CI-green program (Hermes, Performance&hardware-fit, 046/047-residual, installer/docs-site, Qdrant-re-embed-conditional)
+- Correct stale mig-046 test comment
+- Mark shipped --no-deps / discovery-reliability items DONE
+- Pristine-hardening program plan + QA/UX/perf deep audit
+- Fix 10 verified drift items (migration count, deprecated env, broken/stale refs, CHANGELOG regen) + archive superseded audits
+- Add end-user guide (surfaces + plain-English sign-in/recovery), index in docs/README
+- Canonical post-UI_v3 follow-ups execution plan (deep-plan output)
+- De-link removed PomodoroTimer.tsx in 2026-05-02 decisions doc (UI_v3 deleted it; fixes check_agent_docs)
+- Land 8 IA redesign specs + INDEX + parallelized execution plan
+- Add companion docs site + complete user guide (Planned; UI-guide gated on redesign)
+- Setup.sh --check + single/multi mode + source HTTP cache env vars
+- Add public ROADMAP.md (shipped v0.4.1 / in-progress / planned Hermes+offline)
+- Correct stale carried follow-ups (resolve_owner_chat_id NOT dead; py-spy/feed-500 closed in v0.4.1) + log v0.4.1-surfaced opens
+
+
+### Features
+- Promote Discover to top-level + rename Research Feed→Library
+- Wire global Cmd-K command palette to searchPreview (F1)
+- PATCH source config + clear-cooldown admin endpoints (B5)
+- GET /api/setup/smtp (masked) + smtp.* in settings allow-list (B4)
+- GET /api/system/capabilities (networkx/sklearn probe) (B6)
+- Shared client stubs + types + lazy routes + cmdk (Wave-0 Task S)
+- POST /api/review/sync idempotent offline replay + mig 086 + offline-tolerant session grace (+LE-OB5)
+- Send sign-in link + request-link enumeration-timing hardening (+A-3)
+- System Health per-check explanations + dev-mode context banner
+- Shared client additions — admin sendSignInLink + getNextReview deckId (gate for B/F)
+- Offline flashcard review outbox + idempotent sync-on-reconnect (client) + endpoint contract handoff
+- Connectivity banner + per-surface offline indicators (Library/Paper Detail) + install affordance
+- Offline last-known-good route-guard (online path unchanged) + logout purges persisted query cache
+- Persist read-surface query cache to IndexedDB (last-known-good); NON-GOAL queries excluded; logout-purge API
+- PWA foundation — manifest, service worker (read-surface SWR cache, NON-GOALs network-only), online-status hook
+- Settings IA redesign — 2-pane §-rail + §I Account section
+- Feed faceted 3-pane IA — §-facet rail + scoped filter + Inbox-first default
+- Learning Cards IA redesign — focused review session shell
+- Analytics IA redesign — Reflect hero + KPI band + section renames
+- F2 — 3-pane research-log IA redesign
+- F3 — My-Day parity, Pomodoro §1a/§1c/§1d, EOD shutdown ritual
+- Projects IA redesign — chapter rail + scrolling document pane
+- Shell/sidebar grouped roman-numeral nav + Ask page + admin breadcrumbs
+- F0 shared scaffolding — api client fns + types + routes for 8 surfaces
+- Self-service GET/PATCH /api/account with verified email change
+- Add GET /api/analytics/summary period-delta endpoint (B5)
+- Thread entity + on-the-fly Yesterday rollup + EOD shutdown-ritual persistence
+- Project_questions table + CRUD + recent-activity UNION
+- Add UI v3 facet counts — by_source, by_topic, untagged
+- Mode-adaptive SMTP step in first-run wizard (logic-only)
+- Setup.sh --check doctor + --mode single|multi + OS-aware remediation
+- CoreSettings.jarvis_setup_mode + setup_mode in /api/setup/status
+
+
+### Miscellaneous Tasks
+- Land CI-green + verified-gap-closure plan (deep-execute step 0)
+- Remove unused data-popover-testid from HealthDots trigger (Task C review nit)
+- Remove leftover /tmp/zotero-diag.log debug instrumentation from ResearchFeedPage test
+- Remove dead JournalSection component + stale tracked test (replaced by EOD redesign)
+
+
+### Performance
+- My-Day bundle + Analytics staleTime + HeaderPill poll gating (F7)
+- Mig 088 indexes + executive /my-day gather+SQL-streak + /my-day-bundle (B7)
+- Env-tunable stage2 timeout (900) + LLM concurrency (4) (B8)
+- In-memory GET cache for external metadata hosts (Bucket-H httpx-cache reopened, lean/no-dep)
+
+
+### Refactoring
+- Explicit column allowlist in update_thread mirroring notes (M-4)
+- NAMESPACE_DNS named constant + honest retry-determinism test (M-3 review)
+- Drop dead deck_id param getNextReview sent to a backend that ignores it
+- Get_current_user_id Depends — search router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — recommendations router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — recommendation_feedback router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — rag router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — pulse router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — papers router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — notes router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — feed router (CC-03, behavior-preserving)
+- Get_current_user_id Depends — shared infra + test harness (CC-03, behavior-preserving)
+
+
+### Testing
+- Structural init.sql↔migration-sequence drift guard (WS3 / 046-047 class)
+- Cover run_process_pdf EmbeddingBatchError resume path
+- --check side-effect-free + mode→.env + mode-adaptive SMTP step
+
+
+### Harden
+- Never buffer binary/PDF bodies (structural metadata-only guard)
+
+
+### Style
+- Isort test_pulse_stale_fallback to project ruff norm (CC-03 follow-up)
 ## [v0.4.1] - 2026-05-15
 
 
@@ -57,7 +245,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Testing
 - Align magic-link event + prod-config tests with H-2 security behavior
 - Regression — /api/papers/feed 200 across limits (BATCH-A)
-
 ## [v0.4.0] - 2026-05-15
 
 
@@ -81,7 +268,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Testing
 - WS-NEGATIVE-TESTS — cross-user isolation suite + self-enforcing CI gate
-
 ## [v0.3.5-rc] - 2026-05-15
 
 
@@ -101,14 +287,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - WS-DEV-MODE-RETIREMENT — granular dev flags + meta-flag promotion
 - Forward X-Owner-User-Id on all user-data backend calls (WS-CROSS-USER)
 - WS-AUTH foundation — demote API key to ops-only
-
 ## [v0.3.4] - 2026-05-14
 
 
 ### Bug Fixes
 - Mig 077 — papers.user_id was renamed to discovered_by in mig 072
 - Tsc-strict compat for PulseDeck + JournalSection tests
-
 ## [v0.3.3] - 2026-05-14
 
 
@@ -151,7 +335,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Refactoring
 - Extract make_postgres_probe / make_litellm_probe (L-10)
 - Drop l2_penalty signal — feature already in embedding (M-06)
-
 ## [v0.3.2] - 2026-05-14
 
 
@@ -164,7 +347,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Refactoring
 - Residual 4.2+4.3 changes (post-edit hook sweep)
-
 ## [v0.3.1] - 2026-05-14
 
 
@@ -205,7 +387,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### Testing
 - Update _make_profile to use l2_lambda field after 3.3 refactor
 - Cover shared init_langfuse_hook (DOM-J-01)
-
 ## [v0.3.0] - 2026-05-14
 
 
@@ -252,7 +433,6 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - Restrict vector docker_logs to this compose project
 - Align pydantic-ai-eval deps with eval doc recommendation
 - Use --no-deps in profile-stack-up to avoid sibling-Ollama collision
-
 ## [v0.2.2] - 2026-05-14
 
 
@@ -291,20 +471,42 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Spike
 - Pydantic-ai evaluation + recommendation doc for §13
-
 ## [v0.2.1] - 2026-05-12
 
-### Changed
 
-- Completed the deferred roadmap closeout for Zotero group-library sync UX, docs indexing, profiling tooling, and settings migration.
-- Added an opt-in profiling compose override plus bundle treemap support via `ANALYZE_BUNDLE=true`.
-- Routed more runtime configuration through typed settings while preserving secret-file and test-toggle behavior.
+### Bug Fixes
+- Scope config and harden job ownership
+- Add --check to ruff-format (Bucket E3 mitigation §M1)
+
 
 ### Documentation
+- Post-v0.2.0 roadmap — deferred + new follow-ups
 
-- Added the current docs index and Bucket H library-wishlist decision record.
-- Updated the post-v0.2.0 roadmap to distinguish completed closeout work from measured/deferred follow-ups.
 
+### Miscellaneous Tasks
+- Close deferred roadmap tranche
+## [v0.2.0] - 2026-05-10
+
+
+### Documentation
+- 2026-05-10 baseline numbers + negative results (Bucket G)
+
+
+### Features
+- Typed Settings classes for jarvis_common + paper_ingestion + learning_engine
+
+
+### Miscellaneous Tasks
+- Add pydantic-settings + structlog to jarvis-common dep group
+- Make profile target + scripts/profile.sh + HOWTO (Bucket G)
+
+
+### Performance
+- React.lazy 5 heavy pages — main bundle 1132 -> 1022 kB (Bucket G)
+
+
+### Testing
+- Coverage for all 3 Settings classes (24 tests)
 ## [v0.1.0] - 2026-05-10
 
 
@@ -1015,6 +1217,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 
 ### Miscellaneous Tasks
+- Generate CHANGELOG for v0.1.0 and populate RELEASE.md
 - Docker-compose image tags (JARVIS_VERSION variable)
 - Generate CHANGELOG for v0.1.0
 - Cliff.toml + CHANGELOG.md generation config

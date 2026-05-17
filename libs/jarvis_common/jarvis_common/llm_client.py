@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 import httpx
 from pydantic import BaseModel
 
+from jarvis_common.config import get_jarvis_common_settings
+
 if TYPE_CHECKING:
     import openai
 
@@ -295,25 +297,33 @@ async def call_llm_structured(
 
 
 def _langfuse_lifespan_hook() -> None:
-    """Initialize Langfuse SDK. Call once at app startup.
+    """Init Langfuse once at startup. No-op (logs) unless OBSERVABILITY_ENABLED
+    and host+keys are all present.
 
-    No-op (logs info) if ``LANGFUSE_HOST`` is not set — local dev without the
-    ``--profile observability`` stack should not crash on missing env vars.
+    Design constraints (do NOT relax):
+    * Runs as the FIRST init task, before DB migrations — must touch NO database.
+    * Must NEVER raise: every disabled/misconfigured combination returns cleanly
+      so it cannot break startup.  The broad ``except Exception`` is load-bearing.
+    * Keys are read from :class:`jarvis_common.config.JarvisCommonSettings`
+      (``SecretStr`` fields) — never from ``os.environ[...]`` directly, which
+      would ``KeyError`` when absent.
     """
-    host = os.environ.get("LANGFUSE_HOST")
-    if not host:
-        logger.info("LANGFUSE_HOST unset; Langfuse traces will no-op")
+    settings = get_jarvis_common_settings()
+    if not settings.observability_enabled:
+        logger.info("OBSERVABILITY_ENABLED is false; Langfuse traces no-op")
+        return
+    host = settings.langfuse_host
+    pk = settings.langfuse_public_key.get_secret_value() if settings.langfuse_public_key else None
+    sk = settings.langfuse_secret_key.get_secret_value() if settings.langfuse_secret_key else None
+    if not (host and pk and sk):
+        logger.warning("OBSERVABILITY_ENABLED set but LANGFUSE_HOST/keys missing; traces no-op")
         return
     try:
         from langfuse import Langfuse  # noqa: PLC0415
 
-        Langfuse(
-            host=host,
-            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        )
+        Langfuse(host=host, public_key=pk, secret_key=sk)
         logger.info("Langfuse configured, tracing to %s", host)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — must never break startup
         logger.warning("Langfuse init failed (non-fatal): %s", exc, exc_info=True)
 
 

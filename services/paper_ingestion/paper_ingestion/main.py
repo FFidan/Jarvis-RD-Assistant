@@ -188,7 +188,9 @@ async def _init_source_singletons(app: FastAPI) -> None:
                     enabled=row["enabled"],
                     config=row["config"] or {},
                 )
-                app.state.sources[source_type_val] = source_cls(config, app.state.http_client)
+                app.state.sources[source_type_val] = source_cls(
+                    config, app.state.http_client, db_pool=app.state.db_pool
+                )
         except Exception:
             logger.warning(
                 "Could not initialize source singleton for %s",

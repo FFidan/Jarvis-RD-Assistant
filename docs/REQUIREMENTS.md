@@ -207,6 +207,23 @@ The following environment variables are wired for the Phase 1 Discovery & Pulse 
 | `ZOTERO_USER_ID` | `` | Zotero user/library ID |
 | `ZOTERO_LIBRARY_TYPE` | `user` | `"user"` or `"group"` |
 
+### Observability additions (Langfuse operator integration)
+
+The following env vars control the optional Langfuse observability stack. All are consumed only
+when the `observability` Docker Compose profile is active. See
+[docs/contracts/04-observability.md §9](contracts/04-observability.md#9-headless-provisioning)
+for the full operator runbook.
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OBSERVABILITY_ENABLED` | `false` | Boot-gate for the Langfuse SDK. When `false` (or unset), the SDK is never constructed — no network socket, no background thread, no latency delta. Set to `true` by `make observability-up`. |
+| `LANGFUSE_HOST` | `` | Langfuse server URL seen by JARVIS services (e.g. `http://langfuse:3000`). When empty, `@observe()` decorators are no-ops. Set to `http://langfuse:3000` by `make observability-up`. |
+| `LANGFUSE_INIT_USER_EMAIL` | `operator@jarvis.local` | Email for the Langfuse operator account created on first boot. |
+| `LANGFUSE_INIT_USER_PASSWORD` | *(required)* | Password for the Langfuse operator account. Compose fails fast with a clear error if unset when the `observability` profile is enabled. |
+
+The Langfuse project keypair (`langfuse_init_pk.txt` / `langfuse_init_sk.txt`) is file-only —
+it is never passed as an env var and is not listed here. See §9.1 of the contract above.
+
 Note:
 - the table above records intended configuration knobs. During stabilization,
   agents and operators should verify whether an env var is actually consumed by
@@ -214,7 +231,7 @@ Note:
 
 ## Database Migrations
 
-87 migrations currently applied in `db/migrations/` (001–087) as of 2026-05-16. Fresh installs get all tables via `db/init.sql`.
+88 migrations currently applied in `db/migrations/` (001–088) as of 2026-05-17. Fresh installs get all tables via `db/init.sql`. <!-- migration count refreshed 2026-05-17 (agent: claude-code) -->
 Existing installs get migrations applied automatically on startup by the auto-migration runner in
 `paper_ingestion/paper_ingestion/main.py` (`run_migrations()`), tracked in `schema_migrations` table.
 

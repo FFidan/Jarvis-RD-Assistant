@@ -219,7 +219,86 @@ proxy Langfuse API calls, or otherwise depend on Langfuse availability.
 
 ---
 
-## 9. Invariants
+## 9. Headless provisioning
+
+Running `make observability-up` bootstraps the full observability stack in one step:
+
+```
+scripts/gen-langfuse-keys.sh          # generate secrets/langfuse_init_pk.txt + langfuse_init_sk.txt (once)
+OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
+  docker compose --profile observability up -d langfuse paper_ingestion learning_engine
+```
+
+### 9.1 What is provisioned on first boot
+
+When the `langfuse-init` container runs against a fresh `langfuse_postgres_data` volume it creates:
+
+- A Langfuse **organisation** and **project**
+- An **operator user** (credentials from `LANGFUSE_INIT_USER_EMAIL` / `LANGFUSE_INIT_USER_PASSWORD`)
+- A **write-once project keypair** read from `secrets/langfuse_init_pk.txt` (public key) and
+  `secrets/langfuse_init_sk.txt` (secret key)
+
+The keypair files are generated locally by `scripts/gen-langfuse-keys.sh` and are **never committed
+with content** (`.gitignore` covers them). They are the **single source of truth** shared by both
+the Langfuse headless-init container (via `LANGFUSE_PUBLIC_KEY_FILE` / `LANGFUSE_SECRET_KEY_FILE`
+→ `/run/secrets/…`) and the JARVIS service exports — no duplication into `.env`, no env-var form
+of these credentials.
+
+`AUTH_DISABLE_SIGNUP=true` is set in the Langfuse container environment, so all new signups
+(including invited users) are blocked. Langfuse is an operator-only telemetry sink; it is not
+exposed to JARVIS end-users.
+
+### 9.2 Key rotation procedure
+
+Provisioning is **create-if-absent / write-once**. Langfuse does not update an existing project's
+keys via the init container; if the `langfuse_postgres_data` volume already contains a project
+whose keys differ from the current secret files, traces will be silently rejected (no error logged
+by Langfuse, no trace export).
+
+**Rotation procedure — required when the keypair must change:**
+
+1. `docker compose --profile observability down`
+2. `docker volume rm <project>_langfuse_postgres_data`
+3. Delete `secrets/langfuse_init_pk.txt` and `secrets/langfuse_init_sk.txt`
+4. Run `scripts/gen-langfuse-keys.sh` to generate a new keypair
+5. Run `make observability-up`
+
+There is no in-place key update path. Wiping the volume is the documented and only supported
+rotation mechanism.
+
+### 9.3 Trust-domain boundary
+
+Langfuse is a **single deployment-wide operator telemetry tool**, decoupled from JARVIS user
+identity:
+
+- There are **no per-user Langfuse projects** — all traces go to the single operator project
+- There is **no SSO or iframe bridging** — JARVIS users are never directed into Langfuse
+- The only JARVIS-side surface is the admin-controlled `observability.langfuse_dashboard_url`
+  config key documented in §8; the link is loopback-bound and no-proxy
+
+Langfuse availability has no effect on JARVIS end-user functionality.
+
+### 9.4 Profile-OFF behaviour
+
+When `OBSERVABILITY_ENABLED` is unset or `false` (the default):
+
+- The Langfuse SDK is **never constructed** — no import, no network socket, no background thread
+- `@observe()` decorators remain in place but are no-ops (langfuse.decorators handles this case)
+- There is **no latency delta, no log noise, no trace export**
+
+Profile-OFF is the factory default. Enabling observability is an explicit operator opt-in.
+
+### 9.5 Post-enable admin step
+
+After `make observability-up`, an admin sets the dashboard URL **once** in
+Settings → Observability. The field is pre-filled with `http://localhost:3002` as a convenience
+hint. This is an intentional one-time manual step — there is no auto-seed of the dashboard URL.
+Auto-seeding would couple the Langfuse container's bound address into the service layer (YAGNI;
+the URL is operator-specific and cannot be inferred generically).
+
+---
+
+## 10. Invariants
 
 The implementation MUST satisfy these. Testable.
 
@@ -242,7 +321,7 @@ The implementation MUST satisfy these. Testable.
 
 ---
 
-## 10. Cleanup decisions deferred
+## 11. Cleanup decisions deferred
 
 | Item | Candidate dispositions |
 |---|---|
@@ -254,7 +333,7 @@ The implementation MUST satisfy these. Testable.
 
 ---
 
-## 11. Cross-contract references
+## 12. Cross-contract references
 
 - **[01-settings.md §2.1](01-settings.md#21-live-keys-written-and-read-by-code-that-affects-user-visible-behavior)** — encrypted keys whose plaintext MUST NEVER appear in span metadata.
 - **[02-pulse.md §6.1](02-pulse.md#61-degraded-vs-fatal--the-difference-that-matters)** — `degraded_reason` field that the Pulse trace span MUST mirror as a tag.
@@ -263,7 +342,7 @@ The implementation MUST satisfy these. Testable.
 
 ---
 
-## 12. Verified Identifiers
+## 13. Verified Identifiers
 
 Every cited identifier was Read in the session producing this contract.
 Several rows below are **target lines** — the function exists today, the

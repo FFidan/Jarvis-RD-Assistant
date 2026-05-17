@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import inspect
 
+from fastapi.routing import APIRoute
 from jarvis_common.auth import (
     current_user_id_strict,
     current_user_id_strict_with_owner_override,
@@ -86,8 +87,16 @@ def test_log_focus_session_uses_owner_override_resolver() -> None:
 
 def test_telegram_reachable_le_routes_registered() -> None:
     """Pin the exact route paths the Telegram bot depends on."""
-    review_paths = {(r.path, tuple(sorted(r.methods))) for r in review.router.routes}
-    exec_paths = {(r.path, tuple(sorted(r.methods))) for r in executive.router.routes}
+    review_paths = {
+        (r.path, tuple(sorted(r.methods)))
+        for r in review.router.routes
+        if isinstance(r, APIRoute) and r.methods is not None
+    }
+    exec_paths = {
+        (r.path, tuple(sorted(r.methods)))
+        for r in executive.router.routes
+        if isinstance(r, APIRoute) and r.methods is not None
+    }
     assert ("/api/review/next", ("GET",)) in review_paths
     assert ("/api/review/{card_id}", ("POST",)) in review_paths
     assert ("/api/stats", ("GET",)) in review_paths

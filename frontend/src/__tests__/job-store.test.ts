@@ -406,6 +406,8 @@ describe('JobStore', () => {
         login: vi.fn(),
         loginWithSession: vi.fn(),
         checkSession: vi.fn(() => true),
+        isSessionValid: vi.fn(() => true),
+        expireSession: vi.fn(),
       });
 
       vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: statusCode }));

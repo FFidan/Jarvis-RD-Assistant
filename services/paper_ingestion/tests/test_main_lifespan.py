@@ -396,6 +396,84 @@ async def test_rehydrate_litellm_aliases_skips_no_db_connected(
     ), f"Expected INFO log about 'no admin db attached'; got: {[r.message for r in caplog.records]}"
 
 
+# ---------------------------------------------------------------------------
+# SEC-1 production path: cached singletons must carry db_pool
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_init_source_singletons_passes_db_pool_to_ctor() -> None:
+    """SEC-1 regression: _init_source_singletons must pass db_pool= to the source ctor.
+
+    This guards the PRODUCTION pulse path: discover_candidates is called with
+    source_cache=services.sources (pre-built singletons), so any db_pool omission
+    in _init_source_singletons silently makes PersistentSourceRateLimiter inert
+    across all real pulse runs.  If this test turns red, SEC-1 has regressed.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import FastAPI
+    from paper_ingestion.main import _init_source_singletons
+    from paper_ingestion.models import SourceType
+
+    pool = MagicMock()
+    conn = AsyncMock()
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=conn)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    pool.acquire.return_value = ctx
+
+    # Return a valid DB row for every source type queried.
+    conn.fetchrow.return_value = {
+        "id": 1,
+        "source_type": "arxiv",
+        "enabled": True,
+        "config": {},
+    }
+
+    received_db_pools: dict[str, object] = {}
+
+    def _make_spy_class(source_type_val: str):
+        class SpySource:
+            def __init__(self, config, http_client, db_pool=None):
+                received_db_pools[source_type_val] = db_pool
+
+        return SpySource
+
+    http_client = MagicMock()
+    app = FastAPI()
+    app.state.db_pool = pool
+    app.state.http_client = http_client
+
+    preloaded = [
+        SourceType.ARXIV,
+        SourceType.SEMANTIC_SCHOLAR,
+        SourceType.PUBMED,
+        SourceType.OPENALEX,
+    ]
+
+    def _spy_get_source_class(source_type_val: str):
+        return _make_spy_class(source_type_val)
+
+    with (
+        patch(
+            "paper_ingestion.main.get_source_class",
+            side_effect=_spy_get_source_class,
+        ),
+        patch("paper_ingestion._state.set_services"),
+    ):
+        await _init_source_singletons(app)
+
+    for st in preloaded:
+        assert st.value in received_db_pools, (
+            f"source '{st.value}' was never constructed — check preloaded_sources list"
+        )
+        assert received_db_pools[st.value] is pool, (
+            f"source '{st.value}' singleton was built without db_pool; "
+            "PersistentSourceRateLimiter is inert on the production pulse path (SEC-1 regression)"
+        )
+
+
 @pytest.mark.asyncio
 async def test_rehydrate_litellm_aliases_reraises_502() -> None:
     """Non-400 / non-'No DB Connected' RuntimeErrors propagate unchanged."""

@@ -68,7 +68,7 @@ class _Src:
 
 
 def _cls(src):
-    def make(config, http_client):
+    def make(config, http_client, db_pool=None):
         return src
 
     return make

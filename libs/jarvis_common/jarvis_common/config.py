@@ -34,6 +34,7 @@ DB_POOL_MIN                     db_pool_min                 shared
 DB_POOL_MAX                     db_pool_max                 shared
 CORS_ORIGINS                    cors_origins                shared
 LITELLM_BASE_URL                litellm_base_url            shared
+OBSERVABILITY_ENABLED           observability_enabled       shared
 LANGFUSE_HOST                   langfuse_host               shared
 LANGFUSE_PUBLIC_KEY             langfuse_public_key         shared (SecretStr)
 LANGFUSE_SECRET_KEY             langfuse_secret_key         shared (SecretStr)
@@ -132,6 +133,15 @@ class JarvisCommonSettings(BaseSettings):
     )
 
     # --- Langfuse observability -----------------------------------------
+    observability_enabled: bool = Field(
+        default=False,
+        description=(
+            "Master gate for Langfuse tracing (OBSERVABILITY_ENABLED).  When "
+            "false, the Langfuse SDK is not initialised even if host+keys are "
+            "present.  Set true only when the observability stack "
+            "(``--profile observability``) is running."
+        ),
+    )
     langfuse_host: str | None = Field(
         default=None,
         description=(

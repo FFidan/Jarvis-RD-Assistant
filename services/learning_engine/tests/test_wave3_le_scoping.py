@@ -284,27 +284,22 @@ async def test_unlink_paper_from_task_uses_single_connection() -> None:
 
     The TOCTOU fix collapses the previously separate 'async with pool.acquire()'
     calls for the check and the delete into a single context-manager block.
+    LE-OB3 also wraps them in conn.transaction() for durability — the pool/conn
+    mock must support async-CM transaction().
     """
     import types
+    from unittest.mock import patch
 
     from learning_engine.routers.tasks import unlink_paper_from_task
 
     fake_request = types.SimpleNamespace(state=types.SimpleNamespace(user_id=10))
 
-    conn = AsyncMock()
+    # Use _make_pool_and_conn so conn.transaction() is a proper async CM.
+    pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = 5  # task exists and is owned by user 10
     conn.execute.return_value = "DELETE 1"
 
-    # Wire a single shared ctx so we can count acquire() calls.
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
-
     # log_audit uses pool too; patch it out.
-    from unittest.mock import patch
-
     with patch("learning_engine.routers.tasks.log_audit", new=AsyncMock()):
         await unlink_paper_from_task.__wrapped__(
             fake_request,
@@ -343,14 +338,9 @@ async def test_unlink_paper_from_task_404_for_other_users_task() -> None:
 
     fake_request = types.SimpleNamespace(state=types.SimpleNamespace(user_id=2))
 
-    conn = AsyncMock()
+    # Use _make_pool_and_conn so conn.transaction() is a proper async CM.
+    pool, conn = _make_pool_and_conn()
     conn.fetchval.return_value = None  # task not found / not owned by user 2
-
-    ctx = MagicMock()
-    ctx.__aenter__ = AsyncMock(return_value=conn)
-    ctx.__aexit__ = AsyncMock(return_value=False)
-    pool = MagicMock()
-    pool.acquire.return_value = ctx
 
     with pytest.raises(HTTPException) as exc_info:
         await unlink_paper_from_task.__wrapped__(
