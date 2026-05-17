@@ -11,6 +11,7 @@ import asyncpg
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from jarvis_common import JobCreateResponse, current_user_id, require_admin_or_api_key
+from jarvis_common.hardware_fit import recommend_models
 from jarvis_common.model_catalog import Role
 from jarvis_common.serialization import _coerce_bool
 from jarvis_common.settings import get_core_settings, get_secrets_settings
@@ -334,6 +335,26 @@ async def get_system_models(request: Request) -> SystemModelsResponse:
             cloud_api_keys=cloud_api_keys,
         )
         for role in ("smart", "fast", "embed")
+    }
+    # Advisory per-VRAM default-model recommendation.  Convert vram_gb → MiB
+    # for recommend_models(); pass None when the probe reported 0 (CPU-only /
+    # probe failure) so the None-path safe-default logic fires rather than
+    # treating 0 MiB as a concrete GPU measurement.
+    vram_mb_for_rec: int | None = round(hardware.vram_gb * 1024) if hardware.vram_gb > 0.0 else None
+    hw_rec = recommend_models(vram_mb_for_rec)
+    result["hardware_recommendation"] = {
+        "vram_mb": hw_rec.vram_mb,
+        "bucket": hw_rec.bucket.name,
+        "summary": hw_rec.summary,
+        "aliases": [
+            {
+                "alias": a.alias,
+                "model": a.model,
+                "confirm_on_target": a.confirm_on_target,
+                "notes": a.notes,
+            }
+            for a in hw_rec.aliases
+        ],
     }
     result["status"] = "ok" if not result["issues"] else "degraded"
     return SystemModelsResponse.model_validate(result)

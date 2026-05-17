@@ -557,3 +557,159 @@ async def test_delete_system_model_fails_closed_when_current_assignments_unavail
 
     assert exc.value.status_code == 503
     mock_http.request.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: hardware_recommendation field in GET /api/system/models
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_system_models_includes_hardware_recommendation(_app, monkeypatch):
+    """GET /api/system/models response includes hardware_recommendation field."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+
+    # Patch hardware detection to return a known 16 GB value so we can assert
+    # deterministic recommendation output without an actual GPU.
+    from paper_ingestion.services import model_lifecycle as ml
+
+    monkeypatch.setattr(
+        ml,
+        "detect_hardware",
+        lambda: ml.HardwareInfo(
+            vram_gb=16.0,
+            vram_source="nvidia-smi",
+            tier=2,
+            detected_at="2026-05-18T00:00:00+00:00",
+            machine_id="test-host",
+        ),
+    )
+    # Clear cached hw_info so the patched detect_hardware is called.
+    if hasattr(app.state, "hw_info"):
+        del app.state.hw_info
+    if hasattr(app.state, "hw_info_at"):
+        del app.state.hw_info_at
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": []})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    body = await get_system_models(request)
+
+    # hardware_recommendation must be present and non-empty
+    assert hasattr(body, "hardware_recommendation")
+    hw_rec = body.hardware_recommendation
+    assert isinstance(hw_rec, dict)
+    assert hw_rec["bucket"] == "MID"
+    assert "aliases" in hw_rec
+    assert hw_rec["summary"]
+
+    # 16 GB → qwen3:8b for smart (current config.yaml active default)
+    aliases_by_name = {a["alias"]: a for a in hw_rec["aliases"]}
+    assert aliases_by_name["smart"]["model"] == "qwen3:8b"
+    assert aliases_by_name["fast"]["model"] == "qwen3:4b"
+    assert aliases_by_name["embed"]["model"] == "qwen3-embedding:4b"
+    # Measured defaults — not flagged as unverified
+    assert aliases_by_name["smart"]["confirm_on_target"] is False
+
+
+@pytest.mark.asyncio
+async def test_system_models_hardware_recommendation_cpu_only_when_no_gpu(_app, monkeypatch):
+    """hardware_recommendation is safe / non-crashing when no GPU detected."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    from paper_ingestion.services import model_lifecycle as ml
+
+    # Simulate CPU-only / GPU probe failure: vram_gb == 0.0
+    monkeypatch.setattr(
+        ml,
+        "detect_hardware",
+        lambda: ml.HardwareInfo(
+            vram_gb=0.0,
+            vram_source="cpu",
+            tier=0,
+            detected_at="2026-05-18T00:00:00+00:00",
+            machine_id="test-host",
+        ),
+    )
+    if hasattr(app.state, "hw_info"):
+        del app.state.hw_info
+    if hasattr(app.state, "hw_info_at"):
+        del app.state.hw_info_at
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": []})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    body = await get_system_models(request)
+
+    hw_rec = body.hardware_recommendation
+    # vram_gb=0 maps to None in recommend_models call → probe-failure path
+    assert hw_rec["bucket"] == "CPU_ONLY"
+    # probe-failure path: empty aliases list (distinguishes no-GPU from tiny-GPU)
+    assert hw_rec["aliases"] == []
+    assert hw_rec["summary"]
+
+
+@pytest.mark.asyncio
+async def test_system_models_hardware_recommendation_48gb_confirm_on_target(_app, monkeypatch):
+    """hardware_recommendation for 48 GB GPU flags smart as confirm_on_target=True."""
+    app, conn, mock_http = _app
+    from paper_ingestion.main import get_system_models
+    from paper_ingestion.services import model_lifecycle as ml
+
+    # Simulate 48 GB GPU (49 152 MiB → HIGH bucket)
+    monkeypatch.setattr(
+        ml,
+        "detect_hardware",
+        lambda: ml.HardwareInfo(
+            vram_gb=48.0,
+            vram_source="nvidia-smi",
+            tier=4,
+            detected_at="2026-05-18T00:00:00+00:00",
+            machine_id="test-host",
+        ),
+    )
+    if hasattr(app.state, "hw_info"):
+        del app.state.hw_info
+    if hasattr(app.state, "hw_info_at"):
+        del app.state.hw_info_at
+
+    request = _make_request(app.state.db_pool, mock_http)
+    conn.fetch.return_value = []
+
+    async def mock_get_side_effect(url, **kwargs):
+        if "/api/tags" in str(url):
+            return MockResponse(200, {"models": []})
+        if "/api/ps" in str(url):
+            return MockResponse(200, {"models": []})
+        return MockResponse(404)
+
+    mock_http.get.side_effect = mock_get_side_effect
+
+    body = await get_system_models(request)
+
+    hw_rec = body.hardware_recommendation
+    assert hw_rec["bucket"] == "HIGH"
+
+    aliases_by_name = {a["alias"]: a for a in hw_rec["aliases"]}
+    assert aliases_by_name["smart"]["model"] == "qwen3:32b"
+    # RTX 5880 Ada bench not yet run — must be flagged
+    assert aliases_by_name["smart"]["confirm_on_target"] is True

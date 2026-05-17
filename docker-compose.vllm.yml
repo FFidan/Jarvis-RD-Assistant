@@ -67,7 +67,7 @@ services:
     #   --dtype          auto — vLLM selects best dtype for the quant format
     #   --port           bind to 8080 inside the container
     #   --max-model-len  token context window; 8192 matches the Ollama smart
-    #                    alias num_ctx value (litellm/config.yaml line 38)
+    #                    alias num_ctx value (litellm/config.yaml — active Ollama "smart" block)
     #   --gpu-memory-utilization  cap at 0.75 to leave room for the embedder
     #                    (~2.4 GB) + OS overhead on the 16 GB box.
     #                    Adjust up to 0.90 on a 48 GB box where all models

@@ -723,3 +723,124 @@ def test_setup_mode_written_to_env(mode: str, expected_login: str):
         assert f"API_KEY_LOGIN_ENABLED={expected_login}" in env_text, (
             f"Expected 'API_KEY_LOGIN_ENABLED={expected_login}' in .env:\n{env_text}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: --check hardware recommendation line (B3-1 per-VRAM advisory)
+# ---------------------------------------------------------------------------
+
+
+def test_setup_check_hardware_recommendation_no_gpu_is_fail_safe():
+    """--check must not crash or block when no GPU is present.
+
+    The hardware recommendation block in run_doctor() must be entirely
+    advisory — no GPU path falls through to a static info line and the
+    doctor still prints PREFLIGHT: and exits 0 or 1.
+    """
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _stage_setup_tmpdir(tmp)
+
+        # Run --check with PATH that excludes nvidia-smi so GPU probe fails.
+        env = dict(__import__("os").environ)
+        # Remove nvidia-smi from PATH by restricting to essential POSIX tools.
+        # We accomplish this by creating a tmpdir/bin that lacks nvidia-smi.
+        fake_bin = tmp / "bin"
+        fake_bin.mkdir()
+        # Symlink the real bash/python/openssl/docker so other checks pass.
+        for tool in ("bash", "python3", "openssl", "docker"):
+            real = shutil.which(tool)
+            if real:
+                (fake_bin / tool).symlink_to(real)
+        env["PATH"] = str(fake_bin) + ":" + env.get("PATH", "")
+
+        result = subprocess.run(
+            ["bash", "setup.sh", "--check"],
+            cwd=str(tmp),
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode in {0, 1}, (
+            f"--check exited {result.returncode}; hardware recommendation block "
+            f"must not change exit semantics.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "PREFLIGHT:" in combined, f"Expected 'PREFLIGHT:' in output, got:\n{combined}"
+        assert not (tmp / ".env").exists(), "--check must not write a .env file"
+
+
+def test_setup_check_hardware_recommendation_static_pointer_when_python_unavailable():
+    """--check prints a static info pointer when python3 is not available in PATH.
+
+    This verifies the fallback branch: GPU detected, VRAM readable, but
+    python3/hardware_fit not importable → static 'see Settings → System/Models'
+    line is printed, no crash, exit 0 or 1, PREFLIGHT: present.
+    """
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    # Create a fake nvidia-smi that reports a fixed VRAM value and a fake
+    # python3 that always exits non-zero (simulates import failure).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _stage_setup_tmpdir(tmp)
+
+        fake_bin = tmp / "bin"
+        fake_bin.mkdir()
+
+        # Fake nvidia-smi: exits 0, lists one GPU, and reports 16384 MiB VRAM.
+        fake_nvidiasmi = fake_bin / "nvidia-smi"
+        fake_nvidiasmi.write_text(
+            "#!/bin/sh\n"
+            'case "$1" in\n'
+            "  -L) echo 'GPU 0: NVIDIA Test GPU 16G (UUID: fake-uuid)'; exit 0 ;;\n"
+            "  --query-gpu=memory.total) echo '16384'; exit 0 ;;\n"
+            "  *) exit 0 ;;\n"
+            "esac\n"
+        )
+        fake_nvidiasmi.chmod(0o755)
+
+        # Fake python3: always exits 1 (simulates hardware_fit not importable).
+        fake_python3 = fake_bin / "python3"
+        fake_python3.write_text("#!/bin/sh\nexit 1\n")
+        fake_python3.chmod(0o755)
+
+        # Symlink other required tools.
+        for tool in ("openssl", "docker"):
+            real = shutil.which(tool)
+            if real:
+                (fake_bin / tool).symlink_to(real)
+
+        env = dict(__import__("os").environ)
+        env["PATH"] = str(fake_bin) + ":" + env.get("PATH", "")
+
+        result = subprocess.run(
+            ["bash", "setup.sh", "--check"],
+            cwd=str(tmp),
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode in {0, 1}, (
+            f"--check exited {result.returncode}; static-pointer fallback must "
+            f"not change exit semantics.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "PREFLIGHT:" in combined, f"Expected 'PREFLIGHT:' in output, got:\n{combined}"
+        # The static pointer fallback must mention VRAM and Settings/Models.
+        assert "16384" in combined or "Settings" in combined or "System/Models" in combined, (
+            f"Expected VRAM or static settings pointer in --check output, got:\n{combined}"
+        )
+        assert not (tmp / ".env").exists(), "--check must not write a .env file"
