@@ -131,6 +131,63 @@ multi-user auth system. The current state:
 - **Admin bootstrap** — the first-run web wizard creates the admin account; the
   admin can invite additional users via **Settings → Admin → Users**.
 
+### Cross-Service Auth Boundary (resolver DI)
+
+_Reconciled 2026-05-17 (agent: claude-code). Supersedes any earlier informal
+"one canonical resolver, ~52 sites converted" wording — no such global
+convergence exists or is intended; the boundary below is the accurate one._
+
+`jarvis_common.auth` exposes two production user-id resolvers:
+
+- **`current_user_id_strict`** — resolves identity *only* from the session
+  (`request.state.user_id`). Hard 401 for callers without a session cookie. No
+  `X-Owner-User-Id` path.
+- **`current_user_id_strict_with_owner_override`** (and its
+  `Depends()` wrapper `get_current_user_id`) — same session-first behavior, but
+  additionally honors a verified `X-Owner-User-Id` header when the caller
+  presents a valid `X-API-Key`. This is the resolver a header-authenticated
+  cross-service caller (the Telegram bot, or a sibling backend service acting
+  per-user) needs; on a session-only resolver those header-auth calls 401.
+
+The override-capable resolver is applied **selectively, by reachability** — not
+globally — in *both* backend services. An endpoint gets it iff a
+header-authenticated cross-service caller actually reaches it per-user;
+everything else stays session-only **by design** (smaller attack surface, no
+header-spoofing path on browser-only endpoints).
+
+- **paper_ingestion** — owner-override-capable DI on the surfaces reached by
+  the Telegram bot and sibling services per-user: `papers`, `pulse`, `rag`,
+  `search`, `feed`, `notes`, `recommendations`, `recommendation_feedback`,
+  `snapshots` (`services/paper_ingestion/paper_ingestion/routers/`). The
+  remaining routers (`account`, `analytics`, `analyze`, `authors`,
+  `citations`, `contradictions`, `dashboard_api`, `discovery`, `extractions`,
+  `knowledge_graph`, `my_day`, `pdf`, `priority`, `settings`, `threads`,
+  `topics`, `zotero`) are session-only `current_user_id_strict` by design —
+  they are browser-only (or shared-catalog) and no header-auth caller reaches
+  them per-user.
+- **learning_engine** — the Telegram bot reaches exactly these LE endpoints
+  per-user with `X-API-Key` + `X-Owner-User-Id`:
+  `GET /api/review/next`, `POST /api/review/{card_id}`, `GET /api/stats`
+  (all in `services/learning_engine/learning_engine/routers/review.py`) and
+  `POST /api/executive/focus/log`
+  (`services/learning_engine/learning_engine/routers/executive.py`). Both
+  `review.py` and `executive.py` already use
+  `current_user_id_strict_with_owner_override` on every endpoint, so the
+  Telegram path resolves the paired owner correctly. **No other LE router is
+  reached by a header-auth caller per-user.** `analytics`, `cards`, `decks`,
+  `executive_intent`, `export`, `generation`, `milestones`, `project_papers`,
+  `project_questions`, `projects`, and `tasks` remain session-only
+  `current_user_id_strict` **by design** — they serve the browser dashboard
+  only; converting them would add an unused header-spoofing surface with no
+  caller to justify it.
+
+`scripts/check-no-unsafe-resolver.py` treats `current_user_id_strict`,
+`current_user_id_strict_with_owner_override`, and `get_current_user_id` as
+equally *safe* (all establish a non-None identity / hard 401). It enforces that
+every router endpoint has *some* safe resolver — it deliberately does **not**
+mandate the override-capable one, because the session-only choice above is
+intentional, not a gap.
+
 ### Telegram Pairing
 
 Telegram chat-to-user pairing shipped in migration 071. The dashboard issues
