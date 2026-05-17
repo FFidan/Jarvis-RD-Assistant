@@ -31,6 +31,7 @@ async def _read_db_bot_token(database_url: str) -> str | None:
             asyncpg.connect(database_url, server_settings={"jit": "off"}),
             timeout=5.0,
         )
+        assert conn is not None  # asyncpg.connect() never returns None; guard for type checker
         await init_pg_connection(conn)
         row = await conn.fetchrow(
             "SELECT value, encrypted_value FROM user_config "

@@ -27,6 +27,23 @@ const fixtures = vi.hoisted(() => ({
     user: 'relay',
     from_email: 'no-reply@example.com',
     has_password: true,
+    restart_required: false,
+  },
+  smtpConfigNoRestart: {
+    host: 'smtp.example.com',
+    port: 587,
+    user: 'relay',
+    from_email: 'no-reply@example.com',
+    has_password: true,
+    restart_required: false,
+  },
+  smtpConfigRestartRequired: {
+    host: 'smtp.example.com',
+    port: 587,
+    user: 'relay',
+    from_email: 'no-reply@example.com',
+    has_password: true,
+    restart_required: true,
   },
   smtpConfigNoPassword: {
     host: null,
@@ -34,6 +51,7 @@ const fixtures = vi.hoisted(() => ({
     user: null,
     from_email: null,
     has_password: false,
+    restart_required: false,
   },
   saveResponse: { saved: true, test_sent: null, test_error: null },
 }));
@@ -199,8 +217,8 @@ describe('SmtpSection — Save', () => {
     expect(firstArg).toMatchObject({ password: 'newSecret123' });
   });
 
-  it('shows restart-required confirmation message after successful save', async () => {
-    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+  it('shows restart-required message after successful save when restart_required=true', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigRestartRequired);
     mockSaveSmtpConfig.mockResolvedValue({ saved: true, test_sent: null, test_error: null });
 
     const user = userEvent.setup();
@@ -216,6 +234,24 @@ describe('SmtpSection — Save', () => {
         screen.getByText(/administrator must restart the app/i),
       ).toBeInTheDocument(),
     );
+  });
+
+  it('does NOT show restart message when restart_required=false (active immediately)', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigNoRestart);
+    mockSaveSmtpConfig.mockResolvedValue({ saved: true, test_sent: null, test_error: null });
+
+    const user = userEvent.setup();
+    await renderSmtp();
+
+    const hostInput = await screen.findByLabelText(/host/i);
+    await waitFor(() => expect(hostInput).toHaveValue('smtp.example.com'));
+
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/active immediately/i)).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/administrator must restart/i)).not.toBeInTheDocument();
   });
 
   it('Save button is disabled when host is empty', async () => {

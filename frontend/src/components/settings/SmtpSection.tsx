@@ -7,10 +7,9 @@
  * keep the existing password — it is only overwritten when the user types
  * a new value.
  *
- * Because the magic-link sender reads SMTP from process-cached env vars,
- * saved changes only take effect after the service is restarted. The UI
- * shows a clear note when `restart_required` is true (always true per
- * backend).
+ * The `restart_required` flag is read from the GET /api/setup/smtp response
+ * (backend now always returns false — changes apply immediately). The UI
+ * shows an honest success note based on the flag value.
  */
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -77,9 +76,9 @@ export function SmtpSection() {
   }
 
   const hasExistingPassword = config?.has_password ?? false;
-  // restart_required is always true per backend: SMTP is read from process env,
-  // not from user_config at runtime — changes only take effect after restart.
-  const restartRequired = true;
+  // restart_required comes from the backend (now always false — SMTP settings
+  // are applied immediately without requiring a service restart).
+  const restartRequired = config?.restart_required ?? false;
   const saveOk = saveMut.isSuccess && saveMut.data?.saved;
 
   return (
@@ -171,8 +170,8 @@ export function SmtpSection() {
             {saveOk && (
               <p className="text-sm text-green-600 dark:text-green-400">
                 {restartRequired
-                  ? 'Saved. Email sending uses server settings — an administrator must restart the app for the new SMTP settings to take effect.'
-                  : 'SMTP settings saved.'}
+                  ? 'Saved. An administrator must restart the app for the new SMTP settings to take effect.'
+                  : 'SMTP settings saved and active immediately.'}
               </p>
             )}
 

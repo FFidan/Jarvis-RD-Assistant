@@ -73,6 +73,7 @@ export const ALL_SECTIONS: RailSection[] = [
       { section: 'system', item: 'pulse', label: 'Pulse' },
       { section: 'system', item: 'timer', label: 'Timer' },
       { section: 'system', item: 'observability', label: 'Observability' },
+      { section: 'system', item: 'mode', label: 'Access Mode' },
     ],
   },
   {
@@ -80,6 +81,7 @@ export const ALL_SECTIONS: RailSection[] = [
     title: 'Integrations',
     items: [
       { section: 'integrations', item: 'telegram', label: 'Telegram' },
+      { section: 'integrations', item: 'bot-token', label: 'Bot Token' },
       { section: 'integrations', item: 'zotero', label: 'Zotero' },
     ],
   },

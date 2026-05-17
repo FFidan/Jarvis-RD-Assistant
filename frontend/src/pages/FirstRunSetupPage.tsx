@@ -381,6 +381,15 @@ function CloudLlmStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
 
   const anyEntered = openai || anthropic || gemini;
 
+  // Build a per-provider inline status label from the mutation response.
+  function providerSaveStatus(provider: string): string | null {
+    if (!saveMut.isSuccess || !saveMut.data) return null;
+    const { applied_now, restart_required } = saveMut.data;
+    if (applied_now.includes(provider)) return 'Applied now';
+    if (restart_required) return 'Saved — applies after restart';
+    return 'Saved';
+  }
+
   return (
     <SetupStep
       stepNumber={4}
@@ -414,7 +423,12 @@ function CloudLlmStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
     >
       <div className="space-y-3">
         <div>
-          <Label htmlFor="cloud-openai">OpenAI API key</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="cloud-openai">OpenAI API key</Label>
+            {openai && providerSaveStatus('openai') && (
+              <span className="text-xs text-green-600">{providerSaveStatus('openai')}</span>
+            )}
+          </div>
           <Input
             id="cloud-openai"
             type="password"
@@ -425,7 +439,12 @@ function CloudLlmStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           />
         </div>
         <div>
-          <Label htmlFor="cloud-anthropic">Anthropic API key</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="cloud-anthropic">Anthropic API key</Label>
+            {anthropic && providerSaveStatus('anthropic') && (
+              <span className="text-xs text-green-600">{providerSaveStatus('anthropic')}</span>
+            )}
+          </div>
           <Input
             id="cloud-anthropic"
             type="password"
@@ -436,7 +455,12 @@ function CloudLlmStep({ onBack, onNext }: { onBack: () => void; onNext: () => vo
           />
         </div>
         <div>
-          <Label htmlFor="cloud-gemini">Google Gemini API key</Label>
+          <div className="flex items-center justify-between">
+            <Label htmlFor="cloud-gemini">Google Gemini API key</Label>
+            {gemini && providerSaveStatus('gemini') && (
+              <span className="text-xs text-green-600">{providerSaveStatus('gemini')}</span>
+            )}
+          </div>
           <Input
             id="cloud-gemini"
             type="password"

@@ -310,6 +310,9 @@ import type {
   SourceConfigPatch,
   SystemCapabilities,
   MyDayBundle,
+  TelegramBotTokenStatus,
+  TelegramBotTokenSaveResponse,
+  SetupModeResponse,
 } from '@/types';
 
 export type { SourceHealth, SourceRunRecord };
@@ -500,7 +503,13 @@ export interface FirstRunCloudKeysBody {
   anthropic?: string | null;
   gemini?: string | null;
 }
-export interface FirstRunCloudKeysResponse { saved_providers: string[] }
+export interface FirstRunCloudKeysResponse {
+  saved_providers: string[];
+  /** Providers whose keys were applied to the running process immediately. */
+  applied_now: string[];
+  /** True when a service restart is needed for changes to take effect. */
+  restart_required: boolean;
+}
 
 export const getFirstRunStatus = () =>
   apiFetch<FirstRunStatus>('/api/setup/status');
@@ -1609,6 +1618,28 @@ export const getSystemCapabilities = () =>
 
 export const getMyDayBundle = () =>
   apiFetch<MyDayBundle>('/api/executive/my-day-bundle');
+
+// --- Settings: Telegram bot token (UI-4) ---
+
+/** Check whether a Telegram bot token is stored. Token value is never returned. */
+export const getTelegramBotToken = () =>
+  apiFetch<TelegramBotTokenStatus>('/api/setup/telegram-bot-token');
+
+/** Save a new Telegram bot token. A restart is required for it to take effect. */
+export const saveTelegramBotToken = (token: string) =>
+  apiFetch<TelegramBotTokenSaveResponse>('/api/setup/telegram-bot-token', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  });
+
+// --- Settings: access mode (UI-5) ---
+
+/** Switch between single-user and multi-user access mode. Requires a restart. */
+export const saveSetupMode = (mode: 'single' | 'multi') =>
+  apiFetch<SetupModeResponse>('/api/setup/mode', {
+    method: 'POST',
+    body: JSON.stringify({ mode }),
+  });
 
 // --- React Query hooks ---
 export { useFeedCounts } from '@/hooks/use-feed-counts';

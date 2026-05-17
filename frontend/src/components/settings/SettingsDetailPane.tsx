@@ -24,6 +24,8 @@ import { AuthorSection } from './AuthorSection';
 import { SourceDetailPane } from './SourceDetailPane';
 import { SourcesList } from './SourcesList';
 import { SmtpSection } from './SmtpSection';
+import { TelegramBotTokenSection } from './TelegramBotTokenSection';
+import { AccessModeSection } from './AccessModeSection';
 
 // ---------------------------------------------------------------------------
 // Section title map (mirrors STATIC_SECTIONS in SettingsRail)
@@ -57,9 +59,11 @@ const ITEM_LABELS: Record<string, Record<string, string>> = {
     pulse: 'Pulse',
     timer: 'Timer',
     observability: 'Observability',
+    mode: 'Access Mode',
   },
   integrations: {
     telegram: 'Telegram',
+    'bot-token': 'Bot Token',
     zotero: 'Zotero',
   },
   research: {
@@ -132,6 +136,7 @@ function DetailContent({
     if (item === 'pulse') return <PulseSection />;
     if (item === 'timer') return <TimerSection />;
     if (item === 'observability') return <div className="space-y-4"><LangfuseLinkCard /></div>;
+    if (item === 'mode') return <AccessModeSection />;
   }
 
   if (section === 'integrations') {
@@ -152,6 +157,7 @@ function DetailContent({
         </div>
       );
     }
+    if (item === 'bot-token') return <TelegramBotTokenSection />;
     if (item === 'zotero') return <ZoteroSection />;
   }
 

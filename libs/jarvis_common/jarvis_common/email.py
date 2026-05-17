@@ -22,8 +22,6 @@ from jarvis_common.settings import get_core_settings, get_secrets_settings
 
 logger = logging.getLogger(__name__)
 
-_REQUIRED_SMTP_VARS = ("SMTP_HOST", "SMTP_PORT", "SMTP_FROM")
-
 
 @dataclass(frozen=True)
 class _EffectiveSmtp:

@@ -1254,6 +1254,36 @@ export interface SmtpConfig {
   user: string | null;
   from_email: string | null;
   has_password: boolean;
+  /** Backend now always returns false; field may be absent in older responses. */
+  restart_required?: boolean;
+}
+
+// --- Settings: cloud LLM keys (POST /api/setup/cloud-llm-keys) ---
+
+export interface CloudLlmKeysResponse {
+  saved_providers: string[];
+  /** Providers whose keys were applied to the running process immediately. */
+  applied_now: string[];
+  /** True when a service restart is required for the change to take effect. */
+  restart_required: boolean;
+}
+
+// --- Settings: Telegram bot token (GET/POST /api/setup/telegram-bot-token) ---
+
+export interface TelegramBotTokenStatus {
+  has_token: boolean;
+}
+
+export interface TelegramBotTokenSaveResponse {
+  saved: boolean;
+  restart_required: boolean;
+}
+
+// --- Settings: setup mode (POST /api/setup/mode) ---
+
+export interface SetupModeResponse {
+  mode: 'single' | 'multi';
+  restart_required: boolean;
 }
 
 export interface SmtpConfigInput {
