@@ -92,6 +92,19 @@ jobs:
           services/paper_ingestion/tests/integration/test_cross_user_isolation.py
           -v
 
+      - name: Guard - init.sql <-> migration-sequence structural drift
+        # Reuses this job's JARVIS_RUN_LIVE_PG=1 + Docker CLI (the live_pg
+        # fixture owns its throwaway postgres:16.8 container). The guard test
+        # is marked `live_pg` only (matching test_migrations_live.py's
+        # pytestmark), so the marker filter is `live_pg`, not the
+        # `integration and live_pg` used by the cross-user file above.
+        run: >-
+          uv run pytest
+          --override-ini="addopts=--import-mode=importlib"
+          -m "live_pg"
+          services/paper_ingestion/tests/test_migrations_live.py::test_init_sql_matches_migration_sequence
+          -v
+
       - name: Guard — exit 5 (no tests collected) is a failure
         if: always()
         run: |
