@@ -248,6 +248,70 @@ class TestRegisterHealthRoutes:
             assert resp_ok.json()["checks"] == {"a": "ok"}
 
 
+class TestHealthLiveAndExemption:
+    @pytest.mark.asyncio
+    async def test_health_live_returns_ok_without_probes(self) -> None:
+        """``/health/live`` is a pure liveness signal: 200 + status='ok' even
+        when every readiness probe is failing (it never runs them)."""
+
+        async def probe_fail(_r: Request) -> str:
+            return "unavailable"
+
+        app = _make_app([("postgres", probe_fail)], service_name="dummy")
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            live = await client.get("/health/live")
+            assert live.status_code == 200
+            assert live.json() == {"status": "ok"}
+
+            # /health (readiness) still degrades on the same failing probe.
+            ready = await client.get("/health")
+            assert ready.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_health_routes_exempt_from_global_rate_limit(self) -> None:
+        """When a limiter is supplied, the global ``default_limits`` cap never
+        throttles the health routes — a saturated shared IP bucket must not
+        starve a monitoring/LB poll (the 429-under-load defect)."""
+        from jarvis_common.http_rate_limiter import (
+            create_limiter,
+            rate_limit_exceeded_handler,
+        )
+        from slowapi.errors import RateLimitExceeded
+        from slowapi.middleware import SlowAPIMiddleware
+
+        async def probe_ok(_r: Request) -> str:
+            return "ok"
+
+        limiter = create_limiter(default_limits=["1/minute"])
+        app = FastAPI()
+        app.dependency_overrides[verify_api_key] = lambda: None
+        app.state.limiter = limiter
+        app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+        app.add_middleware(SlowAPIMiddleware)
+
+        @app.get("/control")
+        async def control() -> dict[str, str]:
+            return {"ok": "yes"}
+
+        register_health_routes(app, service_name="dummy", checks=[("a", probe_ok)], limiter=limiter)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            # The 1/minute global cap is real: a non-exempt route is throttled.
+            assert (await client.get("/control")).status_code == 200
+            assert (await client.get("/control")).status_code == 429
+
+            # Health routes stay 200 across many calls despite the exhausted bucket.
+            for _ in range(5):
+                assert (await client.get("/health/live")).status_code == 200
+                assert (await client.get("/health")).status_code == 200
+                assert (await client.get("/health/internal")).status_code == 200
+
+
 # ---------------------------------------------------------------------------
 # Shared probe factories (L-10)
 # ---------------------------------------------------------------------------

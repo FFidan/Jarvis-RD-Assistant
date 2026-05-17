@@ -43,6 +43,7 @@ from jarvis_common.models import HealthCheckResponse
 if TYPE_CHECKING:
     import asyncpg
     import httpx
+    from slowapi import Limiter
 
     from jarvis_common.llm_client import LiteLLMConfig
 
@@ -100,8 +101,9 @@ def register_health_routes(
     *,
     service_name: str,
     checks: list[HealthCheck],
+    limiter: Limiter | None = None,
 ) -> None:
-    """Register ``GET /health`` + ``GET /health/internal`` on the FastAPI app.
+    """Register ``GET /health/live`` + ``/health`` + ``/health/internal``.
 
     Parameters
     ----------
@@ -115,9 +117,22 @@ def register_health_routes(
         callable receiving ``request`` and returning ``"ok"`` /
         ``"unavailable"`` / ``"unknown"``.  The service owns this list so
         the shared route handler stays domain-agnostic.
+    limiter:
+        When supplied, every health route is registered with
+        ``limiter.exempt`` so the global ``default_limits`` cap enforced by
+        ``SlowAPIMiddleware`` never throttles them.  Health checks share one
+        unauthenticated ``ip:<addr>`` bucket with all other anonymous traffic
+        from the same proxy; without this exemption a monitoring/load-balancer
+        poll is starved of quota under sustained load and the orchestrator
+        sees spurious 429s.  Omit it to keep the legacy (rate-limited)
+        behaviour, e.g. in unit tests that build no limiter.
 
     Route behaviour
     ---------------
+    * ``GET /health/live`` (no auth, no probes) returns ``{"status": "ok"}``
+      unconditionally — a process-liveness signal that never blocks on a
+      downstream dependency.  Use this for the orchestrator's restart probe;
+      use ``/health`` for the load-balancer's readiness probe.
     * ``GET /health`` (no auth) returns only ``{"status": "ok"|"degraded"}``.
       HTTP 200 when status is ``"ok"``, HTTP 503 when ``"degraded"``.  Never
       exposes dependency details to unauthenticated callers (SEC-H09).
@@ -125,7 +140,16 @@ def register_health_routes(
       full :class:`HealthCheckResponse` body.  Same 200/503 split.
     """
 
+    def _exempt(fn: Any) -> Any:
+        return limiter.exempt(fn) if limiter is not None else fn
+
+    @app.get("/health/live", dependencies=[], response_model=None)
+    @_exempt
+    async def health_live() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.get("/health", dependencies=[], response_model=None)
+    @_exempt
     async def health_check(request: Request) -> dict[str, Any]:
         status, _ = await run_health_checks(request, checks)
         content = {"status": status}
@@ -134,6 +158,7 @@ def register_health_routes(
         return content
 
     @app.get("/health/internal", response_model=HealthCheckResponse)
+    @_exempt
     async def health_check_internal(
         request: Request,
         _auth: None = Depends(verify_api_key),

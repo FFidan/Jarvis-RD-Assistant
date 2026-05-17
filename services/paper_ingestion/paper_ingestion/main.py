@@ -581,6 +581,7 @@ register_health_routes(
         ("ollama", _probe_ollama),
         ("vector", _probe_vector),
     ],
+    limiter=limiter,
 )
 
 

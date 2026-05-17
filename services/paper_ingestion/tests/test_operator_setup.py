@@ -657,7 +657,7 @@ def test_setup_check_default_subnet_no_coupling_warning():
         )
         assert "PREFLIGHT:" in combined, f"Expected 'PREFLIGHT:' in output, got:\n{combined}"
         # The gateway/nginx coupling warning must NOT fire for the default subnet.
-        assert "gateway" not in combined.lower() or "set_real_ip_from" not in combined, (
+        assert "gateway" not in combined.lower() and "set_real_ip_from" not in combined, (
             f"Unexpected coupling warning for default subnet:\n{combined}"
         )
         assert not (tmp / ".env").exists(), "--check must not write a .env file"

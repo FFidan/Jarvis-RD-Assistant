@@ -23,6 +23,27 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _restore_perf_probe_module():
+    """Restore sys.modules["paper_ingestion.perf_probe"] after each test.
+
+    _reload_probe mutates sys.modules to force module-level constants to
+    re-evaluate.  Without this teardown the reloaded (enabled, tmp-path)
+    module instance leaks into the session and corrupts alphabetically-later
+    test files (93 cascade failures).  We snapshot the original entry (or
+    its absence) before the test body runs and unconditionally restore it
+    afterward — monkeypatch already reverts the env vars, this covers the
+    sys.modules side-effect.
+    """
+    _key = "paper_ingestion.perf_probe"
+    _original = sys.modules.get(_key)
+    yield
+    if _original is None:
+        sys.modules.pop(_key, None)
+    else:
+        sys.modules[_key] = _original
+
+
 def _reload_probe(monkeypatch, *, enabled: bool, path: str | None = None):
     """Reload the probe module with the requested env flags applied.
 
@@ -227,11 +248,9 @@ def test_scoring_module_imports(monkeypatch):
     """pulse/scoring.py still imports cleanly after wiring."""
     monkeypatch.delenv("PERF_PROBE_ENABLED", raising=False)
 
-    for mod in list(sys.modules.keys()):
-        if "paper_ingestion" in mod:
-            del sys.modules[mod]
-
-    # Should not raise
+    # A broken wiring import would cause collection to fail for the whole
+    # suite; a plain import (no sys.modules mutation) is sufficient to
+    # assert the contract without polluting the session.
     import paper_ingestion.pulse.scoring  # noqa: F401
 
 
@@ -239,19 +258,11 @@ def test_embedder_module_imports(monkeypatch):
     """ingestion/embedder.py still imports cleanly after wiring."""
     monkeypatch.delenv("PERF_PROBE_ENABLED", raising=False)
 
-    for mod in list(sys.modules.keys()):
-        if "paper_ingestion" in mod:
-            del sys.modules[mod]
-
     import paper_ingestion.ingestion.embedder  # noqa: F401
 
 
 def test_streaming_module_imports(monkeypatch):
     """rag/streaming.py still imports cleanly after wiring."""
     monkeypatch.delenv("PERF_PROBE_ENABLED", raising=False)
-
-    for mod in list(sys.modules.keys()):
-        if "paper_ingestion" in mod:
-            del sys.modules[mod]
 
     import paper_ingestion.rag.streaming  # noqa: F401

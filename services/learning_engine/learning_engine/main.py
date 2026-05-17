@@ -232,4 +232,5 @@ register_health_routes(
         ("postgres", make_postgres_probe()),
         ("litellm", make_litellm_probe()),
     ],
+    limiter=limiter,
 )

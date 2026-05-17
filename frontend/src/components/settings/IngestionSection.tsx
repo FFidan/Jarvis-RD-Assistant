@@ -41,7 +41,7 @@ interface ModelCatalogEntryApi {
 
 /** Per-alias recommendation entry returned by GET /api/system/models hardware_recommendation. */
 interface HardwareRecommendationAlias {
-  alias: string;
+  alias: 'smart' | 'fast' | 'embed';
   model: string;
   confirm_on_target: boolean;
   notes: string;

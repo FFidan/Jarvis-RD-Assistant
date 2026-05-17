@@ -477,6 +477,17 @@ const hwRecommendationMid = {
   ],
 };
 
+const hwRecommendationMidHigh = {
+  vram_mb: 30720,
+  bucket: 'MID_HIGH',
+  summary: 'Mid-high GPU (20–39 GB) detected. Upgrade smart to qwen3:14b for better quality with ample headroom.',
+  aliases: [
+    { alias: 'smart', model: 'qwen3:14b', confirm_on_target: false, notes: '20–39 GB GPU; qwen3:14b (~9 GB) + embedder fits A10/3090' },
+    { alias: 'fast', model: 'qwen3:4b', confirm_on_target: false, notes: '' },
+    { alias: 'embed', model: 'qwen3-embedding:4b', confirm_on_target: false, notes: '' },
+  ],
+};
+
 const hwRecommendationHigh = {
   vram_mb: 49152,
   bucket: 'HIGH',
@@ -521,6 +532,35 @@ describe('IngestionSection — hardware recommendation banner', () => {
     // appear in the ModelSelector mock which renders the configured value)
     const aliasList = screen.getByTestId('hw-recommendation-alias-list');
     expect(aliasList.textContent).toContain('qwen3:8b');
+    expect(aliasList.textContent).toContain('qwen3:4b');
+    expect(aliasList.textContent).toContain('qwen3-embedding:4b');
+
+    // Alias labels visible
+    expect(screen.getByText('smart')).toBeInTheDocument();
+    expect(screen.getByText('fast')).toBeInTheDocument();
+    expect(screen.getByText('embed')).toBeInTheDocument();
+  });
+
+  it('shows summary + alias rows for a MID_HIGH bucket recommendation', async () => {
+    const { fetchConfig, apiFetch } = await import('@/lib/api');
+    vi.mocked(fetchConfig).mockResolvedValue(baseConfig);
+    vi.mocked(apiFetch).mockResolvedValue({
+      ...systemModelsWithFitDetail,
+      hardware_recommendation: hwRecommendationMidHigh,
+    });
+
+    renderSection();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('hw-recommendation-banner')).toBeInTheDocument();
+    });
+
+    // Summary text shown
+    expect(screen.getByText('Mid-high GPU (20–39 GB) detected. Upgrade smart to qwen3:14b for better quality with ample headroom.')).toBeInTheDocument();
+
+    // Per-alias recommended model rows
+    const aliasList = screen.getByTestId('hw-recommendation-alias-list');
+    expect(aliasList.textContent).toContain('qwen3:14b');
     expect(aliasList.textContent).toContain('qwen3:4b');
     expect(aliasList.textContent).toContain('qwen3-embedding:4b');
 
