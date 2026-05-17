@@ -74,6 +74,22 @@ run_doctor() {
   if command -v openssl >/dev/null 2>&1; then ok "openssl present"; else err "openssl missing"; fail=1; fi
   if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then ok "GPU detected"; else info "no GPU — Ollama on CPU (slower, OK)"; fi
   if [ -f .env ]; then info ".env exists (re-run setup.sh to regenerate)"; else info ".env not yet generated"; fi
+
+  # Non-fatal heads-up: the docker network is pinned to JARVIS_NET_SUBNET; a
+  # pre-existing host route in that /24 would collide. Detection only — never
+  # die or touch the fail counter, so --check exit semantics are unchanged.
+  local pinned_subnet="${JARVIS_NET_SUBNET:-10.137.241.0/24}"
+  local subnet_prefix="${pinned_subnet%.*/*}."   # e.g. "10.137.241."
+  local host_routes=""
+  if command -v ip >/dev/null 2>&1; then
+    host_routes="$(ip -o route 2>/dev/null || true)"
+  elif command -v netstat >/dev/null 2>&1; then
+    host_routes="$(netstat -rn 2>/dev/null || true)"
+  fi
+  if [ -n "$host_routes" ] && printf '%s' "$host_routes" | grep -qF "$subnet_prefix"; then
+    warn "Host already has a route in ${pinned_subnet} — set JARVIS_NET_SUBNET in .env to a free range before starting."
+  fi
+
   if [ "$fail" -eq 0 ]; then ok "PREFLIGHT: PASS"; else err "PREFLIGHT: FAIL — fix the items above and re-run ./setup.sh --check"; fi
   return "$fail"
 }
@@ -326,21 +342,40 @@ fi
 # -----------------------------------------------------------------------------
 # 4. Secret generation
 # -----------------------------------------------------------------------------
+# Re-running setup.sh must NOT rotate secrets: the Postgres volume still holds
+# the old POSTGRES_PASSWORD and every user_config row is Fernet-encrypted with
+# the old JARVIS_CONFIG_KEY, so regenerating either makes the stack unbootable.
+# When .env already exists, reuse each secret it already contains; only
+# openssl-generate a fresh value when the key is absent or empty (mirrors the
+# never-clobber contract of scripts/init-secrets.sh::sync_secret).  This must
+# read .env BEFORE section 7 overwrites it via tempfile + mv.
+
+# existing_env_value KEY — print the current value of KEY from .env, or nothing
+# if .env is absent or KEY is absent/empty. A present-but-empty `KEY=` counts
+# as absent (the `=.\+` requires at least one char after `=`). The value is
+# emitted verbatim after the first `=`, so `=`, `/`, `+`, and base64 padding
+# survive intact.
+existing_env_value() {
+  [ -f .env ] || return 1
+  grep -q "^$1=.\+" .env 2>/dev/null || return 1
+  grep "^$1=" .env | head -n 1 | cut -d'=' -f2-
+}
+
 info "Generating secrets..."
-POSTGRES_PASSWORD="$(openssl rand -hex 24)"
-JARVIS_API_KEY="$(openssl rand -hex 32)"
-N8N_ENCRYPTION_KEY="$(openssl rand -hex 32)"
-N8N_JWT_SECRET="$(openssl rand -hex 32)"
+POSTGRES_PASSWORD="$(existing_env_value POSTGRES_PASSWORD || openssl rand -hex 24)"
+JARVIS_API_KEY="$(existing_env_value JARVIS_API_KEY || openssl rand -hex 32)"
+N8N_ENCRYPTION_KEY="$(existing_env_value N8N_ENCRYPTION_KEY || openssl rand -hex 32)"
+N8N_JWT_SECRET="$(existing_env_value N8N_JWT_SECRET || openssl rand -hex 32)"
 # Fernet requires a urlsafe-base64-encoded 32-byte key. openssl rand -base64 32
 # produces exactly that (44 chars with a trailing = pad — Fernet accepts it).
-JARVIS_CONFIG_KEY="$(openssl rand -base64 32)"
+JARVIS_CONFIG_KEY="$(existing_env_value JARVIS_CONFIG_KEY || openssl rand -base64 32)"
 # LiteLLM master_key gates all admin endpoints (/config/update etc.)
-LITELLM_MASTER_KEY="$(openssl rand -hex 32)"
+LITELLM_MASTER_KEY="$(existing_env_value LITELLM_MASTER_KEY || openssl rand -hex 32)"
 ok "Secrets generated."
 
 # Docker secret files are written by scripts/init-secrets.sh (single source of
 # truth) after .env is fully populated.  See section 7a below.
-QDRANT_API_KEY="$(openssl rand -hex 24)"
+QDRANT_API_KEY="$(existing_env_value QDRANT_API_KEY || openssl rand -hex 24)"
 
 # -----------------------------------------------------------------------------
 # 5. Question 1 — Access mode
@@ -483,7 +518,10 @@ esac
 # Detect SAN change — cert volume must be wiped when the access mode changes
 # so the new SAN is included in the regenerated certificate.
 # ---------------------------------------------------------------------------
-OLD_SAN=$(grep '^JARVIS_CERT_SAN=' .env 2>/dev/null | cut -d= -f2-)
+# `|| true` so a pre-existing .env that lacks JARVIS_CERT_SAN (e.g. a partial
+# run being resumed) does not abort the script under `set -e`/`pipefail`
+# (matches the guarded ENVIRONMENT lookup in section 13).
+OLD_SAN=$(grep '^JARVIS_CERT_SAN=' .env 2>/dev/null | cut -d= -f2- || true)
 if [ -n "$OLD_SAN" ] && [ "$OLD_SAN" != "$JARVIS_CERT_SAN" ]; then
   warn "Access mode changed — SSL certificate SAN has changed."
   warn "  Old: ${OLD_SAN}"
@@ -510,17 +548,27 @@ if [ -n "$OLD_SAN" ] && [ "$OLD_SAN" != "$JARVIS_CERT_SAN" ]; then
   fi
 fi
 
+# Ensure secrets/ exists before the Telegram section writes into it.
+# scripts/init-secrets.sh also `mkdir -p secrets`, but it runs much later
+# (section 7a); on a fresh checkout the directory is absent here and the
+# `printf > secrets/telegram_bot_token.txt` below would silently fail.
+mkdir -p secrets
+
 # -----------------------------------------------------------------------------
 # 6. Question 2 — Telegram
 # In non-interactive mode the token is sourced from the environment variable
 # TELEGRAM_BOT_TOKEN (if set) or skipped silently.
 # -----------------------------------------------------------------------------
+# Snapshot any env-provided token BEFORE the unconditional reset below clobbers
+# it — otherwise the documented non-interactive env-sourced path reads an
+# always-empty value.
+_ENV_TELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TELEGRAM_BOT_TOKEN=""
 USE_TELEGRAM_PROFILE=0
 
 if [ "$NON_INTERACTIVE" -eq 1 ]; then
   # Honour a token pre-set in the environment (e.g. from CI secrets).
-  _ni_tg="${TELEGRAM_BOT_TOKEN:-}"
+  _ni_tg="${_ENV_TELEGRAM_BOT_TOKEN:-}"
   if [ -n "${_ni_tg// }" ] && [[ "$_ni_tg" =~ ^[0-9]+:[A-Za-z0-9_-]{20,}$ ]]; then
     TELEGRAM_BOT_TOKEN="$_ni_tg"
     USE_TELEGRAM_PROFILE=1

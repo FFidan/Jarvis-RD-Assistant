@@ -227,7 +227,9 @@ it is never passed as an env var and is not listed here. See §9.1 of the contra
 Note:
 - the table above records intended configuration knobs. During stabilization,
   agents and operators should verify whether an env var is actually consumed by
-  the current code path before relying on it operationally.
+  the current code path before relying on it operationally. The observability
+  variables in this section are part of the §9 contract in
+  docs/contracts/04-observability.md and are wired as documented.
 
 ## Database Migrations
 

@@ -30,11 +30,10 @@ class TestJarvisCommonSettings:
         assert s.cors_origins == "https://localhost:3001"
         assert s.litellm_base_url == "http://litellm:4000"
         assert s.langfuse_host is None
-        assert s.langfuse_public_key is None
-        assert s.langfuse_secret_key is None
         assert s.trusted_proxy_cidrs == ""
         assert s.trust_cf_connecting_ip is False
         assert s.migration_lock_contended_ok is False
+        assert s.observability_enabled is False
 
     def test_database_url_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@host/db")
@@ -63,15 +62,30 @@ class TestJarvisCommonSettings:
         assert s.cors_origins_list == ["https://localhost:3001"]
 
     def test_langfuse_secret_masked_in_repr(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Langfuse keypair lives on SecretsSettings (not JarvisCommonSettings).
+
+        Verifies SecretStr masking and that LANGFUSE_HOST remains on
+        JarvisCommonSettings as a plain non-secret env var.
+        """
+        from jarvis_common.settings import SecretsSettings, get_secrets_settings
+
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "supersecret")
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pubkey")
         monkeypatch.setenv("LANGFUSE_HOST", "http://langfuse:3000")
-        s = JarvisCommonSettings()
-        assert s.langfuse_secret_key is not None
-        assert "supersecret" not in repr(s.langfuse_secret_key)
-        assert s.langfuse_secret_key.get_secret_value() == "supersecret"
-        assert s.langfuse_public_key is not None
-        assert s.langfuse_public_key.get_secret_value() == "pubkey"
+        get_secrets_settings.cache_clear()
+        try:
+            # Keys now come from SecretsSettings.
+            ss = SecretsSettings()
+            assert ss.langfuse_secret_key is not None
+            assert "supersecret" not in repr(ss.langfuse_secret_key)
+            assert ss.langfuse_secret_key.get_secret_value() == "supersecret"
+            assert ss.langfuse_public_key is not None
+            assert ss.langfuse_public_key.get_secret_value() == "pubkey"
+            # Host remains on JarvisCommonSettings as a plain URL.
+            s = JarvisCommonSettings()
+            assert s.langfuse_host == "http://langfuse:3000"
+        finally:
+            get_secrets_settings.cache_clear()
 
     def test_trusted_proxy_cidrs_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8, 172.16.0.0/12")

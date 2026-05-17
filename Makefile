@@ -78,7 +78,9 @@ check: secure-secrets deps-check lint typecheck test
 observability-up:
 	./scripts/gen-langfuse-keys.sh
 	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
-	  docker compose --profile observability up -d langfuse paper_ingestion learning_engine
+	  LANGFUSE_INIT_PROJECT_PUBLIC_KEY=$$(cat secrets/langfuse_init_pk.txt) \
+	  LANGFUSE_INIT_PROJECT_SECRET_KEY=$$(cat secrets/langfuse_init_sk.txt) \
+	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
 
 ## Docker shortcuts
 up:

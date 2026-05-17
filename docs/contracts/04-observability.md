@@ -1,5 +1,5 @@
 # 04 — Observability Contract
-**Status:** LIVING (forward-looking — B.2 Langfuse integration not yet shipped)
+**Status:** LIVING (headless operator integration shipped; see §9)
 **Date:** 2026-05-02
 **Reviewers must update this contract in the same patch as any change to:**
 - The `@observe()` decorator placements documented in §3
@@ -58,12 +58,10 @@ of Langfuse and degrades to no-op decorators.
 docker compose --profile observability up -d langfuse
 ```
 
-Required env vars (added to `.env.example` per spec §8):
-- `LANGFUSE_HOST` (e.g. `http://langfuse:3030`)
-- `LANGFUSE_PUBLIC_KEY`
-- `LANGFUSE_SECRET_KEY`
-
-If `LANGFUSE_HOST` is unset, `@observe()` decorators are no-ops at runtime.
+Required configuration (see `.env.example`):
+- `OBSERVABILITY_ENABLED` — boot-gate; must be `true` for the SDK to initialize.
+- `LANGFUSE_HOST` (e.g. `http://langfuse:3000`) — plain env var; when empty, `@observe()` decorators are no-ops at runtime.
+- Keypair — **file-only** via Docker Secrets: `LANGFUSE_PUBLIC_KEY_FILE=/run/secrets/langfuse_init_pk` and `LANGFUSE_SECRET_KEY_FILE=/run/secrets/langfuse_init_sk` → resolved by `SecretsSettings.langfuse_public_key` / `langfuse_secret_key` (the `_FILE` convention; never set as plain env vars).
 The application MUST start cleanly without Langfuse running.
 
 ---
@@ -179,19 +177,24 @@ JARVIS contract is self-hosted-first.
 Once per service in [`configure_lifespan`](../../libs/jarvis_common/jarvis_common/app_factory.py#L151) at startup. Roughly:
 
 ```python
-# Pseudocode for the impl plan
-def init_langfuse(config: ServiceLifespanConfig) -> None:
-    if not os.environ.get("LANGFUSE_HOST"):
-        return  # observability not configured; @observe() becomes no-op
+# Pseudocode — mirrors _langfuse_lifespan_hook in jarvis_common/llm_client.py
+def _langfuse_lifespan_hook() -> None:
+    settings = get_jarvis_common_settings()
+    if not settings.observability_enabled:
+        return  # OBSERVABILITY_ENABLED is false; @observe() decorators are no-ops
+    secrets = get_secrets_settings()  # resolves LANGFUSE_PUBLIC_KEY_FILE / _SECRET_KEY_FILE
+    host = settings.langfuse_host
+    pk = secrets.langfuse_public_key.get_secret_value() if secrets.langfuse_public_key else None
+    sk = secrets.langfuse_secret_key.get_secret_value() if secrets.langfuse_secret_key else None
+    if not (host and pk and sk):
+        logger.warning("OBSERVABILITY_ENABLED set but host/keys missing; traces no-op")
+        return
     from langfuse import Langfuse
-    Langfuse(
-        public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-        secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-        host=os.environ["LANGFUSE_HOST"],
-    )
+    Langfuse(host=host, public_key=pk, secret_key=sk)
+    # never raises — broad except guards startup
 ```
 
-Initialization MUST be idempotent and MUST NOT raise if env vars are
+Initialization MUST be idempotent and MUST NOT raise if configuration is
 missing. The `@observe()` decorator from `langfuse.decorators` handles
 the no-op case automatically when the SDK is uninitialized.
 
@@ -239,10 +242,16 @@ When the `langfuse-init` container runs against a fresh `langfuse_postgres_data`
   `secrets/langfuse_init_sk.txt` (secret key)
 
 The keypair files are generated locally by `scripts/gen-langfuse-keys.sh` and are **never committed
-with content** (`.gitignore` covers them). They are the **single source of truth** shared by both
-the Langfuse headless-init container (via `LANGFUSE_PUBLIC_KEY_FILE` / `LANGFUSE_SECRET_KEY_FILE`
-→ `/run/secrets/…`) and the JARVIS service exports — no duplication into `.env`, no env-var form
-of these credentials.
+with content** (`.gitignore` covers them). They are the **single source of truth**, consumed two
+ways from the same files (no duplication into `.env`):
+
+- **JARVIS services** read them file-only via `LANGFUSE_PUBLIC_KEY_FILE` / `LANGFUSE_SECRET_KEY_FILE`
+  → `/run/secrets/…` → `SecretsSettings` (their `appuser` can read the mounted secret).
+- **The Langfuse container** runs as non-root `nextjs`; Docker-Compose `file:` secrets preserve the
+  host file's `0600`/uid-1000 perms, so an in-container secret read is unreadable there. Langfuse's
+  headless-init contract is env-only, so `make observability-up` reads the same two files and injects
+  them as `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` / `LANGFUSE_INIT_PROJECT_SECRET_KEY` for that container
+  only (invocation-scoped, never persisted to `.env`). The image's native entrypoint runs unmodified.
 
 `AUTH_DISABLE_SIGNUP=true` is set in the Langfuse container environment, so all new signups
 (including invited users) are blocked. Langfuse is an operator-only telemetry sink; it is not

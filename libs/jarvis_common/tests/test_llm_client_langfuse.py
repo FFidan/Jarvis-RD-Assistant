@@ -14,6 +14,7 @@ from __future__ import annotations
 import jarvis_common.llm_client as lc
 import pytest
 from jarvis_common.config import JarvisCommonSettings
+from jarvis_common.settings import SecretsSettings
 from pydantic import SecretStr
 
 # ---------------------------------------------------------------------------
@@ -21,9 +22,14 @@ from pydantic import SecretStr
 # ---------------------------------------------------------------------------
 
 
-def _settings(**kwargs) -> JarvisCommonSettings:
+def _common_settings(**kwargs) -> JarvisCommonSettings:
     """Build a JarvisCommonSettings with test values, bypassing env reads."""
     return JarvisCommonSettings.model_construct(**kwargs)
+
+
+def _secrets_settings(**kwargs) -> SecretsSettings:
+    """Build a SecretsSettings with test values, bypassing env reads and _FILE."""
+    return SecretsSettings.model_construct(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -40,17 +46,21 @@ def test_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
         "langfuse.Langfuse",
         lambda **k: pytest.fail("must not construct Langfuse when disabled"),
     )
-    # Gate: observability_enabled=False (default). Keys present to ensure the
-    # gate is checked before key resolution, not after.
-    fake_settings = _settings(
-        observability_enabled=False,
-        langfuse_host="http://langfuse.test",
-        langfuse_public_key=SecretStr("pk-test"),
-        langfuse_secret_key=SecretStr("sk-test"),
-    )
+    # Gate: observability_enabled=False (default). Keys present in secrets to
+    # confirm the gate is checked before key resolution, not after.
     monkeypatch.setattr(
         "jarvis_common.llm_client.get_jarvis_common_settings",
-        lambda: fake_settings,
+        lambda: _common_settings(
+            observability_enabled=False,
+            langfuse_host="http://langfuse.test",
+        ),
+    )
+    monkeypatch.setattr(
+        "jarvis_common.llm_client.get_secrets_settings",
+        lambda: _secrets_settings(
+            langfuse_public_key=SecretStr("pk-test"),
+            langfuse_secret_key=SecretStr("sk-test"),
+        ),
     )
 
     lc._langfuse_lifespan_hook()  # must return without raising or constructing Langfuse
@@ -66,15 +76,19 @@ def test_noop_when_enabled_but_keys_missing(monkeypatch: pytest.MonkeyPatch) -> 
         "langfuse.Langfuse",
         lambda **k: pytest.fail("must not construct Langfuse when keys absent"),
     )
-    fake_settings = _settings(
-        observability_enabled=True,
-        langfuse_host="http://langfuse.test",
-        langfuse_public_key=None,
-        langfuse_secret_key=None,
-    )
     monkeypatch.setattr(
         "jarvis_common.llm_client.get_jarvis_common_settings",
-        lambda: fake_settings,
+        lambda: _common_settings(
+            observability_enabled=True,
+            langfuse_host="http://langfuse.test",
+        ),
+    )
+    monkeypatch.setattr(
+        "jarvis_common.llm_client.get_secrets_settings",
+        lambda: _secrets_settings(
+            langfuse_public_key=None,
+            langfuse_secret_key=None,
+        ),
     )
 
     lc._langfuse_lifespan_hook()  # must return without raising or constructing Langfuse
@@ -85,21 +99,26 @@ def test_constructs_when_enabled_and_keys_present(monkeypatch: pytest.MonkeyPatc
 
     The constructed kwargs must include host, public_key (plain str), and
     secret_key (plain str) — no SecretStr objects passed to Langfuse.
+    Keys flow via SecretsSettings (_FILE-aware path), not JarvisCommonSettings.
     """
     seen: dict[str, object] = {}
     monkeypatch.setattr(
         "langfuse.Langfuse",
         lambda **k: seen.update(k),
     )
-    fake_settings = _settings(
-        observability_enabled=True,
-        langfuse_host="http://langfuse.test",
-        langfuse_public_key=SecretStr("pk-real"),
-        langfuse_secret_key=SecretStr("sk-real"),
-    )
     monkeypatch.setattr(
         "jarvis_common.llm_client.get_jarvis_common_settings",
-        lambda: fake_settings,
+        lambda: _common_settings(
+            observability_enabled=True,
+            langfuse_host="http://langfuse.test",
+        ),
+    )
+    monkeypatch.setattr(
+        "jarvis_common.llm_client.get_secrets_settings",
+        lambda: _secrets_settings(
+            langfuse_public_key=SecretStr("pk-real"),
+            langfuse_secret_key=SecretStr("sk-real"),
+        ),
     )
 
     lc._langfuse_lifespan_hook()

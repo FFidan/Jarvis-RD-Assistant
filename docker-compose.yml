@@ -458,7 +458,6 @@ services:
     environment:
       JARVIS_CERT_SAN: ${JARVIS_CERT_SAN:-DNS:jarvis.localhost,DNS:localhost,IP:127.0.0.1}
       JARVIS_SKIP_SELFSIGNED_GEN: ${JARVIS_SKIP_SELFSIGNED_GEN:-true}
-      NGINX_TRUSTED_PROXY_CIDR: ${NGINX_TRUSTED_PROXY_CIDR:-172.16.0.0/12}
     volumes:
       - ./certs:/etc/nginx/certs:ro
     mem_limit: 256m
@@ -553,6 +552,11 @@ services:
     environment:
       NEXTAUTH_URL: http://localhost:${LANGFUSE_HOST_PORT:-3002}
       TELEMETRY_ENABLED: "false"
+      # Next.js standalone binds the resolved $HOSTNAME (the container IP), not
+      # loopback, so the `wget http://localhost:3000` healthcheck below would
+      # false-report `unhealthy`. Pin to 0.0.0.0 so it binds all interfaces and
+      # the loopback healthcheck (and depends_on: service_healthy) is correct.
+      HOSTNAME: "0.0.0.0"
       # Langfuse v2 reads these from env only (no _FILE convention — which is
       # why the old entrypoint shim existed). Interpolated from .env, whose
       # values are kept byte-identical to ./secrets/langfuse_*.txt; the
@@ -569,23 +573,21 @@ services:
       LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-operator@jarvis.local}
       LANGFUSE_INIT_USER_NAME: JARVIS Operator
       LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:-}
-    secrets:
-      - langfuse_init_pk
-      - langfuse_init_sk
-    # Entrypoint shim: read pk/sk from Docker Secret files at runtime ($$
-    # escapes compose interpolation so the shell expands $(cat ...) on start),
-    # then exec the image's real entrypoint. `docker inspect` confirmed the
-    # image entrypoint is ["dumb-init","--","./web/entrypoint.sh"] (unqualified
-    # dumb-init, not /usr/bin/dumb-init), so we exec entrypoint.sh directly.
-    entrypoint: ["sh","-c"]
-    command:
-      - |
-        [ -n "$$LANGFUSE_INIT_USER_PASSWORD" ] || { echo "ERROR: set LANGFUSE_INIT_USER_PASSWORD in .env before enabling observability"; exit 1; }
-        export LANGFUSE_INIT_PROJECT_PUBLIC_KEY="$$(cat /run/secrets/langfuse_init_pk)"
-        export LANGFUSE_INIT_PROJECT_SECRET_KEY="$$(cat /run/secrets/langfuse_init_sk)"
-        exec ./web/entrypoint.sh node ./web/server.js --keepAliveTimeout 110000
+      # The langfuse image runs as non-root `nextjs` (uid 1001) and Docker
+      # Compose `file:` secrets preserve the host file's 0600/uid-1000 perms,
+      # so an in-container `cat /run/secrets/*` shim is unreadable here (the
+      # exact failure the earlier crash-fix removed). Langfuse's headless-init
+      # contract is env-only, so `make observability-up` injects the keypair
+      # from the same secrets/langfuse_init_*.txt files (single source of
+      # truth) as these env vars, and the image's native entrypoint runs
+      # unmodified. JARVIS services still read the files via the _FILE →
+      # SecretsSettings path (their appuser=uid 1000 can read them).
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:-}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:-}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/public/health || exit 1"]
+      # 127.0.0.1, not localhost: busybox wget resolves localhost to ::1 first
+      # but the Next.js server listens IPv4-only on 0.0.0.0:3000.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 5
@@ -644,7 +646,8 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - jarvis
+      jarvis:
+        ipv4_address: 10.137.241.3
 
   caddy:
     image: ${CADDY_IMAGE:-caddy:2.9-alpine}
@@ -676,7 +679,8 @@ services:
         max-size: "10m"
         max-file: "3"
     networks:
-      - jarvis
+      jarvis:
+        ipv4_address: 10.137.241.2
 
   vector:
     image: ${VECTOR_IMAGE:-timberio/vector:0.40.0-alpine}
@@ -727,6 +731,10 @@ volumes:
 networks:
   jarvis:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${JARVIS_NET_SUBNET:-10.137.241.0/24}
+          gateway: 10.137.241.1
 
 secrets:
   postgres_password:

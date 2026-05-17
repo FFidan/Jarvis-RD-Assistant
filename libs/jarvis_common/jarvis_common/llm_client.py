@@ -12,6 +12,7 @@ import httpx
 from pydantic import BaseModel
 
 from jarvis_common.config import get_jarvis_common_settings
+from jarvis_common.settings import get_secrets_settings
 
 if TYPE_CHECKING:
     import openai
@@ -304,17 +305,23 @@ def _langfuse_lifespan_hook() -> None:
     * Runs as the FIRST init task, before DB migrations — must touch NO database.
     * Must NEVER raise: every disabled/misconfigured combination returns cleanly
       so it cannot break startup.  The broad ``except Exception`` is load-bearing.
-    * Keys are read from :class:`jarvis_common.config.JarvisCommonSettings`
-      (``SecretStr`` fields) — never from ``os.environ[...]`` directly, which
-      would ``KeyError`` when absent.
+    * The enable-gate (``OBSERVABILITY_ENABLED``) and host (``LANGFUSE_HOST``)
+      are read from :class:`jarvis_common.config.JarvisCommonSettings` (plain
+      env vars, set by compose as-is).
+    * Keys (``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY``) are read from
+      :class:`jarvis_common.settings.SecretsSettings` — the ``_FILE``-aware
+      model — so compose's ``LANGFUSE_PUBLIC_KEY_FILE=/run/secrets/…`` indirection
+      is honoured without any custom resolver.  Never read from ``os.environ``
+      directly, which would ``KeyError`` when absent.
     """
     settings = get_jarvis_common_settings()
     if not settings.observability_enabled:
         logger.info("OBSERVABILITY_ENABLED is false; Langfuse traces no-op")
         return
+    secrets = get_secrets_settings()
     host = settings.langfuse_host
-    pk = settings.langfuse_public_key.get_secret_value() if settings.langfuse_public_key else None
-    sk = settings.langfuse_secret_key.get_secret_value() if settings.langfuse_secret_key else None
+    pk = secrets.langfuse_public_key.get_secret_value() if secrets.langfuse_public_key else None
+    sk = secrets.langfuse_secret_key.get_secret_value() if secrets.langfuse_secret_key else None
     if not (host and pk and sk):
         logger.warning("OBSERVABILITY_ENABLED set but LANGFUSE_HOST/keys missing; traces no-op")
         return

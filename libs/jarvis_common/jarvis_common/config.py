@@ -36,8 +36,6 @@ CORS_ORIGINS                    cors_origins                shared
 LITELLM_BASE_URL                litellm_base_url            shared
 OBSERVABILITY_ENABLED           observability_enabled       shared
 LANGFUSE_HOST                   langfuse_host               shared
-LANGFUSE_PUBLIC_KEY             langfuse_public_key         shared (SecretStr)
-LANGFUSE_SECRET_KEY             langfuse_secret_key         shared (SecretStr)
 TRUSTED_PROXY_CIDRS             trusted_proxy_cidrs         shared
 JARVIS_TRUST_CF_CONNECTING_IP   trust_cf_connecting_ip      shared
 JARVIS_MIGRATION_LOCK_CONTENDED_OK  migration_lock_contended_ok  shared
@@ -45,7 +43,7 @@ JARVIS_MIGRATION_LOCK_CONTENDED_OK  migration_lock_contended_ok  shared
 
 from __future__ import annotations
 
-from pydantic import Field, SecretStr
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = [
@@ -75,8 +73,10 @@ class JarvisCommonSettings(BaseSettings):
       ``app_factory._resolve_db_pool_kwargs`` applies them only when set.
     * ``cors_origins`` preserves the comma-separated string form; use
       ``cors_origins_list`` to split.
-    * ``langfuse_public_key`` / ``langfuse_secret_key`` are ``SecretStr`` so
-      they are masked in ``repr`` / structured-log serialisations.
+    * Langfuse keypair (``LANGFUSE_PUBLIC_KEY`` / ``LANGFUSE_SECRET_KEY``) live
+      on :class:`jarvis_common.settings.SecretsSettings` where they gain
+      ``_FILE`` indirection support.  Only ``OBSERVABILITY_ENABLED`` (bool gate)
+      and ``LANGFUSE_HOST`` (plain URL) are stored here.
     """
 
     model_config = _CONFIG
@@ -148,14 +148,6 @@ class JarvisCommonSettings(BaseSettings):
             "Langfuse server URL (LANGFUSE_HOST).  When absent, the Langfuse "
             "SDK and Instructor patching are skipped."
         ),
-    )
-    langfuse_public_key: SecretStr | None = Field(
-        default=None,
-        description="Langfuse public API key (LANGFUSE_PUBLIC_KEY).",
-    )
-    langfuse_secret_key: SecretStr | None = Field(
-        default=None,
-        description="Langfuse secret API key (LANGFUSE_SECRET_KEY).",
     )
 
     # --- Trusted-proxy CIDRs --------------------------------------------
