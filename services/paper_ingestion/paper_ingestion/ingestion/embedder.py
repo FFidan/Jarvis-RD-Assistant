@@ -43,6 +43,11 @@ COLLECTION_NAME = "paper_chunks"
 CHUNK_TOKEN_LIMIT = 512
 CHUNK_OVERLAP_TOKENS = 50
 
+# Stable namespace for deterministic Qdrant point IDs derived from (paper_id, chunk_index).
+# Using uuid5(namespace, "paper_id:chunk_index") guarantees the same point ID across retries
+# so Qdrant upsert is idempotent and a failed Phase-3 (DB write) cannot accumulate duplicates.
+_CHUNK_POINT_ID_NAMESPACE = uuid.UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")  # UUID namespace DNS
+
 _KNOWN_EMBEDDING_DIMENSIONS: dict[str, int] = {
     "nomic-embed-text": 768,
     "qwen3-embedding:0.6b": 1024,
@@ -531,7 +536,9 @@ class Embedder:
                 points = []
                 batch_ids: list[str] = []
                 for chunk, embedding in zip(batch, embeddings):
-                    point_id = str(uuid.uuid4())
+                    point_id = str(
+                        uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, f"{paper_id}:{chunk.chunk_index}")
+                    )
                     batch_ids.append(point_id)
                     points.append(
                         PointStruct(

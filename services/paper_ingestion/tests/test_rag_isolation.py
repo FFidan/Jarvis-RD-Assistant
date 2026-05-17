@@ -33,60 +33,68 @@ def _hit(paper_id: int, user_id: int | None, score: float = 0.9) -> SimpleNamesp
     )
 
 
-def _make_embedder(hits: list[SimpleNamespace]) -> Embedder:
+def _make_embedder(hits: list[SimpleNamespace]) -> tuple[Embedder, AsyncMock]:
+    """Return (embedder, mock_qdrant) so tests can inspect mock_qdrant.call_args."""
     mock_qdrant = AsyncMock()
     mock_qdrant.query_points.return_value = SimpleNamespace(points=hits)
     embedder = Embedder(AsyncMock(), mock_qdrant)
     embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
-    return embedder
+    return embedder, mock_qdrant
 
 
 async def test_search_chunks_global_user_scope_passes_filter_to_qdrant():
     """search_chunks_global(user_id=1) sends a should=[user_id==1, is_null] filter."""
-    from qdrant_client.models import FieldCondition, IsNullCondition
+    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
 
-    embedder = _make_embedder([])
+    embedder, mock_qdrant = _make_embedder([])
 
     await embedder.search_chunks_global("q", user_id=1)
 
-    qf = embedder.qdrant.query_points.call_args.kwargs["query_filter"]
+    qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
     assert qf is not None, "user_id should produce a non-None filter"
     user_clauses = [c for c in qf.should if isinstance(c, FieldCondition)]
     null_clauses = [c for c in qf.should if isinstance(c, IsNullCondition)]
-    assert len(user_clauses) == 1 and user_clauses[0].match.value == 1
+    assert len(user_clauses) == 1
+    assert isinstance(user_clauses[0].match, MatchValue)
+    assert user_clauses[0].match.value == 1
     assert len(null_clauses) == 1
 
 
 async def test_search_chunks_global_no_user_id_no_filter():
     """Legacy single-tenant code path: no user_id → no filter."""
-    embedder = _make_embedder([_hit(1, 2), _hit(2, 5), _hit(3, None)])
+    embedder, mock_qdrant = _make_embedder([_hit(1, 2), _hit(2, 5), _hit(3, None)])
 
     results = await embedder.search_chunks_global("q")
 
-    assert embedder.qdrant.query_points.call_args.kwargs["query_filter"] is None
+    assert mock_qdrant.query_points.call_args.kwargs["query_filter"] is None
     assert len(results) == 3
 
 
 async def test_search_similar_excludes_seed_paper_and_scopes_to_user():
     """must_not[paper_id] rides alongside should[user_id OR null]."""
-    from qdrant_client.models import FieldCondition, IsNullCondition
+    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
 
-    embedder = _make_embedder([])
+    embedder, mock_qdrant = _make_embedder([])
 
     await embedder.search_similar("q", paper_id_filter=42, user_id=7)
 
-    qf = embedder.qdrant.query_points.call_args.kwargs["query_filter"]
+    qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
     assert qf.must_not[0].key == "paper_id"
-    assert qf.must_not[0].match.value == 42
+    must_not_clause = qf.must_not[0]
+    assert isinstance(must_not_clause, FieldCondition)
+    assert isinstance(must_not_clause.match, MatchValue)
+    assert must_not_clause.match.value == 42
     user_clauses = [c for c in qf.should if isinstance(c, FieldCondition)]
     null_clauses = [c for c in qf.should if isinstance(c, IsNullCondition)]
+    assert len(user_clauses) == 1
+    assert isinstance(user_clauses[0].match, MatchValue)
     assert user_clauses[0].match.value == 7
     assert len(null_clauses) == 1
 
 
 async def test_hybrid_search_threads_user_id_to_semantic_leg_only():
     """hybrid_search passes user_id to search_chunks_global; BM25 SQL is unchanged."""
-    embedder = _make_embedder([])
+    embedder, _mock_qdrant = _make_embedder([])
     embedder.search_chunks_global = AsyncMock(return_value=[])
 
     db_pool = MagicMock()
@@ -108,7 +116,7 @@ async def test_hybrid_search_bm25_leg_does_not_filter_by_user_id():
     not-yet-claimed papers still work. Regression guard: if someone adds
     a WHERE user_id = $N to the BM25 SQL, this test fails.
     """
-    embedder = _make_embedder([])
+    embedder, _mock_qdrant = _make_embedder([])
     embedder.search_chunks_global = AsyncMock(return_value=[])
 
     db_pool = MagicMock()
@@ -135,9 +143,10 @@ async def test_hybrid_search_bm25_leg_does_not_filter_by_user_id():
 
 async def test_prepare_cross_paper_rag_threads_user_id():
     """prepare_cross_paper_rag forwards user_id into search_chunks_global."""
+    from paper_ingestion.models import CrossPaperAskRequest
     from paper_ingestion.rag.streaming import prepare_cross_paper_rag
 
-    embedder = _make_embedder([])
+    embedder, _mock_qdrant = _make_embedder([])
     embedder.search_chunks_global = AsyncMock(return_value=[])
 
     db_pool = MagicMock()
@@ -145,7 +154,7 @@ async def test_prepare_cross_paper_rag_threads_user_id():
     conn.fetch = AsyncMock(return_value=[])
     db_pool.acquire.return_value.__aenter__.return_value = conn
 
-    body = SimpleNamespace(
+    body = CrossPaperAskRequest(
         question="how do neural ODEs handle stiffness?",
         max_chunks=5,
         max_papers=3,
@@ -174,7 +183,7 @@ async def test_cross_paper_rag_two_tenant_isolation():
     ``FieldCondition(user_id == A)`` and an ``IsNullCondition``, but no
     unconditional match for B.
     """
-    from qdrant_client.models import FieldCondition, IsNullCondition
+    from qdrant_client.models import FieldCondition, IsNullCondition, MatchValue
 
     tenant_a = 1
     tenant_b = 2
@@ -184,10 +193,10 @@ async def test_cross_paper_rag_two_tenant_isolation():
 
     # The real Qdrant client applies the filter server-side; here we verify
     # the filter *passed* to query_points enforces the correct scoping for tenant_a.
-    embedder = _make_embedder([chunk_canonical])  # Qdrant "returns" only canonical
+    embedder, mock_qdrant = _make_embedder([chunk_canonical])  # Qdrant "returns" only canonical
     await embedder.search_chunks_global("attention mechanisms", user_id=tenant_a)
 
-    qf = embedder.qdrant.query_points.call_args.kwargs["query_filter"]
+    qf = mock_qdrant.query_points.call_args.kwargs["query_filter"]
 
     # Must have a non-null filter (proves scoping is active for tenant_a)
     assert qf is not None, "No filter passed — cross-tenant leak possible"
@@ -197,6 +206,7 @@ async def test_cross_paper_rag_two_tenant_isolation():
 
     # Exactly one user-match clause, scoped to tenant_a — NOT tenant_b
     assert len(user_clauses) == 1, f"Expected 1 FieldCondition, got {user_clauses}"
+    assert isinstance(user_clauses[0].match, MatchValue)
     assert user_clauses[0].match.value == tenant_a, (
         f"Filter scoped to wrong user: {user_clauses[0].match.value!r} != {tenant_a}"
     )
@@ -207,7 +217,11 @@ async def test_cross_paper_rag_two_tenant_isolation():
 
     # No clause that would unconditionally admit tenant_b's private chunks
     b_clauses = [
-        c for c in qf.should if isinstance(c, FieldCondition) and c.match.value == tenant_b
+        c
+        for c in qf.should
+        if isinstance(c, FieldCondition)
+        and isinstance(c.match, MatchValue)
+        and c.match.value == tenant_b
     ]
     assert len(b_clauses) == 0, (
         "Filter contains a clause that would admit tenant B's private chunks"

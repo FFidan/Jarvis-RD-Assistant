@@ -405,3 +405,163 @@ async def test_pdf_workflow_embedding_http_status_stays_actionable(status_code: 
     assert f"{status_code}" in message
     assert "LITELLM_MASTER_KEY" in message
     assert "http://litellm:4000" not in message
+
+
+# ---------------------------------------------------------------------------
+# M-3: deterministic Qdrant point IDs — no orphans/duplicates on retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_process_pdf_retry_uses_same_point_ids_after_phase3_failure():
+    """M-3 crash-safety: a Phase-3 (DB insert) failure must not cause duplicate
+    Qdrant vectors on retry.
+
+    Because embed_and_store derives point IDs deterministically from
+    (paper_id, chunk_index), the same IDs are produced on every attempt.
+    The Qdrant upsert is therefore idempotent — re-running after a Phase-3
+    crash overwrites the same points rather than accumulating new ones.
+
+    This test simulates two sequential run_process_pdf calls for the same paper
+    (as a retry would do) and asserts that the point IDs presented to Qdrant
+    on the second call are identical to those on the first call.
+    """
+    import uuid
+
+    from paper_ingestion.ingestion.embedder import _CHUNK_POINT_ID_NAMESPACE
+
+    chunks = [
+        SimpleNamespace(
+            chunk_index=0,
+            content="Deterministic chunk A",
+            page_number=1,
+            start_char=0,
+            end_char=21,
+        ),
+        SimpleNamespace(
+            chunk_index=1,
+            content="Deterministic chunk B",
+            page_number=1,
+            start_char=22,
+            end_char=43,
+        ),
+    ]
+    # The expected deterministic point IDs for paper_id=55, chunk indices 0 and 1.
+    expected_ids = [
+        str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, "55:0")),
+        str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, "55:1")),
+    ]
+
+    def _make_fresh_pool_with_transaction():
+        """Pool whose connection always reports 0 existing chunks (simulates retry state)."""
+        conn = AsyncMock()
+        conn.fetchval.return_value = 0  # no existing chunks (force or post-failure retry)
+        conn.transaction = MagicMock(
+            return_value=MagicMock(
+                __aenter__=AsyncMock(return_value=None),
+                __aexit__=AsyncMock(return_value=False),
+            )
+        )
+        return _make_pool(conn), conn
+
+    # --- First attempt ---
+    pool1, conn1 = _make_fresh_pool_with_transaction()
+    pdf_processor1 = MagicMock()
+    pdf_processor1.process = AsyncMock(return_value=("full text", chunks, expected_ids))
+    embedder1 = MagicMock()
+
+    await run_process_pdf(
+        paper_id=55,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool1,
+        pdf_processor=pdf_processor1,
+        embedder=embedder1,
+    )
+
+    first_call_rows = conn1.executemany.await_args.args[1]
+    first_point_ids = [row[6] for row in first_call_rows]
+
+    # --- Second attempt (retry after hypothetical Phase-3 failure) ---
+    pool2, conn2 = _make_fresh_pool_with_transaction()
+    pdf_processor2 = MagicMock()
+    pdf_processor2.process = AsyncMock(return_value=("full text", chunks, expected_ids))
+    embedder2 = MagicMock()
+
+    await run_process_pdf(
+        paper_id=55,
+        pdf_path=Path("/tmp/paper.pdf"),
+        db_pool=pool2,
+        pdf_processor=pdf_processor2,
+        embedder=embedder2,
+    )
+
+    second_call_rows = conn2.executemany.await_args.args[1]
+    second_point_ids = [row[6] for row in second_call_rows]
+
+    # Deterministic IDs: both attempts use exactly the same point IDs.
+    assert first_point_ids == second_point_ids == expected_ids, (
+        f"Point IDs diverged between attempts: {first_point_ids!r} vs {second_point_ids!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_embed_and_store_point_ids_are_deterministic():
+    """M-3 unit: embed_and_store derives point IDs from (paper_id, chunk_index).
+
+    Two calls with the same paper_id and chunk indices must produce identical
+    UUIDs, making Qdrant upsert idempotent across retries.
+    """
+    import uuid
+
+    from paper_ingestion.ingestion.embedder import (
+        _CHUNK_POINT_ID_NAMESPACE,
+        EMBEDDING_DIMENSION,
+        Embedder,
+    )
+
+    def _make_embedder_for_test() -> Embedder:
+        http = MagicMock()
+        qdrant = AsyncMock()
+        e = Embedder(http, qdrant)
+        return e
+
+    chunks = [
+        SimpleNamespace(
+            chunk_index=0,
+            content="chunk A",
+            page_number=1,
+            start_char=0,
+            end_char=7,
+        ),
+        SimpleNamespace(
+            chunk_index=1,
+            content="chunk B",
+            page_number=1,
+            start_char=8,
+            end_char=15,
+        ),
+    ]
+
+    fake_embedding = [0.1] * EMBEDDING_DIMENSION
+
+    embedder = _make_embedder_for_test()
+    embedder.embed_texts = AsyncMock(return_value=[fake_embedding] * len(chunks))
+
+    ids_first = await embedder.embed_and_store(paper_id=7, chunks=chunks)
+
+    # Reset mock state and call again — same inputs must yield same IDs.
+    embedder.embed_texts = AsyncMock(return_value=[fake_embedding] * len(chunks))
+    embedder.qdrant.upsert.reset_mock()
+
+    ids_second = await embedder.embed_and_store(paper_id=7, chunks=chunks)
+
+    assert ids_first == ids_second, (
+        f"Point IDs are not deterministic: {ids_first!r} vs {ids_second!r}"
+    )
+
+    # Verify IDs match the expected deterministic formula.
+    expected = [
+        str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, "7:0")),
+        str(uuid.uuid5(_CHUNK_POINT_ID_NAMESPACE, "7:1")),
+    ]
+    assert ids_first == expected
