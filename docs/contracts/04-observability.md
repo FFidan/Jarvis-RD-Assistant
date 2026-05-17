@@ -1,6 +1,13 @@
 # 04 — Observability Contract
 **Status:** LIVING (headless operator integration shipped; see §9)
 **Date:** 2026-05-02
+
+> **Optional — default OFF.** Langfuse observability is opt-in. The
+> `observability` compose profile is not started and `OBSERVABILITY_ENABLED`
+> defaults to `false`, so the SDK is never constructed (zero overhead) unless
+> you explicitly run `make observability-up`. Enablement, trust boundary, and
+> keypair rotation are in §9.
+
 **Reviewers must update this contract in the same patch as any change to:**
 - The `@observe()` decorator placements documented in §3
 - Span metadata fields (§4)

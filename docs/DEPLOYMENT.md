@@ -19,6 +19,7 @@ Required `.env` vars (init-secrets generates if blank):
 - `JARVIS_API_KEY`          — 32-byte hex; gates the REST API + dashboard login
 - `JARVIS_CONFIG_KEY`       — Fernet key; encrypts user_config secrets at rest
 - `LITELLM_MASTER_KEY`      — 32-byte hex; gates LiteLLM admin endpoints
+- `JARVIS_MODEL_HMAC_KEY`   — 64-hex; HMAC-signs Pulse classifier pickle blobs; **auto-generated** by `init-secrets.sh` — leave blank in `.env`, do not hand-edit (updated 2026-05-17, agent: claude-code)
 
 Optional:
 - `JARVIS_CONFIG_KEY_OLD`   — enables zero-downtime crypto rotation via MultiFernet
@@ -90,6 +91,32 @@ The `/api/pulse/debug` endpoint is dev-mode only (returns 404 unless
 OpenAlex requires `OPENALEX_EMAIL` or `OPENALEX_API_KEY` for Pulse polling in
 this stack. PubMed can run without an API key, but an NCBI key raises the rate
 limit and is recommended for frequent testing.
+
+---
+
+## Observability (optional — off by default)
+
+LLM-call tracing via Langfuse is **opt-in** and disabled in every default
+deployment: the `observability` compose profile is not started and the
+`OBSERVABILITY_ENABLED` boot-gate defaults to `false`, so the Langfuse SDK is
+never constructed and there is zero latency, network, or log overhead. Nothing
+to do if you don't want it.
+
+To enable it (provisions a loopback-only, operator-only Langfuse instance
+headlessly — no signup, no key copy-paste):
+
+```bash
+# set LANGFUSE_INIT_USER_PASSWORD in .env first (operator dashboard login)
+make observability-up
+```
+
+Then open `http://localhost:3002` and sign in with `LANGFUSE_INIT_USER_EMAIL`
+(default `operator@jarvis.local`) / `LANGFUSE_INIT_USER_PASSWORD`. Langfuse is
+a single deployment-wide *operator* tool, decoupled from JARVIS user accounts
+(no SSO/iframe bridge, loopback-bound, signup disabled). Rotating the keypair
+requires wiping the `langfuse_postgres_data` volume (write-once provisioning).
+Full contract, trust boundary, and rotation procedure:
+[docs/contracts/04-observability.md](contracts/04-observability.md) §9.
 
 ---
 
@@ -234,6 +261,22 @@ JARVIS_CONFIG_KEY=<Fernet key from: python -c "from cryptography.fernet import F
 - `DEV_MODE=true` is a meta-flag: it promotes any granular dev flag (`DEV_AUTH_BYPASS`, `DEV_ERROR_DETAIL`, `DEV_CORS_OPEN`, `DEV_SMTP_LOG_ONLY`, `DEV_CRYPTO_RELAXED`) to `true` unless that flag is explicitly set in the environment. An explicit value always wins. In production, set each flag independently; none are permitted in `ENVIRONMENT=production` (startup will crash if any is `true`).
 - `n8n` is not protected by the JARVIS API key — if you expose the n8n port on LAN, set `N8N_BASIC_AUTH_USER`/`N8N_BASIC_AUTH_PASSWORD` or keep it on `127.0.0.1`. See finding S-7.4 in `docs/archive/2026-05/CODE_SECURITY_REVIEW_2026-04-14.md`.
 
+### Rate-limit client-IP trust (automatic, updated 2026-05-17, agent: claude-code)
+
+JARVIS pins the internal Docker network to a static subnet (`10.137.241.0/24` by default) and assigns Caddy a fixed IP within it (`10.137.241.2` for the public Caddy TLS terminator, `10.137.241.3` for `caddy_local`). nginx is configured to trust **only** those two /32 addresses plus `127.0.0.1` as `set_real_ip_from` sources — so client IP extraction is automatic and requires no operator step.
+
+There is **no `NGINX_TRUSTED_PROXY_CIDR` environment variable** — it was removed. Trust is determined solely by the static Docker IPs, not by any configurable CIDR list.
+
+**Rare override — subnet collision:** If `10.137.241.0/24` conflicts with an existing host LAN segment, `setup.sh --check` will warn about the collision. To resolve it, set `JARVIS_NET_SUBNET=<a free /24>` in `.env` (leave unset normally — the default is appropriate for most setups) and recreate the Docker network:
+
+```bash
+# Edit .env:
+#   JARVIS_NET_SUBNET=10.200.0.0/24   # pick a /24 that doesn't conflict
+docker compose down && docker compose up -d
+```
+
+**Note on `TRUSTED_PROXY_CIDRS`:** this is a separate Python app-layer variable that controls the rightmost-trusted-hop XFF walk for the rate limiter — it is not an nginx concern. Add your load-balancer or upstream proxy CIDRs to it only if you put an additional external proxy in front of the stack. RFC-1918 ranges and `127.0.0.0/8` are always trusted by the Python layer.
+
 ### Configuration principle: environment variables are for security boot-gates only
 
 Environment variables in JARVIS are reserved for two purposes: (1) security-critical flags that must bind before the auth layer starts (the `dev_*` flags, `JARVIS_API_KEY`, `JARVIS_CONFIG_KEY`, `CORS_ORIGINS`, HTTPS/TLS settings), and (2) bootstrap secrets needed before the database exists (database password, encryption keys, LLM master key). All other configuration — model assignments, Pulse schedules, Telegram pairing, notification preferences — is managed via the web app and persisted in the database. This keeps the `dev_*` flags as explicit, high-visibility operator decisions rather than defaults buried in `.env` that can be forgotten before sharing an instance.
@@ -273,6 +316,7 @@ JARVIS supports Docker Secrets for the five most sensitive credentials. Each sec
 | `jarvis_api_key` | `JARVIS_API_KEY_FILE` | JARVIS REST API key (frontend + Telegram) |
 | `jarvis_qdrant_api_key` | `QDRANT_API_KEY_FILE` | Qdrant service API key |
 | `jarvis_telegram_bot_token` | `TELEGRAM_BOT_TOKEN_FILE` | Telegram bot token (telegram profile only) |
+| `jarvis_model_hmac_key` | `JARVIS_MODEL_HMAC_KEY_FILE` | Pulse classifier pickle HMAC signing key (auto-generated; mandatory in production) |
 
 Secrets are stored as files in a `secrets/` directory at the repo root (gitignored). On first run, `setup.sh` creates them:
 
@@ -284,6 +328,20 @@ docker compose up -d paper_ingestion learning_engine   # triggers re-read on nex
 ```
 
 > **Note:** `secrets/` is the canonical secret store — every secret used by the stack lives here as `secrets/<name>.txt` (mode 600, gitignored). `setup.sh` writes all core secrets on first run, including `secrets/litellm_master_key.txt`. Never commit secret files. Use `chmod 600 secrets/*` to restrict read access on multi-user hosts.
+
+### Web UI configuration — zero manual `.env` editing required (updated 2026-05-17, agent: claude-code)
+
+A normal install needs **no manual `.env` editing** beyond what `setup.sh` writes automatically. All ongoing configuration is handled through the web wizard and Settings:
+
+| Setting | Where to configure | Restart required? |
+|---|---|---|
+| SMTP relay | Settings → Integrations → SMTP / first-run wizard | No — takes effect immediately |
+| Cloud LLM keys (OpenAI, Anthropic, Gemini) | Settings → Models → Cloud Providers | No — re-pushed live on save; restart only on push failure |
+| Telegram bot token | Settings → Integrations → Bot Token | Yes — an administrator must restart the `telegram_bot` container: `docker compose restart telegram_bot` |
+| Access mode (single ↔ multi-user) | Settings → System → Access Mode | Yes — requires an app restart after the setting is saved: `docker compose restart paper_ingestion learning_engine` |
+| Auto-fetch interval | Settings → Automation | No — takes effect immediately (live scheduler reschedule) |
+
+**What still lives in `.env`:** security boot-gates (`JARVIS_API_KEY`, `JARVIS_CONFIG_KEY`, `ENVIRONMENT`, TLS/CORS), bootstrap secrets, and infrastructure parameters (ports, bind address, SMTP on multi-user installs without a wizard-configured relay). See the [Configuration principle](#configuration-principle-environment-variables-are-for-security-boot-gates-only) section.
 
 ---
 
@@ -473,7 +531,8 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | API calls work from browser on host but fail from other devices with "CORS blocked" | `CORS_ORIGINS` doesn't include the origin you're calling from | Add your origin to `CORS_ORIGINS` in `.env` and `docker compose up -d paper_ingestion learning_engine` |
 | Tunnel works on `https://<tunnel-host>` but dashboard 404s at `/` | Cloudflare tunnel is pointed at the wrong service port or public hostname mismatch | In Cloudflare Zero Trust → Networks → Tunnels, confirm the public hostname routes to `http://dashboard:3000`. Confirm `TUNNEL_HOSTNAME` in `.env` matches exactly. |
 | Rate limiter 429s every request as "Cloudflare" | Behind Cloudflare but `JARVIS_TRUST_CF_CONNECTING_IP` not enabled | Set `JARVIS_TRUST_CF_CONNECTING_IP=true` in `.env` and restart paper_ingestion / learning_engine. |
-| Rate limiter rate-limits by proxy IP instead of client | Upstream proxy missing from `TRUSTED_PROXY_CIDRS` | Add the proxy's public CIDR to `TRUSTED_PROXY_CIDRS`. |
+| Rate limiter rate-limits by proxy IP instead of client | Upstream proxy missing from `TRUSTED_PROXY_CIDRS` | Add the proxy's public CIDR to `TRUSTED_PROXY_CIDRS`. Note: `NGINX_TRUSTED_PROXY_CIDR` no longer exists — nginx trust is now automatic via pinned Docker IPs (see [Rate-limit client-IP trust](#rate-limit-client-ip-trust-automatic)). |
+| Pinned Docker subnet `10.137.241.0/24` collides with my LAN | `setup.sh --check` warns on host-route collision | Set `JARVIS_NET_SUBNET=<free /24>` in `.env` and run `docker compose down && docker compose up -d` to recreate the network. |
 | LAN device can ping host but `curl -k https://<LAN-IP>:3001` hangs | `DASHBOARD_BIND_HOST=127.0.0.1` (localhost mode) | Run `./setup.sh` mode 2, or edit `.env` to `DASHBOARD_BIND_HOST=0.0.0.0` and restart dashboard. |
 | `setup.sh` option 3 exits immediately with a ZT warning | `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` not set | Configure your Zero-Trust access policy first, then add `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` to `.env`. |
 | `update.sh` says "not running" for a service you're not using | The service is profile-gated (n8n / telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |

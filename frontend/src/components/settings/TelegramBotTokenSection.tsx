@@ -29,7 +29,7 @@ export function TelegramBotTokenSection() {
   const [token, setToken] = useState('');
   const [formatError, setFormatError] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError } = useQuery({
     queryKey: ['telegram-bot-token-status'],
     queryFn: getTelegramBotToken,
     staleTime: 60_000,
@@ -58,6 +58,14 @@ export function TelegramBotTokenSection() {
 
   if (isLoading) {
     return <p className="text-sm text-muted-foreground">Loading bot token status…</p>;
+  }
+
+  if (isError) {
+    return (
+      <p className="text-sm text-destructive">
+        Could not load bot token status (administrator access required).
+      </p>
+    );
   }
 
   const hasToken = data?.has_token ?? false;

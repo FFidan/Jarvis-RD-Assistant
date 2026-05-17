@@ -148,7 +148,11 @@ class TestSendMagicLinkTokenNotLogged:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """log_event context must not contain the raw link."""
+        _conn = AsyncMock()
+        _conn.fetch = AsyncMock(return_value=[])
+        _conn.fetchrow = AsyncMock(return_value=None)
         fake_pool = AsyncMock()
+        fake_pool.acquire.return_value.__aenter__.return_value = _conn
         contexts = await self._run(monkeypatch, caplog, pool=fake_pool)
 
         assert contexts, "Expected log_event to be called at least once"
@@ -161,7 +165,11 @@ class TestSendMagicLinkTokenNotLogged:
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         """log_event context must contain email_hash and link_issued=True."""
+        _conn = AsyncMock()
+        _conn.fetch = AsyncMock(return_value=[])
+        _conn.fetchrow = AsyncMock(return_value=None)
         fake_pool = AsyncMock()
+        fake_pool.acquire.return_value.__aenter__.return_value = _conn
         contexts = await self._run(monkeypatch, caplog, pool=fake_pool)
 
         assert contexts, "Expected log_event to be called"

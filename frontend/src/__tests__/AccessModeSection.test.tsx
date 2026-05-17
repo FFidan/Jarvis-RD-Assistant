@@ -142,4 +142,22 @@ describe('AccessModeSection', () => {
       expect(screen.getByText(/restart required/i)).toBeInTheDocument(),
     );
   });
+
+  it('shows the no-restart success message when restart_required is false', async () => {
+    mockGetStatus.mockResolvedValue(fixtures.statusMulti);
+    mockSave.mockResolvedValue({ mode: 'single', restart_required: false });
+    const user = userEvent.setup();
+    await renderSection();
+
+    await waitFor(() =>
+      expect(screen.getByRole('radio', { name: /single-user/i })).toBeInTheDocument(),
+    );
+
+    await user.click(screen.getByRole('radio', { name: /single-user/i }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(screen.getByText(/access mode updated/i)).toBeInTheDocument(),
+    );
+  });
 });
