@@ -125,7 +125,8 @@ async def test_create_thread_binds_caller_user_id():
 
 
 # ---------------------------------------------------------------------------
-# update_thread — progress/status, no-fields 400, cross-user 404
+# update_thread — progress/status, no-fields 400, cross-user 404,
+#                 allowlist enforcement, partial-update isolation
 # ---------------------------------------------------------------------------
 
 
@@ -166,6 +167,91 @@ async def test_update_thread_cross_user_is_404():
             _mock_request(), thread_id=1, body=ThreadUpdate(progress=0.5), db_pool=pool
         )
     assert exc.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# update_thread — explicit allowlist (mirrors notes.py _NOTE_ALLOWED_COLUMNS)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field, value, col_fragment",
+    [
+        ("title", "New title", '"title"'),
+        ("anchor", "some anchor text", '"anchor"'),
+        ("progress", 0.75, '"progress"'),
+        ("status", "done", '"status"'),
+    ],
+)
+async def test_update_thread_each_allowed_field(field: str, value: object, col_fragment: str):
+    """Each allowlisted column can be updated individually (partial-update semantics)."""
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = _row(**{field: value})
+    body = ThreadUpdate(**{field: value})
+    with _patch_uid(42):
+        await threads.update_thread.__wrapped__(
+            _mock_request(), thread_id=1, body=body, db_pool=pool
+        )
+    sql, *params = conn.fetchrow.await_args.args
+    # The quoted column name must appear in the SET clause
+    assert col_fragment in sql
+    # last_at is always bumped
+    assert "last_at = NOW()" in sql
+    # WHERE clause always scopes to the authenticated user
+    assert "AND user_id = $" in sql
+    assert params[-2:] == [1, 42]
+    # Only the single field value + thread_id + user_id are bound
+    # (1 field value = params[0], then thread_id, user_id)
+    assert params[0] == value
+
+
+@pytest.mark.asyncio
+async def test_update_thread_unrecognised_key_is_silently_dropped():
+    """model_dump(include=_THREAD_ALLOWED_COLUMNS) silently drops non-allowlisted keys.
+
+    Because ThreadUpdate only defines the four allowed fields, Pydantic rejects
+    unknown keys at model construction time.  This test verifies that a body
+    with ONLY unknown fields (simulated via an empty ThreadUpdate) returns 400
+    — the same "No fields to update" path — and that the DB is never touched.
+    This mirrors the notes.py pattern where include=_NOTE_ALLOWED_COLUMNS
+    silently drops anything outside the set.
+    """
+    pool, conn = _make_pool_and_conn()
+    # An empty ThreadUpdate has all fields as None / unset.
+    # model_dump(exclude_unset=True, include=_THREAD_ALLOWED_COLUMNS) → {}
+    with _patch_uid(42), pytest.raises(HTTPException) as exc:
+        await threads.update_thread.__wrapped__(
+            _mock_request(), thread_id=1, body=ThreadUpdate(), db_pool=pool
+        )
+    assert exc.value.status_code == 400
+    conn.fetchrow.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_thread_partial_update_leaves_other_fields_untouched():
+    """Only the supplied field appears in the SET clause; other columns are absent.
+
+    This asserts that the allowlist + exclude_unset semantics produce a true
+    partial update: sending only ``status`` must NOT include title/anchor/progress
+    in the SQL SET clause, leaving them at their existing DB values.
+    """
+    pool, conn = _make_pool_and_conn()
+    conn.fetchrow.return_value = _row(status="done")
+    body = ThreadUpdate(status="done")
+    with _patch_uid(42):
+        await threads.update_thread.__wrapped__(
+            _mock_request(), thread_id=1, body=body, db_pool=pool
+        )
+    sql, *params = conn.fetchrow.await_args.args
+    assert '"status"' in sql
+    # Other allowlisted columns must NOT appear in the SET clause
+    assert '"title"' not in sql
+    assert '"anchor"' not in sql
+    assert '"progress"' not in sql
+    # Exactly one positional param for the field value (before thread_id + user_id)
+    assert len(params) == 3  # status_value, thread_id, user_id
+    assert params[0] == "done"
 
 
 # ---------------------------------------------------------------------------

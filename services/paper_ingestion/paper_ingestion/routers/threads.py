@@ -37,6 +37,12 @@ router = APIRouter(prefix="/api/my-day", tags=["my-day"])
 
 _ROW_COLS = "id, title, anchor, progress, last_at, status, created_at"
 
+# Explicit allowlist of columns that PATCH /threads/{id} may write.
+# Mirrors the _NOTE_ALLOWED_COLUMNS pattern in routers/notes.py — only
+# code-defined names reach the UPDATE statement; user-supplied keys that are
+# not in this set are silently dropped by model_dump(include=…).
+_THREAD_ALLOWED_COLUMNS: set[str] = {"title", "anchor", "progress", "status"}
+
 
 def _to_response(row: asyncpg.Record) -> ThreadResponse:
     return ThreadResponse(
@@ -150,14 +156,14 @@ async def update_thread(
     (status='done'). User-scoped: a non-owned id is a 404, never an update.
     """
     user_id = await current_user_id_strict(request)
-    fields = body.model_dump(exclude_none=True)
+    fields = body.model_dump(exclude_unset=True, include=_THREAD_ALLOWED_COLUMNS)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
 
-    set_clauses = []
+    set_clauses: list[str] = []
     params: list[object] = []
     for idx, (col, val) in enumerate(fields.items(), start=1):
-        set_clauses.append(f"{col} = ${idx}")
+        set_clauses.append(f'"{col}" = ${idx}')
         params.append(val)
     set_clauses.append("last_at = NOW()")
     params.append(thread_id)
@@ -167,7 +173,7 @@ async def update_thread(
 
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow(
-            f"UPDATE thread SET {', '.join(set_clauses)} "  # noqa: S608 (cols are model-constrained)
+            f"UPDATE thread SET {', '.join(set_clauses)} "  # noqa: S608 (columns are code-defined via _THREAD_ALLOWED_COLUMNS)
             f"WHERE id = ${id_pos} AND user_id = ${uid_pos} "
             f"RETURNING {_ROW_COLS}",
             *params,
