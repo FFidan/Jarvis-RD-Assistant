@@ -33,7 +33,10 @@ def _hmac_key() -> bytes:
     the derivation fallback is refused so a stolen bearer cannot also forge
     model blobs.
     """
-    model_key = os.environ.get("JARVIS_MODEL_HMAC_KEY")
+    from jarvis_common.settings import get_secrets_settings  # noqa: PLC0415
+
+    model_secret = get_secrets_settings().jarvis_model_hmac_key
+    model_key = model_secret.get_secret_value() if model_secret else None
     if model_key:
         return model_key.encode()
     if os.environ.get("ENVIRONMENT", "").lower() == "production":

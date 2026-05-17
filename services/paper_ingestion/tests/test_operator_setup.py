@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # ---------------------------------------------------------------------------
 _AUTO_SECRET_FILES = {
     "jarvis_api_key.txt",
+    "jarvis_model_hmac_key.txt",
     "litellm_master_key.txt",
     "postgres_password.txt",
     "qdrant_api_key.txt",

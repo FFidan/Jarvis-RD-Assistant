@@ -537,7 +537,8 @@ def validate_production_config() -> None:
         import os as _os  # noqa: PLC0415
         from pathlib import Path  # noqa: PLC0415
 
-        model_hmac_key = _os.environ.get("JARVIS_MODEL_HMAC_KEY", "")
+        model_hmac_secret = get_secrets_settings().jarvis_model_hmac_key
+        model_hmac_key = model_hmac_secret.get_secret_value() if model_hmac_secret else ""
         if not model_hmac_key:
             raise RuntimeError(
                 "JARVIS_MODEL_HMAC_KEY must be set in production "

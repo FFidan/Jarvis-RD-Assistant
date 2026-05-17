@@ -95,6 +95,11 @@ sync_secret VECTOR_WRITER_PASSWORD vector_writer_password.txt "openssl rand -hex
 # emits the same shape as ``openssl rand -base64 32`` (32 bytes urlsafe-b64).
 sync_secret JARVIS_CONFIG_KEY  jarvis_config_key.txt  "openssl rand -base64 32 | tr -d '\\n'"
 
+# JARVIS_MODEL_HMAC_KEY signs the Pulse classifier pickle blobs (HMAC-SHA256).
+# Mandatory in production (auth.py / pulse/training.py refuse to start without
+# it); 32 bytes hex = 64 chars, comfortably above the 32-char minimum.
+sync_secret JARVIS_MODEL_HMAC_KEY jarvis_model_hmac_key.txt "openssl rand -hex 32"
+
 # ---------------------------------------------------------------------------
 # Langfuse observability (--profile observability)
 # ---------------------------------------------------------------------------

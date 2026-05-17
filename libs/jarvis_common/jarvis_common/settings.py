@@ -199,6 +199,7 @@ class SecretsSettings(BaseSettings):
     model_config = _COMMON_CONFIG
 
     jarvis_api_key: SecretStr | None = None
+    jarvis_model_hmac_key: SecretStr | None = None
     jarvis_config_key: SecretStr | None = None
     jarvis_config_key_old: SecretStr | None = None
     telegram_bot_token: SecretStr | None = None
