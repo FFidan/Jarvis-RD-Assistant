@@ -167,7 +167,7 @@ function FirstRunGate({ children }: { children: ReactNode }) {
 }
 
 export function App() {
-  const { isAuthenticated, checkSession } = useAuthStore();
+  const { isAuthenticated, isSessionValid, expireSession } = useAuthStore();
   // Offline / PWA contract — CANONICAL (shell-sidebar-admin-ia-redesign-design.md §4):
   // When the device is offline AND a prior authenticated identity exists (isAuthenticated
   // is true with a recent authTime), do NOT hard-bounce to /login. Instead allow the
@@ -175,19 +175,28 @@ export function App() {
   // accessible in last-known-good read mode.
   //
   // SECURITY INVARIANT: when `online===true` (or unknowable), the guard is
-  // byte-equivalent to the pre-offline-track implementation — same expiry logic
-  // inside checkSession(), same /login redirect. The softening is exclusively:
+  // byte-equivalent to the pre-offline-track implementation — same expiry logic,
+  // same /login redirect. The softening is exclusively:
   //   OFFLINE + prior authenticated identity → allow app shell (read-only cache).
   //   OFFLINE + never authenticated (isAuthenticated===false) → still gated (no new access).
   //   ONLINE + expired session → still redirects/clears as before (no security regression).
   const { online } = useOnlineStatus();
   const hasKnownIdentity = isAuthenticated;
-  // ONLINE path: use checkSession() which clears state on expiry — unchanged.
-  // OFFLINE + prior identity path: skip checkSession() expiry clearing so the
-  //   last-known-good session remains in place for cached read-only surfaces.
-  const authed = online
-    ? isAuthenticated && checkSession()
-    : hasKnownIdentity;
+  // isSessionValid() is a pure read — safe to call during React render (no set()).
+  // ONLINE path: session must exist and not be expired.
+  // OFFLINE + prior identity path: skip expiry check so the last-known-good session
+  //   remains in place for cached read-only surfaces.
+  const sessionOk = isSessionValid();
+  const authed = online ? isAuthenticated && sessionOk : hasKnownIdentity;
+
+  // Side-effect: when online and the session has expired, clear the store AFTER
+  // render (useEffect) — never during render — to avoid React 19 concurrent-mode
+  // "update during render of a different component" warnings / re-render loops.
+  useEffect(() => {
+    if (online && isAuthenticated && !sessionOk) {
+      expireSession();
+    }
+  }, [online, isAuthenticated, sessionOk, expireSession]);
 
   if (!authed) {
     return (

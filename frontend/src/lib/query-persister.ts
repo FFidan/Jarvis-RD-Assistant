@@ -172,6 +172,14 @@ const READ_SURFACE_KEYS: ReadonlySet<string> = new Set<string>([
   'paper-detail',
   // Notes — READ ONLY (offline note editing is an explicit NON-GOAL; only the
   // GET-populated read cache is persisted, mutations never enter dehydration).
+  //
+  // SECURITY NOTE (shared device): notes are user-authored private content.
+  // They MUST be cleared on logout. clearPersistedQueryCache() (called by
+  // auth-store's logout path) deletes the entire IDB snapshot atomically, which
+  // includes any persisted notes entries. The logout path MUST call that
+  // function before the next user can access the offline cache. Do NOT remove
+  // this note or the clearPersistedQueryCache() call without a replacement
+  // IDB-purge mechanism.
   'notes',
   // Structured extractions (read table + its template list)
   'extraction-table',

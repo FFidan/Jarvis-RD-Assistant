@@ -54,6 +54,19 @@ interface AuthState {
   login: (apiKey: string) => Promise<boolean>;
   loginWithSession: (user: SessionUser) => void;
   logout: () => void;
+  /**
+   * Pure predicate — reads state only, never mutates.
+   * Safe to call during React render (no "update during render" risk).
+   * Returns true iff the session exists and has not expired client-side.
+   */
+  isSessionValid: () => boolean;
+  /**
+   * Side-effectful clear — call from a useEffect (never during render).
+   * Clears the expired session state so the guard redirects to /login on
+   * the next render cycle.
+   */
+  expireSession: () => void;
+  /** @deprecated Use isSessionValid() + expireSession() from a useEffect instead. */
   checkSession: () => boolean;
   getApiKey: () => string | null;
   getUser: () => SessionUser | null;
@@ -205,6 +218,17 @@ export const useAuthStore = create<AuthState>()(
         } catch {
           // ignore — frontend logout already happened
         }
+      },
+
+      isSessionValid(): boolean {
+        const { authTime, isAuthenticated, apiKey, user } = get();
+        if (!isAuthenticated || authTime === null) return false;
+        if (!apiKey && !user) return false;
+        return Date.now() - authTime <= SESSION_DURATION_MS;
+      },
+
+      expireSession(): void {
+        set({ isAuthenticated: false, authTime: null, apiKey: null, user: null });
       },
 
       checkSession(): boolean {

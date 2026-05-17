@@ -26,6 +26,7 @@ export function AuthVerifyPage() {
   const [status, setStatus] = useState<'verifying' | 'error'>('verifying');
   const [errorMsg, setErrorMsg] = useState('');
   const ranOnceRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (ranOnceRef.current) return;
@@ -54,15 +55,15 @@ export function AuthVerifyPage() {
         setStatus('error');
         // Brief display window then redirect; this gives the user a chance
         // to read what went wrong before getting bounced back to /login.
-        const t = setTimeout(() => {
+        timerRef.current = setTimeout(() => {
           navigate(`/login?error=${encodeURIComponent(message)}`, { replace: true });
         }, 2000);
-        return () => clearTimeout(t);
       }
     })();
 
     return () => {
       cancelled = true;
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

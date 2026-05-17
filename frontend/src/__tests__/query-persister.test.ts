@@ -203,3 +203,48 @@ describe('getPersistedCacheTimestamp', () => {
     expect(ts as number).toBeGreaterThanOrEqual(before);
   });
 });
+
+describe("notes — offline read surface + shared-device purge (L-6)", () => {
+  /**
+   * Notes are user-authored private content kept in the offline allow-list so
+   * the "read-only offline" UX works (PaperResearchLog renders NotesTab with
+   * readOnly={!isOnline}). The security invariant is that clearPersistedQueryCache()
+   * removes them from IDB before the next user can load a stale snapshot.
+   */
+  it("shouldDehydrateQuery accepts 'notes' (offline read surface is intentional)", () => {
+    expect(shouldDehydrateQuery(fakeQuery(['notes', 1, 'user']))).toBe(true);
+    expect(shouldDehydrateQuery(fakeQuery(['notes', 1, 'zotero']))).toBe(true);
+  });
+
+  it("notes persisted to IDB are erased by clearPersistedQueryCache (shared-device guard)", async () => {
+    // Persist a notes query into IDB.
+    const source = new QueryClient({
+      defaultOptions: { queries: { gcTime: 1_000_000 } },
+    });
+    const unsub = attachQueryPersister(source);
+    source.setQueryData(['notes', 42, 'user'], [{ id: 1, user_note: 'private' }]);
+    await flushPersistedQueryCache();
+    // Confirm something was persisted (timestamp is set).
+    expect(await getPersistedCacheTimestamp()).not.toBeNull();
+    unsub();
+
+    // Simulate logout: purge IDB.
+    await clearPersistedQueryCache();
+
+    // After purge, IDB timestamp is gone — the snapshot (including notes) is cleared.
+    expect(await getPersistedCacheTimestamp()).toBeNull();
+
+    // A freshly attached client must NOT restore the notes entry.
+    __resetPersisterForTests();
+    const restored = new QueryClient({
+      defaultOptions: { queries: { gcTime: 1_000_000 } },
+    });
+    const unsub2 = attachQueryPersister(restored);
+    // Give persistQueryClient time to attempt a restore (it's async).
+    await new Promise((r) => setTimeout(r, 100));
+    unsub2();
+
+    // Notes must be absent — purge erased the entire IDB snapshot.
+    expect(restored.getQueryData(['notes', 42, 'user'])).toBeUndefined();
+  });
+});

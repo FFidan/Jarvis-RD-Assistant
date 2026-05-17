@@ -5,9 +5,11 @@
  * - Success: posts the token, calls loginWithSession, navigates to "/".
  * - Failure: shows the error and (eventually) navigates to /login?error=...
  * - Missing token: redirects straight to /login?error=Missing+token.
+ * - Timer cleanup: unmounting within the 2 s error-redirect window cancels the
+ *   timer so navigate is NOT called on an unmounted component (L-4 fix).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { AuthVerifyPage } from '@/pages/AuthVerifyPage';
 
@@ -79,5 +81,55 @@ describe('AuthVerifyPage', () => {
       expect(screen.getByText('LOGIN')).toBeInTheDocument();
     });
     expect(verifyMock).not.toHaveBeenCalled();
+  });
+
+  describe('timer cleanup (L-4)', () => {
+    beforeEach(() => {
+      // shouldAdvanceTime keeps @testing-library's internal polling working
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('unmounting within 2 s cancels the redirect timer (navigate not called)', async () => {
+      verifyMock.mockRejectedValueOnce(new Error('Bad token'));
+      const { unmount } = renderWithRoute('/auth/verify?token=bad-token-xxx');
+
+      // Wait for the error state to be set (async catch block ran)
+      await waitFor(() => {
+        expect(screen.queryByText(/bad token/i)).toBeInTheDocument();
+      });
+
+      // Unmount before the 2 s timer fires — cleanup should clearTimeout
+      unmount();
+
+      // Advance past the 2 s window; navigate must NOT have been called
+      await act(async () => {
+        vi.advanceTimersByTime(3000);
+      });
+
+      // LOGIN route should never have been rendered (component is gone)
+      expect(screen.queryByText('LOGIN')).not.toBeInTheDocument();
+    });
+
+    it('on failure, navigates to /login after the 2 s delay when not unmounted', async () => {
+      verifyMock.mockRejectedValueOnce(new Error('Expired link'));
+      renderWithRoute('/auth/verify?token=expired-xxx');
+
+      // Wait for error UI to appear (timer is now running)
+      await waitFor(() => {
+        expect(screen.queryByText(/expired link/i)).toBeInTheDocument();
+      });
+
+      // Advance past the 2 s redirect delay — LOGIN route must now render
+      await act(async () => {
+        vi.advanceTimersByTime(2500);
+      });
+      await waitFor(() => {
+        expect(screen.getByText('LOGIN')).toBeInTheDocument();
+      });
+    });
   });
 });

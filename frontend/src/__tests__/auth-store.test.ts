@@ -124,6 +124,63 @@ describe('auth-store', () => {
     expect(useAuthStore.getState().checkSession()).toBe(false);
   });
 
+  // -----------------------------------------------------------------------
+  // FE-1: isSessionValid() pure predicate + expireSession() side-effect
+  // -----------------------------------------------------------------------
+  it('isSessionValid returns true for a fresh session without mutating state', async () => {
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, json: async () => OWNER });
+    await useAuthStore.getState().login('valid-key-32chars-xxxxxxxxxx');
+    const authTimeBefore = useAuthStore.getState().authTime;
+
+    const result = useAuthStore.getState().isSessionValid();
+
+    expect(result).toBe(true);
+    // Pure: state unchanged
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().authTime).toBe(authTimeBefore);
+    expect(useAuthStore.getState().user).toEqual(OWNER);
+  });
+
+  it('isSessionValid returns false for an expired session without mutating state', () => {
+    const nineHoursAgo = Date.now() - 9 * 60 * 60 * 1000;
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: nineHoursAgo,
+      apiKey: null,
+      user: OWNER,
+    });
+
+    const result = useAuthStore.getState().isSessionValid();
+
+    expect(result).toBe(false);
+    // Pure: isAuthenticated still true — no side-effect happened
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().authTime).toBe(nineHoursAgo);
+  });
+
+  it('isSessionValid returns false when not authenticated', () => {
+    // store already reset to unauthenticated by beforeEach
+    expect(useAuthStore.getState().isSessionValid()).toBe(false);
+    // Still no mutation — remains unauthenticated, not some other falsy state
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+  });
+
+  it('expireSession clears authentication state', () => {
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: Date.now() - 9 * 60 * 60 * 1000,
+      apiKey: null,
+      user: OWNER,
+    });
+
+    useAuthStore.getState().expireSession();
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(useAuthStore.getState().authTime).toBeNull();
+    expect(useAuthStore.getState().apiKey).toBeNull();
+    expect(useAuthStore.getState().user).toBeNull();
+  });
+
   it('logout fans out the cross-user-hygiene purges (FE-A/FE-B)', () => {
     mockFetch.mockResolvedValue({ ok: true, status: 200, json: async () => OWNER });
     useAuthStore.getState().logout();

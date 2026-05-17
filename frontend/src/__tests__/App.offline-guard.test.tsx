@@ -1,17 +1,20 @@
 /**
  * P1c — offline last-known-good route-guard tests.
+ * FE-1 — session-expiry side-effect out of render body.
  *
  * Canonical contract: docs/superpowers/specs/2026-05-15-shell-sidebar-admin-ia-redesign-design.md
  * "Offline / PWA contract — CANONICAL" §4 (last-known-good read mode).
  *
  * Security invariant being tested:
- *   (a) ONLINE + expired session → still redirects to /login (no regression).
+ *   (a) ONLINE + expired session → still redirects to /login (no regression);
+ *       state cleared by useEffect (expireSession), not during render.
  *   (b) OFFLINE + prior authenticated session → renders app shell (no /login bounce, no state clear).
  *   (c) OFFLINE + never authenticated → still gated (no new access granted).
  *   (d) ONLINE + valid session → renders app shell (unmodified happy path).
+ *   (e) isSessionValid() is pure — does NOT mutate store state when session is expired.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 
@@ -106,8 +109,10 @@ describe('App offline route-guard (P1c)', () => {
 
   // -------------------------------------------------------------------------
   // (a) ONLINE + expired session → still redirects to /login (no regression)
+  //     FE-1: state cleared by expireSession() called from useEffect, not
+  //     during render — no "update during render" risk in React 19 concurrent.
   // -------------------------------------------------------------------------
-  it('(a) ONLINE + expired session: redirects to /login and clears state', async () => {
+  it('(a) ONLINE + expired session: redirects to /login and clears state via effect', async () => {
     const nineHoursAgo = Date.now() - 9 * SESSION_8H;
     useAuthStore.setState({
       isAuthenticated: true,
@@ -123,8 +128,11 @@ describe('App offline route-guard (P1c)', () => {
     expect(await screen.findByText('JARVIS RD Assistant')).toBeInTheDocument();
     // The Email field is the magic-link login form.
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
-    // Auth state must be cleared by checkSession().
-    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    // Auth state must be cleared by expireSession() called from useEffect
+    // (post-render side-effect, FE-1). waitFor ensures the effect has flushed.
+    await waitFor(() => {
+      expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -189,5 +197,47 @@ describe('App offline route-guard (P1c)', () => {
 
     const dashboards = await screen.findAllByText('Dashboard');
     expect(dashboards.length).toBeGreaterThanOrEqual(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // (e) FE-1: isSessionValid() is pure — calling it on an expired session must
+  //     NOT mutate store state (no "update during render" side-effect).
+  // -------------------------------------------------------------------------
+  it('(e) isSessionValid() returns false for expired session without mutating store', () => {
+    const nineHoursAgo = Date.now() - 9 * SESSION_8H;
+    const user = { id: 1, email: 'a@b.com', role: 'user' as const };
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: nineHoursAgo,
+      apiKey: null,
+      user,
+    });
+
+    const result = useAuthStore.getState().isSessionValid();
+
+    expect(result).toBe(false);
+    // Pure: store state must be unchanged — isAuthenticated still true,
+    // authTime still set, user record still present.
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().authTime).toBe(nineHoursAgo);
+    expect(useAuthStore.getState().user).toEqual(user);
+  });
+
+  it('(e2) isSessionValid() returns true for a valid (non-expired) session without mutation', () => {
+    const now = Date.now();
+    const user = { id: 3, email: 'fresh@example.com', role: 'user' as const };
+    useAuthStore.setState({
+      isAuthenticated: true,
+      authTime: now,
+      apiKey: null,
+      user,
+    });
+
+    const result = useAuthStore.getState().isSessionValid();
+
+    expect(result).toBe(true);
+    // Pure: store state untouched.
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().user).toEqual(user);
   });
 });
