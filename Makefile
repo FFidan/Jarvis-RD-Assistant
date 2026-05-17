@@ -4,7 +4,7 @@ COMPOSE_ENV_FILES = $(if $(wildcard .env),--env-file .env,) --env-file versions.
 COMPOSE = LETSENCRYPT_DOMAIN=local LETSENCRYPT_EMAIL=local@local.dev docker compose $(COMPOSE_ENV_FILES)
 COMPOSE_PERF = $(COMPOSE) -f docker-compose.yml -f docker-compose.perf.yml
 
-.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up
+.PHONY: setup setup-service deps-export deps-check test test-service lint clean typecheck check ci-smoke up down logs rebuild rebuild-dashboard rebuild-backend rebuild-telegram rebuild-local up-build certs up-https profile profile-stack-up gen-langfuse-keys no-tracked-secrets
 
 ## Generate locally-trusted dev certs via mkcert (run before `make up-https`)
 certs:
@@ -71,20 +71,27 @@ secure-secrets:
 ci-smoke:
 	bash scripts/ci-smoke.sh
 
-## Run all quality checks: dependency parity + lint + typecheck + test
-check: secure-secrets deps-check lint typecheck test
+## Fail if any secrets/*.txt file is tracked by git (recurrence guard)
+no-tracked-secrets:
+	bash scripts/check-no-tracked-secrets.sh
 
-## Bring up Langfuse + JARVIS services with observability tracing enabled
-observability-up:
-	./scripts/gen-langfuse-keys.sh
+## Run all quality checks: dependency parity + lint + typecheck + test
+check: no-tracked-secrets secure-secrets deps-check lint typecheck test
+
+## Bring up Langfuse + JARVIS services with observability tracing enabled.
+## Keys are loaded from .env (written by gen-langfuse-keys.sh) so they never
+## appear in the process environment or docker inspect output.
+observability-up: gen-langfuse-keys
 	OBSERVABILITY_ENABLED=true LANGFUSE_HOST=http://langfuse:3000 \
-	  LANGFUSE_INIT_PROJECT_PUBLIC_KEY=$$(cat secrets/langfuse_init_pk.txt) \
-	  LANGFUSE_INIT_PROJECT_SECRET_KEY=$$(cat secrets/langfuse_init_sk.txt) \
 	  $(COMPOSE) --profile observability up -d langfuse paper_ingestion learning_engine
 
 ## Docker shortcuts
-up:
+up: gen-langfuse-keys
 	$(COMPOSE) up -d
+
+## Ensure Langfuse init keypair exists before any compose up (idempotent — never overwrites an existing key)
+gen-langfuse-keys:
+	./scripts/gen-langfuse-keys.sh
 
 down:
 	$(COMPOSE) down

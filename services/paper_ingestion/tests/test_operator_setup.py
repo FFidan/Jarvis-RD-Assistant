@@ -372,6 +372,113 @@ def test_setup_check_subnet_probe_is_non_fatal():
         )
 
 
+def test_gen_langfuse_keys_generates_non_empty_mode_600_files():
+    """A0-2: gen-langfuse-keys.sh must create non-empty pk-lf-/sk-lf- files with mode 600."""
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    gen_sh = REPO_ROOT / "scripts" / "gen-langfuse-keys.sh"
+    if not gen_sh.exists():
+        pytest.skip("scripts/gen-langfuse-keys.sh not found")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        secrets_dir = tmp / "secrets"
+        secrets_dir.mkdir()
+
+        dest_scripts = tmp / "scripts"
+        dest_scripts.mkdir()
+        shutil.copy(gen_sh, dest_scripts / "gen-langfuse-keys.sh")
+
+        result = subprocess.run(
+            ["bash", str(dest_scripts / "gen-langfuse-keys.sh")],
+            cwd=str(tmp),
+            text=True,
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+        assert result.returncode == 0, (
+            f"gen-langfuse-keys.sh exited {result.returncode}\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+        pk_file = secrets_dir / "langfuse_init_pk.txt"
+        sk_file = secrets_dir / "langfuse_init_sk.txt"
+
+        assert pk_file.exists(), "langfuse_init_pk.txt was not created"
+        assert sk_file.exists(), "langfuse_init_sk.txt was not created"
+
+        pk_content = pk_file.read_text()
+        sk_content = sk_file.read_text()
+
+        assert pk_content.startswith("pk-lf-"), (
+            f"langfuse_init_pk.txt does not start with 'pk-lf-': {pk_content!r}"
+        )
+        assert sk_content.startswith("sk-lf-"), (
+            f"langfuse_init_sk.txt does not start with 'sk-lf-': {sk_content!r}"
+        )
+
+        assert oct(pk_file.stat().st_mode & 0o777) == "0o600", (
+            f"langfuse_init_pk.txt has wrong mode: {oct(pk_file.stat().st_mode & 0o777)}"
+        )
+        assert oct(sk_file.stat().st_mode & 0o777) == "0o600", (
+            f"langfuse_init_sk.txt has wrong mode: {oct(sk_file.stat().st_mode & 0o777)}"
+        )
+
+
+def test_gen_langfuse_keys_is_idempotent():
+    """A0-2: running gen-langfuse-keys.sh twice must not change file content.
+
+    The script uses ``[ -s file ] || generate`` semantics, so an existing
+    non-empty file is preserved verbatim on the second run.
+    """
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    gen_sh = REPO_ROOT / "scripts" / "gen-langfuse-keys.sh"
+    if not gen_sh.exists():
+        pytest.skip("scripts/gen-langfuse-keys.sh not found")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        secrets_dir = tmp / "secrets"
+        secrets_dir.mkdir()
+
+        dest_scripts = tmp / "scripts"
+        dest_scripts.mkdir()
+        shutil.copy(gen_sh, dest_scripts / "gen-langfuse-keys.sh")
+
+        def _run_gen() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["bash", str(dest_scripts / "gen-langfuse-keys.sh")],
+                cwd=str(tmp),
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+
+        r1 = _run_gen()
+        assert r1.returncode == 0, f"First run failed: {r1.stderr}"
+
+        pk_after_first = (secrets_dir / "langfuse_init_pk.txt").read_text()
+        sk_after_first = (secrets_dir / "langfuse_init_sk.txt").read_text()
+
+        r2 = _run_gen()
+        assert r2.returncode == 0, f"Second run failed: {r2.stderr}"
+
+        pk_after_second = (secrets_dir / "langfuse_init_pk.txt").read_text()
+        sk_after_second = (secrets_dir / "langfuse_init_sk.txt").read_text()
+
+        assert pk_after_first == pk_after_second, (
+            "gen-langfuse-keys.sh rotated langfuse_init_pk.txt on second run (not idempotent)"
+        )
+        assert sk_after_first == sk_after_second, (
+            "gen-langfuse-keys.sh rotated langfuse_init_sk.txt on second run (not idempotent)"
+        )
+
+
 @pytest.mark.parametrize(
     "mode,expected_login",
     [

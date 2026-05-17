@@ -47,6 +47,17 @@ All files should show `-rw-------` (mode 600). If any are world-readable, fix th
 chmod 600 secrets/*.txt
 ```
 
+## Langfuse Init Keypair
+
+`langfuse_init_pk.txt` and `langfuse_init_sk.txt` are **git-ignored, machine-local, and
+auto-generated** by `scripts/gen-langfuse-keys.sh` on first use. **Never commit them.**
+
+They seed the Langfuse headless-init (project public/secret key). Rotation invalidates
+the existing Langfuse project credentials and requires a Langfuse volume wipe per
+`docs/observability` §9.2 (operator-only; `OBSERVABILITY_ENABLED` is off by default so
+this is a no-op on standard deployments). The `make up` target ensures they are always
+present before `docker compose up`.
+
 ## How it works
 
 Services read the `*_FILE` environment variable first (Docker Secrets mount path at
