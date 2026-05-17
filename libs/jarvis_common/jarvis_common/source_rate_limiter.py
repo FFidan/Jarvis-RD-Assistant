@@ -136,32 +136,54 @@ class PersistentSourceRateLimiter:
                 await asyncio.sleep(self._min_interval)
 
     async def _acquire_with_retry(self) -> None:
-        """Inner acquire: check cooldown, then atomic slot claim (one retry)."""
-        # ── 1. Cooldown check (read-only; both workers should respect this) ──
+        """Inner acquire: atomic cooldown-check + slot claim (one retry).
+
+        Both the cooldown check and the slot claim happen inside the **same**
+        transaction using ``SELECT … FOR UPDATE`` so that a cooldown written by
+        a concurrent worker between those two steps is always observed.
+
+        H-1 preservation: the connection is released (context-manager exited)
+        before any ``asyncio.sleep`` call.  The sleep therefore never holds an
+        open DB connection.
+        """
+        # ── 1. Cooldown check + atomic slot claim (single transaction) ───────
+        # We lock the existing row (if any) with FOR UPDATE so that a
+        # concurrent ``update_last_request("rate_limit", …)`` that committed
+        # cooldown_until between our read and our INSERT cannot be missed.
+        # The INSERT path (first-ever request, no conflict) takes the lock
+        # implicitly via the unique-index insert.
+        cooldown_wait: float | None = None
         async with self._pool.acquire() as conn:
-            cooldown_row = await conn.fetchrow(
-                """
-                SELECT cooldown_until
-                  FROM source_health
-                 WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
-                   AND source_type = $2
-                """,
-                self._user_id,
+            async with conn.transaction():
+                locked_row = await conn.fetchrow(
+                    """
+                    SELECT cooldown_until, last_request_at
+                      FROM source_health
+                     WHERE (user_id = $1 OR ($1 IS NULL AND user_id IS NULL))
+                       AND source_type = $2
+                       FOR UPDATE
+                    """,
+                    self._user_id,
+                    self._source_type,
+                )
+                if locked_row is not None:
+                    cooldown_until: datetime | None = locked_row["cooldown_until"]
+                    if cooldown_until is not None:
+                        now = datetime.now(tz=UTC)
+                        if cooldown_until > now:
+                            cooldown_wait = (cooldown_until - now).total_seconds()
+                            # Don't claim the slot — just note the wait and bail
+                            # out of the transaction cleanly (no writes).
+
+        # Release the connection BEFORE sleeping (H-1: never hold conn across sleep).
+        if cooldown_wait is not None:
+            _logger.debug(
+                "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
                 self._source_type,
+                cooldown_wait,
             )
-        if cooldown_row is not None:
-            cooldown_until: datetime | None = cooldown_row["cooldown_until"]
-            if cooldown_until is not None:
-                now = datetime.now(tz=UTC)
-                if cooldown_until > now:
-                    wait = (cooldown_until - now).total_seconds()
-                    _logger.debug(
-                        "PersistentSourceRateLimiter[%s] in cooldown; sleeping %.1fs",
-                        self._source_type,
-                        wait,
-                    )
-                    await asyncio.sleep(wait)
-                    return
+            await asyncio.sleep(cooldown_wait)
+            return
 
         # ── 2. Atomic slot claim (up to 2 attempts) ──────────────────────────
         # The INSERT path handles the first-ever request for this source (no
@@ -219,9 +241,22 @@ class PersistentSourceRateLimiter:
                     self._source_type,
                     wait,
                 )
+                # Release connection BEFORE sleeping (H-1).
                 await asyncio.sleep(wait)
-            # attempt == 1: second claim attempt after sleeping; if it also
-            # fails (unlikely), fall through and return — don't block forever.
+            else:
+                # attempt == 1: second claim failed after sleeping.  This is
+                # abnormal (two workers racing on a very short interval, or
+                # clock skew).  Log a warning and signal the caller so it can
+                # use the fallback path — never silently bypass rate-limiting.
+                _logger.warning(
+                    "PersistentSourceRateLimiter[%s] slot still taken after retry; "
+                    "rate-limit enforced via fallback",
+                    self._source_type,
+                )
+                raise RuntimeError(
+                    f"PersistentSourceRateLimiter[{self._source_type}]: "
+                    "slot claim failed on both attempts — rate-limit enforced via fallback"
+                )
 
     async def update_last_request(
         self,

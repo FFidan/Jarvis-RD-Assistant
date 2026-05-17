@@ -44,6 +44,14 @@ def _make_pool(fetchrow_side_effects=None, raise_exc=None):
             conn.fetchrow = AsyncMock(return_value=None)
         conn.execute = AsyncMock(return_value=None)
 
+    # conn.transaction() is called as a plain method (not awaited) and must
+    # return an async context manager.  Wire it up explicitly so it does not
+    # inadvertently return a coroutine (which AsyncMock would do by default).
+    txn_cm = AsyncMock()
+    txn_cm.__aenter__ = AsyncMock(return_value=None)
+    txn_cm.__aexit__ = AsyncMock(return_value=False)
+    conn.transaction = MagicMock(return_value=txn_cm)
+
     pool = MagicMock()
     # pool.acquire() used as async context manager; always returns the same conn
     acquire_cm = AsyncMock()
@@ -442,4 +450,112 @@ async def test_concurrent_acquire_only_one_proceeds_without_sleep(monkeypatch):
     )
     assert 7.0 < sleep_calls[0] <= 10.0, (
         f"Sleep duration {sleep_calls[0]:.2f}s out of expected range (7–10s)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# M-2: Atomic cooldown-check + claim (PI-7)
+# ---------------------------------------------------------------------------
+
+
+async def test_cooldown_observed_inside_same_transaction(monkeypatch):
+    """M-2a: cooldown set by a concurrent worker is observed atomically.
+
+    The fix wraps the cooldown check inside a SELECT … FOR UPDATE transaction
+    so a cooldown written between the check and the claim is never missed.
+    When the locked-row read returns a future cooldown_until, the limiter
+    sleeps and does NOT attempt the slot claim (only 1 fetchrow total).
+
+    fetchrow sequence (single connection, single transaction):
+      1. SELECT … FOR UPDATE → locked_row with future cooldown_until
+      (method returns after cooldown sleep — no slot-claim fetchrow)
+    """
+    now = datetime.now(tz=UTC)
+    cooldown_until = now + timedelta(seconds=30.0)
+
+    # Simulate a cooldown that a concurrent update_last_request("rate_limit")
+    # wrote — the FOR UPDATE lock ensures our check sees it.
+    locked_row = {"cooldown_until": cooldown_until, "last_request_at": now}
+    pool, conn = _make_pool(fetchrow_side_effects=[locked_row])
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    limiter = PersistentSourceRateLimiter(
+        source_type="arxiv",
+        user_id=None,
+        min_interval_seconds=5.0,
+        db_pool=pool,
+    )
+    await limiter.acquire()
+
+    # Must have slept for the cooldown duration (≈ 30s).
+    assert len(sleep_calls) == 1, f"Expected 1 cooldown sleep; got {sleep_calls}"
+    assert 28.0 <= sleep_calls[0] <= 32.0, (
+        f"Cooldown sleep {sleep_calls[0]:.2f}s out of expected range"
+    )
+    # Slot-claim fetchrow must NOT have been called — only 1 fetchrow total.
+    assert conn.fetchrow.call_count == 1, (
+        f"Expected exactly 1 fetchrow (cooldown check only); got {conn.fetchrow.call_count}"
+    )
+
+
+async def test_second_claim_failure_logs_warning_and_raises(monkeypatch, caplog):
+    """M-2b: a 2nd failed slot claim logs a WARNING and raises (not silent).
+
+    Previously the 2nd attempt failing would fall through silently, allowing
+    a rate-limit bypass.  After the fix, a RuntimeError is raised so that
+    acquire() triggers the fallback path — and a WARNING is emitted.
+
+    fetchrow sequence:
+      1. SELECT … FOR UPDATE → None (no existing row / no cooldown)
+      2. atomic claim (attempt 0) → None (slot taken)
+      3. wait-row read           → last_request_at = 1s ago → sleep ~9s
+      4. atomic claim (attempt 1) → None (slot STILL taken → 2nd failure)
+    """
+    import logging
+
+    now = datetime.now(tz=UTC)
+    recent = now - timedelta(seconds=1.0)
+    wait_row = {"last_request_at": recent}
+
+    # All claim attempts fail (None); wait-row is readable on the 3rd call.
+    pool, _ = _make_pool(fetchrow_side_effects=[None, None, wait_row, None])
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
+    monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
+
+    limiter = PersistentSourceRateLimiter(
+        source_type="s2",
+        user_id=1,
+        min_interval_seconds=10.0,
+        db_pool=pool,
+    )
+
+    # acquire() wraps _acquire_with_retry; the RuntimeError from the 2nd
+    # claim failure triggers the fallback (bare asyncio.sleep(min_interval)).
+    with caplog.at_level(logging.WARNING, logger="jarvis_common.source_rate_limiter"):
+        await limiter.acquire()
+
+    # Total sleeps: 1 throttle-wait (≈9s from attempt-0 retry) + 1 fallback (10s).
+    assert len(sleep_calls) == 2, f"Expected 2 sleeps (throttle + fallback); got {sleep_calls}"
+    assert 7.0 < sleep_calls[0] <= 10.0, (
+        f"Throttle-wait sleep {sleep_calls[0]:.2f}s out of range (7–10s)"
+    )
+    assert sleep_calls[1] == 10.0, (
+        f"Fallback sleep should be min_interval=10s; got {sleep_calls[1]}"
+    )
+
+    # A WARNING about the 2nd claim failure must appear in the log.
+    warning_messages = [r.message for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("slot still taken after retry" in m for m in warning_messages), (
+        f"Expected 'slot still taken after retry' warning; got: {warning_messages}"
     )
