@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from paper_ingestion.jobs.data_purge import (
-    _DELETE_EXPIRED_USERS,
+    _DELETE_EXPIRED_USERS_EXCLUDING,
     _SELECT_EXPIRED_USERS,
     data_purge_task,
     register_data_purge,
@@ -81,9 +81,12 @@ async def test_purge_selects_before_deleting() -> None:
     assert "deleted_at < NOW() - INTERVAL '30 days'" in select_sql
     assert select_sql == _SELECT_EXPIRED_USERS
 
-    # DELETE now runs on conn (same connection as SELECT).
-    delete_sql = conn.execute.call_args[0][0]
-    assert delete_sql == _DELETE_EXPIRED_USERS
+    # DELETE now runs on conn (same connection as SELECT) with exclusion parameter.
+    delete_call = conn.execute.call_args
+    delete_sql = delete_call[0][0]
+    assert delete_sql == _DELETE_EXPIRED_USERS_EXCLUDING
+    # All Qdrant purges succeed (mock returns 0) → exclusion list is empty.
+    assert list(delete_call[0][1]) == []
 
 
 @pytest.mark.asyncio
@@ -188,9 +191,14 @@ async def test_purge_no_expired_users_skips_everything() -> None:
 
 @pytest.mark.asyncio
 async def test_purge_qdrant_error_is_resilient_and_continues() -> None:
-    """A Qdrant failure for one uid must not abort the SQL DELETE or audit."""
+    """A Qdrant failure for one uid must not abort the SQL DELETE or audit.
+
+    SEC-PURGE-1: the failed uid (1) must be EXCLUDED from the hard DELETE so
+    its vectors are not orphaned.  uid=2 succeeded and must be deleted.
+    """
     rows = [{"id": 1}, {"id": 2}]
-    app, pool, conn, qdrant = _make_app(rows, execute_result="DELETE 2")
+    # Only uid=2 gets deleted; execute_result reflects that.
+    app, pool, conn, qdrant = _make_app(rows, execute_result="DELETE 1")
 
     call_count = 0
 
@@ -212,6 +220,11 @@ async def test_purge_qdrant_error_is_resilient_and_continues() -> None:
 
     assert call_count == 2
     conn.execute.assert_awaited_once()
+    # Exclusion list must contain uid=1 (failed); uid=2 must NOT be excluded.
+    delete_call = conn.execute.call_args
+    exclude_param = delete_call[0][1]
+    assert 1 in exclude_param
+    assert 2 not in exclude_param
     mock_audit.assert_awaited_once()
     # qdrant_errors must be recorded in audit metadata
     metadata = mock_audit.call_args.kwargs["metadata"]
@@ -223,9 +236,14 @@ async def test_purge_qdrant_error_is_resilient_and_continues() -> None:
 
 @pytest.mark.asyncio
 async def test_purge_missing_qdrant_client_logs_warning_and_continues() -> None:
-    """If qdrant_client is absent from app.state, log a warning but still DELETE."""
+    """If qdrant_client is absent from app.state, log a warning and defer hard-delete.
+
+    SEC-PURGE-1: when Qdrant is unavailable ALL expired uids are treated as
+    failed — the DELETE is issued but with all uids excluded, so no rows are
+    actually removed.  They retry on the next nightly run once Qdrant is back.
+    """
     rows = [{"id": 3}]
-    app, pool, conn, _ = _make_app(rows, execute_result="DELETE 1", include_qdrant=False)
+    app, pool, conn, _ = _make_app(rows, execute_result="DELETE 0", include_qdrant=False)
     # Explicitly remove qdrant_client from state (getattr returns None)
     del app.state.qdrant_client
 
@@ -236,8 +254,131 @@ async def test_purge_missing_qdrant_client_logs_warning_and_continues() -> None:
         await data_purge_task(app)
 
     mock_logger.warning.assert_called()
+    # DELETE is still called — but with uid=3 in the exclusion list → 0 rows removed.
     conn.execute.assert_awaited_once()
+    delete_call = conn.execute.call_args
+    exclude_param = delete_call[0][1]
+    assert 3 in exclude_param
     mock_audit.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# SEC-PURGE-1: failed-Qdrant uids excluded from hard DELETE
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sec_purge1_partial_qdrant_failure_excludes_failed_uid() -> None:
+    """SEC-PURGE-1(a): uid whose Qdrant purge fails must NOT be hard-deleted.
+
+    uid=1 raises → must be excluded from DELETE; uid=2 succeeds → must be
+    deleted.  The DELETE SQL must carry a ``<> ALL($1::int[])`` exclusion
+    containing [1], and qdrant_errors must be recorded in audit metadata.
+    """
+    rows = [{"id": 1}, {"id": 2}]
+    # execute_result reflects only uid=2 being deleted
+    app, pool, conn, qdrant = _make_app(rows, execute_result="DELETE 1")
+
+    async def _flaky_purge(q, uid):
+        if uid == 1:
+            raise RuntimeError("qdrant unreachable")
+        return 5
+
+    with (
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch(
+            "paper_ingestion.jobs.data_purge._purge_qdrant_for_user",
+            side_effect=_flaky_purge,
+        ),
+    ):
+        await data_purge_task(app)  # must not raise
+
+    # DELETE must have been called once (for uid=2 only)
+    conn.execute.assert_awaited_once()
+    delete_call = conn.execute.call_args
+    delete_sql = delete_call[0][0]
+    # New parameterized SQL must include exclusion clause
+    assert "<> ALL($1::int[])" in delete_sql or "!= ALL($1::int[])" in delete_sql
+    # The exclusion parameter must contain uid=1
+    exclude_param = delete_call[0][1]
+    assert 1 in exclude_param
+    assert 2 not in exclude_param
+
+    mock_audit.assert_awaited_once()
+    metadata = mock_audit.call_args.kwargs["metadata"]
+    assert "qdrant_errors" in metadata
+    assert len(metadata["qdrant_errors"]) == 1
+    # uid=2 succeeded → appears in qdrant_vectors_deleted; uid=1 did not
+    assert metadata["qdrant_vectors_deleted"] == {2: 5}
+
+
+@pytest.mark.asyncio
+async def test_sec_purge1_all_success_empty_exclusion_list() -> None:
+    """SEC-PURGE-1(b): all Qdrant purges succeed → exclusion list is empty.
+
+    With no failures the parameterized DELETE with an empty exclusion list
+    must delete all expired uids (regression-equivalent: ``<> ALL('{}'::int[])``
+    is always true so nothing is excluded).
+    """
+    rows = [{"id": 10}, {"id": 20}]
+    app, pool, conn, qdrant = _make_app(rows, execute_result="DELETE 2")
+
+    with (
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch(
+            "paper_ingestion.jobs.data_purge._purge_qdrant_for_user",
+            new_callable=AsyncMock,
+            return_value=3,
+        ),
+    ):
+        await data_purge_task(app)
+
+    conn.execute.assert_awaited_once()
+    delete_call = conn.execute.call_args
+    delete_sql = delete_call[0][0]
+    assert "<> ALL($1::int[])" in delete_sql or "!= ALL($1::int[])" in delete_sql
+    # No failures → exclusion list must be empty
+    exclude_param = delete_call[0][1]
+    assert list(exclude_param) == []
+
+    mock_audit.assert_awaited_once()
+    metadata = mock_audit.call_args.kwargs["metadata"]
+    assert "qdrant_errors" not in metadata
+    assert metadata["qdrant_vectors_deleted"] == {10: 3, 20: 3}
+
+
+@pytest.mark.asyncio
+async def test_sec_purge1_qdrant_none_no_users_deleted() -> None:
+    """SEC-PURGE-1(c): qdrant_client is None → NO users hard-deleted.
+
+    All expired uids are treated as "failed" so the DELETE is called with
+    ALL of them excluded, meaning zero rows are removed.  A warning is logged
+    and qdrant_errors is recorded.  The rows remain deleted_at-marked and will
+    be retried on the next nightly run once Qdrant is restored.
+    """
+    rows = [{"id": 3}, {"id": 4}]
+    app, pool, conn, _ = _make_app(rows, execute_result="DELETE 0", include_qdrant=False)
+    del app.state.qdrant_client
+
+    with (
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch("paper_ingestion.jobs.data_purge.logger") as mock_logger,
+    ):
+        await data_purge_task(app)
+
+    mock_logger.warning.assert_called()
+
+    # DELETE must be called but with ALL uids excluded → no rows deleted
+    conn.execute.assert_awaited_once()
+    delete_call = conn.execute.call_args
+    delete_sql = delete_call[0][0]
+    assert "<> ALL($1::int[])" in delete_sql or "!= ALL($1::int[])" in delete_sql
+    exclude_param = delete_call[0][1]
+    assert set(exclude_param) == {3, 4}
+
+    mock_audit.assert_awaited_once()
+    metadata = mock_audit.call_args.kwargs["metadata"]
+    assert "qdrant_errors" in metadata
 
 
 @pytest.mark.asyncio

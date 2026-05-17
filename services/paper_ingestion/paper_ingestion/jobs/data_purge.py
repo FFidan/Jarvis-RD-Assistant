@@ -27,8 +27,15 @@ _DATA_PURGE_CRON = "10 3 * * *"
 _SELECT_EXPIRED_USERS = (
     "SELECT id FROM users WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days'"
 )
-_DELETE_EXPIRED_USERS = (
-    "DELETE FROM users WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days'"
+# Parameterized DELETE: $1 is a list[int] of uids whose Qdrant purge FAILED.
+# Those uids are excluded so their rows survive this run and are retried next
+# night once Qdrant is healthy again.  When $1 is an empty array every expired
+# row is deleted (``id <> ALL('{}'::int[])`` is always true), which is
+# regression-equivalent to the old unconditional delete.
+_DELETE_EXPIRED_USERS_EXCLUDING = (
+    "DELETE FROM users"
+    " WHERE deleted_at IS NOT NULL AND deleted_at < NOW() - INTERVAL '30 days'"
+    " AND id <> ALL($1::int[])"
 )
 
 
@@ -86,6 +93,10 @@ async def data_purge_task(app: Any) -> None:
 
             qdrant_vectors: dict[int, int] = {}
             qdrant_errors: list[str] = []
+            # Uids whose Qdrant purge failed — excluded from the hard DELETE so
+            # their vectors are not orphaned.  They remain deleted_at-marked and
+            # are naturally retried on the next nightly run.
+            failed_uids: set[int] = set()
             if qdrant is not None:
                 for uid in expired_ids:
                     try:
@@ -93,15 +104,21 @@ async def data_purge_task(app: Any) -> None:
                     except Exception as exc:
                         logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
                         qdrant_errors.append(f"uid={uid}: {exc!r}")
+                        failed_uids.add(uid)
             else:
                 logger.warning(
                     "data_purge: qdrant_client not on app.state"
-                    " — vectors NOT purged for %d user(s)",
+                    " — vectors NOT purged for %d user(s); deferring hard-delete",
                     len(expired_ids),
                 )
                 qdrant_errors.append("qdrant_client missing from app.state")
+                # All uids are "failed" — none should be hard-deleted until
+                # Qdrant is available and vectors can be removed first.
+                failed_uids = set(expired_ids)
 
-            result = await conn.execute(_DELETE_EXPIRED_USERS)
+            # Only delete users whose Qdrant vectors were successfully purged.
+            # Passing an empty list deletes all expired rows (regression-equivalent).
+            result = await conn.execute(_DELETE_EXPIRED_USERS_EXCLUDING, list(failed_uids))
 
         try:
             deleted: int | None = int(result.split()[-1])

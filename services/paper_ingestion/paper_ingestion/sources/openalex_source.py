@@ -44,6 +44,11 @@ logger = logging.getLogger(__name__)
 
 OPENALEX_API_URL = "https://api.openalex.org/works"
 
+# DoS/OOM guard: real OpenAlex abstracts are well under ~10k tokens.
+# 100_000 is generous headroom while preventing a malformed/adversarial work
+# with a position like 1_000_000_000 from allocating a multi-GB list.
+_MAX_ABSTRACT_TOKENS = 100_000
+
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str | None:
     """Reconstruct an abstract string from an OpenAlex abstract_inverted_index.
@@ -81,6 +86,14 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str | None:
             if pos > max_pos:
                 max_pos = pos
 
+    if max_pos + 1 > _MAX_ABSTRACT_TOKENS:
+        logger.warning(
+            "OpenAlex: abstract_inverted_index has max position %d, "
+            "exceeding _MAX_ABSTRACT_TOKENS=%d; truncating to avoid OOM",
+            max_pos,
+            _MAX_ABSTRACT_TOKENS,
+        )
+        max_pos = _MAX_ABSTRACT_TOKENS - 1
     tokens: list[str] = [""] * (max_pos + 1)
     for word, positions in inverted_index.items():
         for pos in positions:

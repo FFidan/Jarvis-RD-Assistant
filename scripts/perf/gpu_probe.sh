@@ -92,10 +92,11 @@ fi
 # Helper: escape a string for JSON (no external deps)
 # ---------------------------------------------------------------------------
 json_escape() {
-  # Escape backslash, double-quote, and the four JSON control characters.
+  # Escapes: backslash (\), double-quote ("), tab (\t), carriage-return (\r),
+  # and newline (\n) — the five characters requiring JSON escaping in string values.
   # Handles the common cases for model names, paths, and git hashes.
   printf '%s' "$1" \
-    | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/\r/\\r/g'
+    | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/\\t/g; s/\r/\\r/g; s/\n/\\n/g'
 }
 
 # ---------------------------------------------------------------------------
@@ -176,7 +177,10 @@ parse_litellm_aliases() {
       first = 1
       for (a in aliases) {
         if (!first) printf ","
-        printf "\"%s\":\"%s\"", a, aliases[a]
+        # Escape backslash then double-quote in both key and value before emitting
+        key = a;   gsub(/\\/, "\\\\", key);   gsub(/"/, "\\\"", key)
+        val = aliases[a]; gsub(/\\/, "\\\\", val); gsub(/"/, "\\\"", val)
+        printf "\"%s\":\"%s\"", key, val
         first = 0
       }
       printf "}"
@@ -422,9 +426,12 @@ while true; do
   emit_timeseries_line
 
   # Sleep in 1-second ticks so SIGTERM / sentinel are checked promptly.
-  # PERF_GPU_POLL_SECONDS is treated as an integer here (sub-second precision
-  # is not needed for a 2 s default; round up non-integer values naturally).
-  local_ticks=$(( PERF_GPU_POLL_SECONDS > 0 ? PERF_GPU_POLL_SECONDS : 1 ))
+  # PERF_GPU_POLL_SECONDS may be a float (e.g. 2.5); bash arithmetic rejects
+  # floats, so we strip the decimal part before the calculation (truncates, does
+  # not round).  An empty or non-numeric value also falls back to 1.
+  _poll_int="${PERF_GPU_POLL_SECONDS%%.*}"
+  [[ "${_poll_int}" =~ ^[0-9]+$ ]] || _poll_int="1"
+  local_ticks=$(( _poll_int > 0 ? _poll_int : 1 ))
   local_i=0
   while (( local_i < local_ticks )); do
     sleep 1 || true

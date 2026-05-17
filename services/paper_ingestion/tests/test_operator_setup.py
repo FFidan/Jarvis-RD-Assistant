@@ -479,6 +479,113 @@ def test_gen_langfuse_keys_is_idempotent():
         )
 
 
+def test_init_secrets_guard_uses_posix_ere_not_gnu_bre():
+    """INST-1 portability: the .env guard in sync_secret must use ``grep -qE``
+    with POSIX ERE ``+`` (compatible with BSD/macOS grep), not GNU BRE ``\\+``
+    which is treated as a literal ``+`` on macOS and causes the guard to misfire,
+    resulting in duplicate KEY= entries on re-run.
+
+    This is a static assertion against the script text — no shell execution
+    required.  It mirrors the existing pattern of script-property assertions in
+    this suite (e.g. test_bootstrap_scripts_probe_direct_http_dashboard_url).
+    """
+    init_sh = REPO_ROOT / "scripts" / "init-secrets.sh"
+    if not init_sh.exists():
+        pytest.skip("scripts/init-secrets.sh not found")
+
+    script_text = init_sh.read_text()
+
+    # Strip comment lines before checking — comments may mention the old form
+    # for documentation purposes, so only inspect executable shell code.
+    code_lines = [ln for ln in script_text.splitlines() if not ln.lstrip().startswith("#")]
+    code_text = "\n".join(code_lines)
+
+    # Must NOT contain the GNU BRE form on an executable line.
+    assert r"grep -q " + r'"^${key}=.\+"' not in code_text, (
+        "init-secrets.sh still uses GNU BRE '\\+' in a grep -q call; "
+        "this is not portable to BSD/macOS grep.  Use grep -qE with POSIX ERE '+' instead."
+    )
+
+    # Must contain the POSIX ERE form used in the guard.
+    assert 'grep -qE "^${key}=.+"' in code_text, (
+        "init-secrets.sh does not use 'grep -qE \"^${key}=.+\"' — "
+        "the POSIX-ERE guard is missing or malformed."
+    )
+
+
+def test_init_secrets_rerun_produces_no_duplicate_env_keys():
+    """INST-1 idempotency: running init-secrets.sh twice must NOT produce
+    duplicate KEY= lines in .env, and secrets/*.txt files must be stable
+    (second run must not change their content).
+    """
+    import shutil as _shutil
+
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl not available")
+
+    init_sh = REPO_ROOT / "scripts" / "init-secrets.sh"
+    if not init_sh.exists():
+        pytest.skip("scripts/init-secrets.sh not found")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        (tmp / ".env").write_text("")
+        (tmp / "secrets").mkdir()
+
+        dest_scripts = tmp / "scripts"
+        dest_scripts.mkdir()
+        _shutil.copy(init_sh, dest_scripts / "init-secrets.sh")
+
+        def _run() -> subprocess.CompletedProcess:
+            return subprocess.run(
+                ["bash", str(dest_scripts / "init-secrets.sh")],
+                cwd=str(tmp),
+                text=True,
+                capture_output=True,
+                timeout=30,
+                check=False,
+            )
+
+        r1 = _run()
+        assert r1.returncode == 0, (
+            f"First run failed (exit {r1.returncode})\nstdout: {r1.stdout}\nstderr: {r1.stderr}"
+        )
+
+        # Snapshot secret file contents after first run.
+        secrets_dir = tmp / "secrets"
+        first_run_contents: dict[str, str] = {}
+        for fpath in sorted(secrets_dir.iterdir()):
+            first_run_contents[fpath.name] = fpath.read_text()
+
+        r2 = _run()
+        assert r2.returncode == 0, (
+            f"Second run failed (exit {r2.returncode})\nstdout: {r2.stdout}\nstderr: {r2.stderr}"
+        )
+
+        # Assert no duplicate KEY= lines in .env.
+        env_text = (tmp / ".env").read_text()
+        env_lines = [ln for ln in env_text.splitlines() if "=" in ln]
+        seen_keys: set[str] = set()
+        duplicates: list[str] = []
+        for line in env_lines:
+            k = line.split("=", 1)[0]
+            if k in seen_keys:
+                duplicates.append(k)
+            seen_keys.add(k)
+        assert not duplicates, (
+            f"Duplicate KEY= entries found in .env after two runs: {duplicates}\n"
+            f".env contents:\n{env_text}"
+        )
+
+        # Assert secrets files are stable (content unchanged by second run).
+        unstable: list[str] = []
+        for fname, first_content in first_run_contents.items():
+            second_content = (secrets_dir / fname).read_text()
+            if first_content != second_content:
+                unstable.append(fname)
+        assert not unstable, f"Secret files changed on second run (not stable): {unstable}"
+
+
 @pytest.mark.parametrize(
     "mode,expected_login",
     [

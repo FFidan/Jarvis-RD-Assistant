@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 # scripts/gen-langfuse-keys.sh — Idempotently generate Langfuse init keypair.
 #
 # Creates secrets/langfuse_init_pk.txt and secrets/langfuse_init_sk.txt when
@@ -10,7 +10,7 @@
 # The .env entries are appended only if absent (mirrors init-secrets.sh idiom).
 #
 # Called automatically by: make up, make observability-up
-set -eu
+set -euo pipefail
 cd "$(dirname "$0")/.."
 
 rand() { head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'; }
@@ -25,12 +25,12 @@ chmod 600 secrets/langfuse_init_pk.txt secrets/langfuse_init_sk.txt
 # ---------------------------------------------------------------------------
 # 2. Mirror values into .env so compose interpolates them without cat-in-env
 #    Only appends when the key is absent from .env — never duplicates.
+#    touch .env first so the guard works even on a fresh checkout.
 # ---------------------------------------------------------------------------
-if [ -f .env ]; then
-  pk="$(tr -d '\n' < secrets/langfuse_init_pk.txt)"
-  sk="$(tr -d '\n' < secrets/langfuse_init_sk.txt)"
-  grep -qE '^LANGFUSE_INIT_PROJECT_PUBLIC_KEY=' .env 2>/dev/null \
-    || printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=%s\n' "$pk" >> .env
-  grep -qE '^LANGFUSE_INIT_PROJECT_SECRET_KEY=' .env 2>/dev/null \
-    || printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=%s\n' "$sk" >> .env
-fi
+touch .env
+pk="$(tr -d '\n' < secrets/langfuse_init_pk.txt)"
+sk="$(tr -d '\n' < secrets/langfuse_init_sk.txt)"
+grep -qE '^LANGFUSE_INIT_PROJECT_PUBLIC_KEY=' .env 2>/dev/null \
+  || printf 'LANGFUSE_INIT_PROJECT_PUBLIC_KEY=%s\n' "$pk" >> .env
+grep -qE '^LANGFUSE_INIT_PROJECT_SECRET_KEY=' .env 2>/dev/null \
+  || printf 'LANGFUSE_INIT_PROJECT_SECRET_KEY=%s\n' "$sk" >> .env

@@ -107,9 +107,12 @@ _fire_batch() {
                     -H "Accept: application/json" 2>/dev/null \
                || echo "ERR,000")
       echo "${scenario},${path},${result}"
-    ) >> "${TMPDIR_LG}/results.txt" &
+    ) > "${TMPDIR_LG}/result_${i}.txt" &
   done
   wait  # wait for all background workers in this batch
+  # Concatenate per-worker files into a single results file; each worker wrote
+  # to its own file so there is no concurrent-append race on a shared fd.
+  cat "${TMPDIR_LG}"/result_*.txt > "${TMPDIR_LG}/results.txt" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -178,10 +181,10 @@ A_START="$(date +%s)"
 
 for endpoint in "${A_ENDPOINTS[@]}"; do
   log "  → ${endpoint} (×${PERF_CONCURRENCY} concurrent)"
-  : > "${TMPDIR_LG}/batch_results.txt"
 
-  # Fire the batch; results land in TMPDIR_LG/results.txt
-  : > "${TMPDIR_LG}/results.txt"
+  # Clean up per-worker files from any prior batch; _fire_batch writes
+  # result_<i>.txt per worker and then concatenates them into results.txt.
+  rm -f "${TMPDIR_LG}"/result_*.txt
   _fire_batch "scenario_a" "${endpoint}"
 
   # Append detail rows to the CSV and extract latencies for stats
@@ -220,7 +223,7 @@ B_END_DEADLINE=$(( B_START + PERF_SUSTAIN_SECS ))
 
 while [[ "$(date +%s)" -lt "${B_END_DEADLINE}" ]]; do
   for endpoint in "${PULSE_ENDPOINTS[@]}"; do
-    : > "${TMPDIR_LG}/results.txt"
+    rm -f "${TMPDIR_LG}"/result_*.txt
     _fire_batch "scenario_b" "${endpoint}"
 
     while IFS= read -r row; do

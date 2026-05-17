@@ -42,9 +42,52 @@ sync_secret() {
   local key="$1" file="secrets/$2" generator="${3:-}"
 
   # Step 1 — ensure value exists in .env
-  if ! grep -q "^${key}=.\+" .env 2>/dev/null; then
+  # Use POSIX ERE (-E) so "+" is a quantifier on both GNU and BSD/macOS grep.
+  # GNU BRE "\+" is a literal "+" on macOS and would misfire, causing duplicate
+  # KEY= entries on re-run (INST-1).
+  if ! grep -qE "^${key}=.+" .env 2>/dev/null; then
     if [ -n "$generator" ]; then
-      echo "${key}=$(eval "$generator")" >> .env
+      # Dispatch on key name to avoid eval (SH-1).  Each branch runs the same
+      # literal openssl command that was previously held in $generator, so
+      # output is byte-identical.  The $generator parameter is retained for the
+      # "is a generator provided?" guard above and for self-documentation; it is
+      # no longer executed.
+      local value
+      case "$key" in
+        JARVIS_API_KEY)
+          value=$(openssl rand -hex 32) ;;
+        LITELLM_MASTER_KEY)
+          value=$(openssl rand -hex 32) ;;
+        POSTGRES_PASSWORD)
+          value=$(openssl rand -hex 24) ;;
+        QDRANT_API_KEY)
+          value=$(openssl rand -hex 24) ;;
+        INFRA_INGEST_KEY)
+          value=$(openssl rand -hex 32) ;;
+        VECTOR_WRITER_PASSWORD)
+          value=$(openssl rand -hex 32) ;;
+        JARVIS_CONFIG_KEY)
+          value=$(openssl rand -base64 32 | tr -d '\n') ;;
+        JARVIS_MODEL_HMAC_KEY)
+          value=$(openssl rand -hex 32) ;;
+        LANGFUSE_NEXTAUTH_SECRET)
+          value=$(openssl rand -hex 32) ;;
+        LANGFUSE_SALT)
+          value=$(openssl rand -hex 16) ;;
+        LANGFUSE_PG_PASSWORD)
+          value=$(openssl rand -hex 24) ;;
+        N8N_ENCRYPTION_KEY)
+          value=$(openssl rand -base64 32 | tr -d '\n') ;;
+        N8N_JWT_SECRET)
+          value=$(openssl rand -hex 32) ;;
+        BACKUP_ENCRYPT_KEY)
+          value=$(openssl rand -base64 32 | tr -d '\n') ;;
+        *)
+          warn "${key} has a generator but is not in the dispatch table — skipping to avoid mis-generation."
+          return
+          ;;
+      esac
+      echo "${key}=${value}" >> .env
       ok "${key} generated and appended to .env."
     else
       warn "${key} not in .env and cannot be auto-generated — set it manually then re-run."

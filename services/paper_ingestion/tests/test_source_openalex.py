@@ -315,6 +315,52 @@ async def test_missing_key_logged_only_once(caplog):
 
 
 # ---------------------------------------------------------------------------
+# ISSUE-OOM-1: _reconstruct_abstract allocation cap (_MAX_ABSTRACT_TOKENS)
+# ---------------------------------------------------------------------------
+
+
+def test_reconstruct_abstract_giant_position_no_oom(caplog):
+    """A crafted inverted index with a huge position must NOT raise MemoryError.
+
+    An adversarial/malformed OpenAlex work with a position like 1_000_000_000
+    previously triggered list("") * (max_pos + 1) → multi-GB allocation →
+    MemoryError (a BaseException, escaping the except Exception guards around
+    _parse_work callers → worker crash for all users).
+
+    After the fix:
+    - No MemoryError is raised.
+    - The return value is a non-empty string containing the in-range token ("b").
+    - A WARNING is logged at the openalex_source logger.
+    """
+    giant_idx = {"a": [1_000_000_000], "b": [0]}
+
+    with caplog.at_level(logging.WARNING, logger="paper_ingestion.sources.openalex_source"):
+        result = _reconstruct_abstract(giant_idx)
+
+    # Must not raise; must return a bounded non-empty string
+    assert result is not None
+    assert isinstance(result, str)
+    assert len(result) > 0
+    # "b" is at position 0, well within the cap; it must appear in the result
+    assert "b" in result
+    # "a" is at position 1_000_000_000, beyond the cap; it is silently dropped
+    assert "a" not in result
+    # A WARNING must have been emitted about the oversized index
+    warn_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert warn_records, "Expected a WARNING log for oversized abstract index"
+
+
+def test_reconstruct_abstract_normal_input_unchanged():
+    """Normal small inverted index is completely unaffected by the cap.
+
+    Behaviour must be byte-identical to the pre-fix implementation for all
+    valid inputs.
+    """
+    idx = {"Hello": [0], "world": [1]}
+    assert _reconstruct_abstract(idx) == "Hello world"
+
+
+# ---------------------------------------------------------------------------
 # 429 → empty list
 # ---------------------------------------------------------------------------
 
