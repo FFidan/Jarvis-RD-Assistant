@@ -3,8 +3,11 @@
 Reopens docs/perf/2026-05-12-library-wishlist-decisions.md "httpx-cache"
 under its stated criteria: short TTL, transparent error behavior (only 200
 GETs to an explicit host allowlist are cached — 429/5xx and every non-source
-host pass straight through), hit/miss counters, env opt-out. No third-party
-dependency (the decision record's httpx-compat concern).
+host pass straight through), hit/miss counters, env opt-out.
+
+XML bodies from arXiv/NCBI are validated via a hardened lxml parser (SEC-3):
+entity expansion, DTD loading, and network access are all disabled, and any
+body containing unresolved entity references is rejected rather than cached.
 """
 
 from __future__ import annotations
