@@ -21,7 +21,7 @@ from paper_ingestion.jobs.data_purge import (
 def _make_pool(
     fetch_rows: list[dict], execute_result: str = "DELETE 2"
 ) -> tuple[MagicMock, AsyncMock]:
-    """Return an asyncpg Pool mock wired with fetch + execute returns."""
+    """Return an asyncpg Pool mock wired with fetch + execute returns on the conn."""
     conn = AsyncMock()
     conn.fetch.return_value = fetch_rows
     conn.execute.return_value = execute_result
@@ -32,16 +32,24 @@ def _make_pool(
 
     pool = MagicMock()
     pool.acquire = _acquire
+    # pool.execute is NOT called by data_purge_task (DELETE runs on the conn).
     pool.execute = AsyncMock(return_value=execute_result)
     return pool, conn
 
 
-def _make_qdrant() -> AsyncMock:
-    """Return a minimal AsyncQdrantClient mock."""
-    qdrant = AsyncMock()
+def _make_count_result(count: int) -> MagicMock:
     result = MagicMock()
-    result.operation_id = 1
-    qdrant.delete.return_value = result
+    result.count = count
+    return result
+
+
+def _make_qdrant(vector_count: int = 3) -> AsyncMock:
+    """Return a minimal AsyncQdrantClient mock with count + delete wired."""
+    qdrant = AsyncMock()
+    qdrant.count.return_value = _make_count_result(vector_count)
+    delete_result = MagicMock()
+    delete_result.operation_id = 1
+    qdrant.delete.return_value = delete_result
     return qdrant
 
 
@@ -65,7 +73,7 @@ async def test_purge_selects_before_deleting() -> None:
     rows = [{"id": 10}, {"id": 20}]
     app, pool, conn, qdrant = _make_app(rows)
 
-    with patch("jarvis_common.audit.log_audit", new_callable=AsyncMock):
+    with patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock):
         await data_purge_task(app)
 
     select_sql = conn.fetch.call_args[0][0]
@@ -73,7 +81,8 @@ async def test_purge_selects_before_deleting() -> None:
     assert "deleted_at < NOW() - INTERVAL '30 days'" in select_sql
     assert select_sql == _SELECT_EXPIRED_USERS
 
-    delete_sql = pool.execute.call_args[0][0]
+    # DELETE now runs on conn (same connection as SELECT).
+    delete_sql = conn.execute.call_args[0][0]
     assert delete_sql == _DELETE_EXPIRED_USERS
 
 
@@ -84,7 +93,7 @@ async def test_purge_calls_qdrant_delete_per_user() -> None:
     app, pool, conn, qdrant = _make_app(rows)
 
     with (
-        patch("jarvis_common.audit.log_audit", new_callable=AsyncMock),
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock),
         patch(
             "paper_ingestion.jobs.data_purge._purge_qdrant_for_user",
             new_callable=AsyncMock,
@@ -104,10 +113,15 @@ async def test_purge_qdrant_filter_uses_user_id() -> None:
     from paper_ingestion.jobs.data_purge import _purge_qdrant_for_user
     from qdrant_client.models import FieldCondition, Filter, MatchValue
 
-    qdrant = _make_qdrant()
-    await _purge_qdrant_for_user(qdrant, 99)
+    qdrant = _make_qdrant(vector_count=5)
+    result = await _purge_qdrant_for_user(qdrant, 99)
 
+    # Returns the pre-delete count from qdrant.count, not operation_id.
+    assert result == 5
+
+    qdrant.count.assert_awaited_once()
     qdrant.delete.assert_awaited_once()
+
     kwargs = qdrant.delete.call_args.kwargs
     selector = kwargs["points_selector"]
     assert isinstance(selector, Filter)
@@ -120,6 +134,17 @@ async def test_purge_qdrant_filter_uses_user_id() -> None:
     assert isinstance(cond.match, MatchValue)
     assert cond.match.value == 99
 
+    # count must also use the same user_id filter
+    count_kwargs = qdrant.count.call_args.kwargs
+    count_selector = count_kwargs["count_filter"]
+    assert isinstance(count_selector, Filter)
+    count_must = count_selector.must
+    assert isinstance(count_must, list)
+    count_cond = count_must[0]
+    assert isinstance(count_cond, FieldCondition)
+    assert isinstance(count_cond.match, MatchValue)
+    assert count_cond.match.value == 99
+
 
 @pytest.mark.asyncio
 async def test_purge_calls_log_audit_not_log_event() -> None:
@@ -128,11 +153,11 @@ async def test_purge_calls_log_audit_not_log_event() -> None:
     app, pool, conn, qdrant = _make_app(rows, execute_result="DELETE 1")
 
     with (
-        patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
         patch(
             "paper_ingestion.jobs.data_purge._purge_qdrant_for_user",
             new_callable=AsyncMock,
-            return_value=0,
+            return_value=7,
         ),
     ):
         await data_purge_task(app)
@@ -142,6 +167,8 @@ async def test_purge_calls_log_audit_not_log_event() -> None:
     assert kwargs["action"] == "user.hard_delete.purged"
     assert kwargs["resource"] == "users"
     assert 5 in kwargs["metadata"]["user_ids"]
+    # Per-uid vector counts must be in audit metadata.
+    assert kwargs["metadata"]["qdrant_vectors_deleted"] == {5: 7}
 
 
 @pytest.mark.asyncio
@@ -149,12 +176,13 @@ async def test_purge_no_expired_users_skips_everything() -> None:
     """When no users are expired, neither Qdrant nor DELETE nor audit are called."""
     app, pool, conn, qdrant = _make_app([], execute_result="DELETE 0")
 
-    with patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit:
+    with patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit:
         await data_purge_task(app)
 
     assert qdrant is not None
     qdrant.delete.assert_not_awaited()
-    pool.execute.assert_not_awaited()
+    # conn.execute (DELETE) must not be called when there are no expired users.
+    conn.execute.assert_not_awaited()
     mock_audit.assert_not_awaited()
 
 
@@ -174,7 +202,7 @@ async def test_purge_qdrant_error_is_resilient_and_continues() -> None:
         return 0
 
     with (
-        patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
         patch(
             "paper_ingestion.jobs.data_purge._purge_qdrant_for_user",
             side_effect=_flaky_purge,
@@ -183,12 +211,14 @@ async def test_purge_qdrant_error_is_resilient_and_continues() -> None:
         await data_purge_task(app)  # must not raise
 
     assert call_count == 2
-    pool.execute.assert_awaited_once()
+    conn.execute.assert_awaited_once()
     mock_audit.assert_awaited_once()
     # qdrant_errors must be recorded in audit metadata
     metadata = mock_audit.call_args.kwargs["metadata"]
     assert "qdrant_errors" in metadata
     assert len(metadata["qdrant_errors"]) == 1
+    # uid=2 succeeded; its count (0) must appear; uid=1 errored so not present.
+    assert metadata["qdrant_vectors_deleted"] == {2: 0}
 
 
 @pytest.mark.asyncio
@@ -200,13 +230,13 @@ async def test_purge_missing_qdrant_client_logs_warning_and_continues() -> None:
     del app.state.qdrant_client
 
     with (
-        patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit,
+        patch("paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock) as mock_audit,
         patch("paper_ingestion.jobs.data_purge.logger") as mock_logger,
     ):
         await data_purge_task(app)
 
     mock_logger.warning.assert_called()
-    pool.execute.assert_awaited_once()
+    conn.execute.assert_awaited_once()
     mock_audit.assert_awaited_once()
 
 
@@ -249,10 +279,17 @@ async def test_purge_deletes_pg_rows_and_calls_qdrant_delete(live_pg_dsn: str) -
     """End-to-end: create an expired user, run the purge, assert 0 PG rows remain.
 
     Qdrant is mocked so the test runs without a real Qdrant instance. The mock
-    asserts that delete was called with the correct user_id filter.
+    asserts that delete was called with the EXACT user_id filter (type-correct,
+    mirroring how production builds it).
+
+    Note: True "0 Qdrant points" verification requires a live Qdrant instance.
+    In the mocked path we validate filter correctness instead, which is
+    equivalent under unit-test conditions — the production code path that
+    constructs and passes this filter is what actually removes the points.
     """
     import asyncpg
     from paper_ingestion.ingestion.embedder import COLLECTION_NAME
+    from qdrant_client.models import FieldCondition, Filter, MatchValue
 
     pool = await asyncpg.create_pool(live_pg_dsn, min_size=1, max_size=2)
     try:
@@ -265,32 +302,51 @@ async def test_purge_deletes_pg_rows_and_calls_qdrant_delete(live_pg_dsn: str) -
             """
         )
 
-        qdrant = _make_qdrant()
+        qdrant = _make_qdrant(vector_count=2)
 
         app = MagicMock()
         app.state.db_pool = pool
         app.state.qdrant_client = qdrant
 
-        with patch("jarvis_common.audit.log_audit", new_callable=AsyncMock) as mock_audit:
+        with patch(
+            "paper_ingestion.jobs.data_purge.log_audit", new_callable=AsyncMock
+        ) as mock_audit:
             await data_purge_task(app)
 
         # Postgres: user row must be gone.
         remaining = await pool.fetchval("SELECT COUNT(*) FROM users WHERE id = $1", user_id)
         assert remaining == 0, f"Expected 0 rows, got {remaining}"
 
-        # Qdrant: delete must have been called with user_id filter.
+        # Qdrant: delete must have been called with the EXACT user_id filter for
+        # this user — type-correct, matching production's Filter construction.
         qdrant.delete.assert_awaited_once()
         kwargs = qdrant.delete.call_args.kwargs
         assert kwargs["collection_name"] == COLLECTION_NAME
         selector = kwargs["points_selector"]
-        cond = selector.must[0]
+        assert isinstance(selector, Filter)
+        must = selector.must
+        assert isinstance(must, list)
+        assert len(must) == 1
+        cond = must[0]
+        assert isinstance(cond, FieldCondition)
         assert cond.key == "user_id"
+        assert isinstance(cond.match, MatchValue)
         assert cond.match.value == user_id
 
-        # Audit: log_audit must have been called with correct action.
+        # count must also have been called (pre-delete vector count)
+        qdrant.count.assert_awaited_once()
+        count_kwargs = qdrant.count.call_args.kwargs
+        assert count_kwargs["collection_name"] == COLLECTION_NAME
+        assert count_kwargs["exact"] is True
+
+        # Audit: log_audit must have been called with correct action and
+        # per-uid vector counts in metadata.
         mock_audit.assert_awaited_once()
-        assert mock_audit.call_args.kwargs["action"] == "user.hard_delete.purged"
-        assert user_id in mock_audit.call_args.kwargs["metadata"]["user_ids"]
+        audit_kwargs = mock_audit.call_args.kwargs
+        assert audit_kwargs["action"] == "user.hard_delete.purged"
+        assert user_id in audit_kwargs["metadata"]["user_ids"]
+        assert user_id in audit_kwargs["metadata"]["qdrant_vectors_deleted"]
+        assert audit_kwargs["metadata"]["qdrant_vectors_deleted"][user_id] == 2
 
     finally:
         await pool.close()

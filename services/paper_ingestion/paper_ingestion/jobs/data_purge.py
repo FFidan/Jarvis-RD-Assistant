@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from apscheduler.triggers.cron import CronTrigger
+from jarvis_common.audit import log_audit
 
 logger = logging.getLogger(__name__)
 
@@ -34,19 +35,31 @@ _DELETE_EXPIRED_USERS = (
 async def _purge_qdrant_for_user(qdrant: Any, uid: int) -> int:
     """Delete all Qdrant vectors whose payload ``user_id`` matches *uid*.
 
-    Returns the number of points reported deleted (0 on error — caller logs).
+    Counts matching points before deleting so the audit metadata records the
+    real per-uid vector count, not Qdrant's operation sequence number.
+
+    Returns the pre-delete point count (0 if count or delete fails — caller
+    logs the error and continues).
     """
     from qdrant_client.models import FieldCondition, Filter, MatchValue  # noqa: PLC0415
 
     from paper_ingestion.ingestion.embedder import COLLECTION_NAME  # noqa: PLC0415
 
-    result = await qdrant.delete(
+    uid_filter = Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=uid))])
+
+    count_result = await qdrant.count(
         collection_name=COLLECTION_NAME,
-        points_selector=Filter(must=[FieldCondition(key="user_id", match=MatchValue(value=uid))]),
+        count_filter=uid_filter,
+        exact=True,
+    )
+    point_count: int = count_result.count
+
+    await qdrant.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=uid_filter,
         wait=True,
     )
-    # AsyncQdrantClient.delete returns an UpdateResult; operation_id may be None.
-    return getattr(result, "operation_id", None) and 1 or 0
+    return point_count
 
 
 async def data_purge_task(app: Any) -> None:
@@ -59,44 +72,47 @@ async def data_purge_task(app: Any) -> None:
     3. SQL DELETE FROM users (ON DELETE CASCADE collapses owned rows).
     4. Audit-log the destructive event via log_audit (best-effort, never raises).
     """
-    from jarvis_common.audit import log_audit  # noqa: PLC0415
-
     pool = app.state.db_pool
     qdrant = getattr(app.state, "qdrant_client", None)
 
     try:
         async with pool.acquire() as conn:
             rows = await conn.fetch(_SELECT_EXPIRED_USERS)
-        expired_ids: list[int] = [r["id"] for r in rows]
+            expired_ids: list[int] = [r["id"] for r in rows]
 
-        if not expired_ids:
-            logger.info("data_purge: no expired users to purge")
-            return
+            if not expired_ids:
+                logger.info("data_purge: no expired users to purge")
+                return
 
-        qdrant_errors: list[str] = []
-        if qdrant is not None:
-            for uid in expired_ids:
-                try:
-                    await _purge_qdrant_for_user(qdrant, uid)
-                except Exception as exc:
-                    logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
-                    qdrant_errors.append(f"uid={uid}: {exc!r}")
-        else:
-            logger.warning(
-                "data_purge: qdrant_client not on app.state — vectors NOT purged for %d user(s)",
-                len(expired_ids),
-            )
-            qdrant_errors.append("qdrant_client missing from app.state")
+            qdrant_vectors: dict[int, int] = {}
+            qdrant_errors: list[str] = []
+            if qdrant is not None:
+                for uid in expired_ids:
+                    try:
+                        qdrant_vectors[uid] = await _purge_qdrant_for_user(qdrant, uid)
+                    except Exception as exc:
+                        logger.warning("data_purge: Qdrant purge failed for user %d: %r", uid, exc)
+                        qdrant_errors.append(f"uid={uid}: {exc!r}")
+            else:
+                logger.warning(
+                    "data_purge: qdrant_client not on app.state"
+                    " — vectors NOT purged for %d user(s)",
+                    len(expired_ids),
+                )
+                qdrant_errors.append("qdrant_client missing from app.state")
 
-        result = await pool.execute(_DELETE_EXPIRED_USERS)
+            result = await conn.execute(_DELETE_EXPIRED_USERS)
+
         try:
-            deleted = int(result.split()[-1])
+            deleted: int | None = int(result.split()[-1])
         except Exception:
-            deleted = len(expired_ids)
+            # Parse failed — report unknown rather than an assumed count.
+            deleted = None
 
         metadata: dict[str, Any] = {
             "user_ids": expired_ids,
             "users_deleted": deleted,
+            "qdrant_vectors_deleted": qdrant_vectors,
         }
         if qdrant_errors:
             metadata["qdrant_errors"] = qdrant_errors
@@ -108,7 +124,7 @@ async def data_purge_task(app: Any) -> None:
             metadata=metadata,
         )
         logger.info(
-            "data_purge: hard-deleted %d expired user(s), qdrant_errors=%d",
+            "data_purge: hard-deleted %s expired user(s), qdrant_errors=%d",
             deleted,
             len(qdrant_errors),
         )

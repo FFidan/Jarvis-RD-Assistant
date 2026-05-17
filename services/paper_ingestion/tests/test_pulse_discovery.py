@@ -79,6 +79,7 @@ class _StubSource:
         self._raises = raises
         self.last_poll_diagnostic = diagnostic
         self.fetch_new_since_calls = 0
+        self.db_pool = None  # set by factory when db_pool is forwarded
 
     async def fetch_new_since(self, since, topics, limit=100, user_id=None):
         # WS-2D: accept user_id kwarg for base-class signature compatibility.
@@ -96,9 +97,10 @@ class _UnsupportedSource(_StubSource):
 
 
 def _make_source_class(stub: _StubSource):
-    """Wrap a stub instance so that calling `cls(config, http_client)` returns it."""
+    """Wrap a stub instance so that calling ``cls(config, http_client, db_pool=...)`` returns it."""
 
-    def factory(config, http_client):
+    def factory(config, http_client, db_pool=None):
+        stub.db_pool = db_pool
         return stub
 
     return factory
@@ -830,3 +832,49 @@ async def test_discover_cooldown_message_is_dated_and_plain_language():
     # The old bare "{:%H:%M}" with no date must be gone.
     assert msg != "In cooldown until 00:39"
     assert diagnostics["_CooldownStub"]["status"] == "cooldown"
+
+
+# ---------------------------------------------------------------------------
+# SEC-1 regression: db_pool forwarded to source constructor
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_source_ctor_receives_db_pool():
+    """Each freshly-constructed source must have db_pool set to the pool passed
+    into discover_candidates so its PersistentSourceRateLimiter is operational.
+
+    Regression for SEC-1: the ctor call previously omitted db_pool=, leaving
+    every source's self.db_pool as None and making per-source persistent pacing
+    inert on that code path.
+    """
+    from paper_ingestion.pulse.discovery import discover_candidates
+
+    pool, conn = _make_pool_and_conn()
+    conn.fetch.return_value = [
+        _source_row("arxiv", 1),
+        _source_row("openalex", 2),
+    ]
+
+    stubs = {
+        "arxiv": _StubSource([_paper("arxiv:sec1", "A")]),
+        "openalex": _StubSource([_paper("oa:sec1", "B")]),
+    }
+
+    def fake_get(name):
+        return _make_source_class(stubs[name])
+
+    profile = _make_profile()
+    with patch("paper_ingestion.pulse.discovery.get_source_class", side_effect=fake_get):
+        await discover_candidates(
+            pool, MagicMock(), profile, since=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+    # Both stubs must have received the pool — not None — proving that
+    # discover_candidates forwarded db_pool to the source constructor.
+    assert stubs["arxiv"].db_pool is pool, (
+        "arxiv source was constructed without db_pool; per-source rate-limiter is inert"
+    )
+    assert stubs["openalex"].db_pool is pool, (
+        "openalex source was constructed without db_pool; per-source rate-limiter is inert"
+    )

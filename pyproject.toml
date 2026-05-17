@@ -16,6 +16,7 @@ jarvis-common = [
     "httpx>=0.27.0",
     "instructor>=1.5",
     "langfuse>=2.50",
+    "lxml>=5.0.0",  # SEC-3: cached_transport uses lxml for hardened XML parsing
     "openai>=1.50",
     "procrastinate[aiopg]>=0.49",
     "psycopg[binary]>=3.1",  # procrastinate 3.x imports psycopg unconditionally; bundled libpq

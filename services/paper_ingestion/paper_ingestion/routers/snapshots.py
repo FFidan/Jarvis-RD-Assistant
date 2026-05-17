@@ -9,6 +9,7 @@ from jarvis_common.auth import get_current_user_id
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.deps import get_db_pool, limiter
+from paper_ingestion.models import SourceType
 
 router = APIRouter(prefix="/api/snapshots", tags=["snapshots"])
 
@@ -61,7 +62,7 @@ async def get_snapshot(
         )
 
     # Unknown paper_id → opaque 404 (same as missing snapshot below)
-    if row is None or (row["source_type"] == "local" and not row["in_library"]):
+    if row is None or (row["source_type"] == SourceType.LOCAL.value and not row["in_library"]):
         raise HTTPException(404, f"Snapshot not found: paper {paper_id}, page {page}")
 
     if not snapshot_path.exists():

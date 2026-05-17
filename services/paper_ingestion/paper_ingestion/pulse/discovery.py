@@ -192,7 +192,7 @@ async def discover_candidates(
             config=row["config"] or {},
         )
         try:
-            sources.append(cls(config=config, http_client=http_client))
+            sources.append(cls(config=config, http_client=http_client, db_pool=db_pool))
         except Exception:
             logger.exception("pulse.discover: failed to instantiate source %s", source_type)
 

@@ -7,6 +7,7 @@ Coverage:
   (d) Path-traversal guard: is_relative_to check blocks escaping paths.
 """
 
+import pathlib
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -155,35 +156,37 @@ async def test_unknown_paper_id_returns_404(_snap_app):
 # ---------------------------------------------------------------------------
 
 
-async def test_path_traversal_guard_still_active(_snap_app, tmp_path, monkeypatch):
-    """is_relative_to guard blocks paths that escape the storage root."""
-    import paper_ingestion.routers.snapshots as snap_mod
+async def test_path_traversal_guard_still_active(_snap_app, monkeypatch):
+    """is_relative_to guard returns HTTP 400 when resolved path escapes storage root.
+
+    The production guard is:
+        if not snapshot_path.is_relative_to(base):
+            raise HTTPException(400, "Invalid path")
+
+    Since paper_id and page are typed ``int``, FastAPI rejects non-numeric path
+    segments before the handler runs, so traversal can only originate from a
+    compromised storage path or future refactor.  We monkeypatch
+    ``pathlib.Path.is_relative_to`` to return ``False`` to directly exercise
+    the guard's 400 branch without relying on filesystem layout.
+
+    Non-tautology guarantee: removing the ``is_relative_to`` guard from the
+    production handler would cause this test to receive 200 (file found) or 404
+    (file missing) instead of 400, so the assertion fails.
+    """
     from jarvis_common.auth import get_current_user_id
 
     app, conn = _snap_app
     app.dependency_overrides[get_current_user_id] = lambda: 1
+    # Use a public-source paper so the DB scoping gate does not fire first.
     conn.fetchrow.return_value = _paper_row("arxiv", in_library=False)
 
-    # Fabricate a snapshot_path that escapes base by monkeypatching Path.resolve
-    # on the constructed path. Easier: override SNAPSHOT_STORAGE_PATH to a subdir
-    # so that tmp_path/1/page_1.png is NOT relative to the new base.
-    outer_base = tmp_path / "outer"
-    outer_base.mkdir()
-    # The real snapshot file lives at tmp_path/1/page_1.png (created by fixture).
-    # Set storage path to outer_base → resolved snapshot is tmp_path/1/page_1.png
-    # which is NOT relative to outer_base → guard fires → 400.
-    original = snap_mod.SNAPSHOT_STORAGE_PATH
-    snap_mod.SNAPSHOT_STORAGE_PATH = str(outer_base)
+    # Force is_relative_to to report that the resolved path escapes the base.
+    monkeypatch.setattr(pathlib.Path, "is_relative_to", lambda self, *args: False)
 
-    try:
-        async with httpx.AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            # paper_id=1, page=1 → outer_base/1/page_1.png IS relative to outer_base
-            # → guard passes, file not present → 404
-            resp = await client.get("/api/snapshots/1/1")
-    finally:
-        snap_mod.SNAPSHOT_STORAGE_PATH = original
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp = await client.get("/api/snapshots/1/1")
 
-    # outer_base/1/page_1.png doesn't exist → 404 (path is valid, guard didn't fire)
-    assert resp.status_code == 404
+    # Guard must fire and return 400 — NOT 404 or 200.
+    assert resp.status_code == 400

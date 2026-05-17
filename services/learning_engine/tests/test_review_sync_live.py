@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import asyncpg
 import pytest
-from learning_engine.models import ReviewSyncEvent, ReviewSyncRequest
+from learning_engine.models import Rating, ReviewSyncEvent, ReviewSyncRequest
 from learning_engine.routers import review
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -39,7 +39,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def _event(key: str, *, card_id: int, rating: int = 3) -> ReviewSyncEvent:
+def _event(key: str, *, card_id: int, rating: Rating = Rating.GOOD) -> ReviewSyncEvent:
     return ReviewSyncEvent(
         idempotency_key=key,
         card_id=card_id,
