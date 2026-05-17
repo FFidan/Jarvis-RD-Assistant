@@ -586,6 +586,83 @@ def test_init_secrets_rerun_produces_no_duplicate_env_keys():
         assert not unstable, f"Secret files changed on second run (not stable): {unstable}"
 
 
+def test_setup_check_nondefault_subnet_emits_coupling_warning():
+    """SEC-NET-1: when JARVIS_NET_SUBNET is set to a non-default value, --check
+    must emit a non-fatal warning about the gateway and nginx set_real_ip_from
+    coupling. The run must still exit 0 or 1 and still print 'PREFLIGHT:'."""
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _stage_setup_tmpdir(tmp)
+
+        env = dict(__import__("os").environ)
+        env["JARVIS_NET_SUBNET"] = "10.200.0.0/24"  # non-default value
+
+        result = subprocess.run(
+            ["bash", "setup.sh", "--check"],
+            cwd=str(tmp),
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode in {0, 1}, (
+            f"--check exited {result.returncode}; coupling warning must not "
+            f"change exit semantics.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "PREFLIGHT:" in combined, (
+            f"Expected 'PREFLIGHT:' in output (regression), got:\n{combined}"
+        )
+        # The coupling warning must mention gateway and nginx/set_real_ip_from.
+        assert "gateway" in combined.lower(), (
+            f"Expected gateway coupling warning in --check output, got:\n{combined}"
+        )
+        assert "set_real_ip_from" in combined or "nginx.conf" in combined, (
+            f"Expected nginx/set_real_ip_from coupling warning in --check output, got:\n{combined}"
+        )
+        assert not (tmp / ".env").exists(), "--check must not write a .env file"
+
+
+def test_setup_check_default_subnet_no_coupling_warning():
+    """SEC-NET-1: with default/unset JARVIS_NET_SUBNET the gateway/nginx
+    coupling warning must NOT appear — only the standard PREFLIGHT output."""
+    if shutil.which("bash") is None:
+        pytest.skip("bash not available")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+        _stage_setup_tmpdir(tmp)
+
+        # Strip JARVIS_NET_SUBNET from env entirely (default behaviour).
+        env = {k: v for k, v in __import__("os").environ.items() if k != "JARVIS_NET_SUBNET"}
+
+        result = subprocess.run(
+            ["bash", "setup.sh", "--check"],
+            cwd=str(tmp),
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+            env=env,
+        )
+
+        combined = result.stdout + result.stderr
+        assert result.returncode in {0, 1}, (
+            f"--check exited {result.returncode}.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+        assert "PREFLIGHT:" in combined, f"Expected 'PREFLIGHT:' in output, got:\n{combined}"
+        # The gateway/nginx coupling warning must NOT fire for the default subnet.
+        assert "gateway" not in combined.lower() or "set_real_ip_from" not in combined, (
+            f"Unexpected coupling warning for default subnet:\n{combined}"
+        )
+        assert not (tmp / ".env").exists(), "--check must not write a .env file"
+
+
 @pytest.mark.parametrize(
     "mode,expected_login",
     [

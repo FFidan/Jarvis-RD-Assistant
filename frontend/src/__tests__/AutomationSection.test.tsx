@@ -1,9 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { AutomationSection } from '@/components/settings/AutomationSection';
+
+// Mock Radix Select with native HTML elements (portals do not work in jsdom).
+// Capture onValueChange so tests can invoke it directly.
+let _selectOnValueChange: ((v: string) => void) | undefined;
+
+vi.mock('@/components/ui/select', () => ({
+  Select: ({ children, onValueChange }: any) => {
+    _selectOnValueChange = onValueChange;
+    return <div>{children}</div>;
+  },
+  SelectTrigger: ({ children }: any) => <button data-testid="select-trigger">{children}</button>,
+  SelectValue: ({ placeholder }: any) => <span>{placeholder}</span>,
+  SelectContent: ({ children }: any) => <div>{children}</div>,
+  SelectGroup: ({ children }: any) => <div>{children}</div>,
+  SelectLabel: ({ children }: any) => <div>{children}</div>,
+  SelectSeparator: () => <hr />,
+  SelectItem: ({ children, value }: any) => (
+    <div
+      role="option"
+      onClick={() => _selectOnValueChange?.(value)}
+    >
+      {children}
+    </div>
+  ),
+}));
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/api')>();
@@ -36,6 +61,7 @@ describe('AutomationSection', () => {
     vi.clearAllMocks();
     vi.mocked(fetchNudges).mockResolvedValue([]);
     vi.mocked(fetchConfig).mockResolvedValue([]);
+    _selectOnValueChange = undefined;
   });
 
   it('shows empty state when no nudges are configured', async () => {
@@ -83,6 +109,51 @@ describe('AutomationSection', () => {
     await waitFor(() => {
       expect(vi.mocked(updateNudge)).toHaveBeenCalledWith(2, { enabled: true });
     });
+  });
+
+  it('cancels in-flight debounce timeout when NudgeRow unmounts', async () => {
+    vi.mocked(fetchNudges).mockResolvedValue([
+      {
+        id: 4,
+        nudge_type: 'review_reminder',
+        enabled: true,
+        cron_expression: '0 8 * * *',
+        last_fired_at: null,
+        config: {},
+        created_at: '2026-04-17T00:00:00Z',
+      },
+    ]);
+
+    const { unmount } = renderSection();
+    await waitFor(() => {
+      expect(screen.getByText('Flashcard Review Reminder')).toBeInTheDocument();
+    });
+
+    // Spy on setTimeout to capture the debounce timer ID, and on clearTimeout to
+    // assert the exact ID is cancelled when the component unmounts.
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+
+    // Arm the debounce inside NudgeRow by triggering onValueChange on the TimeSelect's
+    // Select (captured by the module-level _selectOnValueChange via our Radix mock).
+    act(() => {
+      _selectOnValueChange?.('09');
+    });
+
+    // Verify a setTimeout was registered by handleTimeChange
+    expect(setTimeoutSpy).toHaveBeenCalled();
+    // The last setTimeout call is the debounce (300ms)
+    const debounceTimerId = setTimeoutSpy.mock.results[setTimeoutSpy.mock.results.length - 1]?.value;
+    expect(debounceTimerId).toBeDefined();
+
+    // Unmount BEFORE the 300ms debounce elapses — the cleanup useEffect must call
+    // clearTimeout with the exact debounce timer ID.
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(debounceTimerId);
+
+    setTimeoutSpy.mockRestore();
+    clearTimeoutSpy.mockRestore();
   });
 
   it('renders auto-fetch interval input and fires setConfig mutation on blur', async () => {

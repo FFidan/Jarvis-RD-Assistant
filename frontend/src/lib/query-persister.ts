@@ -97,8 +97,10 @@ export const SENSITIVE_GC_TIME = 5 * 60 * 1000; // 5 minutes
  */
 export const SENSITIVE_QUERY_KEYS: ReadonlyArray<string> = [
   'admin',
-  'logs',
   'config',
+  'logs',
+  'smtp-config',
+  'telegram-bot-token-status',
 ] as const;
 
 /** Bumped when the dehydrated shape changes — invalidates old snapshots. */

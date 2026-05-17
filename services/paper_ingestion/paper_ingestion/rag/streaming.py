@@ -24,6 +24,7 @@ from jarvis_common.prompt_safety import escape_llm_text, wrap_delimited
 from jarvis_common.sse import SSE_DONE, sse_event
 
 from paper_ingestion.models import AskRequest, CrossPaperAskRequest
+from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.rag.decomposition import decompose_query
 
 if TYPE_CHECKING:
@@ -173,139 +174,149 @@ async def prepare_cross_paper_rag(
     :class:`CrossPaperRagNoResults` short-circuit when no relevant chunks are
     found.
     """
-    # 1. Search all chunks — optionally via query decomposition
-    if body.decompose:
-        fast_model = get_fast_model()
-        sub_queries = await decompose_query(body.question, model=fast_model)
-        per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
+    with probe_span("prepare_cross_paper_rag", decompose=body.decompose):
+        # 1. Search all chunks — optionally via query decomposition
+        if body.decompose:
+            fast_model = get_fast_model()
+            sub_queries = await decompose_query(body.question, model=fast_model)
+            per_query_limit = max(body.max_chunks * 2 // len(sub_queries), 3)
 
-        results = await asyncio.gather(
-            *(
-                embedder.search_chunks_global(
-                    query_text=sq,
-                    limit=per_query_limit,
-                    score_threshold=_SEARCH_SCORE_THRESHOLD,
-                    user_id=user_id,
+            results = await asyncio.gather(
+                *(
+                    embedder.search_chunks_global(
+                        query_text=sq,
+                        limit=per_query_limit,
+                        score_threshold=_SEARCH_SCORE_THRESHOLD,
+                        user_id=user_id,
+                    )
+                    for sq in sub_queries
                 )
-                for sq in sub_queries
             )
+
+            # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping highest score
+            seen: dict[tuple[int, int], dict] = {}
+            for chunk_list in results:
+                for chunk in chunk_list:
+                    key = (chunk["paper_id"], chunk["chunk_index"])
+                    if key not in seen or chunk["score"] > seen[key]["score"]:
+                        seen[key] = chunk
+            all_chunks = list(seen.values())
+        else:
+            all_chunks = await embedder.search_chunks_global(
+                query_text=body.question,
+                limit=body.max_chunks * 2,
+                score_threshold=_SEARCH_SCORE_THRESHOLD,
+                user_id=user_id,
+            )
+
+        if not all_chunks:
+            logger.warning(
+                "Cross-paper RAG found 0 chunks for query: %.100s (decompose=%s)",
+                body.question,
+                body.decompose,
+            )
+            return CrossPaperRagNoResults(
+                answer="No relevant information found in the paper collection.",
+                sources=[],
+            )
+
+        # 1b. Cross-encoder rerank merged results using original question
+        all_chunks = await embedder.rerank_chunks(
+            body.question, all_chunks, top_k=body.max_chunks * 2
         )
 
-        # Merge: flatten all chunks, dedup by (paper_id, chunk_index) keeping highest score
-        seen: dict[tuple[int, int], dict] = {}
-        for chunk_list in results:
-            for chunk in chunk_list:
-                key = (chunk["paper_id"], chunk["chunk_index"])
-                if key not in seen or chunk["score"] > seen[key]["score"]:
-                    seen[key] = chunk
-        all_chunks = list(seen.values())
-    else:
-        all_chunks = await embedder.search_chunks_global(
-            query_text=body.question,
-            limit=body.max_chunks * 2,
-            score_threshold=_SEARCH_SCORE_THRESHOLD,
-            user_id=user_id,
+        # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
+        chunks_by_paper: dict[int, list[dict]] = {}
+        for chunk in all_chunks:
+            pid = chunk["paper_id"]
+            if pid not in chunks_by_paper:
+                chunks_by_paper[pid] = []
+            chunks_by_paper[pid].append(chunk)
+
+        for pid in chunks_by_paper:
+            chunks_by_paper[pid].sort(key=lambda c: c["score"], reverse=True)
+            chunks_by_paper[pid] = chunks_by_paper[pid][:2]
+
+        # 3. Trim to max_papers (pick papers with highest top-chunk score)
+        paper_ids_sorted = sorted(
+            chunks_by_paper.keys(),
+            key=lambda pid: chunks_by_paper[pid][0]["score"],
+            reverse=True,
+        )
+        paper_ids_sorted = paper_ids_sorted[: body.max_papers]
+
+        # Flatten and trim to max_chunks total
+        selected_chunks: list[dict] = []
+        for pid in paper_ids_sorted:
+            selected_chunks.extend(chunks_by_paper[pid])
+        selected_chunks.sort(key=lambda c: c["score"], reverse=True)
+        selected_chunks = selected_chunks[: body.max_chunks]
+
+        # 4. Fetch paper metadata — defense-in-depth user-scope predicate (RAG-DB-1).
+        # Primary isolation is Qdrant's _user_scope_filter (SEC-4); this secondary
+        # check ensures mis-tagged Qdrant payloads cannot surface another user's
+        # paper metadata.  NULL user_id = shared canonical corpus, visible to all.
+        unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
+        async with db_pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, title, authors, url FROM papers"
+                " WHERE id = ANY($1::int[])"
+                " AND (user_id = $2 OR user_id IS NULL)",
+                unique_paper_ids,
+                user_id,
+            )
+        paper_meta = {row["id"]: row for row in rows}
+
+        # 5. Build prompt with per-paper sections
+        safe_question = escape_llm_text(body.question)
+
+        # Group selected chunks by paper for the prompt
+        prompt_chunks_by_paper: dict[int, list[dict]] = {}
+        for chunk in selected_chunks:
+            pid = chunk["paper_id"]
+            if pid not in prompt_chunks_by_paper:
+                prompt_chunks_by_paper[pid] = []
+            prompt_chunks_by_paper[pid].append(chunk)
+
+        context_sections: list[str] = []
+        paper_number_map: dict[int, int] = {}
+        for i, pid in enumerate(prompt_chunks_by_paper.keys(), start=1):
+            meta = paper_meta.get(pid)
+            title = wrap_delimited("title", meta["title"])[0] if meta else f"Paper ID {pid}"
+            paper_number_map[pid] = i
+
+            excerpts = "\n".join(
+                f'<excerpt page="{c["page_number"] or "?"}">'
+                f"{escape_llm_text(c['content'])}</excerpt>"
+                for c in prompt_chunks_by_paper[pid]
+            )
+            context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
+
+        context_block = "\n\n".join(context_sections)
+        prompt = (
+            "You are a research assistant answering questions using evidence "
+            "from multiple papers.\n"
+            "Answer ONLY based on the provided excerpts. Cite each claim with "
+            "[Paper N] where N is the paper number.\n"
+            "If the excerpts don't contain enough information, say so.\n\n"
+            f"{context_block}\n\n"
+            f"<question>{safe_question}</question>\n\nANSWER:"
         )
 
-    if not all_chunks:
-        logger.warning(
-            "Cross-paper RAG found 0 chunks for query: %.100s (decompose=%s)",
-            body.question,
-            body.decompose,
-        )
-        return CrossPaperRagNoResults(
-            answer="No relevant information found in the paper collection.",
-            sources=[],
-        )
-
-    # 1b. Cross-encoder rerank merged results using original question
-    all_chunks = await embedder.rerank_chunks(body.question, all_chunks, top_k=body.max_chunks * 2)
-
-    # 2. Deduplicate: group by paper_id, keep top 2 chunks per paper
-    chunks_by_paper: dict[int, list[dict]] = {}
-    for chunk in all_chunks:
-        pid = chunk["paper_id"]
-        if pid not in chunks_by_paper:
-            chunks_by_paper[pid] = []
-        chunks_by_paper[pid].append(chunk)
-
-    for pid in chunks_by_paper:
-        chunks_by_paper[pid].sort(key=lambda c: c["score"], reverse=True)
-        chunks_by_paper[pid] = chunks_by_paper[pid][:2]
-
-    # 3. Trim to max_papers (pick papers with highest top-chunk score)
-    paper_ids_sorted = sorted(
-        chunks_by_paper.keys(),
-        key=lambda pid: chunks_by_paper[pid][0]["score"],
-        reverse=True,
-    )
-    paper_ids_sorted = paper_ids_sorted[: body.max_papers]
-
-    # Flatten and trim to max_chunks total
-    selected_chunks: list[dict] = []
-    for pid in paper_ids_sorted:
-        selected_chunks.extend(chunks_by_paper[pid])
-    selected_chunks.sort(key=lambda c: c["score"], reverse=True)
-    selected_chunks = selected_chunks[: body.max_chunks]
-
-    # 4. Fetch paper metadata
-    unique_paper_ids = list({c["paper_id"] for c in selected_chunks})
-    async with db_pool.acquire() as conn:
-        rows = await conn.fetch(
-            "SELECT id, title, authors, url FROM papers WHERE id = ANY($1::int[])",
-            unique_paper_ids,
-        )
-    paper_meta = {row["id"]: row for row in rows}
-
-    # 5. Build prompt with per-paper sections
-    safe_question = escape_llm_text(body.question)
-
-    # Group selected chunks by paper for the prompt
-    prompt_chunks_by_paper: dict[int, list[dict]] = {}
-    for chunk in selected_chunks:
-        pid = chunk["paper_id"]
-        if pid not in prompt_chunks_by_paper:
-            prompt_chunks_by_paper[pid] = []
-        prompt_chunks_by_paper[pid].append(chunk)
-
-    context_sections: list[str] = []
-    paper_number_map: dict[int, int] = {}
-    for i, pid in enumerate(prompt_chunks_by_paper.keys(), start=1):
-        meta = paper_meta.get(pid)
-        title = wrap_delimited("title", meta["title"])[0] if meta else f"Paper ID {pid}"
-        paper_number_map[pid] = i
-
-        excerpts = "\n".join(
-            f'<excerpt page="{c["page_number"] or "?"}">{escape_llm_text(c["content"])}</excerpt>'
-            for c in prompt_chunks_by_paper[pid]
-        )
-        context_sections.append(f"--- Paper {i}: {title} ---\n{excerpts}")
-
-    context_block = "\n\n".join(context_sections)
-    prompt = (
-        "You are a research assistant answering questions using evidence "
-        "from multiple papers.\n"
-        "Answer ONLY based on the provided excerpts. Cite each claim with "
-        "[Paper N] where N is the paper number.\n"
-        "If the excerpts don't contain enough information, say so.\n\n"
-        f"{context_block}\n\n"
-        f"<question>{safe_question}</question>\n\nANSWER:"
-    )
-
-    messages = [{"role": "user", "content": prompt}]
-    sources_list = [
-        {
-            "paper_id": c["paper_id"],
-            "paper_title": (
-                paper_meta[c["paper_id"]]["title"] if c["paper_id"] in paper_meta else "Unknown"
-            ),
-            "content": c["content"],
-            "page_number": c["page_number"],
-            "score": round(c["score"], 3),
-        }
-        for c in selected_chunks
-    ]
-    return CrossPaperRagPrep(messages=messages, sources=sources_list)
+        messages = [{"role": "user", "content": prompt}]
+        sources_list = [
+            {
+                "paper_id": c["paper_id"],
+                "paper_title": (
+                    paper_meta[c["paper_id"]]["title"] if c["paper_id"] in paper_meta else "Unknown"
+                ),
+                "content": c["content"],
+                "page_number": c["page_number"],
+                "score": round(c["score"], 3),
+            }
+            for c in selected_chunks
+        ]
+        return CrossPaperRagPrep(messages=messages, sources=sources_list)
 
 
 # ---------------------------------------------------------------------------

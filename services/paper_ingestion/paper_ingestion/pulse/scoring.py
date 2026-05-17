@@ -36,6 +36,7 @@ from jarvis_common.verify import QuoteVerifier
 
 from paper_ingestion.config import get_paper_ingestion_settings as _get_cfg
 from paper_ingestion.models import PaperCreate
+from paper_ingestion.perf_probe import probe_span
 from paper_ingestion.pulse.models import PulseScoringOutput
 from paper_ingestion.pulse.profile import UserProfile
 from paper_ingestion.pulse.prompts import build_scoring_prompt
@@ -306,13 +307,14 @@ async def stage2_llm_rerank(
                     max_tokens=_LLM_MAX_TOKENS,
                     temperature=_LLM_TEMPERATURE,
                 )
-                output: PulseScoringOutput = await call_llm_structured(
-                    openai_client,  # type: ignore[arg-type]
-                    response_model=PulseScoringOutput,
-                    messages=scoring_messages,
-                    options=options,
-                    max_retries=_stage2_max_retries(),
-                )
+                with probe_span("pulse_stage2_llm", model=_LLM_MODEL):
+                    output: PulseScoringOutput = await call_llm_structured(
+                        openai_client,  # type: ignore[arg-type]
+                        response_model=PulseScoringOutput,
+                        messages=scoring_messages,
+                        options=options,
+                        max_retries=_stage2_max_retries(),
+                    )
                 relevance = output.relevance
                 novelty = output.novelty
                 reasoning = output.reasoning

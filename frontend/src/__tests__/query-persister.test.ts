@@ -24,6 +24,7 @@ import {
   flushPersistedQueryCache,
   getPersistedCacheTimestamp,
   shouldDehydrateQuery,
+  SENSITIVE_QUERY_KEYS,
   __resetPersisterForTests,
 } from '@/lib/query-persister';
 
@@ -202,6 +203,23 @@ describe('getPersistedCacheTimestamp', () => {
     expect(typeof ts).toBe('number');
     expect(ts as number).toBeGreaterThanOrEqual(before);
   });
+});
+
+describe('SENSITIVE_QUERY_KEYS — FE-GC-1: smtp-config + telegram-bot-token-status', () => {
+  it("contains 'smtp-config'", () => {
+    expect(SENSITIVE_QUERY_KEYS).toContain('smtp-config');
+  });
+
+  it("contains 'telegram-bot-token-status'", () => {
+    expect(SENSITIVE_QUERY_KEYS).toContain('telegram-bot-token-status');
+  });
+
+  it.each([['smtp-config'], ['telegram-bot-token-status']])(
+    "'%s' is excluded from IDB dehydration (shouldDehydrateQuery)",
+    (key) => {
+      expect(shouldDehydrateQuery(fakeQuery([key]))).toBe(false);
+    },
+  );
 });
 
 describe("notes — offline read surface + shared-device purge (L-6)", () => {

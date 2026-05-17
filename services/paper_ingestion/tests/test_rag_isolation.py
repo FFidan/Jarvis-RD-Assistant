@@ -226,3 +226,171 @@ async def test_cross_paper_rag_two_tenant_isolation():
     assert len(b_clauses) == 0, (
         "Filter contains a clause that would admit tenant B's private chunks"
     )
+
+
+# ---------------------------------------------------------------------------
+# RAG-DB-1: metadata fetch respects user_id scope (defense-in-depth)
+# ---------------------------------------------------------------------------
+
+
+def _make_db_row(paper_id: int, title: str, user_id: int | None) -> dict:
+    """Simulate an asyncpg Record as a plain dict for test purposes."""
+    return {
+        "id": paper_id,
+        "title": title,
+        "authors": "Author",
+        "url": "http://x",
+        "user_id": user_id,
+    }
+
+
+def _make_pool_with_chunks(
+    chunks: list[dict],
+    db_rows: list[dict],
+) -> tuple:
+    """Return (embedder, db_pool) mocks for prepare_cross_paper_rag tests."""
+    mock_qdrant = AsyncMock()
+    from paper_ingestion.embedder import Embedder
+
+    embedder = Embedder(AsyncMock(), mock_qdrant)
+    embedder.embed_texts = AsyncMock(return_value=[[0.1, 0.2]])
+    embedder.search_chunks_global = AsyncMock(return_value=chunks)
+    embedder.rerank_chunks = AsyncMock(side_effect=lambda q, c, top_k: c[:top_k])
+
+    conn = AsyncMock()
+    # Capture the SQL and params so we can assert on them
+    captured: list[tuple] = []
+
+    async def _fetch(sql, *args, **kwargs):
+        captured.append((sql, args))
+        return db_rows
+
+    conn.fetch = AsyncMock(side_effect=_fetch)
+    db_pool = MagicMock()
+    db_pool.acquire.return_value.__aenter__.return_value = conn
+    return embedder, db_pool, captured
+
+
+async def test_metadata_fetch_excludes_other_user_paper():
+    """RAG-DB-1 (a): metadata SQL must include user-scope predicate.
+
+    A paper owned by a different user must be filtered out at the DB layer.
+    We verify the SQL contains AND (user_id = $2 OR user_id IS NULL) and that
+    the $2 parameter is the caller's user_id.
+    """
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import prepare_cross_paper_rag
+
+    # Qdrant returns a chunk for paper_id=5 (owned by user 99, correctly scoped by Qdrant)
+    chunks = [
+        {
+            "paper_id": 5,
+            "chunk_index": 0,
+            "content": "content from paper 5",
+            "page_number": 1,
+            "score": 0.9,
+        }
+    ]
+    # DB row for the other user — should be excluded by the predicate
+    db_rows: list[dict] = []  # empty: simulates predicate filtered it out
+
+    embedder, db_pool, captured = _make_pool_with_chunks(chunks, db_rows)
+
+    body = CrossPaperAskRequest(
+        question="test question",
+        max_chunks=5,
+        max_papers=3,
+        decompose=False,
+    )
+
+    await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=99)
+
+    assert captured, "DB fetch was not called"
+    sql, args = captured[0]
+    sql_lower = sql.lower()
+    assert "user_id = $2" in sql_lower, f"Missing user_id = $2 predicate in metadata SQL: {sql!r}"
+    assert "user_id is null" in sql_lower, (
+        f"Missing user_id IS NULL predicate in metadata SQL (shared corpus): {sql!r}"
+    )
+    # The second positional arg must be the caller's user_id
+    assert args[1] == 99, f"Expected user_id=99 as $2 parameter, got args={args}"
+
+
+async def test_metadata_fetch_includes_canonical_paper():
+    """RAG-DB-1 (b): canonical papers (user_id IS NULL) are included for all users.
+
+    The SQL predicate must allow user_id IS NULL rows so the shared corpus
+    remains accessible. We verify the returned paper_meta includes the canonical
+    paper when the DB returns it (i.e. the predicate allows it).
+    """
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    chunks = [
+        {
+            "paper_id": 20,
+            "chunk_index": 0,
+            "content": "canonical content",
+            "page_number": 3,
+            "score": 0.85,
+        }
+    ]
+    # DB returns the canonical paper (user_id IS NULL allowed by predicate)
+    db_rows = [{"id": 20, "title": "Canonical Paper", "authors": "System", "url": "http://c"}]
+
+    embedder, db_pool, captured = _make_pool_with_chunks(chunks, db_rows)
+
+    body = CrossPaperAskRequest(
+        question="canonical question",
+        max_chunks=5,
+        max_papers=3,
+        decompose=False,
+    )
+
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=7)
+
+    assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
+    titles = [s["paper_title"] for s in result.sources]
+    assert "Canonical Paper" in titles, (
+        f"Canonical paper missing from sources — shared corpus broken: {titles}"
+    )
+    # SQL must still have both predicates
+    sql, args = captured[0]
+    sql_lower = sql.lower()
+    assert "user_id = $2" in sql_lower
+    assert "user_id is null" in sql_lower
+    assert args[1] == 7
+
+
+async def test_metadata_fetch_same_user_paper_unaffected():
+    """RAG-DB-1 (c): regression — same-user papers are still returned normally."""
+    from paper_ingestion.models import CrossPaperAskRequest
+    from paper_ingestion.rag.streaming import CrossPaperRagPrep, prepare_cross_paper_rag
+
+    chunks = [
+        {
+            "paper_id": 42,
+            "chunk_index": 0,
+            "content": "user's own paper content",
+            "page_number": 2,
+            "score": 0.92,
+        }
+    ]
+    db_rows = [{"id": 42, "title": "My Paper", "authors": "Me", "url": "http://me"}]
+
+    embedder, db_pool, captured = _make_pool_with_chunks(chunks, db_rows)
+
+    body = CrossPaperAskRequest(
+        question="my own research",
+        max_chunks=5,
+        max_papers=3,
+        decompose=False,
+    )
+
+    result = await prepare_cross_paper_rag(embedder, db_pool, body, AsyncMock(), user_id=5)
+
+    assert isinstance(result, CrossPaperRagPrep), f"Expected CrossPaperRagPrep, got {result!r}"
+    titles = [s["paper_title"] for s in result.sources]
+    assert "My Paper" in titles, f"Same-user paper missing from sources: {titles}"
+    sql, args = captured[0]
+    assert args[1] == 5, f"Expected user_id=5 as $2, got {args}"

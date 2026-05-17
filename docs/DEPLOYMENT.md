@@ -267,11 +267,17 @@ JARVIS pins the internal Docker network to a static subnet (`10.137.241.0/24` by
 
 There is **no `NGINX_TRUSTED_PROXY_CIDR` environment variable** — it was removed. Trust is determined solely by the static Docker IPs, not by any configurable CIDR list.
 
-**Rare override — subnet collision:** If `10.137.241.0/24` conflicts with an existing host LAN segment, `setup.sh --check` will warn about the collision. To resolve it, set `JARVIS_NET_SUBNET=<a free /24>` in `.env` (leave unset normally — the default is appropriate for most setups) and recreate the Docker network:
+**Rare override — subnet collision:** If `10.137.241.0/24` conflicts with an existing host LAN segment, `setup.sh --check` will warn about the collision. To resolve it, set `JARVIS_NET_SUBNET=<a free /24>` in `.env` (leave unset normally — the default is appropriate for most setups) and update **two hard-coded literals** before recreating the Docker network:
+
+1. **`docker-compose.yml`** — change `gateway: 10.137.241.1` to a gateway IP inside the new subnet (e.g. `10.200.0.1`). If you skip this step `docker compose up` hard-fails because the gateway is outside the declared subnet.
+2. **`frontend/nginx.conf`** — update `set_real_ip_from 10.137.241.2/32` and `set_real_ip_from 10.137.241.3/32` to the new static IPs assigned to `caddy` and `caddy_local` in the new subnet. If you skip this step all clients collapse to one rate-limit bucket (RB-4 self-DoS regression).
+
+`setup.sh --check` emits a non-fatal warning when `JARVIS_NET_SUBNET` is set to a non-default value as a reminder to update both files.
 
 ```bash
 # Edit .env:
 #   JARVIS_NET_SUBNET=10.200.0.0/24   # pick a /24 that doesn't conflict
+# Also update docker-compose.yml gateway: and frontend/nginx.conf set_real_ip_from literals.
 docker compose down && docker compose up -d
 ```
 
@@ -532,7 +538,7 @@ Qdrant is **not** backed up by `scripts/backup.sh`. If you want durable vector b
 | Tunnel works on `https://<tunnel-host>` but dashboard 404s at `/` | Cloudflare tunnel is pointed at the wrong service port or public hostname mismatch | In Cloudflare Zero Trust → Networks → Tunnels, confirm the public hostname routes to `http://dashboard:3000`. Confirm `TUNNEL_HOSTNAME` in `.env` matches exactly. |
 | Rate limiter 429s every request as "Cloudflare" | Behind Cloudflare but `JARVIS_TRUST_CF_CONNECTING_IP` not enabled | Set `JARVIS_TRUST_CF_CONNECTING_IP=true` in `.env` and restart paper_ingestion / learning_engine. |
 | Rate limiter rate-limits by proxy IP instead of client | Upstream proxy missing from `TRUSTED_PROXY_CIDRS` | Add the proxy's public CIDR to `TRUSTED_PROXY_CIDRS`. Note: `NGINX_TRUSTED_PROXY_CIDR` no longer exists — nginx trust is now automatic via pinned Docker IPs (see [Rate-limit client-IP trust](#rate-limit-client-ip-trust-automatic)). |
-| Pinned Docker subnet `10.137.241.0/24` collides with my LAN | `setup.sh --check` warns on host-route collision | Set `JARVIS_NET_SUBNET=<free /24>` in `.env` and run `docker compose down && docker compose up -d` to recreate the network. |
+| Pinned Docker subnet `10.137.241.0/24` collides with my LAN | `setup.sh --check` warns on host-route collision | Set `JARVIS_NET_SUBNET=<free /24>` in `.env` **and** update `docker-compose.yml` `gateway:` and `frontend/nginx.conf` `set_real_ip_from` literals to the new range (see [Rate-limit client-IP trust](#rate-limit-client-ip-trust-automatic)), then run `docker compose down && docker compose up -d`. |
 | LAN device can ping host but `curl -k https://<LAN-IP>:3001` hangs | `DASHBOARD_BIND_HOST=127.0.0.1` (localhost mode) | Run `./setup.sh` mode 2, or edit `.env` to `DASHBOARD_BIND_HOST=0.0.0.0` and restart dashboard. |
 | `setup.sh` option 3 exits immediately with a ZT warning | `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` not set | Configure your Zero-Trust access policy first, then add `JARVIS_TUNNEL_ACK_ZT_CONFIGURED=1` to `.env`. |
 | `update.sh` says "not running" for a service you're not using | The service is profile-gated (n8n / telegram / cloudflared / backup) | Expected; ignore the warning for profiles you haven't activated. |

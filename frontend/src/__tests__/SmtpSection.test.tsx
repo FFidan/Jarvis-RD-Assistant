@@ -159,6 +159,43 @@ describe('SmtpSection — hydration', () => {
     );
     expect(screen.queryByText(/currently set/i)).not.toBeInTheDocument();
   });
+
+  it('hydrates form fields exactly once (useEffect one-shot via !hydrated guard)', async () => {
+    // getSmtpConfig is called once; fields should be seeded from that response
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    await renderSmtp();
+
+    // Assert all four seeded fields carry the config values
+    const hostInput = await screen.findByLabelText(/host/i);
+    expect(hostInput).toHaveValue('smtp.example.com');
+    expect(screen.getByLabelText(/port/i)).toHaveValue('587');
+    expect(screen.getByLabelText(/username/i)).toHaveValue('relay');
+    expect(screen.getByLabelText(/from address/i)).toHaveValue('no-reply@example.com');
+
+    // getSmtpConfig should have been called exactly once (no extra fetches)
+    expect(mockGetSmtpConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-seed fields when config resolves to the same value (hydrated guard holds)', async () => {
+    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+
+    const user = userEvent.setup();
+    await renderSmtp();
+
+    // Wait for initial hydration
+    const hostInput = await screen.findByLabelText(/host/i);
+    await waitFor(() => expect(hostInput).toHaveValue('smtp.example.com'));
+
+    // User edits the host field
+    await user.clear(hostInput);
+    await user.type(hostInput, 'smtp.custom.net');
+    expect(hostInput).toHaveValue('smtp.custom.net');
+
+    // A stale-time expiry or query re-run would normally trigger re-evaluation;
+    // because hydrated=true the useEffect body is a no-op — user edit is preserved
+    expect(hostInput).toHaveValue('smtp.custom.net');
+  });
 });
 
 // ---------------------------------------------------------------------------

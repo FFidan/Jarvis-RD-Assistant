@@ -29,6 +29,7 @@ from qdrant_client.models import Distance, PointStruct, VectorParams
 
 from paper_ingestion.config import get_paper_ingestion_settings
 from paper_ingestion.models import ChunkForEmbedding
+from paper_ingestion.perf_probe import probe_span
 
 logger = logging.getLogger(__name__)
 
@@ -420,13 +421,14 @@ class Embedder:
         last_exc: Exception | None = None
         for attempt in range(3):
             try:
-                response = await self.http_client.post(
-                    f"{litellm_config.base_url}/v1/embeddings",
-                    json={"model": EMBEDDING_MODEL, "input": texts},
-                    headers=build_litellm_headers(litellm_config),
-                    timeout=request_timeout,
-                )
-                response.raise_for_status()
+                with probe_span("embed_texts_post", n_texts=len(texts), attempt=attempt):
+                    response = await self.http_client.post(
+                        f"{litellm_config.base_url}/v1/embeddings",
+                        json={"model": EMBEDDING_MODEL, "input": texts},
+                        headers=build_litellm_headers(litellm_config),
+                        timeout=request_timeout,
+                    )
+                    response.raise_for_status()
                 break
             except (httpx.TimeoutException, httpcore.ReadTimeout) as exc:
                 # httpx.ReadTimeout subclasses httpx.TimeoutException; the bare
@@ -937,7 +939,8 @@ class Embedder:
             LIMIT $2
         """
         async with db_pool.acquire() as conn:
-            bm25_rows = await conn.fetch(bm25_sql, query, candidate_limit)
+            with probe_span("hybrid_search_bm25_sql", candidate_limit=candidate_limit):
+                bm25_rows = await conn.fetch(bm25_sql, query, candidate_limit)
 
         # Build rank map (1-indexed)
         bm25_rank_map: dict[int, int] = {}

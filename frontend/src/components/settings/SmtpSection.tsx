@@ -11,7 +11,7 @@
  * (backend now always returns false — changes apply immediately). The UI
  * shows an honest success note based on the flag value.
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getSmtpConfig, saveSmtpConfig } from '@/lib/api';
 import { Button } from '@/components/ui/button';
@@ -42,13 +42,15 @@ export function SmtpSection() {
   const [hydrated, setHydrated] = useState(false);
 
   // Hydrate form fields once the query resolves (only on first load)
-  if (config && !hydrated) {
-    setHost(config.host ?? '');
-    setPort(config.port != null ? String(config.port) : '587');
-    setUser(config.user ?? '');
-    setFromEmail(config.from_email ?? '');
-    setHydrated(true);
-  }
+  useEffect(() => {
+    if (config && !hydrated) {
+      setHost(config.host ?? '');
+      setPort(config.port != null ? String(config.port) : '587');
+      setUser(config.user ?? '');
+      setFromEmail(config.from_email ?? '');
+      setHydrated(true);
+    }
+  }, [config, hydrated]);
 
   const saveMut = useMutation({
     mutationFn: saveSmtpConfig,

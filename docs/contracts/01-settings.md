@@ -301,7 +301,7 @@ Plan: [docs/archive/2026-05/old-plans/2026-05-02-contracts-settings-and-ux.md](.
 | Item | Why accepted |
 |---|---|
 | `llm.{smart,fast,embed}_model` PARTIAL | LiteLLM YAML is the deliberate runtime authority. The `user_config` row exists for UI read-back display only. See [03-llm.md §2](03-llm.md). |
-| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). |
+| `llm.{anthropic,openai,google}.api_key` PARTIAL | Conditional secrets by design — only consumed when a cloud-provider model alias is selected or a `/test` endpoint is invoked. No contract violation. See [03-llm.md §2](03-llm.md). **Per-user BYO credentials** (not a shared ops secret): `set_config` writes with `row_user_id = caller_user_id` ([settings.py:827](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L827)); reads are scoped to the caller's row with no cross-user fallback ([settings.py:698-704](../../services/paper_ingestion/paper_ingestion/routers/settings.py#L698-L704)). The first-run/Settings wizard surfaces these keys for convenience but they remain per-user — there is no privilege-escalation path. (CFG-1 design-clarification 2026-05-18, agent: claude-code) |
 
 ---
 
