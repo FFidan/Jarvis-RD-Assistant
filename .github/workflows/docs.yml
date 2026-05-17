@@ -1,0 +1,45 @@
+name: Docs
+
+# Build on every push to master (then deploy) and on PRs (build-only check).
+# Keeps the same branch/PR trigger convention as ci.yml.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-deploy:
+    name: MkDocs build (+ deploy on master)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed for gh-pages branch push on master
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          # Full history lets mkdocs-material show last-updated dates correctly
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install -r requirements-docs.txt
+
+      - name: Build (strict — zero warnings allowed)
+        run: mkdocs build --strict
+
+      # Deploy only on pushes to master; PRs just build.
+      - name: Deploy to GitHub Pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: mkdocs gh-deploy --force
+        # Deploys to the gh-pages branch (default).
+        # GitHub Pages is configured to serve from that branch.
+        # No custom domain — served at the default *.github.io URL.

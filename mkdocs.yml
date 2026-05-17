@@ -1,0 +1,145 @@
+# MkDocs configuration — JARVIS RD Assistant operator/developer docs site.
+#
+# HYBRID NO-FILE-MOVE APPROACH
+# ─────────────────────────────
+# Canonical Markdown files stay exactly where they are in the repo.
+# This site is a generated read-only aggregated view.
+#
+# Most operator/developer docs already live under docs/ (the docs_dir), so they
+# are referenced directly in the nav below.
+#
+# Exceptions — files that live outside docs/:
+#   README.md        (repo root)
+#   AGENTS.md        (repo root)
+#   db/migrations/README.md
+#
+# For those three, thin shim files live in docs/ and use the
+# mkdocs-include-markdown-plugin directive:
+#
+#   {% include-markdown "../<path>" rewrite-relative-urls=false %}
+#
+# The shims are committed; `site/` (build output) is gitignored.
+# No file is moved. No canonical content is duplicated.
+# `mkdocs build --strict` validates this config at CI time.
+#
+# SCOPE: operator/developer half ONLY.
+# Out of scope: end-user manual (gated on UI redesign).
+
+site_name: JARVIS RD Assistant — Operator & Developer Docs
+site_description: >-
+  Deployment, architecture, engineering standards, security, API contracts,
+  and agentic workflow for JARVIS RD Assistant operators and developers.
+site_url: ""   # default *.github.io — no custom domain, no CNAME
+
+# Repo link shown in the Material theme header
+repo_url: https://github.com/FFidan/Jarvis-RD-Assistant
+repo_name: FFidan/Jarvis-RD-Assistant
+edit_uri: edit/master/
+
+docs_dir: docs
+
+# Link-validation tuning.
+#
+# The contract docs (docs/contracts/*.md) link to source-code paths like
+# ../../services/paper_ingestion/... which are valid on disk but don't exist
+# as MkDocs pages (they're Python/SQL files, not docs).  Several operator
+# docs also cross-link to AGENTS.md / CLAUDE.md at the repo root via
+# relative paths like ../AGENTS.md — again valid on disk, not as MkDocs pages.
+#
+# Setting links.not_found to 'ignore' suppresses the "target not found among
+# documentation files" warning for those cases.  This keeps `--strict` green
+# without removing legitimate source-code references from the contracts.
+# nav.not_found stays at 'warn' (the default) so broken NAV entries still fail.
+validation:
+  links:
+    not_found: ignore
+    absolute_links: ignore
+    unrecognized_links: ignore
+
+# Exclude directories that live under docs/ but are NOT part of this site:
+#  - archive/   historical plans, audit reports, old roadmaps (not operator docs)
+#  - plans/     in-flight implementation plans (agent working docs)
+#  - specs/     dated transition specs (not evergreen)
+#  - perf/      profiling snapshots
+#  - agentic/   agent-internal runbooks
+#  - superpowers/ skill docs
+#  - screenshots/ UI screenshots
+#
+# Without this exclusion, `mkdocs build --strict` would fail because those
+# files contain relative links to source-code paths (not doc files) and MkDocs
+# resolves them against docs_dir — producing hundreds of broken-link warnings.
+exclude_docs: |
+  /README.md
+  archive/
+  plans/
+  specs/
+  perf/
+  agentic/
+  superpowers/
+  screenshots/
+  audit/
+
+# Curated allowlist — ONLY existing operator/developer docs.
+# End-user docs (USER_GUIDE.md, screenshots/, specs/, plans/, archive/) are
+# intentionally omitted.
+nav:
+  - Home: index.md
+  - Quickstart: readme-shim.md
+  - Deployment: DEPLOYMENT.md
+  - Architecture: ARCHITECTURE.md
+  - Engineering Standards: ENGINEERING_STANDARDS.md
+  - Security: SECURITY.md
+  - Agentic Workflow: AGENTIC_WORKFLOW.md
+  - Migrations: migrations-shim.md
+  - Agent Guide: agents-shim.md
+  - System Contracts:
+      - Overview: contracts/README.md
+      - Settings: contracts/01-settings.md
+      - Pulse: contracts/02-pulse.md
+      - LLM Client: contracts/03-llm.md
+      - Observability: contracts/04-observability.md
+      - Model Lifecycle: contracts/05-model-lifecycle.md
+      - Hardware-Aware Settings: contracts/06-hardware-aware-settings.md
+
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+  # include-markdown: allows shim files in docs/ to pull content from
+  # canonical files outside docs_dir (repo root, db/migrations/) at build
+  # time — no file moves, no duplication. This is the only non-default plugin.
+  - include-markdown
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - tables
+  - toc:
+      permalink: true

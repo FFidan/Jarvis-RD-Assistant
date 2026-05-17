@@ -96,3 +96,6 @@ artifacts/
 
 # CodeBoarding scratch outputs
 .codeboarding/
+
+# MkDocs build output (generated; deploy target is gh-pages branch)
+site/
