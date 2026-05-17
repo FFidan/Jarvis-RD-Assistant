@@ -5,6 +5,9 @@
 # wall-clock timings, and (optionally) py-spy flamegraph + pg_stat_statements
 # top-N when those tools are available.
 #
+# Also runs concurrency load generation (scripts/perf/loadgen.sh) and GPU/VRAM
+# telemetry (scripts/perf/gpu_probe.sh) as additive, best-effort captures.
+#
 # Output: artifacts/perf/<UTC-timestamp>/
 #
 # Pre-reqs (best-effort — script degrades gracefully if missing):
@@ -16,6 +19,18 @@
 #   - pg_stat_statements extension preloaded in Postgres
 #     (set `shared_preload_libraries = 'pg_stat_statements'` in postgresql.conf
 #      and `CREATE EXTENSION pg_stat_statements;`).
+#   - nvidia-smi (for GPU telemetry; degrades gracefully when absent)
+#
+# Environment knobs (all optional):
+#   PERF_CONCURRENCY        Concurrent workers for loadgen (default: 10)
+#   PERF_PROBE_ENABLED      Set to 1 to enable in-process perf probes during
+#                           the load window; probes write JSONL to
+#                           ${OUT_DIR}/perf-probe.jsonl (default: 0)
+#   PERF_PROBE_PATH         Override probe output path (default: auto-set to
+#                           ${OUT_DIR}/perf-probe.jsonl)
+#   PERF_GPU_POLL_SECONDS   gpu_probe.sh polling interval in seconds (default: 2)
+#   SKIP_LIGHTHOUSE         Set to 1 to skip Lighthouse (useful on CI; default: 0)
+#   PAPER_INGESTION_HOST_PORT  Backend port (default: 8010)
 #
 # This script never fails the build — missing tools log warnings instead.
 set -euo pipefail
@@ -34,6 +49,26 @@ log() { echo "[profile] $*" >&2; }
 API_KEY=""
 if [[ -f "${API_KEY_FILE}" ]]; then
   API_KEY="$(cat "${API_KEY_FILE}")"
+fi
+
+# ---------------------------------------------------------------------------
+# 0. GPU probe — start in background (best-effort)
+# ---------------------------------------------------------------------------
+GPU_PROBE_SCRIPT="${REPO_ROOT}/scripts/perf/gpu_probe.sh"
+GPU_PROBE_SENTINEL="${OUT_DIR}/.gpu_probe.stop"
+GPU_PROBE_PID=""
+
+if [[ -f "${GPU_PROBE_SCRIPT}" ]]; then
+  log "Starting GPU probe in background"
+  OUT_DIR="${OUT_DIR}" \
+  PERF_GPU_PROBE_STOP="${GPU_PROBE_SENTINEL}" \
+  PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}" \
+  PERF_GPU_POLL_SECONDS="${PERF_GPU_POLL_SECONDS:-2}" \
+  bash "${GPU_PROBE_SCRIPT}" &
+  GPU_PROBE_PID="$!"
+  log "GPU probe PID ${GPU_PROBE_PID} (sentinel: ${GPU_PROBE_SENTINEL})"
+else
+  log "WARN: ${GPU_PROBE_SCRIPT} not found — skipping GPU telemetry"
 fi
 
 # ---------------------------------------------------------------------------
@@ -139,6 +174,50 @@ if command -v npx >/dev/null 2>&1 && [[ "${SKIP_LIGHTHOUSE:-}" != "1" ]]; then
   else
     log "WARN: Lighthouse run failed (chrome unavailable?); see lighthouse.log"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Concurrency load generation (best-effort)
+#    Runs AFTER sequential captures so perf-probe.jsonl reflects real load.
+#    PERF_PROBE_ENABLED=1 + PERF_PROBE_PATH activate in-process span probes.
+# ---------------------------------------------------------------------------
+LOADGEN_SCRIPT="${REPO_ROOT}/scripts/perf/loadgen.sh"
+
+if [[ -f "${LOADGEN_SCRIPT}" ]]; then
+  log "Running load-gen (PERF_CONCURRENCY=${PERF_CONCURRENCY:-10})"
+  OUT_DIR="${OUT_DIR}" \
+  PERF_CONCURRENCY="${PERF_CONCURRENCY:-10}" \
+  PERF_PROBE_ENABLED="${PERF_PROBE_ENABLED:-0}" \
+  PERF_PROBE_PATH="${PERF_PROBE_PATH:-${OUT_DIR}/perf-probe.jsonl}" \
+  PAPER_INGESTION_HOST_PORT="${PAPER_INGESTION_HOST_PORT:-8010}" \
+  bash "${LOADGEN_SCRIPT}" || log "WARN: loadgen exited non-zero — concurrency metrics may be partial"
+else
+  log "WARN: ${LOADGEN_SCRIPT} not found — skipping concurrency load generation"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Stop GPU probe — sentinel file first, then SIGTERM fallback
+# ---------------------------------------------------------------------------
+if [[ -n "${GPU_PROBE_PID}" ]]; then
+  log "Stopping GPU probe (PID ${GPU_PROBE_PID})"
+  # Sentinel lets the probe exit cleanly from its sleep/check loop.
+  touch "${GPU_PROBE_SENTINEL}" 2>/dev/null || true
+  # Give it up to 10 seconds to stop on its own; SIGTERM if not done.
+  local_wait=0
+  while kill -0 "${GPU_PROBE_PID}" 2>/dev/null && [[ "${local_wait}" -lt 10 ]]; do
+    sleep 1
+    (( local_wait++ )) || true
+  done
+  if kill -0 "${GPU_PROBE_PID}" 2>/dev/null; then
+    log "GPU probe still alive after ${local_wait}s — sending SIGTERM"
+    kill -TERM "${GPU_PROBE_PID}" 2>/dev/null || true
+    wait "${GPU_PROBE_PID}" 2>/dev/null || true
+  else
+    wait "${GPU_PROBE_PID}" 2>/dev/null || true
+  fi
+  rm -f "${GPU_PROBE_SENTINEL}"
+  log "GPU probe stopped. Timeseries → ${OUT_DIR}/gpu-timeseries.jsonl"
+  log "Run metadata → ${OUT_DIR}/run-metadata.json"
 fi
 
 log "Profiling complete. Artifacts in ${OUT_DIR}"

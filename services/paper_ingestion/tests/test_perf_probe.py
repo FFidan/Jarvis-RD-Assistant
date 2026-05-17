@@ -190,7 +190,7 @@ def test_exception_inside_span_reraises(tmp_path, monkeypatch):
 
 
 def test_exception_inside_span_still_records(tmp_path, monkeypatch):
-    """A span that exits via exception still appends a record (or leaves the file clean)."""
+    """A span that exits via exception still appends a record."""
     probe_path = str(tmp_path / "exc_record.jsonl")
     probe = _reload_probe(monkeypatch, enabled=True, path=probe_path)
 
@@ -200,13 +200,10 @@ def test_exception_inside_span_still_records(tmp_path, monkeypatch):
     except ValueError:
         pass
 
-    # If a record was written it must be valid JSON (file not corrupted)
-    if os.path.exists(probe_path):
-        content = open(probe_path).read().strip()
-        if content:
-            rec = json.loads(content)
-            assert rec["span"] == "exc_record_op"
-            assert isinstance(rec["ms"], float)
+    assert os.path.exists(probe_path), "record must be written even on exception"
+    rec = json.loads(open(probe_path).read().strip())
+    assert rec["span"] == "exc_record_op"
+    assert isinstance(rec["ms"], float)
 
 
 def test_exception_inside_disabled_span_still_reraises(monkeypatch):

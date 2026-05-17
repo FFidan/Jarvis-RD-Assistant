@@ -135,9 +135,10 @@ describe('AutomationSection', () => {
     const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
 
     // Arm the debounce inside NudgeRow by triggering onValueChange on the TimeSelect's
-    // Select (captured by the module-level _selectOnValueChange via our Radix mock).
+    // minutes Select (the last Select rendered by TimeSelect; our Radix mock overwrites
+    // _selectOnValueChange on each Select, so it always holds the final one — minutes).
     act(() => {
-      _selectOnValueChange?.('09');
+      _selectOnValueChange?.('15');
     });
 
     // Verify a setTimeout was registered by handleTimeChange

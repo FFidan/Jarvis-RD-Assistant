@@ -1,0 +1,123 @@
+# =============================================================================
+# vLLM drop-in overlay — Track-B Phase-2 spike (B2-1)
+# =============================================================================
+# Use ONLY for performance comparisons against Ollama under the LiteLLM alias.
+# This overlay is intentionally NOT included in the default compose path and
+# must never be merged into docker-compose.yml.
+#
+# Usage:
+#   # 1. Start the full stack + vLLM alongside it:
+#   docker compose -f docker-compose.yml -f docker-compose.vllm.yml \
+#     --profile vllm up -d
+#
+#   # 2. Uncomment the vLLM "smart" alias block in litellm/config.yaml and
+#   #    comment out the Ollama "smart" block, then reload LiteLLM:
+#   docker compose restart litellm
+#
+#   # 3. Run the bench harness:
+#   PERF_CONCURRENCY=4  make profile   # smart hot-path: concurrency 1/4/8
+#   PERF_CONCURRENCY=8  make profile
+#
+#   # 4. Restore Ollama alias + stop vLLM when done:
+#   docker compose -f docker-compose.yml -f docker-compose.vllm.yml \
+#     --profile vllm stop vllm
+#
+# Isolation guarantees:
+#   - Profile "vllm" — never starts unless explicitly requested.
+#   - Loopback-bound port 8080 (host). No cross-pollination with Ollama port
+#     11434 or any other service.
+#   - The LiteLLM alias seam (litellm/config.yaml) is the ONLY touch point.
+#     Zero call-site changes required.  db_helpers.validated_model() and
+#     get_smart_model() always return the alias "smart"; LiteLLM routes it.
+#
+# VRAM budget reasoning (16 GB RTX 5060 Ti, 16 311 MiB total):
+#   - qwen3-embedding:4b (resident, keep_alive=-1): ~2.4 GB
+#   - Qwen2.5-7B-Instruct-AWQ (vLLM, 4-bit AWQ): ~4.5–5.5 GB
+#   - Total peak: ~7–8 GB  <  16 GB physical  → within budget with ~8 GB headroom.
+#
+#   AWQ was chosen over FP16 (14–15 GB) because it is the only quant that fits
+#   the 16 GB box alongside the resident embedder.  On a 48 GB box use FP16
+#   (Qwen2.5-7B-Instruct, ~15 GB) for a fair throughput ceiling measurement.
+#
+#   The Ollama smart model (qwen3:8b ≈ 5–6 GB) and the vLLM model must NOT
+#   both be GPU-resident simultaneously on the 16 GB box — unload one before
+#   benchmarking the other (run `ollama stop qwen3:8b` or simply not calling
+#   it during the vLLM bench window).
+#
+# Model choice: Qwen/Qwen2.5-7B-Instruct-AWQ
+#   - Same model family as the current smart model (qwen3:8b ≈ Qwen2.5-7B
+#     with extended thinking; task-comparable for summarisation / card gen).
+#   - AWQ 4-bit quantisation ships a HuggingFace-hosted GPTQ/AWQ repo that
+#     vLLM loads natively without manual model conversion.
+#   - OpenAI-compatible /v1/chat/completions endpoint exposed at 0.0.0.0:8080
+#     (container) → 127.0.0.1:8080 (host), matching LiteLLM api_base convention.
+# =============================================================================
+
+services:
+  vllm:
+    image: ${VLLM_IMAGE:-vllm/vllm-openai:latest}
+    profiles: [vllm]
+    restart: "no"
+    # Loopback-bind only — same security posture as the ollama service
+    # (127.0.0.1:${host_port}:${container_port}).
+    ports:
+      - "127.0.0.1:${VLLM_HOST_PORT:-8080}:8080"
+    # vLLM OpenAI-compatible server args:
+    #   --model          HuggingFace model ID (AWQ variant for 16 GB fit)
+    #   --dtype          auto — vLLM selects best dtype for the quant format
+    #   --port           bind to 8080 inside the container
+    #   --max-model-len  token context window; 8192 matches the Ollama smart
+    #                    alias num_ctx value (litellm/config.yaml line 38)
+    #   --gpu-memory-utilization  cap at 0.75 to leave room for the embedder
+    #                    (~2.4 GB) + OS overhead on the 16 GB box.
+    #                    Adjust up to 0.90 on a 48 GB box where all models
+    #                    fit simultaneously without VRAM pressure.
+    command:
+      - "--model"
+      - "${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}"
+      - "--dtype"
+      - "auto"
+      - "--port"
+      - "8080"
+      - "--max-model-len"
+      - "${VLLM_MAX_MODEL_LEN:-8192}"
+      - "--gpu-memory-utilization"
+      - "${VLLM_GPU_MEMORY_UTILIZATION:-0.75}"
+    volumes:
+      # Persist downloaded model weights across container restarts.
+      # Reuses the same cache convention as the hf_cache volume in
+      # paper_ingestion (Marker/Surya models).
+      - vllm_model_cache:/root/.cache/huggingface
+    environment:
+      # HuggingFace cache: keep model weights out of the writable container layer.
+      HF_HOME: /root/.cache/huggingface
+      # Suppress HF token warning — model is public, no token needed.
+      TRANSFORMERS_OFFLINE: "0"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            # Mirrors the ollama service GPU reservation block exactly
+            # (docker-compose.yml lines 138–144).
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    mem_limit: 8g
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080/health')\" 2>/dev/null || exit 1"
+      interval: 30s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - jarvis
+
+volumes:
+  vllm_model_cache:

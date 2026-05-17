@@ -128,7 +128,7 @@ describe('SmtpSection — hydration', () => {
     mockSaveSmtpConfig.mockResolvedValue(fixtures.saveResponse);
   });
 
-  it('hydrates host/port/user/from_email fields from getSmtpConfig', async () => {
+  it('hydrates host/port/user/from_email fields from getSmtpConfig (called once)', async () => {
     mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
 
     await renderSmtp();
@@ -138,6 +138,8 @@ describe('SmtpSection — hydration', () => {
     expect(screen.getByLabelText(/port/i)).toHaveValue('587');
     expect(screen.getByLabelText(/username/i)).toHaveValue('relay');
     expect(screen.getByLabelText(/from address/i)).toHaveValue('no-reply@example.com');
+    // React-Query must not issue duplicate fetches
+    expect(mockGetSmtpConfig).toHaveBeenCalledTimes(1);
   });
 
   it('shows "currently set" hint for password when has_password=true', async () => {
@@ -160,28 +162,21 @@ describe('SmtpSection — hydration', () => {
     expect(screen.queryByText(/currently set/i)).not.toBeInTheDocument();
   });
 
-  it('hydrates form fields exactly once (useEffect one-shot via !hydrated guard)', async () => {
-    // getSmtpConfig is called once; fields should be seeded from that response
-    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
-
-    await renderSmtp();
-
-    // Assert all four seeded fields carry the config values
-    const hostInput = await screen.findByLabelText(/host/i);
-    expect(hostInput).toHaveValue('smtp.example.com');
-    expect(screen.getByLabelText(/port/i)).toHaveValue('587');
-    expect(screen.getByLabelText(/username/i)).toHaveValue('relay');
-    expect(screen.getByLabelText(/from address/i)).toHaveValue('no-reply@example.com');
-
-    // getSmtpConfig should have been called exactly once (no extra fetches)
-    expect(mockGetSmtpConfig).toHaveBeenCalledTimes(1);
-  });
-
   it('does not re-seed fields when config resolves to the same value (hydrated guard holds)', async () => {
-    mockGetSmtpConfig.mockResolvedValue(fixtures.smtpConfigWithPassword);
+    // Return a fresh object reference on each call (simulates React-Query
+    // returning a new object after stale-time expiry / background refetch)
+    mockGetSmtpConfig.mockImplementation(() =>
+      Promise.resolve({ ...fixtures.smtpConfigWithPassword }),
+    );
 
     const user = userEvent.setup();
-    await renderSmtp();
+    const { SmtpSection } = await import('@/components/settings/SmtpSection');
+    const qc = makeQC();
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <SmtpSection />
+      </QueryClientProvider>,
+    );
 
     // Wait for initial hydration
     const hostInput = await screen.findByLabelText(/host/i);
@@ -192,9 +187,16 @@ describe('SmtpSection — hydration', () => {
     await user.type(hostInput, 'smtp.custom.net');
     expect(hostInput).toHaveValue('smtp.custom.net');
 
-    // A stale-time expiry or query re-run would normally trigger re-evaluation;
-    // because hydrated=true the useEffect body is a no-op — user edit is preserved
-    expect(hostInput).toHaveValue('smtp.custom.net');
+    // Force a re-render (new QueryClientProvider instance triggers a fresh
+    // useEffect call with config — the !hydrated guard must block re-seeding)
+    rerender(
+      <QueryClientProvider client={qc}>
+        <SmtpSection />
+      </QueryClientProvider>,
+    );
+
+    // User's edit must survive: the !hydrated guard made the useEffect a no-op
+    expect(screen.getByLabelText(/host/i)).toHaveValue('smtp.custom.net');
   });
 });
 

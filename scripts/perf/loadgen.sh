@@ -130,6 +130,14 @@ _emit_stats() {
   sort -n "${datafile}" > "${TMPDIR_LG}/sorted_${label}.txt"
 
   awk -v label="${label}" -v elapsed="${elapsed_s}" '
+  # Percentile index (nearest-rank) — function must be at global scope for
+  # GNU awk compatibility; it cannot be defined inside an END block.
+  function pct(p,   idx) {
+    idx = int(p/100 * n + 0.999999) - 1
+    if (idx < 0) idx = 0
+    if (idx >= n) idx = n-1
+    return vals[idx]
+  }
   BEGIN { n=0 }
   {
     vals[n] = $1
@@ -139,13 +147,6 @@ _emit_stats() {
     if (n == 0) {
       print label ",0,0,0,0,0"
       exit
-    }
-    # Percentile index (nearest-rank — works on any awk, no GNU required)
-    function pct(p,   idx) {
-      idx = int(p/100 * n + 0.999999) - 1
-      if (idx < 0) idx = 0
-      if (idx >= n) idx = n-1
-      return vals[idx]
     }
     p50 = pct(50)
     p95 = pct(95)
