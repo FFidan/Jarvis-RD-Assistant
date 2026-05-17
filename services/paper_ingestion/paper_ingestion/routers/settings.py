@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import asyncpg
 import httpx
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import APIRouter, Depends, HTTPException, Request
 from jarvis_common import dynamic_update, log_audit
 from jarvis_common.auth import current_user_id_strict, require_admin, verify_api_key
@@ -98,6 +99,8 @@ _ALLOWED_CONFIG_KEYS = frozenset(
         "smtp.pass",
         # Observability — deployment-wide Langfuse dashboard link (admin-only).
         "observability.langfuse_dashboard_url",
+        # Automation — auto-fetch pipeline interval (system-wide scheduler).
+        "automation.fetch_interval_hours",
     }
 )
 
@@ -222,6 +225,8 @@ SYSTEM_KEYS: frozenset[str] = frozenset(
         "smtp.pass",
         # Observability — one deployment-wide Langfuse dashboard link; admin-only.
         "observability.langfuse_dashboard_url",
+        # Automation — pipeline interval; system-wide, admin-only.
+        "automation.fetch_interval_hours",
     }
 )
 # Note: dynamic llm.<hostname>.* patterns are SYSTEM_KEYS (hardware-wide).
@@ -554,6 +559,8 @@ _CONFIG_VALIDATORS: dict[str, Callable[[Any], None]] = {
     "zotero.auto_push_on_star": _validate_bool,
     # Observability
     "observability.langfuse_dashboard_url": _validate_langfuse_dashboard_url,
+    # Automation
+    "automation.fetch_interval_hours": _validate_positive_int,
     # Cloud LLM provider keys
     "llm.anthropic.api_key": _validate_nonempty_str,
     "llm.openai.api_key": _validate_nonempty_str,
@@ -994,6 +1001,31 @@ async def set_config(
                 exc_info=True,
             )
             raise
+    if key == "automation.fetch_interval_hours":
+        # Reschedule the auto-pipeline job live so the new interval takes effect without restart.
+        # Follow-up known gap: the env-based self-gate in auto_fetch.py / config.py
+        # (AUTO_FETCH_INTERVAL_HOURS / auto_fetch_interval_hours) is NOT yet unified with
+        # this user_config key — out of scope here; this path persists + rescheduling only.
+        hours = max(int(body.value), 1)
+        job = scheduler.get_job("auto_pipeline") if scheduler is not None else None
+        if job is not None:
+            try:
+                scheduler.reschedule_job(
+                    "auto_pipeline",
+                    trigger=IntervalTrigger(hours=hours),
+                )
+                logger.info("auto_pipeline rescheduled live (interval=%dh)", hours)
+            except Exception:
+                logger.warning(
+                    "auto_pipeline reschedule failed (interval=%dh); persisted value still saved",
+                    hours,
+                    exc_info=True,
+                )
+        else:
+            logger.warning(
+                "auto_pipeline job not found in scheduler;"
+                " persisted value will take effect on restart"
+            )
     if key in _ZOTERO_LIBRARY_SCOPE_KEYS:
         async with db_pool.acquire() as conn:
             await conn.execute(

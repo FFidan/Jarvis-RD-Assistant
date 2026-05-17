@@ -1501,3 +1501,182 @@ def test_smtp_pass_resolve_value_is_masked_not_plaintext(monkeypatch) -> None:
     assert resolved is not None
     assert "sup3r-secret-pw" not in resolved
     assert resolved.startswith("****")
+
+
+# ---------------------------------------------------------------------------
+# UI-3: automation.fetch_interval_hours — allow-list, validator, live reschedule
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_interval_key_in_allow_list() -> None:
+    """automation.fetch_interval_hours must be in _ALLOWED_CONFIG_KEYS and SYSTEM_KEYS."""
+    from paper_ingestion.routers import settings
+
+    assert "automation.fetch_interval_hours" in settings._ALLOWED_CONFIG_KEYS
+    assert settings._is_allowed_config_key("automation.fetch_interval_hours") is True
+    assert "automation.fetch_interval_hours" in settings.SYSTEM_KEYS
+    assert settings._classify_config_key("automation.fetch_interval_hours") == "system"
+
+
+def test_fetch_interval_validator_rejects_zero() -> None:
+    """_validate_positive_int rejects 0 for automation.fetch_interval_hours."""
+    from paper_ingestion.routers.settings import _validate_positive_int
+
+    with pytest.raises(ValueError):
+        _validate_positive_int(0)
+
+
+def test_fetch_interval_validator_rejects_negative() -> None:
+    """_validate_positive_int rejects negative values."""
+    from paper_ingestion.routers.settings import _validate_positive_int
+
+    with pytest.raises(ValueError):
+        _validate_positive_int(-1)
+
+
+def test_fetch_interval_validator_rejects_non_int() -> None:
+    """_validate_positive_int rejects float/string for automation.fetch_interval_hours."""
+    from paper_ingestion.routers.settings import _validate_positive_int
+
+    with pytest.raises(ValueError):
+        _validate_positive_int("24")
+
+
+def test_fetch_interval_validator_accepts_positive_int() -> None:
+    """_validate_positive_int accepts valid positive integers."""
+    from paper_ingestion.routers.settings import _validate_positive_int
+
+    _validate_positive_int(1)
+    _validate_positive_int(24)
+    _validate_positive_int(168)
+
+
+@pytest.mark.asyncio
+async def test_set_fetch_interval_persists_and_reschedules():
+    """PUT /api/config/automation.fetch_interval_hours persists the value and calls
+    scheduler.reschedule_job('auto_pipeline', trigger=IntervalTrigger(hours=<value>))."""
+    from unittest.mock import MagicMock
+
+    import httpx
+    from apscheduler.triggers.interval import IntervalTrigger
+    from httpx import ASGITransport
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
+    from paper_ingestion.deps import get_db_pool, get_scheduler
+    from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as _settings_mod
+
+    pool, conn = _make_pool_and_conn()
+
+    # Simulate the auto_pipeline job being present
+    mock_job = MagicMock()
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = mock_job
+
+    _lenient = _make_lenient_require_admin()
+    _orig_require_admin = _settings_mod.require_admin
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_scheduler] = lambda: mock_scheduler
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[require_admin] = _lenient
+    _settings_mod.require_admin = _lenient
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.put(
+                "/api/config/automation.fetch_interval_hours",
+                json={"key": "automation.fetch_interval_hours", "value": 6},
+            )
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["key"] == "automation.fetch_interval_hours"
+        assert body["value"] == 6
+
+        # DB write occurred
+        conn.execute.assert_awaited()
+
+        # Scheduler was queried and reschedule was called
+        mock_scheduler.get_job.assert_called_with("auto_pipeline")
+        mock_scheduler.reschedule_job.assert_called_once()
+        call_kwargs = mock_scheduler.reschedule_job.call_args
+        assert call_kwargs.args[0] == "auto_pipeline"
+        trigger_arg = call_kwargs.kwargs.get("trigger") or call_kwargs.args[1]
+        assert isinstance(trigger_arg, IntervalTrigger)
+    finally:
+        _settings_mod.require_admin = _orig_require_admin
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+
+@pytest.mark.asyncio
+async def test_set_fetch_interval_missing_job_does_not_500():
+    """PUT /api/config/automation.fetch_interval_hours returns 200 even when the
+    auto_pipeline job is absent from the scheduler (not-yet-started / first boot)."""
+    from unittest.mock import MagicMock
+
+    import httpx
+    from httpx import ASGITransport
+    from jarvis_common import verify_api_key
+    from jarvis_common.auth import require_admin
+    from paper_ingestion.deps import get_db_pool, get_scheduler
+    from paper_ingestion.main import app
+    from paper_ingestion.routers import settings as _settings_mod
+
+    pool, conn = _make_pool_and_conn()
+
+    mock_scheduler = MagicMock()
+    mock_scheduler.get_job.return_value = None  # job absent
+
+    _lenient = _make_lenient_require_admin()
+    _orig_require_admin = _settings_mod.require_admin
+    app.state.db_pool = pool
+    app.state.limiter.enabled = False
+    app.dependency_overrides[get_db_pool] = lambda: pool
+    app.dependency_overrides[get_scheduler] = lambda: mock_scheduler
+    app.dependency_overrides[verify_api_key] = lambda: None
+    app.dependency_overrides[require_admin] = _lenient
+    _settings_mod.require_admin = _lenient
+
+    try:
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.put(
+                "/api/config/automation.fetch_interval_hours",
+                json={"key": "automation.fetch_interval_hours", "value": 12},
+            )
+
+        assert resp.status_code == 200
+        # reschedule_job must NOT be called when job is absent
+        mock_scheduler.reschedule_job.assert_not_called()
+    finally:
+        _settings_mod.require_admin = _orig_require_admin
+        app.dependency_overrides.clear()
+        app.state.limiter.enabled = True
+
+
+@pytest.mark.asyncio
+async def test_set_fetch_interval_rejects_invalid_values(_app):
+    """PUT /api/config/automation.fetch_interval_hours rejects 0 and negative values."""
+    app, conn, _ = _app
+
+    async with httpx.AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        resp_zero = await client.put(
+            "/api/config/automation.fetch_interval_hours",
+            json={"key": "automation.fetch_interval_hours", "value": 0},
+        )
+        resp_neg = await client.put(
+            "/api/config/automation.fetch_interval_hours",
+            json={"key": "automation.fetch_interval_hours", "value": -5},
+        )
+
+    # 400 from the validator (not 422 — the handler raises HTTPException(400, ...))
+    assert resp_zero.status_code == 400
+    assert resp_neg.status_code == 400

@@ -138,6 +138,16 @@ export function AutomationSection() {
     });
   };
 
+  const fetchIntervalEntry = configs.find((e) => e.key === 'automation.fetch_interval_hours');
+  const fetchIntervalValue =
+    fetchIntervalEntry !== undefined && fetchIntervalEntry.value !== null
+      ? Number(fetchIntervalEntry.value)
+      : 24;
+  const [fetchIntervalInput, setFetchIntervalInput] = useState<number>(fetchIntervalValue);
+  useEffect(() => {
+    setFetchIntervalInput(fetchIntervalValue);
+  }, [fetchIntervalValue]);
+
   const timezoneEntry = configs.find((e) => e.key === 'user.timezone');
   const timezoneValue = timezoneEntry
     ? (typeof timezoneEntry.value === 'string'
@@ -292,6 +302,36 @@ export function AutomationSection() {
             </div>
           )}
         </>
+      )}
+
+      {/* Auto-fetch interval — always visible regardless of nudge count */}
+      {!isLoading && (
+        <div>
+          <h3 className="text-base font-semibold mt-0 mb-2">Pipeline Settings</h3>
+          <Card className="rounded-md border-hair shadow-none">
+            <CardContent className="flex items-center gap-4 p-4">
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-sm">Auto-fetch interval (hours)</div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  How often the background pipeline fetches new papers from all sources
+                </p>
+              </div>
+              <Input
+                type="number"
+                min={1}
+                className="w-24 text-right"
+                value={fetchIntervalInput}
+                disabled={configMut.isPending}
+                onChange={(e) => setFetchIntervalInput(Number(e.target.value))}
+                onBlur={() => {
+                  const hours = Math.max(1, fetchIntervalInput);
+                  setFetchIntervalInput(hours);
+                  configMut.mutate({ key: 'automation.fetch_interval_hours', value: hours });
+                }}
+              />
+            </CardContent>
+          </Card>
+        </div>
       )}
     </div>
   );
